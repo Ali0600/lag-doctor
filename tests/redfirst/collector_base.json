@@ -1,0 +1,22 @@
+[
+  {"name": "falling behind bursts instead of skipping",
+   "file": "lagdoctor/capture/base.py",
+   "old": "            if behind > period:",
+   "new": "            if False:",
+   "tests": ["tests/test_collector_base.py::test_a_slow_tick_skips_ahead_instead_of_bursting"]},
+  {"name": "a crash escapes run()",
+   "file": "lagdoctor/capture/base.py",
+   "old": "        except Exception as exc:  # noqa: BLE001 - a collector crash must degrade, not kill the session",
+   "new": "        except ZeroDivisionError as exc:",
+   "tests": ["tests/test_collector_base.py::test_a_crash_in_run_becomes_a_failed_status"]},
+  {"name": "stop waits forever",
+   "file": "lagdoctor/capture/base.py",
+   "old": "        self._thread.join(timeout)",
+   "new": "        self._thread.join()",
+   "tests": ["tests/test_collector_base.py::test_stop_is_bounded_and_reports_a_stuck_thread"]},
+  {"name": "a stuck thread is not reported",
+   "file": "lagdoctor/capture/base.py",
+   "old": "        if self._thread.is_alive():",
+   "new": "        if False:",
+   "tests": ["tests/test_collector_base.py::test_stop_is_bounded_and_reports_a_stuck_thread"]}
+]
