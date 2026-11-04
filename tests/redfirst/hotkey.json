@@ -1,0 +1,17 @@
+[
+  {"name": "registration failure treated as success",
+   "file": "lagdoctor/winapi/hotkey.py",
+   "old": "        if not _user32.RegisterHotKey(None, self._ID, self._mods | MOD_NOREPEAT, self._vk):",
+   "new": "        if not (_user32.RegisterHotKey(None, self._ID, self._mods | MOD_NOREPEAT, self._vk) or True):",
+   "tests": ["tests/test_hotkey.py::test_a_key_already_taken_is_reported_not_raised"]},
+  {"name": "callback exception kills the listener",
+   "file": "lagdoctor/winapi/hotkey.py",
+   "old": "                    except Exception:  # noqa: BLE001 - a bad callback must not kill the listener",
+   "new": "                    except ZeroDivisionError:",
+   "tests": ["tests/test_hotkey.py::test_a_crashing_callback_does_not_stop_the_listener"]},
+  {"name": "presses for our id ignored",
+   "file": "lagdoctor/winapi/hotkey.py",
+   "old": "                if msg.message == WM_HOTKEY and msg.wParam == self._ID:",
+   "new": "                if msg.message == WM_HOTKEY and msg.wParam == self._ID + 1:",
+   "tests": ["tests/test_hotkey.py::test_listener_registers_delivers_presses_and_releases_the_key"]}
+]
