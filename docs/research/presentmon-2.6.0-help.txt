@@ -1,0 +1,86 @@
+PresentMon 2.6.0
+
+Capture Target Options:
+  --process_name name           Only record processes with the specified exe
+                                name. This argument can be repeated to capture
+                                multiple processes.
+  --exclude name                Do not record processes with the specified exe
+                                name. This argument can be repeated to exclude
+                                multiple processes.
+  --process_id id               Only record the process with the specified
+                                process ID.
+  --etl_file path               Analyze an ETW trace log file instead of the
+                                actively running processes.
+
+Output Options:
+  --output_file path            Write CSV output to the specified path.
+  --output_stdout               Write CSV output to STDOUT.
+  --multi_csv                   Create a separate CSV file for each captured
+                                process.
+  --no_csv                      Do not create any output CSV file.
+  --no_console_stats            Do not display active swap chains and frame
+                                statistics in the console.
+  --qpc_time                    Output the CPU start time as a performance
+                                counter value.
+  --qpc_time_ms                 Output the CPU start time as a performance
+                                counter value converted to milliseconds.
+  --date_time                   Output the CPU start time as a date and time
+                                with nanosecond precision.
+  --exclude_dropped             Exclude frames that were not displayed to the
+                                screen from the CSV output.
+  --v1_metrics                  Output a CSV using PresentMon 1.x metrics.
+  --v2_metrics                  Output a CSV using PresentMon 2.x metrics.
+  --write_display_metadata      Write VidPnSourceId, LayerIndex, and PresentId
+                                columns to CSV output.
+
+Recording Options:
+  --hotkey key                  Use the specified key press to start and stop
+                                recording. 'key' is of the form MODIFIER+KEY,
+                                e.g., "ALT+SHIFT+F11".
+  --delay seconds               Wait for specified amount of time before
+                                starting to record. If using --hotkey, the delay
+                                occurs each time the recording key is pressed.
+  --timed seconds               Stop recording after the specified amount of
+                                time.
+  --scroll_indicator            Enable scroll lock while recording.
+  --track_gpu_video             Track the video encode/decode portion of GPU
+                                work separately from other engines.
+  --no_track_display            Do not track frames all the way to display.
+  --no_track_input              Do not track keyboard/mouse clicks impacting
+                                each frame.
+  --no_track_gpu                Do not track the duration of GPU work in each
+                                frame.
+
+Execution Options:
+  --session_name name           Use the specified session name instead of the
+                                default "PresentMon". This can be used to start
+                                multiple captures at the same time, as long as
+                                each is using a distinct, case-insensitive name.
+  --stop_existing_session       If a trace session with the same name is already
+                                running, stop the existing session before
+                                starting a new session.
+  --terminate_existing_session  If a trace session with the same name is already
+                                running, stop the existing session then exit.
+  --restart_as_admin            If not running with elevated privilege, restart
+                                and request to be run as administrator.
+  --terminate_on_proc_exit      Terminate PresentMon when all the target
+                                processes have exited.
+  --terminate_after_timed       When using --timed, terminate PresentMon after
+                                the timed capture completes.
+
+Beta Options:
+  --track_frame_type            Track the type of each displayed frame; requires
+                                application and/or driver instrumentation using
+                                Intel-PresentMon provider.
+  --track_hw_measurements       Tracks HW-measured latency and/or power data
+                                coming from a LMT and/or PCAT device.
+  --track_app_timing            Track app times for each displayed frame;
+                                requires application and/or driver
+                                instrumentation using Intel-PresentMon provider.
+  --track_hybrid_present        Tracks if the present is a hybrid present and is
+                                performing a cross adapter copy.
+  --track_pc_latency            Track app timines for each displayed frame;
+                                requires application instrumentation using PC
+                                Latency events.
+  --set_circular_buffer_size    Overide the default present event circular
+                                buffer size of 2048. Must be a power of 2.

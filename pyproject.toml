@@ -1,0 +1,25 @@
+[project]
+name = "lag-doctor"
+version = "0.1.0"
+description = "Finds out why a PC game is lagging, and fixes what can be fixed, without touching the game process."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "psutil>=7.0",
+]
+
+[project.optional-dependencies]
+# Only the synthetic test game needs a graphics library.
+laglab = ["pyglet>=2.1"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+# Run from the checkout (`uv run python -m lagdoctor`); no build backend needed.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
