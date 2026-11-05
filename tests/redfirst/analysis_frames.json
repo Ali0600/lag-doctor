@@ -1,0 +1,1120 @@
+[
+ {
+  "name": "1% figures need 1000 frames",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "MIN_FRAMES_1PCT = 1_000 ",
+  "new": "MIN_FRAMES_1PCT = 1_001 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_one_percent_figures_need_1000_frames"
+  ]
+ },
+ {
+  "name": "0.1% low needs 10000 frames",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "MIN_FRAMES_01PCT = 10_000 ",
+  "new": "MIN_FRAMES_01PCT = 10_001 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_point_one_percent_low_needs_10000_frames"
+  ]
+ },
+ {
+  "name": "1% low takes floor, not ceil",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    k = _ceil_div(len(d), per)",
+  "new": "    k = max(1, len(d) // per)",
+  "tests": [
+   "tests/test_analysis_frames.py::test_one_percent_low_takes_exactly_ceil_of_one_percent_of_frames"
+  ]
+ },
+ {
+  "name": "1% low sweeps in ties",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return 1000.0 / st.mean(heapq.nlargest(k, d))",
+  "new": "    return 1000.0 / st.mean([x for x in d if x >= st.percentile(d, 100.0 - 100.0 / per)])",
+  "tests": [
+   "tests/test_analysis_frames.py::test_one_percent_low_does_not_sweep_in_ties"
+  ]
+ },
+ {
+  "name": "rule of three at n > 30",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "RULE_OF_THREE_N = 30 ",
+  "new": "RULE_OF_THREE_N = 31 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_time_beyond_50_ms_and_the_rule_of_three"
+  ]
+ },
+ {
+  "name": "hitch at 50 ms",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "HITCH_MS = 50.0 ",
+  "new": "HITCH_MS = 50.1 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_hitch_classes_nest_and_need_twice_the_baseline",
+   "tests/test_analysis_frames_events.py::test_stutter_class_boundaries"
+  ]
+ },
+ {
+  "name": "hitch needs 2 M",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "HITCH_X_BASELINE = 2.0 ",
+  "new": "HITCH_X_BASELINE = 1.9 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_hitch_classes_nest_and_need_twice_the_baseline",
+   "tests/test_analysis_frames_events.py::test_a_hitch_also_needs_twice_the_baseline"
+  ]
+ },
+ {
+  "name": "severe at 150 ms",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "SEVERE_MS = 150.0 ",
+  "new": "SEVERE_MS = 150.1 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_hitch_classes_nest_and_need_twice_the_baseline",
+   "tests/test_analysis_frames_events.py::test_stutter_class_boundaries"
+  ]
+ },
+ {
+  "name": "freeze at 500 ms",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "FREEZE_MS = 500.0 ",
+  "new": "FREEZE_MS = 500.1 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_hitch_classes_nest_and_need_twice_the_baseline",
+   "tests/test_analysis_frames_events.py::test_stutter_class_boundaries"
+  ]
+ },
+ {
+  "name": "time beyond 50 ms",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "BEYOND_MS = 50.0 ",
+  "new": "BEYOND_MS = 49.0 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_time_beyond_50_ms_and_the_rule_of_three"
+  ]
+ },
+ {
+  "name": "baseline N = 10 sqrt(median)",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "BASELINE_K = 10.0 ",
+  "new": "BASELINE_K = 10.5 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_baseline_window_size"
+  ]
+ },
+ {
+  "name": "baseline N at least 20",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "BASELINE_MIN_FRAMES = 20 ",
+  "new": "BASELINE_MIN_FRAMES = 21 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_baseline_window_size"
+  ]
+ },
+ {
+  "name": "baseline N at most 120",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "BASELINE_MAX_FRAMES = 120 ",
+  "new": "BASELINE_MAX_FRAMES = 119 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_baseline_window_size"
+  ]
+ },
+ {
+  "name": "GPU-bound at r 0.90",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "R_GPU = 0.90 ",
+  "new": "R_GPU = 0.91 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_gpu_bound_at_r_090_and_mixed_just_below",
+   "tests/test_analysis_frames_attribute.py::test_gpu_side_threshold_is_r_090"
+  ]
+ },
+ {
+  "name": "GPU-bound when FT - G <= 1 ms",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "GPU_GAP_MS = 1.0 ",
+  "new": "GPU_GAP_MS = 0.9 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_gpu_bound_when_frame_time_minus_gpu_busy_is_at_most_1_ms"
+  ]
+ },
+ {
+  "name": "CPU-or-other at r 0.75",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "R_CPU = 0.75 ",
+  "new": "R_CPU = 0.74 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_cpu_main_needs_the_busiest_thread_at_085",
+   "tests/test_analysis_frames_attribute.py::test_gpu_side_threshold_is_r_090"
+  ]
+ },
+ {
+  "name": "HAGS margin 0.5 ms",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "HAGS_MARGIN_MS = 0.5 ",
+  "new": "HAGS_MARGIN_MS = 0.4 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_hags_margin_comes_off_gpu_busy"
+  ]
+ },
+ {
+  "name": "main-thread bound at 0.85",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "THREAD_BOUND = 0.85 ",
+  "new": "THREAD_BOUND = 0.86 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_cpu_main_needs_the_busiest_thread_at_085"
+  ]
+ },
+ {
+  "name": "all-core bound at 0.85",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "ALL_CORES_BOUND = 0.85 ",
+  "new": "ALL_CORES_BOUND = 0.86 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_cpu_all_cores_needs_085_of_every_logical_cpu"
+  ]
+ },
+ {
+  "name": "thread judged over 1 s",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "THREAD_WINDOW_S = 1.0 ",
+  "new": "THREAD_WINDOW_S = 0.25 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_the_busiest_thread_is_judged_over_1_s_means_not_single_ticks"
+  ]
+ },
+ {
+  "name": "event ticks left out of the thread load",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        if _in_spans(float(ti), spans, starts):\n            tainted.add(b)",
+  "new": "        if False:\n            tainted.add(b)",
+  "tests": [
+   "tests/test_analysis_frames.py::test_thread_load_inside_events_does_not_count"
+  ]
+ },
+ {
+  "name": "VSync band 0.25 ms",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "VSYNC_BAND_MS = 0.25 ",
+  "new": "VSYNC_BAND_MS = 0.23 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_band_is_the_larger_of_025_ms_and_4_percent_of_a_period"
+  ]
+ },
+ {
+  "name": "VSync band 4 % of P",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "VSYNC_BAND_FRAC = 0.04 ",
+  "new": "VSYNC_BAND_FRAC = 0.038 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_band_is_the_larger_of_025_ms_and_4_percent_of_a_period"
+  ]
+ },
+ {
+  "name": "VSync needs 90 % quantised",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "VSYNC_SHARE = 0.90 ",
+  "new": "VSYNC_SHARE = 0.89 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_needs_90_percent_on_refresh_multiples_and_the_app_locked_to_one"
+  ]
+ },
+ {
+  "name": "VSync needs the app locked to k*P",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        vsync = q >= VSYNC_SHARE and _near_multiple(ft, period, band)",
+  "new": "        vsync = q >= VSYNC_SHARE",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_needs_90_percent_on_refresh_multiples_and_the_app_locked_to_one"
+  ]
+ },
+ {
+  "name": "cap CoV < 3 %",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "CAP_COV = 0.03 ",
+  "new": "CAP_COV = 0.028 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_frame_cap_is_a_regular_cadence_off_the_refresh_multiples"
+  ]
+ },
+ {
+  "name": "cap not within 3 % of k*P",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "CAP_REFRESH_FRAC = 0.03 ",
+  "new": "CAP_REFRESH_FRAC = 0.032 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_cadence_within_3_percent_of_a_refresh_multiple_is_not_a_cap"
+  ]
+ },
+ {
+  "name": "a refresh-multiple cadence is not a cap",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if regular and period and _on_refresh_multiple(c, period):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_cadence_within_3_percent_of_a_refresh_multiple_is_not_a_cap"
+  ]
+ },
+ {
+  "name": "cap judged per 5 s",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "CAP_WINDOW_S = 5.0 ",
+  "new": "CAP_WINDOW_S = 0.1 ",
+  "tests": [
+   "tests/test_analysis_frames_synth.py::test_bound_verdict_per_mode[smooth-capped]"
+  ]
+ },
+ {
+  "name": "cap window needs 20 frames",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "CAP_WINDOW_MIN_FRAMES = 20 ",
+  "new": "CAP_WINDOW_MIN_FRAMES = 700 ",
+  "tests": [
+   "tests/test_analysis_frames_synth.py::test_bound_verdict_per_mode[smooth-capped]"
+  ]
+ },
+ {
+  "name": "a cap needs a thread under 0.85",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    elif regular and (r is None or r < R_CPU) and (busiest is None or busiest < THREAD_BOUND):",
+  "new": "    elif regular and (r is None or r < R_CPU):",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_regular_cadence_with_a_saturated_thread_is_cpu_bound_not_capped"
+  ]
+ },
+ {
+  "name": "robust CoV by MAD",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return (st.percentile(xs, 75.0) - st.percentile(xs, 25.0)) / IQR_TO_SD / med",
+  "new": "    return MAD_TO_SD * st.mad(xs) / med",
+  "tests": [
+   "tests/test_analysis_frames.py::test_robust_cov_sees_a_two_value_cadence_even_with_a_one_frame_majority"
+  ]
+ },
+ {
+  "name": "plain CoV",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return (st.percentile(xs, 75.0) - st.percentile(xs, 25.0)) / IQR_TO_SD / med",
+  "new": "    return (math.fsum((x - st.mean(xs)) ** 2 for x in xs) / len(xs)) ** 0.5 / st.mean(xs)",
+  "tests": [
+   "tests/test_analysis_frames.py::test_robust_cov_ignores_one_stray_frame_that_a_plain_cov_cannot"
+  ]
+ },
+ {
+  "name": "bound needs 10 s",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "BOUND_MIN_S = 10.0 ",
+  "new": "BOUND_MIN_S = 10.1 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_bound_needs_300_steady_frames_and_10_s"
+  ]
+ },
+ {
+  "name": "bound needs 300 frames",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "BOUND_MIN_FRAMES = 300 ",
+  "new": "BOUND_MIN_FRAMES = 301 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_bound_needs_300_steady_frames_and_10_s"
+  ]
+ },
+ {
+  "name": "3D engine fallback at 95 %",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "ENGINE_GPU_PCT = 95.0 ",
+  "new": "ENGINE_GPU_PCT = 95.1 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_no_frames_falls_back_to_the_3d_engine"
+  ]
+ },
+ {
+  "name": "r needs GPU busy on most frames",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if len(gpu_busy) * 2 >= len(rows):",
+  "new": "    if gpu_busy:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_r_needs_gpu_busy_on_most_frames"
+  ]
+ },
+ {
+  "name": "main chain by rows",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    best = max(rows, key=lambda k: (shown.get(k, 0), len(rows[k])))",
+  "new": "    best = max(rows, key=lambda k: (len(rows[k]), shown.get(k, 0)))",
+  "tests": [
+   "tests/test_analysis_frames.py::test_main_chain_is_the_one_with_most_displayed_frames_not_most_rows",
+   "tests/test_analysis_frames_synth.py::test_a_decoy_swap_chain_does_not_move_the_main_chain"
+  ]
+ },
+ {
+  "name": "junk not cleaned",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        out[name] = [_clean(name, _at(col, i)) for i in pick]",
+  "new": "        out[name] = [_at(col, i) for i in pick]",
+  "tests": [
+   "tests/test_analysis_frames.py::test_main_chain_sorts_by_time_and_turns_junk_into_none"
+  ]
+ },
+ {
+  "name": "event frames counted as steady",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return _classify(cap, fr, _steady_rows(fr, spans), tick_spans)",
+  "new": "    return _classify(cap, fr, _steady_rows(fr, []), tick_spans)",
+  "tests": [
+   "tests/test_analysis_frames.py::test_event_frames_are_not_steady"
+  ]
+ },
+ {
+  "name": "generated frames counted as app frames",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return ft is None or ft == \"Application\"",
+  "new": "    return True",
+  "tests": [
+   "tests/test_analysis_frames.py::test_generated_frames_are_left_out_of_the_bound",
+   "tests/test_analysis_frames_events.py::test_pacing_ignores_generated_frames"
+  ]
+ },
+ {
+  "name": "display series ignored",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if rows:\n        return rows, [float(t[i]) for i in rows], [float(disp[i]) for i in rows], \"display\"",
+  "new": "    if False:\n        return rows, [float(t[i]) for i in rows], [float(disp[i]) for i in rows], \"display\"",
+  "tests": [
+   "tests/test_analysis_frames.py::test_display_series_falls_back_to_presents_when_display_tracking_is_missing",
+   "tests/test_analysis_frames_events.py::test_stutters_use_displayed_frames_when_display_is_tracked"
+  ]
+ },
+ {
+  "name": "dropped frames in the display series",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "and _pos(_at(disp, i)) and _at(shown, i) != 0]",
+  "new": "and _pos(_at(disp, i))]",
+  "tests": [
+   "tests/test_analysis_frames.py::test_dropped_share_mode_and_runtime"
+  ]
+ },
+ {
+  "name": "stutter at 2.5 M",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "STUTTER_X = 2.5 ",
+  "new": "STUTTER_X = 2.49 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_stutter_needs_25x_the_baseline"
+  ]
+ },
+ {
+  "name": "stutter +8 ms",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "STUTTER_MIN_MS = 8.0 ",
+  "new": "STUTTER_MIN_MS = 7.99 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_stutter_needs_8_ms_above_the_baseline"
+  ]
+ },
+ {
+  "name": "merge within 250 ms",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "MERGE_S = 0.25 ",
+  "new": "MERGE_S = 0.27 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_stutters_closer_than_250_ms_merge"
+  ]
+ },
+ {
+  "name": "stall when less than half covered",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "STALL_COVER = 0.5 ",
+  "new": "STALL_COVER = 0.51 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_stall_needs_the_row_to_cover_less_than_half_of_the_gap"
+  ]
+ },
+ {
+  "name": "stalls never detected",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        if own is not None and own >= STALL_COVER * gap_ms:\n            continue",
+  "new": "        if True:\n            continue",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_a_jump_in_time_with_no_frame_to_cover_it_is_a_stall"
+  ]
+ },
+ {
+  "name": "worst_t is the start",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "            detail={\"worst_t\": worst[\"t\"],",
+  "new": "            detail={\"worst_t\": worst[\"start\"],",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_stutter_detail_class_and_span"
+  ]
+ },
+ {
+  "name": "span is the own frame only",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        span = max(dj, float(own)) if own is not None and own > 0 else dj",
+  "new": "        span = float(own) if own is not None and own > 0 else dj",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_stutters_use_displayed_frames_when_display_is_tracked"
+  ]
+ },
+ {
+  "name": "FPS drop below 80 %",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "FPS_DROP_FRAC = 0.80 ",
+  "new": "FPS_DROP_FRAC = 0.82 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_fps_drop_below_80_percent_of_the_cap"
+  ]
+ },
+ {
+  "name": "FPS drop for 2 s",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "FPS_DROP_MIN_S = 2.0 ",
+  "new": "FPS_DROP_MIN_S = 2.3 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_fps_drop_must_last_2_s_of_rolling_fps"
+  ]
+ },
+ {
+  "name": "target p90",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "TARGET_PCTL = 90.0 ",
+  "new": "TARGET_PCTL = 50.0 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_fps_target_rules"
+  ]
+ },
+ {
+  "name": "target ignores the cap",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if pace.get(\"verdict\") == \"capped\" and _num(pace.get(\"cap_fps\")):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_fps_target_rules",
+   "tests/test_analysis_frames_events.py::test_fps_drop_below_80_percent_of_the_cap"
+  ]
+ },
+ {
+  "name": "VSync target ignores the lock multiple",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        k = max(1, round(ft / (1000.0 / hz)))",
+  "new": "        k = 1",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_fps_target_rules"
+  ]
+ },
+ {
+  "name": "pacing swing 4 ms",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "PACING_SWING_MS = 4.0 ",
+  "new": "PACING_SWING_MS = 4.01 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_pacing_needs_more_than_10_percent_of_swings_at_4_ms"
+  ]
+ },
+ {
+  "name": "pacing share 10 %",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "PACING_SHARE = 0.10 ",
+  "new": "PACING_SHARE = 0.11 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_pacing_needs_more_than_10_percent_of_swings_at_4_ms"
+  ]
+ },
+ {
+  "name": "pacing animation 2 ms",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "PACING_ANIM_MS = 2.0 ",
+  "new": "PACING_ANIM_MS = 2.02 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_pacing_by_animation_error"
+  ]
+ },
+ {
+  "name": "pacing uses generated frames",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    keep = [j for j, i in enumerate(rows) if fa._is_app(fr, i)]",
+  "new": "    keep = list(range(len(rows)))",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_pacing_ignores_generated_frames"
+  ]
+ },
+ {
+  "name": "spike +30 ms",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "SPIKE_RISE_MS = 30.0 ",
+  "new": "SPIKE_RISE_MS = 30.1 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_ping_spike_needs_30_ms_over_the_rolling_minimum"
+  ]
+ },
+ {
+  "name": "spike 2x median",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "SPIKE_X_MEDIAN = 2.0 ",
+  "new": "SPIKE_X_MEDIAN = 2.01 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_ping_spike_needs_twice_the_median"
+  ]
+ },
+ {
+  "name": "spike minimum over 120 s",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "SPIKE_BASE_WINDOW_S = 120.0 ",
+  "new": "SPIKE_BASE_WINDOW_S = 125.0 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_ping_spike_minimum_looks_back_120_s_only"
+  ]
+ },
+ {
+  "name": "network samples merge within 1 s",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "NET_MERGE_S = 1.0 ",
+  "new": "NET_MERGE_S = 0.9 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_ping_spike_detail_and_merge"
+  ]
+ },
+ {
+  "name": "loss at 1 % in 15 s",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "LOSS_PCT = 1.0 ",
+  "new": "LOSS_PCT = 1.05 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_loss_needs_1_percent_in_15_s_or_a_10_percent_burst"
+  ]
+ },
+ {
+  "name": "burst at 10 %",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "BURST_PCT = 10.0",
+  "new": "BURST_PCT = 15.0",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_loss_needs_1_percent_in_15_s_or_a_10_percent_burst"
+  ]
+ },
+ {
+  "name": "burst window 200 ms",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "BURST_WINDOW_S = 0.2 ",
+  "new": "BURST_WINDOW_S = 0.3 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_loss_needs_1_percent_in_15_s_or_a_10_percent_burst"
+  ]
+ },
+ {
+  "name": "not probed counts as lost",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "            lost = [t for t, v in rows if v is None and t >= from_t]",
+  "new": "            lost = [t for t, v in rows if v is None]",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_not_probed_yet_is_not_lost"
+  ]
+ },
+ {
+  "name": "server gap 100 ms",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "GAP_MIN_MS = 100.0 ",
+  "new": "GAP_MIN_MS = 100.1 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_server_gaps_of_100_ms_or_more_are_events"
+  ]
+ },
+ {
+  "name": "mark window 3 s before",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "MARK_BEFORE_S = 3.0 ",
+  "new": "MARK_BEFORE_S = 2.9 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_mark_window_and_what_it_overlaps"
+  ]
+ },
+ {
+  "name": "mark window 0.5 s after",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "MARK_AFTER_S = 0.5",
+  "new": "MARK_AFTER_S = 0.6",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_mark_window_and_what_it_overlaps"
+  ]
+ },
+ {
+  "name": "mark visible without frames",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        mk.detail[\"visible_in_frames\"] = bool(frame_ids) if frames_measured else None",
+  "new": "        mk.detail[\"visible_in_frames\"] = bool(frame_ids)",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_mark_window_and_what_it_overlaps"
+  ]
+ },
+ {
+  "name": "jitter as a median",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    out[\"jitter_ms\"] = st.mean(diffs) if diffs else None",
+  "new": "    out[\"jitter_ms\"] = st.median(diffs) if diffs else None",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_summary_stats"
+  ]
+ },
+ {
+  "name": "rolling FPS grid unbounded",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "MAX_GRID_POINTS = 864_000 ",
+  "new": "MAX_GRID_POINTS = 864_000_000 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_rolling_fps_stays_bounded_on_a_junk_time_span"
+  ]
+ },
+ {
+  "name": "robust z 3.5",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "Z_MIN = 3.5 ",
+  "new": "Z_MIN = 3.51 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_signal_must_clear_a_robust_z_of_35"
+  ]
+ },
+ {
+  "name": "floor THREAD_EXTRA_MS",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "THREAD_EXTRA_MS = 31.25 ",
+  "new": "THREAD_EXTRA_MS = 31.3 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor IO_EXTRA_BPS",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "IO_EXTRA_BPS = 1 << 20 ",
+  "new": "IO_EXTRA_BPS = (1 << 20) + 2 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor FAULTS_RISE_PS",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "FAULTS_RISE_PS = 1000.0 ",
+  "new": "FAULTS_RISE_PS = 1000.2 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor OTHERS_ONE_PCT",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "OTHERS_ONE_PCT = 100.0 ",
+  "new": "OTHERS_ONE_PCT = 100.2 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor OTHERS_ALL_PCT",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "OTHERS_ALL_PCT = 200.0 ",
+  "new": "OTHERS_ALL_PCT = 200.2 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor OTHERS_DISK_BPS",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "OTHERS_DISK_BPS = 20e6 ",
+  "new": "OTHERS_DISK_BPS = 20.05e6 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor OTHERS_GPU_PCT",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "OTHERS_GPU_PCT = 10.0 ",
+  "new": "OTHERS_GPU_PCT = 10.05 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor DPC_RISE_PCT",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "DPC_RISE_PCT = 10.0 ",
+  "new": "DPC_RISE_PCT = 10.05 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor IRQ_RISE_PCT",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "IRQ_RISE_PCT = 5.0 ",
+  "new": "IRQ_RISE_PCT = 5.05 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor PERF_DROP_FRAC",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "PERF_DROP_FRAC = 0.20 ",
+  "new": "PERF_DROP_FRAC = 0.21 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor LIMIT_SHARE",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "LIMIT_SHARE = 0.25 ",
+  "new": "LIMIT_SHARE = 0.26 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor NV_THROTTLE_PCT",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "NV_THROTTLE_PCT = 30.0 ",
+  "new": "NV_THROTTLE_PCT = 30.05 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor SHARED_RISE_MB_PER_S",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "SHARED_RISE_MB_PER_S = 256.0 / 60.0 ",
+  "new": "SHARED_RISE_MB_PER_S = 260.0 / 60.0 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor DISK_BUSY_PCT",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "DISK_BUSY_PCT = 90.0 ",
+  "new": "DISK_BUSY_PCT = 90.05 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor DISK_READ_MS",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "DISK_READ_MS = 15.0 ",
+  "new": "DISK_READ_MS = 15.05 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor UNFOCUSED_SHARE",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "UNFOCUSED_SHARE = 0.5 ",
+  "new": "UNFOCUSED_SHARE = 0.51 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "floor BASE_WINDOW_S",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "BASE_WINDOW_S = 1.0 ",
+  "new": "BASE_WINDOW_S = 2.0 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_signal_floor"
+  ]
+ },
+ {
+  "name": "machine-wide other CPU",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "max(0.0, x * nlp - g)",
+  "new": "0.0",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_background_cpu_from_many_small_processes"
+  ]
+ },
+ {
+  "name": "RAM low at 10 %",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "RAM_LOW_FRAC = 0.10 ",
+  "new": "RAM_LOW_FRAC = 0.099 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_memory_paging_also_needs_ram_nearly_full"
+  ]
+ },
+ {
+  "name": "RAM low at 64 MB",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "RAM_LOW_MB = 64.0 ",
+  "new": "RAM_LOW_MB = 63.0 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_memory_paging_also_needs_ram_nearly_full"
+  ]
+ },
+ {
+  "name": "VRAM full at 90 %",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "VRAM_FULL_FRAC = 0.90 ",
+  "new": "VRAM_FULL_FRAC = 0.91 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_vram_overflow_also_needs_vram_90_percent_full"
+  ]
+ },
+ {
+  "name": "conditions ignored",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if best is not None and cause.condition is not None and cause.condition(a, b) is not True:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_page_faults_without_low_ram_are_not_paging"
+  ]
+ },
+ {
+  "name": "lift needs 5 events",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "LIFT_MIN_EVENTS = 5 ",
+  "new": "LIFT_MIN_EVENTS = 6 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lift_labels"
+  ]
+ },
+ {
+  "name": "lift needs a >= 3",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "LIFT_MIN_A = 3 ",
+  "new": "LIFT_MIN_A = 4 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lift_labels"
+  ]
+ },
+ {
+  "name": "lift needs a/n >= 0.30",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "LIFT_MIN_SHARE = 0.30 ",
+  "new": "LIFT_MIN_SHARE = 0.31 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lift_labels"
+  ]
+ },
+ {
+  "name": "lift >= 2",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "LIFT_MIN = 2.0 ",
+  "new": "LIFT_MIN = 2.01 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lift_labels"
+  ]
+ },
+ {
+  "name": "lift >= 4 weighs 3",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "LIFT_STRONG = 4.0 ",
+  "new": "LIFT_STRONG = 60.0 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lift_uses_a_floor_of_002_on_the_baseline_share"
+  ]
+ },
+ {
+  "name": "lift floor 0.02",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "LIFT_B_FLOOR = 0.02 ",
+  "new": "LIFT_B_FLOOR = 0.03 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lift_uses_a_floor_of_002_on_the_baseline_share"
+  ]
+ },
+ {
+  "name": "contradicts needs n >= 10",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "CONTRA_MIN_EVENTS = 10 ",
+  "new": "CONTRA_MIN_EVENTS = 11 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lift_labels"
+  ]
+ },
+ {
+  "name": "contradicts at a/n <= 0.10",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "CONTRA_MAX_SHARE = 0.10 ",
+  "new": "CONTRA_MAX_SHARE = 0.09 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lift_labels"
+  ]
+ },
+ {
+  "name": "weakest cause first",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        ranked = sorted(hits.values(), key=lambda h: (-weight[h.cause] * min(h.z, Z_CAP) / Z_MIN,",
+  "new": "        ranked = sorted(hits.values(), key=lambda h: (weight[h.cause] * min(h.z, Z_CAP) / Z_MIN,",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_driver_is_never_the_first_cause_when_something_else_moved"
+  ]
+ },
+ {
+  "name": "ties reversed",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "                                                      CAUSE_ORDER.index(h.cause)))",
+  "new": "                                                      -CAUSE_ORDER.index(h.cause)))",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_reading_from_disk_explains_the_extra_cpu_work"
+  ]
+ },
+ {
+  "name": "driver not capped",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            w = min(w, 1.0)",
+  "new": "            w = w",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_driver_is_never_the_first_cause_when_something_else_moved"
+  ]
+ },
+ {
+  "name": "no side gating",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if hit is not None and c.name in allowed:",
+  "new": "            if hit is not None:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_gpu_side_events_never_blame_cpu_causes"
+  ]
+ },
+ {
+  "name": "side from the displayed frame",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            slow = max(cand, key=lambda i: fm[i])",
+  "new": "            slow = cand[-1]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_side_comes_from_the_slowest_presented_frame_not_the_displayed_one"
+  ]
+ },
+ {
+  "name": "a stall gets a side",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if fm[slow] >= STALL_COVER * float(ev.severity):",
+  "new": "            if True:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_stall_has_no_side"
+  ]
+ },
+ {
+  "name": "residual without data",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if \"game_cpu_spike\" not in measured or base is None:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_without_system_samples_the_cause_is_unknown_not_a_stall"
+  ]
+ },
+ {
+  "name": "busy thread at 0.85",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "THREAD_BUSY = 0.85 ",
+  "new": "THREAD_BUSY = 1.01 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_nothing_moved_but_the_thread_saturated_is_the_games_own_work"
+  ]
+ },
+ {
+  "name": "guard never relaxes",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if len(windows) >= MIN_BASE_WINDOWS or guard <= QUIET_GUARD_MIN_S:",
+  "new": "        if True:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_dense_events_relax_the_quiet_guard"
+  ]
+ },
+ {
+  "name": "8 baseline windows",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "MIN_BASE_WINDOWS = 8 ",
+  "new": "MIN_BASE_WINDOWS = 30 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_dense_events_relax_the_quiet_guard"
+  ]
+ },
+ {
+  "name": "quiet guard 2 s",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "QUIET_GUARD_S = 2.0 ",
+  "new": "QUIET_GUARD_S = 1.5 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_dense_events_relax_the_quiet_guard"
+  ]
+ },
+ {
+  "name": "window 0.5 s before",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "WINDOW_BEFORE_S = 0.5 ",
+  "new": "WINDOW_BEFORE_S = 0.2 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_window_starts_half_a_second_before_the_event"
+  ]
+ },
+ {
+  "name": "window 0.25 s after",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "WINDOW_AFTER_S = 0.25",
+  "new": "WINDOW_AFTER_S = 0.0",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_window_ends_a_quarter_second_after_the_event"
+  ]
+ },
+ {
+  "name": "marks at full weight",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        weight[c.name] = w / 2.0 if half else w",
+  "new": "        weight[c.name] = w",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_marks_are_attributed_at_half_weight_when_frames_were_not_measured"
+  ]
+ },
+ {
+  "name": "program not grouped",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    many = f\" ({len(rises)} processes)\" if len(rises) > 1 else \"\"",
+  "new": "    many = \"\"",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_background_cpu_names_the_program"
+  ]
+ },
+ {
+  "name": "one pid only",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    return [pid for _, pid in rises[:8]], name,",
+  "new": "    return [pid for _, pid in rises[:1]], name,",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_background_cpu_names_the_program",
+   "tests/test_analysis_frames_synth.py::test_the_hog_events_name_the_hogs"
+  ]
+ },
+ {
+  "name": "slide unbounded",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "MAX_SLIDES = 14_400 ",
+  "new": "MAX_SLIDES = 14_400_000 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_scans_stay_bounded_on_junk_time_spans"
+  ]
+ },
+ {
+  "name": "quiet scan unbounded",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "MAX_QUIET_WINDOWS = 345_600 ",
+  "new": "MAX_QUIET_WINDOWS = 345_600_000 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_scans_stay_bounded_on_junk_time_spans"
+  ]
+ },
+ {
+  "name": "unlisted ticks not counted as 0",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        return math.fsum(self.v[lo:hi]) / n",
+  "new": "        return math.fsum(self.v[lo:hi]) / max(1, hi - lo)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_others_are_stored_only_where_a_process_was_listed"
+  ]
+ }
+]

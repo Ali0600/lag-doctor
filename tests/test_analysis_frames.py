@@ -1,0 +1,345 @@
+"""analysis/frames.py: main swap chain, frame statistics and the bound classifier, at literal points.
+
+Thresholds are pinned just either side of their value; the live test runs LagLab's own frame-cap loop.
+"""
+from __future__ import annotations
+
+import math
+import time
+
+import pytest
+
+from lagdoctor.analysis import frames as fa
+from lagdoctor.model import F, S, Capture, LagEvent
+from tests.synth import capture as make_cap, frames_table as make_frames, system_table as make_system
+
+P144 = 1000.0 / 144.003
+
+
+def bound_of(frame_ms=20.0, gpu_ms=None, thread=50.0, n=1200, cpu_pct=None, **kw):
+    events = kw.pop("events", [])
+    fr = make_frames([frame_ms] * n if not isinstance(frame_ms, list) else frame_ms, gpu_ms=gpu_ms,
+                     display_ms=kw.pop("display_ms", None), displayed=kw.pop("displayed", None),
+                     frame_type=kw.pop("frame_type", None))
+    secs = 2.0 + sum(fr[F.FRAME_MS]) / 1000.0
+    cols = {}
+    if thread is not None:
+        cols[S.GAME_TOP_THREAD_PCT] = thread
+    if cpu_pct is not None:
+        cols[S.GAME_CPU_PCT] = cpu_pct
+    for k in [k for k in kw if k in S.ALL]:
+        cols[k] = kw.pop(k)
+    cap = make_cap(fr, make_system(secs, **cols) if cols else {}, **kw)
+    return fa.bound(cap, fa.main_chain(cap), events)
+
+
+# ----------------------------------------------------------------------------------- main chain ---
+
+def test_main_chain_is_the_one_with_most_displayed_frames_not_most_rows():
+    many_rows = make_frames([10.0] * 50, displayed=[1 if i < 5 else 0 for i in range(50)], chain="0x1A2B")
+    shown = make_frames([10.0] * 20, displayed=1, chain="0x0", t0=1.003)
+    frames = {c: many_rows[c] + shown[c] for c in F.ALL}
+    fr = fa.main_chain(make_cap(frames))
+    assert set(fr[F.SWAP_CHAIN]) == {"0x0"} and len(fr[F.T]) == 20
+
+
+def test_main_chain_sorts_by_time_and_turns_junk_into_none():
+    fr = make_frames([10.0, 11.0, 12.0])
+    fr[F.T] = [3.0, 1.0, 2.0]
+    fr[F.GPU_BUSY_MS] = ["7", float("nan"), True]
+    fr[F.RUNTIME] = [5, "Other", None]
+    out = fa.main_chain(make_cap(fr))
+    assert out[F.T] == [1.0, 2.0, 3.0]
+    assert out[F.FRAME_MS] == [11.0, 12.0, 10.0]
+    assert out[F.GPU_BUSY_MS] == [None, 1, None]          # NaN and a string are missing; a bool is 0/1
+    assert out[F.RUNTIME] == ["Other", None, None]
+
+
+def test_main_chain_of_no_frames_is_empty_columns():
+    fr = fa.main_chain(make_cap({}))
+    assert set(fr) == set(F.ALL) and all(v == [] for v in fr.values())
+
+
+# ----------------------------------------------------------------------------------- statistics ---
+
+def test_one_percent_low_takes_exactly_ceil_of_one_percent_of_frames():
+    d = [10.0] * 1040 + [50.0] * 10                      # n = 1050: ceil(10.5) = 11 frames, floor would be 10
+    s = fa.frame_stats(make_frames(d), 20.0)
+    assert s["low1_fps"] == pytest.approx(1000.0 / ((10 * 50.0 + 10.0) / 11))
+    assert s["low1_fps"] != pytest.approx(20.0)
+
+
+def test_one_percent_low_does_not_sweep_in_ties():
+    # LC 2.5's tie case: 1990 frames of 6.94 ms + 10 hitches of 60 ms. "All frames >= the quantile" would
+    # average every frame (138.8 FPS); exactly ceil(1 % of n) = 20 frames gives 29.9 FPS.
+    s = fa.frame_stats(make_frames([6.94] * 1990 + [60.0] * 10), 20.0)
+    assert s["low1_fps"] == pytest.approx(29.88, abs=0.01)
+    assert s["avg_fps"] == pytest.approx(138.79, abs=0.01)
+    assert s["p1_fps"] == pytest.approx(1000.0 / 6.94)     # R-7 P99 sits inside the 6.94 ms block: it hides them
+
+
+def test_one_percent_figures_need_1000_frames():
+    assert fa.frame_stats(make_frames([10.0] * 999), 10.0)["low1_fps"] is None
+    assert fa.frame_stats(make_frames([10.0] * 999), 10.0)["p1_fps"] is None
+    s = fa.frame_stats(make_frames([10.0] * 1000), 10.0)
+    assert s["low1_fps"] == pytest.approx(100.0) and s["p99_frame_ms"] == pytest.approx(10.0)
+
+
+def test_point_one_percent_low_needs_10000_frames():
+    assert fa.frame_stats(make_frames([5.0] * 9999), 50.0)["low01_fps"] is None
+    assert fa.frame_stats(make_frames([5.0] * 9990 + [40.0] * 10), 50.0)["low01_fps"] == pytest.approx(25.0)
+
+
+def test_hitch_classes_nest_and_need_twice_the_baseline():
+    base = [10.0] * 40
+    for d, want in ((49.9, (0, 0, 0)), (50.0, (1, 0, 0)), (149.9, (1, 0, 0)), (150.0, (1, 1, 0)),
+                    (499.9, (1, 1, 0)), (500.0, (1, 1, 1))):
+        s = fa.frame_stats(make_frames(base + [d] + base), 5.0)
+        assert (s["hitches"], s["severe_hitches"], s["freezes"]) == want, d
+    # 50 ms against a 25.1 ms baseline is under 2 M: a slow game, not a hitch
+    s = fa.frame_stats(make_frames([25.1] * 40 + [50.0] + [25.1] * 5), 5.0)
+    assert s["hitches"] == 0
+    s = fa.frame_stats(make_frames([24.9] * 40 + [50.0] + [24.9] * 5), 5.0)
+    assert s["hitches"] == 1
+
+
+def test_time_beyond_50_ms_and_the_rule_of_three():
+    s = fa.frame_stats(make_frames([10.0] * 30 + [60.0, 50.0, 70.0]), 5.0)
+    assert s["time_beyond_50_ms"] == pytest.approx(30.0)            # (60-50) + 0 + (70-50)
+    assert s["hitch_rate_bound"] is None                              # there were hitches
+    assert fa.frame_stats(make_frames([10.0] * 31), 1.0)["hitch_rate_bound"] == pytest.approx(3 / 31)
+    assert fa.frame_stats(make_frames([10.0] * 30), 1.0)["hitch_rate_bound"] is None   # n must exceed 30
+
+
+def test_dropped_share_mode_and_runtime():
+    fr = make_frames([10.0] * 8, displayed=[1, 0, 1, 1, 1, 0, 1, None], display_ms=[10.0, None] + [10.0] * 6)
+    fr[F.PRESENT_MODE] = ["Composed: Flip"] * 5 + ["Hardware: Independent Flip"] * 3
+    s = fa.frame_stats(fr, 1.0)
+    assert s["dropped_pct"] == pytest.approx(100.0 * 2 / 7)
+    assert s["present_mode"] == "Composed: Flip" and s["runtime"] == "Other"
+    assert s["frames_source"] == "display" and s["frames"] == 6     # not dropped, with a display time
+
+
+def test_display_series_falls_back_to_presents_when_display_tracking_is_missing():
+    rows, t, d, src = fa.display_series(make_frames([8.0, 9.0, 10.0]))
+    assert src == "present" and d == [8.0, 9.0, 10.0] and rows == [0, 1, 2]
+    rows, t, d, src = fa.display_series(make_frames([8.0, 9.0, 10.0], display_ms=[None, 7.0, 14.0], displayed=1))
+    assert src == "display" and d == [7.0, 14.0] and rows == [1, 2]
+
+
+def test_baseline_window_size():
+    assert fa.baseline_frames(4.0) == 20          # 10 * 2 = 20
+    assert fa.baseline_frames(3.9) == 20          # clamped up
+    assert fa.baseline_frames(16.0) == 40
+    assert fa.baseline_frames(144.0) == 120       # 10 * 12 = 120
+    assert fa.baseline_frames(146.0) == 120       # clamped down
+    assert fa.baseline_frames(6.25) == 25
+
+
+def test_frame_stats_of_nothing_is_not_measured():
+    s = fa.frame_stats(make_frames([]), 30.0)
+    assert s["frames"] == 0 and s["avg_fps"] is None and s["hitches"] is None and s["duration_s"] == 30.0
+
+
+# ------------------------------------------------------------------------------------ the bound ---
+
+def test_gpu_bound_at_r_090_and_mixed_just_below():
+    assert bound_of(20.0, 18.0)["verdict"] == "gpu"           # r = 0.900
+    b = bound_of(20.0, 17.9)                                  # r = 0.895
+    assert b["verdict"] == "mixed" and b["r"] == pytest.approx(0.895)
+
+
+def test_gpu_bound_when_frame_time_minus_gpu_busy_is_at_most_1_ms():
+    assert bound_of(5.0, 4.0, n=2400)["verdict"] == "gpu"     # r = 0.80, but FT - G = 1.0 ms
+    assert bound_of(5.0, 3.95, n=2400)["verdict"] == "mixed"  # FT - G = 1.05 ms
+
+
+def test_hags_margin_comes_off_gpu_busy():
+    assert bound_of(20.0, 18.4, hags=False)["verdict"] == "gpu"          # 18.4 / 20 = 0.92
+    b = bound_of(20.0, 18.4, hags=True)                                  # (18.4 - 0.5) / 20 = 0.895
+    assert b["verdict"] == "mixed" and b["gpu_ms"] == pytest.approx(17.9)
+    assert bound_of(20.0, 18.4, hags=None)["verdict"] == "gpu"           # unknown: no margin, said in notes
+
+
+def test_cpu_main_needs_the_busiest_thread_at_085():
+    jitter = [20.0 * (1.1 if i % 2 else 0.9) for i in range(1200)]       # irregular: not a frame cap
+    assert bound_of(jitter, 10.0, thread=85.0)["verdict"] == "cpu_main"
+    assert bound_of(jitter, 10.0, thread=84.9)["verdict"] == "waiting"
+    assert bound_of(jitter, 15.0, thread=90.0)["verdict"] == "cpu_main"   # r = 0.75 still counts as CPU-or-other
+    assert bound_of(jitter, 15.2, thread=90.0)["verdict"] == "mixed"      # r = 0.76
+
+
+def test_cpu_all_cores_needs_085_of_every_logical_cpu():
+    jitter = [20.0 * (1.1 if i % 2 else 0.9) for i in range(1200)]
+    assert bound_of(jitter, 10.0, thread=50.0, cpu_pct=1360.0)["verdict"] == "cpu_all"   # 0.85 x 16 CPUs
+    assert bound_of(jitter, 10.0, thread=50.0, cpu_pct=1359.0)["verdict"] == "waiting"
+
+
+def test_without_thread_data_cpu_cannot_be_told_from_waiting():
+    jitter = [20.0 * (1.1 if i % 2 else 0.9) for i in range(1200)]
+    b = bound_of(jitter, 10.0, thread=None)
+    assert b["verdict"] == "unknown" and b["busiest_thread"] is None and b["r"] == pytest.approx(0.5)
+
+
+def test_the_busiest_thread_is_judged_over_1_s_means_not_single_ticks():
+    # one tick in four at 100 %, the rest at 80 %: no single-tick read decides, the 1 s mean is 85 %
+    jitter = [20.0 * (1.1 if i % 2 else 0.9) for i in range(1200)]
+    b = bound_of(jitter, 10.0, thread=lambda t: 100.0 if round(t / 0.25) % 4 == 0 else 80.0)
+    assert b["busiest_thread"] == pytest.approx(0.85) and b["verdict"] == "cpu_main"
+
+
+def _wobble(n, base, rel):
+    """Frame times cycling base*(1-rel), base, base*(1+rel): median base, MAD base*rel, so the robust
+    CoV is 1.4826 * rel in any window (a two-value cycle would give MAD 0 in odd-sized windows)."""
+    return [base * (1 + rel * ((i % 3) - 1)) for i in range(n)]
+
+
+def test_frame_cap_is_a_regular_cadence_off_the_refresh_multiples():
+    b = bound_of(_wobble(1500, 8.333, 0.0290 / 1.4826), 0.5, thread=30.0, hz=144.003)
+    assert b["verdict"] == "capped" and b["cap_fps"] == pytest.approx(120.0, abs=0.1)
+    b = bound_of(_wobble(1500, 8.333, 0.0310 / 1.4826), 0.5, thread=30.0, hz=144.003)
+    assert b["verdict"] == "waiting" and b["cap_fps"] is None
+
+
+def test_a_cadence_within_3_percent_of_a_refresh_multiple_is_not_a_cap():
+    near = 2 * P144 * 1.029
+    far = 2 * P144 * 1.031
+    assert bound_of(near, 0.5, thread=30.0, hz=144.003)["verdict"] == "waiting"
+    assert bound_of(far, 0.5, thread=30.0, hz=144.003)["verdict"] == "capped"
+
+
+def test_a_regular_cadence_with_a_saturated_thread_is_cpu_bound_not_capped():
+    assert bound_of(26.0, 0.5, thread=99.0, hz=144.003)["verdict"] == "cpu_main"
+    assert bound_of(26.0, 0.5, thread=84.0, hz=144.003)["verdict"] == "capped"
+
+
+def test_vsync_needs_90_percent_on_refresh_multiples_and_the_app_locked_to_one():
+    p = 1000.0 / 60.0
+    n = 1200
+    on = [p] * n
+
+    def disp(share_off):
+        k = round(share_off * n)
+        return [p + 3.0 if i < k else p for i in range(n)]          # 3 ms off the grid
+
+    assert bound_of(on, 5.0, thread=30.0, hz=60.0, display_ms=disp(0.10), displayed=1)["verdict"] == "vsync"
+    b = bound_of(on, 5.0, thread=30.0, hz=60.0, display_ms=disp(0.11), displayed=1)
+    assert b["verdict"] != "vsync" and b["quantised_pct"] == pytest.approx(89.0)
+    # displayed frames on the grid, but the game presents freely at 18 ms: composition, not VSync
+    b = bound_of(18.0, 5.0, thread=30.0, hz=60.0, display_ms=[p] * n, displayed=1)
+    assert b["verdict"] != "vsync" and b["vsync"] is False and b["vrr"] is False
+
+
+def test_vsync_band_is_the_larger_of_025_ms_and_4_percent_of_a_period():
+    p = 1000.0 / 60.0                                               # 4 % = 0.667 ms > 0.25 ms
+    assert bound_of([p] * 1200, 5.0, thread=30.0, hz=60.0, display_ms=p + 0.66, displayed=1)["vsync"] is True
+    assert bound_of([p] * 1200, 5.0, thread=30.0, hz=60.0, display_ms=p + 0.68, displayed=1)["vsync"] is False
+    p = 1000.0 / 240.0                                              # 4 % = 0.167 ms < 0.25 ms
+    assert bound_of([p] * 3000, 1.0, thread=30.0, hz=240.0, display_ms=p + 0.24, displayed=1)["vsync"] is True
+    assert bound_of([p] * 3000, 1.0, thread=30.0, hz=240.0, display_ms=p + 0.26, displayed=1)["vsync"] is False
+
+
+def test_bound_needs_300_steady_frames_and_10_s():
+    assert bound_of(34.0, 33.0, n=299)["verdict"] == "unknown"     # 10.2 s but 299 frames
+    assert bound_of(34.0, 33.0, n=300)["verdict"] == "gpu"
+    assert bound_of(16.6, 16.0, n=602)["verdict"] == "unknown"     # 602 frames but 9.99 s
+    assert bound_of(16.6, 16.0, n=603)["verdict"] == "gpu"         # 10.01 s
+
+
+def test_event_frames_are_not_steady():
+    # 1200 GPU-bound frames, but an FPS-drop event covers all but 299 of them
+    frames = [20.0] * 1200
+    t_end_of_frame_900 = 1.0 + 901 * 0.020
+    ev = LagEvent(id=1, kind="fps_drop", t_start=0.0, t_end=t_end_of_frame_900, severity=30.0)
+    assert bound_of(frames, 19.0, events=[ev])["verdict"] == "unknown"
+    pacing = LagEvent(id=2, kind="pacing", t_start=0.0, t_end=1e9, severity=6.9)
+    assert bound_of(frames, 19.0, events=[pacing])["verdict"] == "gpu"      # pacing frames are still steady
+
+
+def test_generated_frames_are_left_out_of_the_bound():
+    # every other frame generated by the driver, with no CPU or GPU timing of its own
+    frames = [10.0] * 2400
+    gpu = [9.5 if i % 2 == 0 else None for i in range(2400)]
+    ftype = ["Application" if i % 2 == 0 else "AMD AFMF" for i in range(2400)]
+    b = bound_of(frames, gpu, frame_type=ftype)
+    assert b["verdict"] == "gpu" and b["steady_frames"] == 1200
+
+
+def test_r_needs_gpu_busy_on_most_frames():
+    # PresentMon prints 0 for an unknown GPU busy (PM 2.3), so a few timed frames are not a verdict
+    jitter = [10.0 * (1.1 if i % 4 < 2 else 0.9) for i in range(1200)]       # irregular: not a frame cap
+    half = [9.5 if i % 2 == 0 else None for i in range(1200)]
+    third = [9.5 if i % 3 == 0 else None for i in range(1200)]
+    assert bound_of(jitter, half, thread=50.0)["verdict"] == "gpu"            # half the frames: enough
+    b = bound_of(jitter, third, thread=50.0)
+    assert b["r"] is None and b["verdict"] == "unknown"
+
+
+def test_thread_load_inside_events_does_not_count():
+    # the game's thread is saturated only during three long FPS drops; outside them it runs at 80 %
+    spans = [(2.0, 8.0), (12.0, 18.0), (22.0, 28.0)]
+    jitter = [20.0 * (1.1 if i % 2 else 0.9) for i in range(1500)]
+    drops = [LagEvent(id=i, kind="fps_drop", t_start=a, t_end=b, severity=30.0) for i, (a, b) in enumerate(spans)]
+    b = bound_of(jitter, 10.0, thread=lambda t: 100.0 if any(a - 0.3 <= t <= b + 0.3 for a, b in spans) else 80.0,
+                 events=drops)
+    assert b["busiest_thread"] == pytest.approx(0.80) and b["verdict"] == "waiting"
+
+
+def test_no_frames_falls_back_to_the_3d_engine():
+    cap = make_cap({}, make_system(20.0, game_gpu_pct=95.0, game_top_thread_pct=30.0))
+    b = fa.bound(cap, fa.main_chain(cap), [])
+    assert b["verdict"] == "gpu" and b["confidence"] == "low"
+    cap = make_cap({}, make_system(20.0, game_gpu_pct=94.9, game_top_thread_pct=30.0))
+    assert fa.bound(cap, fa.main_chain(cap), [])["verdict"] == "unknown"
+
+
+def test_refresh_comes_from_the_games_display():
+    inv = {"displays": [{"device": r"\\.\DISPLAY1", "primary": True, "hz": 144.003},
+                        {"device": r"\\.\DISPLAY2", "primary": False, "hz": 59.94}]}
+    cap = Capture(started_at="x", clock_origin=0.0, duration_s=1.0, target={"monitor_device": r"\\.\DISPLAY2"},
+                  sources={}, inventory=inv)
+    assert fa.refresh_hz(cap) == pytest.approx(59.94)
+    cap.target = {}
+    assert fa.refresh_hz(cap) == pytest.approx(144.003)
+    cap.inventory = {"displays": [{"device": "a", "hz": 60.0}, {"device": "b", "hz": 75.0}]}
+    assert fa.refresh_hz(cap) is None                      # two displays, none primary, no target: unknown
+
+
+# ------------------------------------------------------------------------------ live, read-only ---
+
+def test_live_laglab_frame_cap_reads_as_a_cap_despite_stray_late_frames():
+    """LagLab's own 120 FPS cap loop on this machine (headless): its cadence must pass the cap test.
+
+    The independent readout is the cap we asked for. A single OS-delayed wake-up (19 ms, measured here)
+    pushes a plain stdev/mean CoV past 3 %, so this also guards the robust estimate.
+    """
+    from laglab.app import _burn, _wait_until
+
+    starts = []
+    end = time.perf_counter() + 5.6
+    while (fs := time.perf_counter()) < end:
+        starts.append(fs)
+        _burn(0.0005)
+        _wait_until(fs + 1 / 120)
+    ms = [(b - a) * 1000.0 for a, b in zip(starts, starts[1:])]
+    fr = {F.T: [s - starts[0] for s in starts[1:]], F.FRAME_MS: ms}
+    cov, c = fa._cap_cadence(fr, list(range(len(ms))))
+    assert c == pytest.approx(1000 / 120, abs=0.05)
+    assert cov < 0.03, f"robust CoV {cov:.4f} of LagLab's real cap"          # LC 3.3's 3 %
+    late = [x for x in ms if x > 1000 / 120 + 1.0]
+    print(f"live cap: {len(ms)} frames, median {c:.4f} ms, robust CoV {100 * cov:.3f}%, {len(late)} late > 1 ms")
+
+
+def test_robust_cov_ignores_one_stray_frame_that_a_plain_cov_cannot():
+    xs = [8.3333] * 599 + [19.16]                          # what the live loop produced once in 1,200 frames
+    plain = (sum((x - sum(xs) / len(xs)) ** 2 for x in xs) / len(xs)) ** 0.5 / (sum(xs) / len(xs))
+    assert plain > 0.03                                    # LC 3.3's 3 %
+    assert fa._robust_cov(xs) < 0.03
+    assert math.isinf(fa._robust_cov([0.0, 0.0]))
+
+
+def test_robust_cov_sees_a_two_value_cadence_even_with_a_one_frame_majority():
+    xs = [4.0, 20.0] * 250 + [4.0]                         # LagLab pace mode in an odd-sized window: MAD = 0
+    assert fa._robust_cov(xs) > 1.0
+    assert fa.MAD_TO_SD * fa.st.mad(xs) / fa.st.median(xs) == 0.0     # what a MAD-based estimate would say
+    assert fa._robust_cov([9.0] * 251 + [11.0] * 249) == pytest.approx(2.0 / 1.349 / 9.0)
