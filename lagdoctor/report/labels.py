@@ -1,6 +1,8 @@
 """Plain-English labels shared by the console and HTML reports."""
 from __future__ import annotations
 
+from lagdoctor.report.charts import number
+
 LAG_TYPES = {
     "none": "No lag found",
     "low_fps": "Low frame rate",
@@ -131,7 +133,10 @@ BOUND = {
 
 def severity_text(kind: str, severity: float, detail: dict | None = None) -> str:
     """An event's severity in words. A pacing event flagged by its animation error alone (events.py's
-    detail["criterion"] "anim") carries that error as its severity, not a swing (A11)."""
+    detail["criterion"] "anim") carries that error as its severity, not a swing (A11). A severity that is not a
+    sane number (a damaged capture, A15) reads "-"."""
+    if number(severity) is None:
+        return "-"
     if kind == "stutter":
         return f"{severity:.0f} ms frame"
     if kind == "fps_drop":
@@ -146,6 +151,48 @@ def severity_text(kind: str, severity: float, detail: dict | None = None) -> str
     if kind == "net_gap":
         return f"{severity:.0f} ms silence"
     return ""
+
+
+def event_text(ev) -> str:
+    """'Stutter (160 ms frame)': an event's kind and how bad it was."""
+    kind = ev.kind if isinstance(ev.kind, str) else "?"
+    sev = severity_text(kind, ev.severity, ev.detail)
+    return EVENT_KINDS.get(kind, kind) + (f" ({sev})" if sev else "")
+
+
+def marks(stats: dict, events: list) -> list[tuple[float, list, list[str]]]:
+    """CC-5: (time, [the lag events in its window], [signals that moved]) for each of the user's lag-key presses,
+    from Diagnosis.stats["marks"] (analysis/diagnose.mark_list); entries a damaged file spoiled are left out."""
+    raw = stats.get("marks") if isinstance(stats, dict) else None
+    by_id = {ev.id: ev for ev in events or [] if isinstance(getattr(ev, "id", None), int)}
+    out = []
+    for m in raw if isinstance(raw, list) else []:
+        t = number(m.get("t")) if isinstance(m, dict) else None
+        if t is None:
+            continue
+        ids = m.get("events") if isinstance(m.get("events"), list) else []
+        found = [by_id[i] for i in ids if isinstance(i, int) and not isinstance(i, bool) and i in by_id]
+        causes = [c for c in m.get("causes") or [] if isinstance(c, str)] if isinstance(m.get("causes"), list) else []
+        out.append((t, found, causes))
+    return sorted(out, key=lambda r: r[0])
+
+
+def marks_summary(rows: list, frames_measured: bool) -> str:
+    """'You marked 4 moments: 1 matched a stutter, FPS drop or network event; 3 showed nothing in what was measured.'
+    plus what that means for the moments without an event (LC 5.2, 6). A moment with no event where the system
+    sampler saw a signal move (attributed when frames were not measured) is counted apart."""
+    n = len(rows)
+    matched = sum(1 for _, found, _ in rows if found)
+    moved = sum(1 for _, found, causes in rows if not found and causes)
+    quiet = n - matched - moved
+    parts = ([f"{matched} matched a stutter, FPS drop or network event"] if matched else []) + \
+            ([f"{moved} had no lag event but a system signal moved"] if moved else []) + \
+            ([f"{quiet} showed nothing in what was measured"] if quiet else [])
+    text = f"You marked {n} moment{'' if n == 1 else 's'}: " + "; ".join(parts) + "."
+    if n - matched:
+        text += (" No stutter or FPS drop was measured at those moments." if frames_measured else
+                 " Frame timing was not measured, so a stutter at those moments could not be seen.")
+    return text
 
 
 def cause_text(cause: str) -> str:

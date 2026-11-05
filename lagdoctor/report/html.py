@@ -3,6 +3,11 @@
 Every string that came from outside the tool (game and process names, window
 titles, adapter names, evidence text) is escaped: a process can be named
 "<script>...", and the report must still be a harmless page.
+
+A capture can be damaged (A15): every number read from it goes through
+charts.number() (junk, NaN and corrupt magnitudes read as missing), and each
+section is built on its own, so one that still breaks is replaced by a note
+saying so while the rest of the report is written.
 """
 from __future__ import annotations
 
@@ -10,13 +15,13 @@ import os
 from datetime import datetime
 from html import escape
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from lagdoctor import __version__
-from lagdoctor.analysis.stats import clean, percentile
+from lagdoctor.analysis.stats import percentile
 from lagdoctor.model import Capture, Diagnosis, F, N, S
 from lagdoctor.report import labels
-from lagdoctor.report.charts import Chart, fmt_clock
+from lagdoctor.report.charts import Chart, fmt_clock, number
 
 
 def e(value: Any) -> str:
@@ -24,12 +29,24 @@ def e(value: Any) -> str:
 
 
 def _fmt(v: Any, pattern: str = "{:.0f}", suffix: str = "") -> str:
-    if v is None:
-        return "-"
+    v = number(v)
+    return "-" if v is None else pattern.format(v) + suffix
+
+
+def _dict(v: Any) -> dict:
+    return v if isinstance(v, dict) else {}
+
+
+def _list(v: Any) -> list:
+    return v if isinstance(v, list) else []
+
+
+def _section(build: Callable[[], str]) -> str:
+    """One part of the page; a part a damaged capture still breaks becomes a note, never a lost report (A15)."""
     try:
-        return pattern.format(v) + suffix
-    except (TypeError, ValueError):
-        return e(v)
+        return build()
+    except Exception as exc:  # noqa: BLE001 - the rest of the report must still be written; this says what failed
+        return f'<p class="muted">This part of the report could not be drawn from this capture ({e(type(exc).__name__)}).</p>'
 
 
 CSS = """
@@ -97,22 +114,57 @@ def _legend(chart: Chart) -> str:
 
 
 def _not_measured_note(cap: Capture, source: str) -> str:
-    st = cap.sources.get(source)
-    why = st.detail if st and st.detail else (st.state if st else "not recorded")
+    st = _dict(cap.sources).get(source)
+    detail, state = getattr(st, "detail", None), getattr(st, "state", None)
+    why = detail if detail else (state if st else "not recorded")
     return f'<p class="muted">Not measured: {e(why)}</p>'
+
+
+def _column(table: Any, name: str) -> list:
+    return _list(_dict(table).get(name))
+
+
+def _points(table: Any, column: str, scale: float = 1.0) -> tuple[list[float], list[float | None]]:
+    """(times, values) of one column with every row whose time is not a sane number left out, and every value
+    that is not one read as missing (None): a damaged capture can hold anything (A15)."""
+    xs, ys = [], []
+    for ti, vi in zip(_column(table, "t"), _column(table, column)):
+        ti, vi = number(ti), number(vi)
+        if ti is not None:
+            xs.append(ti)
+            ys.append(None if vi is None else vi * scale)
+    return xs, ys
+
+
+def _x1(cap: Capture, xs: list[float]) -> float:
+    """The chart's right edge: the capture's length, or the last sample when that is later."""
+    return max([v for v in (number(cap.duration_s), max(xs, default=None)) if v is not None] or [1.0])
+
+
+def mark_times(d: Diagnosis, cap: Capture) -> list[float]:
+    """The user's lag-key presses: the analysed ones (Diagnosis.stats["marks"]), else the capture's own list."""
+    stats = _dict(d.stats)
+    if isinstance(stats.get("marks"), list):
+        return [t for t, _, _ in labels.marks(stats, d.events)]
+    return [t for t in (number(m) for m in _list(cap.marks)) if t is not None]
+
+
+def _draw_marks(ch: Chart, marks: list[float]) -> None:
+    for m in marks:
+        ch.vline(m, "mark", "you pressed the lag key")
 
 
 # ------------------------------------------------------------------ sections --
 
 def _tiles(d: Diagnosis) -> str:
-    s = d.stats
+    s = _dict(d.stats)
     bound = s.get("bound")
     tiles = [
         ("Average FPS", _fmt(s.get("avg_fps"))),
         ("1% low FPS", _fmt(s.get("low1_fps"))),
         ("Stutters / min", _fmt(s.get("stutters_per_min"), "{:.1f}")),
         ("Worst frame", _fmt(s.get("worst_frame_ms"), suffix=" ms")),
-        ("Limited by", e(labels.BOUND_SHORT.get(bound, bound)) if bound else "-"),
+        ("Limited by", e(labels.BOUND_SHORT.get(bound, bound)) if isinstance(bound, str) and bound else "-"),
         ("Ping (internet)", _fmt(s.get("ping_inet_ms"), suffix=" ms")),
         ("Jitter", _fmt(s.get("jitter_ms"), "{:.1f}", " ms")),
         ("Packet loss", _fmt(s.get("loss_pct"), "{:.1f}", "%")),
@@ -123,34 +175,39 @@ def _tiles(d: Diagnosis) -> str:
 
 def _main_frames(d: Diagnosis, cap: Capture) -> tuple[list, list]:
     """Frame times of the swap chain the analysis used; a game's tiny side chains would only add noise."""
-    t, ms = cap.frames.get(F.T) or [], cap.frames.get(F.FRAME_MS) or []
-    chain, chains = d.stats.get("main_chain"), cap.frames.get(F.SWAP_CHAIN)
+    t, ms = _column(cap.frames, F.T), _column(cap.frames, F.FRAME_MS)
+    chain, chains = _dict(d.stats).get("main_chain"), _column(cap.frames, F.SWAP_CHAIN)
     if chain is not None and chains and len(chains) == len(t):
         keep = [i for i, c in enumerate(chains) if c == chain]
-        t, ms = [t[i] for i in keep], [ms[i] for i in keep]
-    return t, ms
+        t, ms = [t[i] for i in keep], [ms[i] if i < len(ms) else None for i in keep]
+    xs, ys = [], []
+    for ti, vi in zip(t, ms):
+        ti, vi = number(ti), number(vi)
+        if ti is not None:
+            xs.append(ti)
+            ys.append(vi if vi is not None and vi > 0 else None)
+    return xs, ys
 
 
 def _frame_chart(d: Diagnosis, cap: Capture) -> str:
     t, ms = _main_frames(d, cap)
-    vals = clean(ms)
+    vals = [v for v in ms if v is not None]
     if not t or not vals:
         return _not_measured_note(cap, "frames")
-    refresh = d.stats.get("refresh_hz")
-    ref_ms = 1000.0 / refresh if refresh else None
+    refresh = number(_dict(d.stats).get("refresh_hz"))
+    ref_ms = 1000.0 / refresh if refresh and refresh > 0 else None
     top = min(max(vals) * 1.05, max(percentile(vals, 99.9) * 1.6, 40.0))
     top = max(top, (ref_ms or 0) * 2.2, 20.0)
-    ch = Chart("Frame times: higher is slower; spikes are stutters", 0.0, max(cap.duration_s, t[-1]), 0.0, top, " ms")
+    ch = Chart("Frame times: higher is slower; spikes are stutters", 0.0, _x1(cap, t), 0.0, top, " ms")
     for ev in d.events:
         if ev.kind == "fps_drop":
             ch.band(ev.t_start, ev.t_end, "drop", "FPS drop")
     if ref_ms:
         ch.hline(ref_ms, "ref", f"one screen refresh ({refresh:.0f} Hz = {ref_ms:.1f} ms)")
     ch.line(t, ms, "s1", "time to make each frame", agg="max")
-    stutters = [(ev.detail.get("worst_t", ev.t_start), ev.severity) for ev in d.events if ev.kind == "stutter"]
+    stutters = [(_dict(ev.detail).get("worst_t", ev.t_start), ev.severity) for ev in d.events if ev.kind == "stutter"]
     ch.dots(stutters, "bad", "stutter")
-    for m in cap.marks:
-        ch.vline(m, "mark", "you pressed the lag key")
+    _draw_marks(ch, mark_times(d, cap))
     note = ""
     worst = max(vals)
     if worst > top:
@@ -161,59 +218,60 @@ def _frame_chart(d: Diagnosis, cap: Capture) -> str:
 
 
 def _series_chart(title: str, cap: Capture, table: dict, specs: list[tuple[str, str, str]], y1: float,
-                  unit: str, source: str, scale: float = 1.0, ref: tuple[float, str] | None = None) -> str:
-    t = table.get("t") or []
-    present = [(col, cls, label) for col, cls, label in specs if any(v is not None for v in table.get(col) or [])]
-    if not t or not present:
+                  unit: str, source: str, scale: float = 1.0, ref: tuple[float, str] | None = None,
+                  marks: list[float] = ()) -> str:
+    lines = [(cls, label, *_points(table, col, scale)) for col, cls, label in specs]
+    present = [(cls, label, xs, ys) for cls, label, xs, ys in lines if any(v is not None for v in ys)]
+    if not present:
         return _not_measured_note(cap, source)
-    ch = Chart(title, 0.0, max(cap.duration_s, t[-1]), 0.0, y1, unit)
+    ch = Chart(title, 0.0, _x1(cap, [x for _, _, xs, _ in present for x in xs[-1:]]), 0.0, y1, unit)
     if ref:
         ch.hline(ref[0], "ref", ref[1])
-    for col, cls, label in present:
-        ys = [None if v is None else v * scale for v in table[col]]
-        ch.line(t, ys, cls, label, agg="mean")
+    for cls, label, xs, ys in present:
+        ch.line(xs, ys, cls, label, agg="mean")
+    _draw_marks(ch, marks)
     return ch.svg() + _legend(ch)
 
 
 def _memory_chart(cap: Capture) -> str:
     total_mb = None
-    luid = cap.target.get("adapter_luid")
-    for a in cap.inventory.get("adapters") or []:
-        if a.get("luid") == luid and a.get("vram_mb"):
-            total_mb = a["vram_mb"]
-    used = clean(cap.system.get(S.VRAM_USED_MB) or [])
-    top_mb = max([total_mb or 0] + used + clean(cap.system.get(S.GAME_SHARED_MB) or []) + [1024]) * 1.1
-    ref = (total_mb / 1024, f"video memory size ({total_mb / 1024:.1f} GB)") if total_mb else None
+    luid = _dict(cap.target).get("adapter_luid")
+    for a in _list(_dict(cap.inventory).get("adapters")):
+        if isinstance(a, dict) and luid and a.get("luid") == luid and number(a.get("vram_mb")):
+            total_mb = number(a["vram_mb"])
+    used = [v for c in (S.VRAM_USED_MB, S.GAME_SHARED_MB) for v in _points(cap.system, c)[1] if v is not None]
+    top_mb = max([total_mb or 0.0] + used + [1024.0]) * 1.1
+    ref = (total_mb / 1024, f"video memory size ({total_mb / 1024:.1f} GB)") if total_mb and total_mb > 0 else None
     return _series_chart("Video memory (VRAM)", cap, cap.system,
                          [(S.VRAM_USED_MB, "s1", "VRAM in use (all programs)"),
                           (S.GAME_SHARED_MB, "s2", "game data spilled into system RAM")],
                          top_mb / 1024, " GB", "system", scale=1 / 1024, ref=ref)
 
 
-def _network_chart(cap: Capture) -> str:
-    net = cap.network
-    t = net.get("t") or []
+def _network_chart(cap: Capture, marks: list[float] = ()) -> str:
     cols = [(N.GW_RTT_MS, "s1", "ping to your router"), (N.INET_RTT_MS, "s2", "ping to the internet"),
             (N.SERVER_RTT_MS, "s3", "ping to the game server")]
-    vals = [v for c, _, _ in cols for v in clean(net.get(c) or [])]
-    if not t or not vals:
+    lines = [(cls, label, *_points(cap.network, col)) for col, cls, label in cols]
+    vals = [v for _, _, _, ys in lines for v in ys if v is not None]
+    if not vals:
         return _not_measured_note(cap, "network")
     top = max(50.0, percentile(vals, 99) * 1.4)
-    ch = Chart("Network round-trip time", 0.0, max(cap.duration_s, t[-1]), 0.0, top, " ms")
-    for col, cls, label in cols:
-        if any(v is not None for v in net.get(col) or []):
-            ch.line(t, net[col], cls, label, agg="max")
-    inet = net.get(N.INET_RTT_MS) or []
-    listed = (cap.net_flows.get("lost") or {}).get("internet") if isinstance(cap.net_flows, dict) else None
+    t, inet = _points(cap.network, N.INET_RTT_MS)
+    ch = Chart("Network round-trip time", 0.0, _x1(cap, t[-1:]), 0.0, top, " ms")
+    for cls, label, xs, ys in lines:
+        if any(v is not None for v in ys):
+            ch.line(xs, ys, cls, label, agg="max")
+    listed = _dict(_dict(cap.net_flows).get("lost")).get("internet")
     if isinstance(listed, list):
         # The network collector's own record: a probe that got no reply. A None RTT can also mean
         # "not sent this round" (no target yet, no free worker), which is not a loss.
-        lost = [(x, top) for x in listed if isinstance(x, (int, float)) and not isinstance(x, bool)]
+        lost = [(x, top) for x in listed if number(x) is not None]
     elif any(v is not None for v in inet):
         lost = [(x, top) for x, v in zip(t, inet) if v is None]     # an older capture without the record
     else:
         lost = []
     ch.dots(lost, "bad", "lost ping (internet)")
+    _draw_marks(ch, marks)
     return ch.svg() + _legend(ch)
 
 
@@ -245,16 +303,37 @@ def _findings(d: Diagnosis) -> str:
 
 
 def _events(d: Diagnosis) -> str:
-    worst = sorted((ev for ev in d.events if ev.kind != "mark"), key=lambda ev: -ev.severity)[:15]
+    timed = [ev for ev in d.events if ev.kind != "mark" and number(ev.t_start) is not None]
+    worst = sorted(timed, key=lambda ev: -(number(ev.severity) or 0.0))[:15]
     if not worst:
         return '<p class="muted">No lag events were found.</p>'
     rows = "".join(
         f"<tr><td>{fmt_clock(ev.t_start)}</td><td>{e(labels.EVENT_KINDS.get(ev.kind, ev.kind))}</td>"
-        f"<td>{e(labels.severity_text(ev.kind, ev.severity))}</td>"
+        f"<td>{e(labels.severity_text(ev.kind, ev.severity, ev.detail))}</td>"
         f"<td>{e(', '.join(labels.cause_text(c) for c in ev.causes) or 'no clear cause')}</td></tr>"
-        for ev in sorted(worst, key=lambda ev: ev.t_start))
+        for ev in sorted(worst, key=lambda ev: number(ev.t_start)))
     return ('<div class="tablewrap"><table><thead><tr><th>When</th><th>What</th><th>How bad</th>'
             f'<th>Likely cause</th></tr></thead><tbody>{rows}</tbody></table></div>')
+
+
+def _marks(d: Diagnosis) -> str:
+    """CC-5: the moments the user marked with the lag key, and what was found at each (LC 2.4, 5.2)."""
+    rows = labels.marks(d.stats, d.events)
+    if not rows:
+        return ""
+    frames_ok = str(_dict(d.measured).get("frames", "")).startswith(("ok", "partial"))
+    body = []
+    for t, found, causes in rows:
+        if found:
+            what = "; ".join(labels.event_text(ev) for ev in found)
+        elif causes:
+            what = "No lag event; meanwhile " + ", ".join(labels.cause_text(c) for c in causes)
+        else:
+            what = "Nothing in what was measured"
+        body.append(f"<tr><td>{fmt_clock(t)}</td><td>{e(what)}</td></tr>")
+    return (f"<h2>Moments you marked</h2><p>{e(labels.marks_summary(rows, frames_ok))}</p>"
+            '<div class="tablewrap"><table><thead><tr><th>When</th><th>What was found</th></tr></thead>'
+            f"<tbody>{''.join(body)}</tbody></table></div>")
 
 
 def _yes_no(v: Any) -> str:
@@ -262,42 +341,45 @@ def _yes_no(v: Any) -> str:
 
 
 def _pc(cap: Capture) -> str:
-    inv = cap.inventory
+    inv = _dict(cap.inventory)
     rows: list[tuple[str, str]] = []
-    os_ = inv.get("os") or {}
+    os_ = _dict(inv.get("os"))
     if os_:
         rows.append(("Windows", f"{os_.get('name', '')} (build {os_.get('build', '?')})"))
-    cpu = inv.get("cpu") or {}
+    cpu = _dict(inv.get("cpu"))
     if cpu:
         rows.append(("CPU", f"{cpu.get('name', '?')}, {cpu.get('cores', '?')} cores / "
                             f"{cpu.get('threads', '?')} threads"))
-    if inv.get("ram_gb"):
-        rows.append(("Memory", f"{inv['ram_gb']:.0f} GB"))
-    for a in inv.get("adapters") or []:
+    if number(inv.get("ram_gb")):
+        rows.append(("Memory", f"{_fmt(inv['ram_gb'])} GB"))
+    game_luid = _dict(cap.target).get("adapter_luid")
+    for a in (x for x in _list(inv.get("adapters")) if isinstance(x, dict)):
         kind = "integrated" if a.get("integrated") else "dedicated"
-        used = " (the game used this one)" if a.get("luid") and a.get("luid") == cap.target.get("adapter_luid") else ""
+        used = " (the game used this one)" if a.get("luid") and a.get("luid") == game_luid else ""
         rows.append(("GPU", f"{a.get('name', '?')}, {kind}, {_fmt(a.get('vram_mb'), suffix=' MB')}{used}"))
-    for dsp in inv.get("displays") or []:
+    for dsp in (x for x in _list(inv.get("displays")) if isinstance(x, dict)):
         rows.append(("Display", f"{dsp.get('name') or dsp.get('device', '?')}: {dsp.get('width', '?')}x"
                                 f"{dsp.get('height', '?')} at {_fmt(dsp.get('hz'))} Hz "
                                 f"(max {_fmt(dsp.get('max_hz'))} Hz)"))
-    pw = inv.get("power") or {}
+    pw = _dict(inv.get("power"))
     if pw:
-        mode = (pw.get("slider") or "?").replace("_", " ")
-        battery = {True: "on battery", False: "plugged in"}.get(pw.get("on_battery"), "power source unknown")
+        mode = str(pw.get("slider") or "?").replace("_", " ")
+        on_battery = pw.get("on_battery")
+        battery = ("on battery" if on_battery is True else "plugged in" if on_battery is False
+                   else "power source unknown")
         rows.append(("Power", f"plan {pw.get('scheme_name') or '?'}; power mode {mode}; {battery}"))
-    st = inv.get("settings") or {}
+    st = _dict(inv.get("settings"))
     if st:
         rows.append(("Settings", f"Game Mode {_yes_no(st.get('game_mode'))}; background recording "
                                  f"{_yes_no(st.get('background_recording'))}; GPU scheduling "
                                  f"{_yes_no(st.get('hags'))}; windowed-game optimisations "
                                  f"{_yes_no(st.get('windowed_optimizations'))}; memory integrity "
                                  f"{_yes_no(st.get('memory_integrity'))}"))
-    game = inv.get("game") or {}
+    game = _dict(inv.get("game"))
     if game:
         rows.append(("Game file", f"{game.get('exe') or '?'} on {game.get('drive') or '?'} "
                                   f"({game.get('media') or 'unknown'} drive)"))
-    net = inv.get("network") or {}
+    net = _dict(inv.get("network"))
     if net:
         rows.append(("Network", f"{net.get('kind') or '?'} {net.get('name') or ''}".strip()))
     if not rows:
@@ -317,11 +399,12 @@ def _cleared(d: Diagnosis) -> str:
 
 def _not_measured(d: Diagnosis, cap: Capture) -> str:
     items = []
-    for src, st in sorted(cap.sources.items()):
-        if st.state != "ok":
-            items.append(f"<li><strong>{e(src)}</strong>: {e(st.detail or st.state)}</li>")
-    for what, why in sorted(d.measured.items()):
-        if why != "ok" and what not in cap.sources:
+    sources = _dict(cap.sources)
+    for src, st in sorted(sources.items(), key=lambda kv: str(kv[0])):
+        if getattr(st, "state", None) != "ok":
+            items.append(f"<li><strong>{e(src)}</strong>: {e(getattr(st, 'detail', '') or getattr(st, 'state', '?'))}</li>")
+    for what, why in sorted(_dict(d.measured).items(), key=lambda kv: str(kv[0])):
+        if why != "ok" and what not in sources:
             items.append(f"<li><strong>{e(what)}</strong>: {e(why)}</li>")
     unchecked = "".join(f"<li><strong>{e(', '.join(topics))}</strong>: {e(why)}</li>"
                         for why, topics in labels.group_unchecked(d.unchecked))
@@ -336,18 +419,28 @@ def _not_measured(d: Diagnosis, cap: Capture) -> str:
     return out
 
 
-def render(d: Diagnosis, cap: Capture, capture_path: Path | None = None) -> str:
-    game = cap.target.get("name") or "your game"
-    try:
-        when = datetime.fromisoformat(cap.started_at).strftime("%d %b %Y %H:%M")
-    except ValueError:
-        when = cap.started_at
-    lag = labels.LAG_TYPES.get(d.lag_type, d.lag_type)
-    gpu_chart = _series_chart(
+def _cpu_gpu_chart(d: Diagnosis, cap: Capture) -> str:
+    return _series_chart(
         "CPU and GPU load", cap, cap.system,
         [(S.GAME_GPU_PCT, "s1", "GPU used by the game"), (S.GAME_TOP_THREAD_PCT, "s2", "game's busiest thread"),
          (S.CPU_TOTAL_PCT, "s3", "whole CPU"), (S.GPU_OTHER_PCT, "s4", "GPU used by other programs")],
-        100.0, "%", "system")
+        100.0, "%", "system", marks=mark_times(d, cap))
+
+
+def _head(d: Diagnosis, cap: Capture, game: str) -> str:
+    try:
+        when = datetime.fromisoformat(cap.started_at).strftime("%d %b %Y %H:%M")
+    except (TypeError, ValueError):
+        when = cap.started_at
+    lag = labels.LAG_TYPES.get(d.lag_type, d.lag_type) if isinstance(d.lag_type, str) else d.lag_type
+    return (f"<header><h1>Lag report: {e(game)}</h1><p class=\"meta\">{e(when)} &middot; "
+            f"{fmt_clock(cap.duration_s)} recorded &middot; {_fmt(_dict(d.stats).get('frames'))} frames</p></header>"
+            f'<section class="verdict {e(d.lag_type)}"><div class="badge">{e(lag)}</div>'
+            f'<p class="headline">{e(d.headline)}</p></section>')
+
+
+def render(d: Diagnosis, cap: Capture, capture_path: Path | None = None) -> str:
+    game = _dict(cap.target).get("name") or "your game"
     footer = f"lag-doctor {e(__version__)}"
     if capture_path:
         footer += (f" &middot; capture saved at <code>{e(capture_path)}</code> &middot; re-run the analysis with "
@@ -356,20 +449,18 @@ def render(d: Diagnosis, cap: Capture, capture_path: Path | None = None) -> str:
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
         f"<title>Lag report: {e(game)}</title><style>{CSS}</style></head><body><main>"
-        f"<header><h1>Lag report: {e(game)}</h1><p class=\"meta\">{e(when)} &middot; "
-        f"{fmt_clock(cap.duration_s)} recorded &middot; {_fmt(d.stats.get('frames'))} frames</p></header>"
-        f'<section class="verdict {e(d.lag_type)}"><div class="badge">{e(lag)}</div>'
-        f'<p class="headline">{e(d.headline)}</p></section>'
-        f"{_tiles(d)}"
-        f"<h2>Frame times</h2>{_frame_chart(d, cap)}"
-        f"<h2>What is causing it</h2>{_findings(d)}"
-        f"<h2>CPU and GPU</h2>{gpu_chart}"
-        f"<h2>Video memory</h2>{_memory_chart(cap)}"
-        f"<h2>Network</h2>{_network_chart(cap)}"
-        f"<h2>Worst moments</h2>{_events(d)}"
-        f"<h2>This PC</h2>{_pc(cap)}"
-        f"{_cleared(d)}"
-        f"{_not_measured(d, cap)}"
+        f"{_section(lambda: _head(d, cap, game))}"
+        f"{_section(lambda: _tiles(d))}"
+        f"<h2>Frame times</h2>{_section(lambda: _frame_chart(d, cap))}"
+        f"<h2>What is causing it</h2>{_section(lambda: _findings(d))}"
+        f"<h2>CPU and GPU</h2>{_section(lambda: _cpu_gpu_chart(d, cap))}"
+        f"<h2>Video memory</h2>{_section(lambda: _memory_chart(cap))}"
+        f"<h2>Network</h2>{_section(lambda: _network_chart(cap, mark_times(d, cap)))}"
+        f"<h2>Worst moments</h2>{_section(lambda: _events(d))}"
+        f"{_section(lambda: _marks(d))}"
+        f"<h2>This PC</h2>{_section(lambda: _pc(cap))}"
+        f"{_section(lambda: _cleared(d))}"
+        f"{_section(lambda: _not_measured(d, cap))}"
         f"<footer>{footer}</footer></main></body></html>")
 
 

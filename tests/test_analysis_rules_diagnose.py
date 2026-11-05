@@ -19,7 +19,7 @@ from e2e_truth import judge  # noqa: E402
 from lagdoctor.analysis import attribute, events, frames, rules  # noqa: E402
 from lagdoctor.analysis import diagnose as dg  # noqa: E402
 from lagdoctor.analysis.diagnose import diagnose  # noqa: E402
-from lagdoctor.model import F, S, Capture, Diagnosis, Finding, SourceStatus  # noqa: E402
+from lagdoctor.model import F, N, S, Capture, Diagnosis, Finding, SourceStatus  # noqa: E402
 from tests import synth  # noqa: E402
 
 
@@ -34,10 +34,11 @@ def causes(d: Diagnosis) -> set[str]:
 
 # ----------------------------------------------------------------------------- acceptance ---
 
+@pytest.mark.parametrize("hiccups", [0.0, synth.MEASURED_HICCUP_RATE])
 @pytest.mark.parametrize("seed", [1, 2])
 @pytest.mark.parametrize("mode", synth.MODES)
-def test_every_laglab_scenario_passes_the_end_to_end_judge(mode, seed):
-    s = synth.laglab(mode, seed=seed)
+def test_every_laglab_scenario_passes_the_end_to_end_judge(mode, seed, hiccups):
+    s = synth.laglab(mode, seed=seed, hiccups=hiccups)
     d = diagnose(s.cap)
     assert discrete(s.cap) and "intel" in s.log["gl_renderer"].lower()     # so the judge demands wrong_gpu too
     v = judge(mode, s.log, s.cap.clock_origin, d, has_discrete_gpu=discrete(s.cap))
@@ -48,14 +49,27 @@ def test_every_laglab_scenario_passes_the_end_to_end_judge(mode, seed):
 @pytest.mark.parametrize("mode, lag, lead", [("smooth", "none", None), ("gpu", "low_fps", "wrong_gpu"),
                                              ("cpu", "low_fps", "cpu_limit"), ("hitch", "stutter", "game_cpu_spike"),
                                              ("hitch-io", "stutter", "asset_streaming"),
-                                             ("hitch-wait", "stutter", "game_stall"), ("hog", "mixed", "background_hogs"),
-                                             ("pace", "pacing", "uneven_pacing")])
+                                             ("hitch-wait", "stutter", "game_stall"), ("hog", "mixed", "background_hogs")])
 def test_lag_type_and_the_finding_the_headline_names(mode, lag, lead):
     d = diagnose(synth.laglab(mode).cap)
     assert d.lag_type == lag
     if lead:
         assert d.findings[0].cause == lead and d.findings[0].confidence == "high"
-        assert dg.labels.cause_text(lead) in d.headline or lead == "uneven_pacing"
+        assert dg.labels.cause_text(lead) in d.headline
+
+
+def test_laglabs_pace_mode_is_uneven_and_low_and_the_headline_names_the_uneven_pacing():
+    # Changed on purpose (A1, A6). Pace mode sleeps to its own 4 / 20 ms deadlines: 66 FPS shown on the 144 Hz
+    # panel with neither side at its limit ("waiting"), so it is low FPS as well as uneven: "mixed". One frame-time
+    # pattern weighs W_STEADY now, so uneven_pacing is "possible" and wrong_gpu (same tier, an auto-fix) ranks
+    # first; the headline still names uneven_pacing, the finding that claims the lag's own events.
+    d = diagnose(synth.laglab("pace").cap)
+    assert d.lag_type == "mixed" and d.stats["bound"] == "waiting"
+    pacing = next(f for f in d.findings if f.cause == "uneven_pacing")
+    assert pacing.confidence == "medium" and set(pacing.event_ids) & {e.id for e in d.events if e.kind == "pacing"}
+    assert d.headline.startswith("Several problems: Low frame rate (66 FPS average on a 144 Hz screen; neither the "
+                                 "CPU nor the GPU is at its limit) and uneven frame pacing over ")
+    assert "the game itself hands over its frames at uneven intervals" in d.headline
 
 
 def test_headlines_carry_the_numbers_and_the_rule_of_three():
@@ -66,8 +80,6 @@ def test_headlines_carry_the_numbers_and_the_rule_of_three():
     assert hitch.startswith("9 stutters (18.0 a minute, worst ") and "no hitches" not in hitch
     smooth = diagnose(synth.laglab("smooth").cap).headline
     assert smooth.startswith("No lag stood out: no hitches ≥ 50 ms in ")
-    pace = diagnose(synth.laglab("pace").cap).headline
-    assert pace.startswith("Uneven frame pacing over ") and "uneven intervals" in pace
 
 
 # ------------------------------------------------------------------------------- negatives ---
@@ -186,7 +198,8 @@ def test_the_planted_gpu_evidence_is_strong_enough_to_report_without_the_gate():
 FIX_PARAMS = {"power_plan": {"scheme": str}, "refresh_rate": {"device": str, "hz": int},
               "gpu_preference": {"exe": str, "preference": int}, "game_dvr_off": {}, "game_mode_on": {},
               "windowed_optimizations_on": {},
-              "background_priority": {"pid": int, "create_time": int, "class": str, "exclude": list}}
+              "background_priority": {"pid": int, "create_time": int, "class": str, "exclude": list, "name": str,
+                                      "game_name": (str, type(None))}}
 FIX_OF_CAUSE = {"power_plan": "power_plan", "refresh_rate": "refresh_rate", "wrong_gpu": "gpu_preference",
                 "game_dvr": "game_dvr_off", "game_mode_off": "game_mode_on",
                 "windowed_composition": "windowed_optimizations_on", "background_hogs": "background_priority"}
@@ -204,7 +217,10 @@ def everything_wrong():
     inv["settings"].update(game_dvr=True, background_recording=True, game_mode=False, windowed_optimizations=False)
     cap.frames[F.PRESENT_MODE] = ["Composed: Copy with GPU GDI"] * len(cap.frames[F.T])
     cap.frames[F.RUNTIME] = ["DXGI"] * len(cap.frames[F.T])
-    cap.others = [[t, [list(p) + [134000000000000000 + p[0]] for p in procs]] for t, procs in cap.others]
+    # synth's hogs (pid 20000 and up) share LagLab's image name, python.exe, which never gets a priority fix
+    # (SEC-2): name them as the separate program they stand for
+    cap.others = [[t, [[p[0], "hog.exe" if p[0] >= 20000 else p[1], *p[2:], 134000000000000000 + p[0]]
+                       for p in procs]] for t, procs in cap.others]
     return cap
 
 
@@ -227,6 +243,8 @@ def test_every_fix_offered_matches_designs_fix_table_exactly():
     assert offered["background_priority"]["class"] == "below_normal"
     assert offered["background_priority"]["pid"] != synth.GAME_PID
     assert synth.GAME_PID in offered["background_priority"]["exclude"]
+    assert offered["background_priority"]["name"] == "hog.exe"
+    assert offered["background_priority"]["game_name"] == "python.exe"
 
 
 @pytest.mark.parametrize("mode", synth.MODES)
@@ -247,6 +265,7 @@ STATS_KEYS = ("frames duration_s avg_fps low1_fps low01_fps p1_fps median_frame_
 def test_the_stats_hold_every_key_design_lists():
     d = diagnose(synth.laglab("hitch").cap)
     assert set(STATS_KEYS) <= set(d.stats)
+    assert d.stats["marks"] == []                                  # CC-5: the user's presses, none here
     assert d.stats["main_chain"] == "0x0" and d.stats["bound"] == "capped" and d.stats["stutters"] == 9
     assert d.stats["ping_inet_ms"] is not None and d.stats["refresh_hz"] == pytest.approx(144.003)
 
@@ -329,6 +348,19 @@ def test_a_corrupt_capture_degrades_without_crashing_any_rule():
     json.dumps(d.to_json(), allow_nan=False)
 
 
+def test_a_corrupt_capture_still_gets_both_reports_whole(tmp_path):
+    # A15: html.write crashed on a string in a system column, and the user lost the report of a capture
+    # the analysis had read
+    from lagdoctor.report import console, html
+    cap = junk_capture()
+    d = diagnose(cap)
+    text = console.render(d, cap)
+    assert "VERDICT [STUTTER]" in text and "could not be shown" not in text
+    page = html.write(d, cap, tmp_path / "report.html").read_text(encoding="utf-8")
+    assert "could not be drawn" not in page and page.endswith("</html>")
+    assert "<h2>CPU and GPU</h2><svg" in page and "<h2>Frame times</h2><svg" in page
+
+
 # --------------------------------------------------------------------- lag type and lag time ---
 
 @pytest.mark.parametrize("lag, frames_ok, want", [
@@ -339,12 +371,22 @@ def test_lag_type_is_the_category_with_the_most_lag_time(lag, frames_ok, want):
     assert dg.pick_lag_type(lag, frames_ok) == want
 
 
-@pytest.mark.parametrize("verdict, fps, hz, steady", [("gpu", 129.5, 144.0, 25.0), ("gpu", 129.7, 144.0, 0.0),
-                                                      ("cpu_main", 59.9, None, 25.0), ("cpu_main", 60.1, None, 0.0),
-                                                      ("capped", 30.0, 144.0, 0.0), ("waiting", 30.0, 144.0, 0.0)])
-def test_a_frame_rate_the_hardware_holds_under_the_refresh_counts_as_low_fps_time(verdict, fps, hz, steady):
+# Changed on purpose: the old points pinned LC 4.14's 0.9 x refresh (a cap rule), and "waiting" at 30 FPS on 144 Hz
+# counting nothing (A6). Now: steady time under 80 % of the target (LC 2.4, S18; DECISIONS 2026-11-04) counts,
+# whatever holds the rate there; a cap or a VSync lock is the game's own target.
+@pytest.mark.parametrize("verdict, fps, hz, steady", [
+    ("gpu", 115.1, 144.0, 25.0), ("gpu", 115.3, 144.0, 0.0),            # 0.8 x 144 = 115.2
+    ("gpu", 120.0, 144.0, 0.0),                                         # DECISIONS: not "low" for the whole capture
+    ("cpu_main", 47.9, None, 25.0), ("cpu_main", 48.1, None, 0.0),      # no refresh: 0.8 x 60 = 48
+    ("cpu_all", 30.0, 60.0, 25.0), ("mixed", 30.0, 60.0, 25.0),
+    ("waiting", 30.0, 144.0, 25.0), ("waiting", 120.0, 144.0, 0.0),     # A6: neither side at its limit
+    ("unknown", 30.0, 144.0, 25.0),                                     # the frame rate is measured all the same
+    ("capped", 30.0, 144.0, 0.0), ("vsync", 30.0, 60.0, 0.0)])         # their own target: never low FPS
+def test_steady_time_under_80_percent_of_the_refresh_counts_as_low_fps(verdict, fps, hz, steady):
     lag = dg.lag_time([], [], {"avg_fps": fps}, {"verdict": verdict, "refresh_hz": hz, "steady_s": 25.0}, True)
     assert lag["low_fps"] == steady
+    assert dg.lag_time([], [], {"avg_fps": fps}, {"verdict": verdict, "refresh_hz": hz, "steady_s": 25.0},
+                       False)["low_fps"] == 0.0                         # frames not measured: nothing to count
 
 
 def test_pacing_counts_only_where_a_confident_pacing_finding_claims_it():
@@ -354,6 +396,295 @@ def test_pacing_counts_only_where_a_confident_pacing_finding_claims_it():
         f = Finding(cause="uneven_pacing", title="t", category="pacing", confidence=conf, score=0.5, summary="",
                     event_ids=[1])
         assert dg.lag_time(pac, [f], {}, {"verdict": "waiting"}, True)["pacing"] == want
+
+
+def test_pacing_lag_time_leaves_out_the_stutters_and_fps_drops_inside_it():
+    # A1: a pacing window around a hitch counted the hitch's own time twice, and window-sized pacing outweighed it
+    from lagdoctor.model import LagEvent
+    evs = [LagEvent(1, "pacing", 0.0, 10.0, 7.0, {}), LagEvent(2, "stutter", 2.0, 2.5, 450.0, {}),
+           LagEvent(3, "fps_drop", 5.0, 7.0, 30.0, {}), LagEvent(4, "stutter", 9.5, 11.0, 300.0, {}),
+           LagEvent(5, "pacing", 20.0, 24.0, 7.0, {})]          # after every stutter: kept whole
+    f = Finding(cause="uneven_pacing", title="t", category="pacing", confidence="medium", score=0.5, summary="",
+                event_ids=[1, 5])
+    lag = dg.lag_time(evs, [f], {}, {"verdict": "capped"}, True)
+    assert lag["pacing"] == pytest.approx(10.0 - 0.5 - 2.0 - 0.5 + 4.0)
+    assert lag["stutter"] == pytest.approx(2.0) and lag["low_fps"] == pytest.approx(2.0)
+    assert dg._minus([(5.0, 10.0)], [(1.0, 2.0), (12.0, 13.0)]) == [(5.0, 10.0)]       # cuts outside it
+    assert dg._minus([(5.0, 10.0)], [(4.0, 6.0), (9.0, 11.0)]) == [(6.0, 9.0)]         # cuts over its ends
+
+
+def test_dropped_frame_judder_counts_as_pacing_whichever_rule_claims_it():
+    # A11: frames made faster than a fixed refresh are never shown and the picture jerks. With a cap above the
+    # refresh the claim is frame_cap's ("setup"), and before this the verdict said no lag stood out
+    from lagdoctor.model import LagEvent
+    pac = [LagEvent(1, "pacing", 0.0, 29.0, 6.7, {"criterion": "anim"})]
+    cap_finding = Finding(cause="frame_cap", title="t", category="setup", confidence="medium", score=0.5, summary="",
+                          event_ids=[1])
+    assert dg.lag_time(pac, [cap_finding], {}, {"verdict": "capped"}, True, dropped={1})["pacing"] == 29.0
+    assert dg.lag_time(pac, [cap_finding], {}, {"verdict": "capped"}, True)["pacing"] == 0.0   # a cap's own judder
+    d = diagnose(synth.laglab("smooth", fps_cap=86.0, refresh_hz=60.0).cap)
+    assert d.lag_type == "pacing" and d.stats["bound"] == "capped"
+    assert d.headline.startswith("Uneven frame pacing over ") and "possibly a frame-rate cap" in d.headline
+    assert not [e for e in d.events if e.kind == "fps_drop"]
+
+
+# --------------------------------------------------------------------- severe hitches (A1) ---
+
+def gpu_bound_with_freezes(freeze_ms: float, n: int = 8, dur: float = 60.0, ft: float = 19.6):
+    """A GPU-bound game at ~51 FPS on the 144 Hz panel, with n frames of freeze_ms spread over the capture."""
+    import random
+    rng = random.Random(7)
+    fms, gms, t = [], [], 1.0
+    at = [5.0 + i * (dur - 10) / n for i in range(n)]
+    while t < dur - 0.5:
+        if at and t >= at[0]:
+            at.pop(0)
+            f, g = freeze_ms, 3.0
+        else:
+            f = ft * rng.uniform(0.97, 1.03)
+            g = f * 0.96
+        fms.append(f)
+        gms.append(g)
+        t += f / 1000.0
+    fr = synth.frames_table(fms, gpu_ms=gms, display_ms=fms, displayed=1, mode="Hardware: Independent Flip",
+                            runtime="DXGI")
+    spans = [(fr[F.T][i] - f / 1000, fr[F.T][i]) for i, f in enumerate(fms) if f >= 250]
+
+    def thread(x):
+        return 100.0 if any(a - 0.1 <= x <= b + 0.1 for a, b in spans) else 55.0 + rng.uniform(-3, 3)
+
+    cap = synth.capture(fr, synth.system_table(dur, game_top_thread_pct=thread, game_cpu_pct=lambda x: thread(x) + 60,
+                                               game_gpu_pct=96.0, cpu_total_pct=20.0, game_focused=1),
+                        hz=synth.REFRESH_HZ, duration=dur)
+    cap.sources = synth.sources(("frames", "system"))
+    return cap
+
+
+def pacing_with_hitches():
+    """30 s of uneven 12 / 20 ms frames on 60 Hz, with five hitches of 150 to 450 ms."""
+    ms, t, i = [], 0.0, 0
+    at, sizes = [5.0, 11.0, 17.0, 22.0, 27.0], [150.0, 300.0, 450.0, 200.0, 350.0]
+    while t < 30.0:
+        if at and t >= at[0]:
+            at.pop(0)
+            f = sizes.pop(0)
+        else:
+            f = 12.0 if i % 2 == 0 else 20.0
+            i += 1
+        ms.append(f)
+        t += f / 1000.0
+    cap = synth.capture(synth.frames_table(ms, t0=0.2, gpu_ms=5.0, frame_type="Application", displayed=1),
+                        duration=30.5, hz=60.0)
+    cap.sources = synth.sources(("frames",))
+    return cap
+
+
+@pytest.mark.parametrize("make, lag, named", [
+    (lambda: gpu_bound_with_freezes(600.0), "low_fps", "; also 8 freezes, worst 600 ms."),
+    (lambda: gpu_bound_with_freezes(300.0), "low_fps", "; also 8 severe hitches, worst 300 ms."),
+    (pacing_with_hitches, "pacing", "; also 5 severe hitches, worst 450 ms.")])
+def test_severe_hitches_and_freezes_are_named_whatever_the_lag_type(make, lag, named):
+    # A1 (LC 2.3: spikes >= 225 ms are never acceptable): the headline once named only the frame rate or the pacing
+    d = diagnose(make())
+    assert d.lag_type == lag and d.headline.endswith(named), d.headline
+
+
+def test_the_severe_hitch_clause_counts_from_the_stats_or_else_the_events():
+    from lagdoctor.model import LagEvent
+    evs = [LagEvent(1, "stutter", 1.0, 1.2, 180.0, {"class": "severe"}),
+           LagEvent(2, "stutter", 5.0, 5.7, 640.0, {"class": "freeze"}),
+           LagEvent(3, "stutter", 9.0, 9.1, 70.0, {"class": "hitch"})]
+    assert dg._severe({"severe_hitches": 3, "freezes": 1}, evs) == "2 severe hitches and 1 freeze, worst 640 ms"
+    assert dg._severe({}, evs) == "1 severe hitch and 1 freeze, worst 640 ms"           # no stats: the events
+    assert dg._severe({"severe_hitches": 1, "freezes": 0, "worst_frame_ms": 160.0}, []) == "1 severe hitch, worst 160 ms"
+    assert dg._severe({"severe_hitches": 0, "freezes": 0}, evs[2:]) is None              # a 70 ms hitch: not severe
+    env = rules._Env(synth.laglab("hitch").cap, {"stats": {"frames": 3000}})
+    stutter = dg.headline("stutter", [], {"stutters_per_min": 2.0, "severe_hitches": 1, "freezes": 1}, evs[1:2],
+                          {"stutter": 0.7}, env)
+    assert "also" not in stutter                                     # the stutter part names them already
+
+
+def test_gold_hitches_inside_uneven_pacing_are_named(presentmon_exe, gold_etl_dir):
+    # A1 on PresentMon's own output: test_case_4 (dwm.exe, 60 Hz) holds two ~420 ms hitches inside pacing that
+    # covers the whole replay; the headline once read only "Uneven frame pacing over 100% of the capture"
+    import time
+    from lagdoctor.capture import presentmon as pm
+    src = pm.PresentMonSource(10376, exe=presentmon_exe, etl_file=gold_etl_dir / "test_case_4.etl")
+    src.start(0.0)
+    deadline = time.monotonic() + 60.0
+    while src._thread is not None and src._thread.is_alive():
+        assert time.monotonic() < deadline, "the replay did not finish in 60 s"
+        time.sleep(0.1)
+    src.stop()
+    assert src.status().state == "ok", src.status()
+    cols = {k: list(v) for k, v in src.result()["columns"].items()}
+    t0 = min(x for x in cols[F.T] if isinstance(x, float))
+    cols[F.T] = [x - t0 if isinstance(x, float) else x for x in cols[F.T]]
+    cap = Capture(started_at="2026-11-04T00:00:00+00:00", clock_origin=0.0,
+                  duration_s=max(x for x in cols[F.T] if isinstance(x, float)), target={"pid": 10376},
+                  sources={"frames": SourceStatus("ok")}, frames=cols,
+                  inventory={"cpu": {"threads": 16}, "settings": {"hags": None},
+                             "displays": [{"device": r"\\.\DISPLAY1", "primary": True, "hz": 60.0}]})
+    d = diagnose(cap)
+    assert sorted(round(e.severity) for e in d.events if e.kind == "stutter") == [416, 434]
+    assert "worst 434 ms" in d.headline, d.headline
+
+
+# --------------------------------------------------------------------- low FPS, waiting (A6) ---
+
+def waiting_game(fps: float = 45.0, thread: float = 75.0):
+    """A steady game under the refresh with neither side at its limit: r = 0.23 and its busiest thread at
+    `thread` % (LC 3.2's grey zone at 75), the process using 2.6 CPUs, on the 144 Hz panel."""
+    import random
+    rng = random.Random(3)
+    ft = 1000.0 / fps
+    fms = [ft * rng.uniform(0.93, 1.07) for _ in range(int(38.5 / (ft / 1000.0)))]
+    fr = synth.frames_table(fms, gpu_ms=[0.23 * f for f in fms], display_ms=fms, displayed=1,
+                            mode="Hardware: Independent Flip", runtime="DXGI")
+    sysb = synth.system_table(40.0, game_top_thread_pct=lambda t: thread + rng.uniform(-4, 4), game_cpu_pct=260.0,
+                              game_gpu_pct=25.0, cpu_total_pct=25.0, game_focused=1)
+    cap = synth.capture(fr, sysb, hz=synth.REFRESH_HZ, duration=40.0)
+    cap.sources = synth.sources(("frames", "system"))
+    return cap
+
+
+@pytest.mark.parametrize("thread, said", [
+    (55.0, "neither the CPU nor the GPU is at its limit"),                          # LC 3.2's "Neither" (< 0.6)
+    (75.0, "the GPU is not at its limit and the CPU may be close to it, its busiest thread at 7")])   # grey zone
+def test_a_low_frame_rate_while_waiting_is_low_fps_and_says_neither_side_is_the_limit(thread, said):
+    # A6: a steady 45 FPS on 144 Hz with r = 0.23 got "No lag stood out" and CPU and GPU "checked and fine"
+    d = diagnose(waiting_game(thread=thread))
+    assert d.stats["bound"] == "waiting" and d.lag_type == "low_fps"
+    assert d.headline.startswith(f"Low frame rate (45 FPS average on a 144 Hz screen; {said}"), d.headline
+    assert "No lag" not in d.headline
+    # the headline and the lists agree: the grey zone keeps the CPU open, under 0.6 it is checked and fine
+    assert ("cpu_limit" in d.cleared) == (thread < 100 * rules.THREAD_WAITING) and "gpu_limit" in d.cleared
+    assert not diagnose(waiting_game(fps=120.0)).lag_type == "low_fps"              # 120 of 144: no low FPS
+
+
+# ------------------------------------------------------------------------- no hitches (A4) ---
+
+def test_the_rule_of_three_is_never_claimed_next_to_a_50_ms_stutter():
+    # A4: a stall's freeze event next to frame stats that missed it read "no hitches >= 50 ms in N frames"
+    from lagdoctor.model import LagEvent
+    env = rules._Env(synth.laglab("hitch").cap, {"stats": {"frames": 3000}})
+    stats = {"hitches": 0, "frames": 3000, "hitch_rate_bound": 0.001, "avg_fps": 40.0, "refresh_hz": 144.0}
+    stall = [LagEvent(1, "stutter", 5.0, 10.0, 5010.0, {"class": "freeze", "stall": True})]
+    assert "no hitches" not in dg.headline("low_fps", [], stats, stall, {"low_fps": 20.0}, env)
+    short = [LagEvent(1, "stutter", 5.0, 5.03, 30.0, {"class": "stutter"})]       # under 50 ms: the bound stands
+    assert "no hitches ≥ 50 ms in 3,000 frames" in dg.headline("low_fps", [], stats, short, {"low_fps": 20.0}, env)
+
+
+# ---------------------------------------------------------------------------- network (A8) ---
+
+def net_event(i, event_kind, t0, t1, **detail):
+    from lagdoctor.model import LagEvent
+    return LagEvent(i, event_kind, t0, t1, 50.0, detail)
+
+
+@pytest.mark.parametrize("dur, span, want", [(120.0, 1.19, 0.0), (120.0, 1.21, 1.21),    # 1 % of 120 s = 1.2 s
+                                             (50.0, 0.99, 0.0), (50.0, 1.01, 1.01)])     # at least 1 s
+def test_one_network_event_names_network_lag_only_past_one_percent_or_a_second(dur, span, want):
+    lag = dg.lag_time([net_event(1, "net_spike", 60.0, 60.0 + span, target="internet")], [],
+                      {"duration_s": dur}, {}, True)
+    assert lag["network"] == pytest.approx(want)
+
+
+def test_two_network_events_are_network_lag_however_short():
+    evs = [net_event(1, "net_spike", 10.0, 10.5, target="internet"), net_event(2, "net_gap", 50.0, 50.3, kind="delay")]
+    assert dg.lag_time(evs, [], {"duration_s": 120.0}, {}, True)["network"] == pytest.approx(0.8)
+
+
+def test_a_router_that_ignores_pings_and_a_game_that_paused_are_no_network_lag():
+    # A8, NE 7 row 9: lost router pings with the internet answering are the router ignoring ICMP; NE 4.6: a "local"
+    # gap is the game's own sending paused (a hitch the frames show), not the network
+    gw = [net_event(1, "net_loss", 30.0, 32.0, target="gateway"), net_event(2, "net_loss", 70.0, 72.0, target="gateway")]
+    local = [net_event(3, "net_gap", 40.0, 43.0, kind="local"), net_event(4, "net_gap", 90.0, 92.0, kind="local")]
+    assert dg.lag_time(gw + local, [], {"duration_s": 120.0}, {}, True)["network"] == 0.0
+    both = gw[:1] + [net_event(5, "net_loss", 30.5, 31.5, target="internet")]       # the internet lost them too
+    assert dg.lag_time(both, [], {"duration_s": 120.0}, {}, True)["network"] == pytest.approx(2.0)
+    assert {e.id for e in dg.network_events(both)} == {1, 5}
+    stalled = gw[:1] + [net_event(6, "net_gap", 30.5, 31.5, kind="local")]          # the PC stalled: no corroboration
+    assert dg.network_events(stalled) == []
+
+
+@pytest.mark.parametrize("label, kw, lag", [
+    ("one slow ping, two rounds", dict(net_spikes=[(60.0, 60.9, 36.0)]), "none"),
+    ("four lost rounds in a row", dict(net_losses=[60.2, 60.7, 61.2, 61.7]), "network"),
+    ("the game paused its own traffic", dict(server_gaps=[(40.0, 3000.0, "local")]), "none"),
+    ("the server stopped answering", dict(server_gaps=[(100.0, 20000.0, "open")]), "network"),
+    ("two late bursts", dict(server_gaps=[(40.0, 300.0, "delay"), (80.0, 300.0, "delay")]), "network")])
+def test_network_lag_needs_more_than_one_short_event(label, kw, lag):
+    d = diagnose(synth.laglab("smooth", duration_s=120.0, **kw).cap)
+    assert d.lag_type == lag, (label, d.headline)
+
+
+def test_a_router_ignoring_pings_in_a_real_capture_is_no_network_lag():
+    s = synth.laglab("smooth", duration_s=120.0)
+    t = s.cap.network[N.T]
+    for m in (60.2, 60.7, 61.2):                  # three router pings in a row unanswered, the internet answering
+        k = min(range(len(t)), key=lambda i: abs(t[i] - m))
+        s.cap.network[N.GW_RTT_MS][k] = None
+        s.cap.net_flows["lost"]["gateway"].append(t[k])
+    s.cap.net_flows["probes"]["gateway"]["lost"] = 3
+    d = diagnose(s.cap)
+    assert [e.detail["target"] for e in d.events if e.kind == "net_loss"] == ["gateway"]    # the event exists ...
+    assert d.lag_type == "none"                                                           # ... and is no lag
+
+
+def test_a_lost_connection_is_said_with_its_time():
+    d = diagnose(synth.laglab("smooth", duration_s=120.0, server_gaps=[(100.0, 20000.0, "open")]).cap)
+    assert d.headline.startswith("Network lag (the game server stopped answering at 1:40)")
+
+
+# ------------------------------------------------------------------------------ marks (CC-5) ---
+
+def test_the_marks_reach_the_diagnosis_with_what_matched_them():
+    # LagLab's hitch mode hitches every 3 s from 3.4 s; a press covers the 3 s before it and 0.5 s after (LC 2.4)
+    s = synth.laglab("hitch", marks=(2.5, 3.9, 12.0, 20.0))
+    d = diagnose(s.cap)
+    marks = d.stats["marks"]
+    assert [m["t"] for m in marks] == [2.5, 3.9, 12.0, 20.0]
+    kinds = [{next(e.kind for e in d.events if e.id == i) for i in m["events"]} for m in marks]
+    assert kinds == [set(), {"stutter"}, {"stutter"}, {"stutter"}]          # 2.5 s: before the first hitch
+    json.dumps(d.to_json(), allow_nan=False)
+
+
+def test_a_mark_is_not_matched_by_a_router_that_ignored_pings():
+    # NE 7 row 9: router-only loss is no lag, so it cannot explain the moment the user marked either
+    from lagdoctor.model import LagEvent
+    mk = LagEvent(3, "mark", 27.0, 30.5, 0.0, {"mark_t": 30.0, "frame_events": [], "net_events": [1]})
+    gw = net_event(1, "net_loss", 29.0, 30.0, target="gateway")
+    assert dg.mark_list([gw, mk]) == [{"t": 30.0, "events": [], "causes": []}]
+    inet = net_event(2, "net_loss", 29.2, 29.8, target="internet")          # the internet lost them too
+    mk.detail["net_events"] = [1, 2]
+    assert dg.mark_list([gw, inet, mk])[0]["events"] == [1, 2]
+
+
+def test_marks_are_reported_also_without_frame_timing():
+    from lagdoctor.report import console, html
+    s = synth.laglab("smooth", duration_s=40.0, marks=(8.0, 15.0, 22.0, 30.0), with_frames=False)
+    d = diagnose(s.cap)
+    assert [m["t"] for m in d.stats["marks"]] == [8.0, 15.0, 22.0, 30.0]
+    text = console.render(d, s.cap)
+    assert "You marked 4 moments: 4 showed nothing in what was measured. Frame timing was not measured" in \
+        " ".join(text.split())
+    assert "0:08, 0:15, 0:22, 0:30" in text
+    page = html.render(d, s.cap)
+    assert "<h2>Moments you marked</h2>" in page and page.count("Nothing in what was measured") == 4
+    assert page.count('class="vl mark"') == 8          # on the CPU/GPU chart and the ping chart (no frame chart)
+
+
+def test_marks_with_frames_say_which_matched_a_stutter():
+    from lagdoctor.report import console, html
+    s = synth.laglab("hitch", marks=(2.5, 3.9))
+    d = diagnose(s.cap)
+    text = " ".join(console.render(d, s.cap).split())
+    assert ("You marked 2 moments: 1 matched a stutter, FPS drop or network event; 1 showed nothing in what was "
+            "measured. No stutter or FPS drop was measured at those moments.") in text
+    assert "- 0:04: Stutter (" in text and "- nothing at 0:02" in text
+    page = html.render(d, s.cap)
+    assert page.count('class="vl mark"') == 6          # frame, CPU/GPU and ping charts
 
 
 def test_ranking_follows_the_score():

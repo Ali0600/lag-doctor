@@ -3,20 +3,35 @@
 Downsampling keeps the maximum of each pixel column by default. A frame-time
 chart that averaged its buckets would hide exactly the spikes the report is
 about; one 400 ms stutter among 100 000 smooth frames must still reach the top.
+
+A capture can be damaged (A15), so every value is checked with number() first:
+a point that is not a sane finite number is left out, never drawn or crashed on.
 """
 from __future__ import annotations
 
 import math
 from html import escape
-from typing import Sequence
+from typing import Any, Sequence
 
 W, H = 960, 220
 LEFT, RIGHT, TOP, BOTTOM = 52, 14, 12, 28
+MAX_VALUE = 1e7              # analysis.frames.MAX_ABS_VALUE: a time, ms, % or MB past it is corrupt
 
 
-def fmt_clock(seconds: float) -> str:
-    seconds = max(0.0, seconds)
-    m, s = divmod(int(round(seconds)), 60)
+def number(v: Any) -> float | None:
+    """v as a float when it is a finite number within +-MAX_VALUE, else None (strings, bools, NaN, 1e308)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    v = float(v)
+    return v if math.isfinite(v) and abs(v) <= MAX_VALUE else None
+
+
+def fmt_clock(seconds: Any) -> str:
+    """m:ss; "-" for a time that is not a sane number."""
+    seconds = number(seconds)
+    if seconds is None:
+        return "-"
+    m, s = divmod(int(round(max(0.0, seconds))), 60)
     return f"{m}:{s:02d}"
 
 
@@ -63,10 +78,12 @@ def downsample(xs: Sequence[float], ys: Sequence[float | None], x0: float, x1: f
     peaks: list[float | None] = [None] * buckets
     span = x1 - x0
     for x, y in zip(xs, ys):
+        x = number(x)
         if x is None or x < x0 or x > x1:
             continue
         b = min(buckets - 1, int((x - x0) / span * buckets))
-        if y is None or (isinstance(y, float) and math.isnan(y)):
+        y = number(y)
+        if y is None:                     # missing, or junk from a damaged capture
             missing[b] = True
             continue
         counts[b] += 1
@@ -87,9 +104,11 @@ class Chart:
     """A time chart: lines, dots, vertical marks, shaded bands and reference lines."""
 
     def __init__(self, title: str, x0: float, x1: float, y0: float, y1: float, y_unit: str = "") -> None:
-        if x1 <= x0:
+        x0, y0 = number(x0) or 0.0, number(y0) or 0.0
+        x1, y1 = number(x1), number(y1)
+        if x1 is None or x1 <= x0:
             x1 = x0 + 1.0
-        if y1 <= y0:
+        if y1 is None or y1 <= y0:
             y1 = y0 + 1.0
         self.title, self.x0, self.x1, self.y0, self.y1, self.y_unit = title, x0, x1, y0, y1, y_unit
         self._back: list[str] = []
@@ -120,14 +139,22 @@ class Chart:
         return self
 
     def dots(self, points: Sequence[tuple[float, float]], cls: str, label: str) -> "Chart":
-        if points:
-            for x, y in points:
-                self._front.append(f'<circle class="dot {cls}" cx="{self.px(x):.1f}" cy="{self.py(y):.1f}" r="3.5">'
-                                   f'<title>{escape(label)} at {fmt_clock(x)}: {y:.0f}{escape(self.y_unit)}</title></circle>')
+        drawn = False
+        for x, y in points:
+            x, y = number(x), number(y)
+            if x is None or y is None:
+                continue
+            self._front.append(f'<circle class="dot {cls}" cx="{self.px(x):.1f}" cy="{self.py(y):.1f}" r="3.5">'
+                               f'<title>{escape(label)} at {fmt_clock(x)}: {y:.0f}{escape(self.y_unit)}</title></circle>')
+            drawn = True
+        if drawn:
             self.legend.append((cls, label))
         return self
 
     def vline(self, x: float, cls: str, label: str) -> "Chart":
+        x = number(x)
+        if x is None or not self.x0 <= x <= self.x1:
+            return self
         X = self.px(x)
         self._front.append(f'<line class="vl {cls}" x1="{X:.1f}" x2="{X:.1f}" y1="{TOP}" y2="{H - BOTTOM}">'
                            f'<title>{escape(label)} at {fmt_clock(x)}</title></line>')
@@ -136,6 +163,9 @@ class Chart:
         return self
 
     def band(self, xa: float, xb: float, cls: str, label: str) -> "Chart":
+        xa, xb = number(xa), number(xb)
+        if xa is None or xb is None or xb < self.x0 or xa > self.x1:
+            return self
         a, b = self.px(max(xa, self.x0)), self.px(min(xb, self.x1))
         self._back.append(f'<rect class="band {cls}" x="{a:.1f}" y="{TOP}" width="{max(1.0, b - a):.1f}" '
                           f'height="{H - TOP - BOTTOM}"><title>{escape(label)}</title></rect>')
@@ -144,7 +174,8 @@ class Chart:
         return self
 
     def hline(self, y: float, cls: str, label: str) -> "Chart":
-        if self.y0 <= y <= self.y1:
+        y = number(y)
+        if y is not None and self.y0 <= y <= self.y1:
             Y = self.py(y)
             self._back.append(f'<line class="hl {cls}" x1="{LEFT}" x2="{W - RIGHT}" y1="{Y:.1f}" y2="{Y:.1f}">'
                               f'<title>{escape(label)}</title></line>')
