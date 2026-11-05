@@ -5,12 +5,12 @@ names the research note section it comes from: LC = docs/research/lag-causes.md,
 LC tags these thresholds [inferred]: they are defaults to tune against LagLab, never silently.
 
 A capture can come from disk (`lagdoctor analyze FILE`), so every value read here is checked: a value
-that is not a finite number (or, for text columns, a string) counts as missing.
+that is not a finite number (or, for text columns, a string) counts as missing, and so does a time, a
+millisecond or a percentage too large to be real (MAX_ABS_VALUE: a corrupt 1e308 would overflow a sum).
 """
 from __future__ import annotations
 
 import bisect
-import heapq
 import math
 from collections import Counter
 from typing import Any, Iterable, Sequence
@@ -30,6 +30,14 @@ BEYOND_MS = 50.0             # LC 2.4: time beyond 50 ms = sum of (D - 50) over 
 BASELINE_K = 10.0            # LC 2.4 (CapFrameX, S11): M over N = clamp(round(10 * sqrt(median_ms)), 20, 120)
 BASELINE_MIN_FRAMES = 20     # LC 2.4: lower clamp of N
 BASELINE_MAX_FRAMES = 120    # LC 2.4: upper clamp of N
+# ---- stutters and stalls (LC 2.4; PM 2.4, PM 10 rule 7): one test for frame_stats and events -----
+STUTTER_X = 2.5              # LC 2.4 (CapFrameX, S12): a stutter is D >= 2.5 x M ...
+STUTTER_MIN_MS = 8.0         # LC 2.4 (S20): ... and D - M >= 8 ms (events.py: D - max(M, E) on a quantised display)
+STALL_COVER = 0.5            # [inferred] a jump in t that the row's own frame time covers less than half of
+                             # means rows are missing: a stall (PM 10 parser rule 7, PM 2.4)
+# ---- value checks --------------------------------------------------------------------------------
+MAX_ABS_VALUE = 1e7          # [inferred] seconds, ms and % past +-1e7 (115 days, a 2.8-hour frame, 100,000 CPUs)
+                             # are corrupt; byte and count columns are not bounded (they can pass 1e7)
 
 # ---- bound classifier (LC 3.1-3.4) ---------------------------------------------------------------
 R_GPU = 0.90                 # LC 3.1: r = GPU busy / frame time >= 0.90 -> GPU-bound ...
@@ -76,8 +84,20 @@ def _num(v: Any) -> float | int | None:
     return None
 
 
-def _pos(v: Any) -> bool:
+def _bounded(v: Any) -> float | int | None:
+    """_num for a time (s or ms) or a percentage: past +-MAX_ABS_VALUE the value is corrupt, so missing."""
     n = _num(v)
+    return n if n is not None and abs(n) <= MAX_ABS_VALUE else None
+
+
+def _num_col(name: str, v: Any) -> float | int | None:
+    """A value of the F/S/N column `name`: times ("t"), "_ms" and "_pct" columns bounded, others only finite."""
+    return _bounded(v) if name == "t" or name.endswith(("_ms", "_pct")) else _num(v)
+
+
+def _pos(v: Any) -> bool:
+    """A positive time in ms (every caller passes one), bounded like _bounded."""
+    n = _bounded(v)
     return n is not None and n > 0
 
 
@@ -88,7 +108,7 @@ def _at(col: Sequence | None, i: int) -> Any:
 def _clean(name: str, v: Any) -> Any:
     if name in _TEXT_COLS:
         return v if isinstance(v, str) else None
-    return _num(v)
+    return _num_col(name, v)
 
 
 def _chain_key(v: Any) -> str | None:
@@ -106,10 +126,6 @@ def _col(table: Any, name: str) -> list:
     return col if isinstance(col, list) else []
 
 
-def _ceil_div(n: int, d: int) -> int:
-    return -(-n // d)
-
-
 # ------------------------------------------------------------------ main chain ---
 
 def main_chain(cap: Capture) -> dict[str, list]:
@@ -125,7 +141,7 @@ def main_chain(cap: Capture) -> dict[str, list]:
     rows: dict[str | None, list[int]] = {}
     shown: dict[str | None, int] = {}
     for i, ti in enumerate(t):
-        if _num(ti) is None:
+        if _bounded(ti) is None:
             continue
         key = _chain_key(_at(chains, i))
         rows.setdefault(key, []).append(i)
@@ -151,11 +167,11 @@ def display_series(fr: dict[str, list]) -> tuple[list[int], list[float], list[fl
     t = fr.get(F.T) or []
     disp = fr.get(F.DISPLAY_MS) or []
     shown = fr.get(F.DISPLAYED) or []
-    rows = [i for i in range(len(t)) if _num(t[i]) is not None and _pos(_at(disp, i)) and _at(shown, i) != 0]
+    rows = [i for i in range(len(t)) if _bounded(t[i]) is not None and _pos(_at(disp, i)) and _at(shown, i) != 0]
     if rows:
         return rows, [float(t[i]) for i in rows], [float(disp[i]) for i in rows], "display"
     fm = fr.get(F.FRAME_MS) or []
-    rows = [i for i in range(len(t)) if _num(t[i]) is not None and _pos(_at(fm, i))]
+    rows = [i for i in range(len(t)) if _bounded(t[i]) is not None and _pos(_at(fm, i))]
     return rows, [float(t[i]) for i in rows], [float(fm[i]) for i in rows], "present"
 
 
@@ -163,6 +179,66 @@ def baseline_frames(median_ms: float) -> int:
     """N, the number of earlier frames the stutter baseline M is the median of (LC 2.4)."""
     n = round(BASELINE_K * math.sqrt(max(0.0, median_ms)))
     return int(min(BASELINE_MAX_FRAMES, max(BASELINE_MIN_FRAMES, n)))
+
+
+def baseline(d: list[float]) -> list[float | None]:
+    """M for each frame of a display series: the median of the N frames before it, N sized by the series'
+    own median (LC 2.4). frame_stats and events both call this, so they judge every frame alike."""
+    return st.trailing_median(d, baseline_frames(st.median(d))) if d else []
+
+
+def first_t(fr: dict[str, list]) -> float | None:
+    """The time of the chain's first row: no event starts before it (nothing was measured earlier)."""
+    return min((float(x) for x in fr.get(F.T) or [] if _bounded(x) is not None), default=None)
+
+
+def stall_gaps(fr: dict[str, list]) -> list[tuple[float, float, float, float]]:
+    """(t before, t after, gap ms, baseline M) of each stall: a jump in t between consecutive rows of the
+    chain, as big as a stutter (gap >= 2.5 M and gap - M >= 8 ms), that the later row's own frame time
+    covers less than half of, so rows are missing (PM 2.4: a chain stalled > 4 s is pruned; PM 10 rule 7).
+
+    The one stall test: events turns each into a stutter event and frame_stats folds it into its series (A4).
+    """
+    _, t, d, _ = display_series(fr)
+    if len(d) < 2:
+        return []
+    m = baseline(d)
+    tail = st.median(d[-baseline_frames(st.median(d)):])     # the baseline after the last displayed frame
+    tt, fm = fr.get(F.T) or [], fr.get(F.FRAME_MS) or []
+    out = []
+    for i in range(1, len(tt)):
+        a, b = _bounded(tt[i - 1]), _bounded(tt[i])
+        if a is None or b is None:
+            continue
+        gap_ms = (b - a) * 1000.0
+        k = bisect.bisect_left(t, b)
+        mk = m[k] if k < len(m) else tail
+        if mk is None or gap_ms < STUTTER_X * mk or gap_ms - mk < STUTTER_MIN_MS:
+            continue
+        own = _bounded(_at(fm, i))
+        if own is not None and own >= STALL_COVER * gap_ms:
+            continue      # a long frame of its own: the display series judges it
+        out.append((float(a), float(b), gap_ms, float(mk)))
+    return out
+
+
+def _fold_stalls(t: list[float], d: list[float], gaps: list[tuple[float, float, float, float]]) -> list[float]:
+    """The display series with each stall as one interval (A4). The stall replaces the interval of the first
+    displayed frame after it, whose own interval lies inside it; stalls with no displayed frame between them
+    are one frozen screen. A stall after the last displayed frame ends the series."""
+    span: dict[int, tuple[float, float]] = {}
+    for a, b, _gap, _base in gaps:
+        k = bisect.bisect_left(t, b)
+        lo, hi = span.get(k, (a, b))
+        span[k] = (min(lo, a), max(hi, b))
+    out = list(d)
+    for k in sorted(span):
+        ms = (span[k][1] - span[k][0]) * 1000.0
+        if k < len(out):
+            out[k] = max(out[k], ms)
+        else:
+            out.append(ms)
+    return out
 
 
 def _is_app(fr: dict[str, list], i: int) -> bool:
@@ -174,9 +250,9 @@ def _is_app(fr: dict[str, list], i: int) -> bool:
 
 def _low_fps(d: list[float], per: int) -> float:
     """FPS of the mean of exactly ceil(n / per) slowest frames (LC 2.4, 2.5: never 'all frames >= the
-    quantile', which sweeps in every tie). per=100 is the 1% low, per=1000 the 0.1% low."""
-    k = _ceil_div(len(d), per)
-    return 1000.0 / st.mean(heapq.nlargest(k, d))
+    quantile', which sweeps in every tie). per=100 is the 1% low, per=1000 the 0.1% low. One implementation
+    with stats.low_fps_avg, so the two can never disagree."""
+    return st.low_fps_avg(d, 100.0 / per)
 
 
 def frame_stats(fr: dict[str, list], duration_s: float) -> dict[str, Any]:
@@ -184,12 +260,15 @@ def frame_stats(fr: dict[str, list], duration_s: float) -> dict[str, Any]:
 
     hitches / severe_hitches / freezes count frames, and the classes nest: a frame is a hitch when
     D >= 50 ms and D >= 2 M (LC 2.4); a hitch of >= 150 ms is also severe, one of >= 500 ms also a freeze.
+    Each stall (rows missing, stall_gaps) counts as one interval of the series, so a freeze that shows only
+    as a jump in t is in the FPS, the lows, the worst frame and the hitch counts, and no rule-of-three bound
+    is claimed over a capture with frames missing (A4).
     """
     out: dict[str, Any] = dict.fromkeys(FRAME_STAT_KEYS)
-    rows, _t, d, source = display_series(fr)
+    rows, t, d, source = display_series(fr)
     n = len(d)
     out["frames"] = n
-    dur = _num(duration_s)
+    dur = _bounded(duration_s)
     out["duration_s"] = float(dur) if dur is not None and dur >= 0 else None
 
     shown = [_num(v) for v in fr.get(F.DISPLAYED) or []]
@@ -203,30 +282,32 @@ def frame_stats(fr: dict[str, list], duration_s: float) -> dict[str, Any]:
         return out
 
     out["frames_source"] = source
-    med = st.median(d)
-    out["avg_fps"] = st.avg_fps(d)
+    gaps = stall_gaps(fr)
+    series = _fold_stalls(t, d, gaps)
+    med = st.median(series)
+    out["avg_fps"] = st.avg_fps(series)
     out["median_frame_ms"] = med
-    out["worst_frame_ms"] = max(d)
+    out["worst_frame_ms"] = max(series)
     if n >= MIN_FRAMES_1PCT:
-        p99 = st.percentile(d, 99.0)
+        p99 = st.percentile(series, 99.0)
         out["p99_frame_ms"] = p99
         out["p1_fps"] = 1000.0 / p99            # a percentile: labelled separately from the 1% low
-        out["low1_fps"] = _low_fps(d, 100)
+        out["low1_fps"] = _low_fps(series, 100)
     if n >= MIN_FRAMES_01PCT:
-        out["low01_fps"] = _low_fps(d, 1000)
+        out["low01_fps"] = _low_fps(series, 1000)
 
-    m = st.trailing_median(d, baseline_frames(med))
+    m = st.trailing_median(series, baseline_frames(med))
     hitches = severe = freezes = 0
-    for di, mi in zip(d, m):
+    for di, mi in zip(series, m):
         if mi is None or di < HITCH_MS or di < HITCH_X_BASELINE * mi:
             continue
         hitches += 1
         severe += di >= SEVERE_MS
         freezes += di >= FREEZE_MS
     out["hitches"], out["severe_hitches"], out["freezes"] = hitches, severe, freezes
-    out["time_beyond_50_ms"] = math.fsum(di - BEYOND_MS for di in d if di > BEYOND_MS)
-    if hitches == 0 and n > RULE_OF_THREE_N:
-        out["hitch_rate_bound"] = 3.0 / n
+    out["time_beyond_50_ms"] = math.fsum(di - BEYOND_MS for di in series if di > BEYOND_MS)
+    if hitches == 0 and not gaps and n > RULE_OF_THREE_N:
+        out["hitch_rate_bound"] = 3.0 / n       # rows missing: no bound can be claimed over what was not seen
     return out
 
 
@@ -257,16 +338,16 @@ def refresh_hz(cap: Capture) -> float | None:
 
 
 def hags_on(cap: Capture) -> bool | None:
-    """Hardware GPU scheduling for the game's adapter (DESIGN inventory `settings.hags`, else the adapter)."""
+    """Hardware GPU scheduling for the game's adapter: that adapter's own D3DKMT readout first, found by the
+    LUID the session filled in after the capture; then the inventory's `settings.hags`, which falls back to a
+    discrete adapter when the game's adapter was unknown at start (A12, inventory.hags_for)."""
     inv = cap.inventory if isinstance(cap.inventory, dict) else {}
     settings = inv.get("settings") if isinstance(inv.get("settings"), dict) else {}
-    if isinstance(settings.get("hags"), bool):
-        return settings["hags"]
-    luid = (cap.target or {}).get("adapter_luid") if isinstance(cap.target, dict) else None
+    luid = cap.target.get("adapter_luid") if isinstance(cap.target, dict) else None
     for a in inv.get("adapters") or []:
         if isinstance(a, dict) and luid and a.get("luid") == luid and isinstance(a.get("hags"), bool):
             return a["hags"]
-    return None
+    return settings["hags"] if isinstance(settings.get("hags"), bool) else None
 
 
 def _logical_cpus(cap: Capture) -> int | None:
@@ -298,7 +379,7 @@ def _in_spans(x: float, spans: list[tuple[float, float]], starts: list[float]) -
 def _steady_rows(fr: dict[str, list], spans: list[tuple[float, float]]) -> list[int]:
     starts = [a for a, _ in spans]
     t = fr.get(F.T) or []
-    return [i for i in range(len(t)) if _num(t[i]) is not None and _is_app(fr, i)
+    return [i for i in range(len(t)) if _bounded(t[i]) is not None and _is_app(fr, i)
             and not _in_spans(float(t[i]), spans, starts)]
 
 
@@ -309,7 +390,7 @@ def _window_means(cap: Capture, column: str, spans: list[tuple[float, float]]) -
     bins: dict[int, list[float]] = {}
     tainted: set[int] = set()
     for ti, vi in zip(t, v):
-        ti, vi = _num(ti), _num(vi)
+        ti, vi = _bounded(ti), _num_col(column, vi)
         if ti is None:
             continue
         b = int(math.floor(ti / THREAD_WINDOW_S))
@@ -422,7 +503,7 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
     cb, cw = fr.get(F.CPU_BUSY_MS) or [], fr.get(F.CPU_WAIT_MS) or []
     app_ms = []
     for i in rows:
-        busy, wait = _num(_at(cb, i)), _num(_at(cw, i))
+        busy, wait = _bounded(_at(cb, i)), _bounded(_at(cw, i))
         if busy is not None and busy > 0:
             app_ms.append(float(busy) + float(wait if wait is not None and wait > 0 else 0.0))
         elif _pos(_at(fm, i)):
@@ -434,7 +515,7 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
     gpu_busy = [float(gb_col[i]) for i in rows if _pos(_at(gb_col, i))]
     hags = hags_on(cap)
     margin = HAGS_MARGIN_MS if hags else 0.0
-    r = None
+    r = raw = None
     if len(gpu_busy) * 2 >= len(rows):   # GPU busy prints 0 when unknown (PM 2.3): need it on most frames
         raw = st.median(gpu_busy)
         out["gpu_busy_pct"] = 100.0 * raw / ft
@@ -458,6 +539,10 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
         out["quantised_pct"] = 100.0 * q
         band = max(VSYNC_BAND_MS, VSYNC_BAND_FRAC * period)
         vsync = q >= VSYNC_SHARE and _near_multiple(ft, period, band)
+        if vsync and _sync_off(fr, rows):
+            vsync = False    # A14: composition quantises a game that asked for no VSync; its rate is its own
+            notes.append("the game presents with SyncInterval 0 or allows tearing: not VSync, though Windows "
+                         "shows its frames on whole refresh periods")
         out["vsync"] = vsync
         out["vrr"] = False if q >= VSYNC_SHARE else _vrr_hint(cap, ft, period)
         notes.append(f"{100 * q:.0f}% of displayed frames on whole refresh periods ({period:.2f} ms at {hz:.0f} Hz)")
@@ -480,14 +565,15 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
 
     verdict, conf = "unknown", "low"
     if vsync:
-        verdict, conf = "vsync", "high"
+        verdict, conf = _vsync_limit(fr, rows, ft, hz, raw, busiest, notes)
     elif regular and (r is None or r < R_CPU) and (busiest is None or busiest < THREAD_BOUND):
         verdict = "capped"
         out["cap_fps"] = 1000.0 / c
         conf = "high" if r is not None and busiest is not None and not near(busiest, THREAD_BOUND) else "medium"
     elif r is None:
         verdict, conf = "unknown", "low"
-    elif r >= R_GPU or ft - (out["gpu_ms"] or 0.0) <= GPU_GAP_MS:
+    # A14: the 1 ms gap only settles the borderline zone; it never calls a GPU idle >= 25 % of a frame the limit
+    elif r >= R_GPU or (r > R_CPU and ft - (out["gpu_ms"] or 0.0) <= GPU_GAP_MS):
         verdict, conf = "gpu", ("medium" if near(r, R_GPU) else "high")
     elif r <= R_CPU and busiest is not None and busiest >= THREAD_BOUND:
         verdict, conf = "cpu_main", ("medium" if near(r, R_CPU) or near(busiest, THREAD_BOUND) else "high")
@@ -502,6 +588,53 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
         verdict, conf = "mixed", "medium"
     out["verdict"], out["confidence"] = verdict, conf
     return out
+
+
+def _vsync_limit(fr: dict[str, list], rows: list[int], ft: float, hz: float, raw_gpu: float | None,
+                 busiest: float | None, notes: list[str]) -> tuple[str, str]:
+    """(verdict, confidence) for a game locked to k refreshes a frame (A6). From k = 2, VSync rounds the rate
+    down to refresh / k, so whatever needs more than k - 1 periods is what holds it there: the GPU when its
+    raw busy time does, the CPU when the busiest thread is saturated or MsCPUBusy (where it is the CPU's own
+    work) does. Only when neither does is the display itself the limit."""
+    period = 1000.0 / hz
+    k = round(ft / period)
+    if k < 2:
+        return "vsync", "high"
+    one = (k - 1) * period
+    rounds = f"VSync rounds the frame rate down to {hz / k:.0f} FPS (refresh / {k})"
+    if raw_gpu is not None and raw_gpu > one:
+        notes.append(f"{rounds}: the GPU needs {raw_gpu:.1f} ms a frame, more than {k - 1} refresh period(s) "
+                     f"({one:.1f} ms)")
+        return "gpu", ("medium" if raw_gpu / one - 1.0 < CONF_MARGIN else "high")
+    if busiest is not None and busiest >= THREAD_BOUND:
+        notes.append(f"{rounds}: the busiest game thread runs {100 * busiest:.0f}% of a CPU")
+        return "cpu_main", ("medium" if busiest - THREAD_BOUND < CONF_MARGIN else "high")
+    cpu = _cpu_busy_ms(fr, rows)
+    if cpu is not None and cpu > one:
+        notes.append(f"{rounds}: the CPU works {cpu:.1f} ms a frame, more than {k - 1} refresh period(s) "
+                     f"({one:.1f} ms)")
+        return "cpu_main", ("medium" if cpu / one - 1.0 < CONF_MARGIN else "high")
+    return "vsync", "high"
+
+
+def _cpu_busy_ms(fr: dict[str, list], rows: list[int]) -> float | None:
+    """Median MsCPUBusy over the rows where it is the CPU's own work: MsCPUWait measured on most of them
+    (PM 2.2), and a runtime other than "Other", whose MsCPUBusy holds the wait as well (PM 8.2)."""
+    runtimes = Counter(v for v in (_at(fr.get(F.RUNTIME), i) for i in rows) if isinstance(v, str))
+    if not runtimes or runtimes.most_common(1)[0][0] == "Other":
+        return None
+    cb, cw = fr.get(F.CPU_BUSY_MS) or [], fr.get(F.CPU_WAIT_MS) or []
+    busy = [float(cb[i]) for i in rows if _pos(_at(cb, i)) and _bounded(_at(cw, i)) is not None]
+    return st.median(busy) if busy and len(busy) * 2 >= len(rows) else None
+
+
+def _sync_off(fr: dict[str, list], rows: list[int]) -> bool:
+    """LC 3.3 (PM 2.1): VSync needs SyncInterval >= 1 and AllowsTearing = 0. True when the chain's usual values
+    rule it out: SyncInterval 0, or tearing allowed. -1 (unknown, e.g. OpenGL) and missing columns do not."""
+    def usual(col: str) -> float | int | None:
+        seen = Counter(v for v in (_num(_at(fr.get(col), i)) for i in rows) if v is not None)
+        return seen.most_common(1)[0][0] if seen else None
+    return usual(F.SYNC_INTERVAL) == 0 or usual(F.ALLOWS_TEARING) == 1
 
 
 def _vrr_hint(cap: Capture, ft: float, period: float) -> bool | None:

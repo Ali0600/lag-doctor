@@ -19,18 +19,19 @@
  },
  {
   "name": "1% low takes floor, not ceil",
-  "file": "lagdoctor/analysis/frames.py",
-  "old": "    k = _ceil_div(len(d), per)",
-  "new": "    k = max(1, len(d) // per)",
+  "file": "lagdoctor/analysis/stats.py",
+  "old": "    k = math.ceil(len(frame_ms) * pct / 100.0)",
+  "new": "    k = max(1, math.floor(len(frame_ms) * pct / 100.0))",
   "tests": [
-   "tests/test_analysis_frames.py::test_one_percent_low_takes_exactly_ceil_of_one_percent_of_frames"
+   "tests/test_analysis_frames.py::test_one_percent_low_takes_exactly_ceil_of_one_percent_of_frames",
+   "tests/test_stats.py::test_low_fps_avg_takes_ceil_not_floor_of_the_share"
   ]
  },
  {
   "name": "1% low sweeps in ties",
-  "file": "lagdoctor/analysis/frames.py",
-  "old": "    return 1000.0 / st.mean(heapq.nlargest(k, d))",
-  "new": "    return 1000.0 / st.mean([x for x in d if x >= st.percentile(d, 100.0 - 100.0 / per)])",
+  "file": "lagdoctor/analysis/stats.py",
+  "old": "    return 1000.0 / mean(heapq.nlargest(k, frame_ms))",
+  "new": "    return 1000.0 / mean([x for x in frame_ms if x >= percentile(frame_ms, 100.0 - pct)])",
   "tests": [
    "tests/test_analysis_frames.py::test_one_percent_low_does_not_sweep_in_ties"
   ]
@@ -397,7 +398,7 @@
  },
  {
   "name": "stutter at 2.5 M",
-  "file": "lagdoctor/analysis/events.py",
+  "file": "lagdoctor/analysis/frames.py",
   "old": "STUTTER_X = 2.5 ",
   "new": "STUTTER_X = 2.49 ",
   "tests": [
@@ -406,7 +407,7 @@
  },
  {
   "name": "stutter +8 ms",
-  "file": "lagdoctor/analysis/events.py",
+  "file": "lagdoctor/analysis/frames.py",
   "old": "STUTTER_MIN_MS = 8.0 ",
   "new": "STUTTER_MIN_MS = 7.99 ",
   "tests": [
@@ -424,7 +425,7 @@
  },
  {
   "name": "stall when less than half covered",
-  "file": "lagdoctor/analysis/events.py",
+  "file": "lagdoctor/analysis/frames.py",
   "old": "STALL_COVER = 0.5 ",
   "new": "STALL_COVER = 0.51 ",
   "tests": [
@@ -433,7 +434,7 @@
  },
  {
   "name": "stalls never detected",
-  "file": "lagdoctor/analysis/events.py",
+  "file": "lagdoctor/analysis/frames.py",
   "old": "        if own is not None and own >= STALL_COVER * gap_ms:\n            continue",
   "new": "        if True:\n            continue",
   "tests": [
@@ -582,25 +583,7 @@
   "old": "LOSS_PCT = 1.0 ",
   "new": "LOSS_PCT = 1.05 ",
   "tests": [
-   "tests/test_analysis_frames_events.py::test_loss_needs_1_percent_in_15_s_or_a_10_percent_burst"
-  ]
- },
- {
-  "name": "burst at 10 %",
-  "file": "lagdoctor/analysis/events.py",
-  "old": "BURST_PCT = 10.0",
-  "new": "BURST_PCT = 15.0",
-  "tests": [
-   "tests/test_analysis_frames_events.py::test_loss_needs_1_percent_in_15_s_or_a_10_percent_burst"
-  ]
- },
- {
-  "name": "burst window 200 ms",
-  "file": "lagdoctor/analysis/events.py",
-  "old": "BURST_WINDOW_S = 0.2 ",
-  "new": "BURST_WINDOW_S = 0.3 ",
-  "tests": [
-   "tests/test_analysis_frames_events.py::test_loss_needs_1_percent_in_15_s_or_a_10_percent_burst"
+   "tests/test_analysis_frames_events.py::test_loss_also_needs_1_percent_of_its_15_s_window"
   ]
  },
  {
@@ -664,6 +647,416 @@
   "new": "MAX_GRID_POINTS = 864_000_000 ",
   "tests": [
    "tests/test_analysis_frames_events.py::test_rolling_fps_stays_bounded_on_a_junk_time_span"
+  ]
+ },
+ {
+  "name": "stalls left out of the frame statistics",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    series = _fold_stalls(t, d, gaps)",
+  "new": "    series = list(d)",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_stall_counts_in_the_frame_statistics",
+   "tests/test_analysis_frames.py::test_frame_stats_and_the_stutter_events_see_the_same_stalls",
+   "tests/test_analysis_frames_synth.py::test_a_stall_is_never_reported_as_no_hitches"
+  ]
+ },
+ {
+  "name": "rule of three over missing rows",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if hitches == 0 and not gaps and n > RULE_OF_THREE_N:",
+  "new": "    if hitches == 0 and n > RULE_OF_THREE_N:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_stall_too_short_to_be_a_hitch_still_withholds_the_rule_of_three"
+  ]
+ },
+ {
+  "name": "stalls between shown frames counted apart",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        span[k] = (min(lo, a), max(hi, b))",
+  "new": "        span[k] = (a, b)",
+  "tests": [
+   "tests/test_analysis_frames.py::test_stalls_with_no_frame_shown_between_them_are_one_frozen_screen"
+  ]
+ },
+ {
+  "name": "HAGS from settings first",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    luid = cap.target.get(\"adapter_luid\") if isinstance(cap.target, dict) else None",
+  "new": "    if isinstance(settings.get(\"hags\"), bool):\n        return settings[\"hags\"]\n    luid = cap.target.get(\"adapter_luid\") if isinstance(cap.target, dict) else None",
+  "tests": [
+   "tests/test_analysis_frames.py::test_hags_comes_from_the_games_own_adapter_first"
+  ]
+ },
+ {
+  "name": "1 ms gap at any ratio",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "(r > R_CPU and ft - (out[\"gpu_ms\"] or 0.0) <= GPU_GAP_MS)",
+  "new": "(ft - (out[\"gpu_ms\"] or 0.0) <= GPU_GAP_MS)",
+  "tests": [
+   "tests/test_analysis_frames.py::test_the_1_ms_gap_never_calls_a_gpu_idle_a_quarter_of_the_frame_the_limit"
+  ]
+ },
+ {
+  "name": "VSync without asking for it",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        if vsync and _sync_off(fr, rows):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_needs_the_game_to_ask_for_it"
+  ]
+ },
+ {
+  "name": "SyncInterval 0 ignored",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return usual(F.SYNC_INTERVAL) == 0 or usual(F.ALLOWS_TEARING) == 1",
+  "new": "    return usual(F.ALLOWS_TEARING) == 1",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_needs_the_game_to_ask_for_it"
+  ]
+ },
+ {
+  "name": "tearing ignored",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return usual(F.SYNC_INTERVAL) == 0 or usual(F.ALLOWS_TEARING) == 1",
+  "new": "    return usual(F.SYNC_INTERVAL) == 0",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_needs_the_game_to_ask_for_it"
+  ]
+ },
+ {
+  "name": "unknown SyncInterval rules VSync out",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return usual(F.SYNC_INTERVAL) == 0 or usual(F.ALLOWS_TEARING) == 1",
+  "new": "    return usual(F.SYNC_INTERVAL) in (0, -1) or usual(F.ALLOWS_TEARING) == 1",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_needs_the_game_to_ask_for_it"
+  ]
+ },
+ {
+  "name": "VSync never rounds down",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        verdict, conf = _vsync_limit(fr, rows, ft, hz, raw, busiest, notes)",
+  "new": "        verdict, conf = \"vsync\", \"high\"",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_gpu_that_needs_more_than_one",
+   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
+  ]
+ },
+ {
+  "name": "GPU judged against k periods",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if raw_gpu is not None and raw_gpu > one:",
+  "new": "    if raw_gpu is not None and raw_gpu > k * period:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_gpu_that_needs_more_than_one"
+  ]
+ },
+ {
+  "name": "busiest thread ignored under VSync",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if busiest is not None and busiest >= THREAD_BOUND:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
+  ]
+ },
+ {
+  "name": "MsCPUBusy ignored under VSync",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if cpu is not None and cpu > one:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
+  ]
+ },
+ {
+  "name": "MsCPUBusy read for runtime Other",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if not runtimes or runtimes.most_common(1)[0][0] == \"Other\":",
+  "new": "    if not runtimes:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
+  ]
+ },
+ {
+  "name": "times not bounded",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return n if n is not None and abs(n) <= MAX_ABS_VALUE else None",
+  "new": "    return n",
+  "tests": [
+   "tests/test_analysis_frames.py::test_times_and_milliseconds_past_1e7_are_missing",
+   "tests/test_analysis_frames_events.py::test_absurd_values_from_a_corrupt_capture_are_missing_not_events"
+  ]
+ },
+ {
+  "name": "percentages not bounded",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "name.endswith((\"_ms\", \"_pct\"))",
+  "new": "name.endswith(\"_ms\")",
+  "tests": [
+   "tests/test_analysis_frames.py::test_times_and_milliseconds_past_1e7_are_missing"
+  ]
+ },
+ {
+  "name": "corrupt row times kept",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        if _bounded(ti) is None:\n            continue\n        key = _chain_key",
+  "new": "        if _num(ti) is None:\n            continue\n        key = _chain_key",
+  "tests": [
+   "tests/test_analysis_frames.py::test_times_and_milliseconds_past_1e7_are_missing"
+  ]
+ },
+ {
+  "name": "low FPS count adds a frame at whole counts",
+  "file": "lagdoctor/analysis/stats.py",
+  "old": "    k = math.ceil(len(frame_ms) * pct / 100.0)",
+  "new": "    k = math.floor(len(frame_ms) * pct / 100.0) + 1",
+  "tests": [
+   "tests/test_stats.py::test_low_fps_avg_counts_exactly_at_whole_counts"
+  ]
+ },
+ {
+  "name": "low FPS share outside 0-100 accepted",
+  "file": "lagdoctor/analysis/stats.py",
+  "old": "    if not 0.0 < pct <= 100.0:\n",
+  "new": "    if False:\n",
+  "tests": [
+   "tests/test_stats.py::test_low_fps_avg_refuses_a_share_outside_0_to_100"
+  ]
+ },
+ {
+  "name": "trailing median takes missing as 0",
+  "file": "lagdoctor/analysis/stats.py",
+  "old": "        if v is not None:\n            bisect.insort(ordered, v)",
+  "new": "        bisect.insort(ordered, 0.0 if v is None else v)",
+  "tests": [
+   "tests/test_stats.py::test_trailing_median_skips_missing_values_but_keeps_their_place"
+  ]
+ },
+ {
+  "name": "excess over M only on a quantised display",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "max(mj, held[j])",
+  "new": "mj",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_a_frame_one_refresh_late_on_a_quantised_display_is_no_stutter",
+   "tests/test_analysis_frames_synth.py::test_os_wakeup_hiccups_never_make_a_hitch_in_the_smooth_control",
+   "tests/test_analysis_frames_synth.py::test_the_smooth_control_with_the_measured_hiccups_has_no_stutters",
+   "tests/test_analysis_frames_synth.py::test_the_end_to_end_judge_passes_the_smooth_control_with_the_measured_hiccups",
+   "tests/test_analysis_frames_synth.py::test_the_hitches_are_still_found_with_the_measured_hiccups"
+  ]
+ },
+ {
+  "name": "cadence rule on a display that is not quantised",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if q is None or q < fa.VSYNC_SHARE:",
+  "new": "    if q is None:",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_the_cadence_rule_needs_a_quantised_display"
+  ]
+ },
+ {
+  "name": "cadence slack 5 % (wider)",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "CADENCE_SLACK = 0.05 ",
+  "new": "CADENCE_SLACK = 0.07 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_the_cadence_rule_holds_k_refreshes_up_to_5_percent_past_k_periods"
+  ]
+ },
+ {
+  "name": "cadence slack 5 % (narrower)",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "CADENCE_SLACK = 0.05 ",
+  "new": "CADENCE_SLACK = 0.03 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_the_cadence_rule_holds_k_refreshes_up_to_5_percent_past_k_periods"
+  ]
+ },
+ {
+  "name": "cadence from the whole run",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    mp = st.trailing_median(presents, fa.baseline_frames(st.median(d)))",
+  "new": "    mp = [st.median([x for x in presents if x is not None])] * len(presents)",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_the_cadence_rule_follows_the_games_frame_rate_where_it_is"
+  ]
+ },
+ {
+  "name": "stutter frames counted as pacing",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    calm = [not fa._in_spans(x, spans, starts) for x in t]",
+  "new": "    calm = [True] * len(t)",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_the_swings_around_a_stutter_are_not_pacing",
+   "tests/test_analysis_frames_synth.py::test_gold_hitches_do_not_count_as_their_own_pacing"
+  ]
+ },
+ {
+  "name": "animation-only pacing severity from swings",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        if criterion == \"anim\" and anim_p95 is not None:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_pacing_says_which_test_fired_and_animation_error_sets_its_severity",
+   "tests/test_analysis_frames_synth.py::test_a_cap_above_a_60_hz_refresh_is_animation_judder_not_an_fps_drop",
+   "tests/test_analysis_frames_synth.py::test_gold_dropped_frame_judder_reports_its_animation_error"
+  ]
+ },
+ {
+  "name": "pacing criterion never both",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        criterion = \"both\" if by_swing and by_anim else (\"swing\" if by_swing else \"anim\")",
+  "new": "        criterion = \"swing\" if by_swing else \"anim\"",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_pacing_says_which_test_fired_and_animation_error_sets_its_severity"
+  ]
+ },
+ {
+  "name": "pacing starts before the first row",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "t_start=max(t[js[0]] - d[js[0]] / 1000.0, first)",
+  "new": "t_start=t[js[0]] - d[js[0]] / 1000.0",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_no_event_starts_before_the_chains_first_row"
+  ]
+ },
+ {
+  "name": "stutter starts before the first row",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "\"start\": max(t[j] - span / 1000.0, first)",
+  "new": "\"start\": t[j] - span / 1000.0",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_no_event_starts_before_the_chains_first_row"
+  ]
+ },
+ {
+  "name": "FPS target above the refresh",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if hz and hz > 0 and pace.get(\"vrr\") is not True and target > hz:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_the_fps_target_never_tops_a_fixed_refresh",
+   "tests/test_analysis_frames_synth.py::test_a_cap_above_a_60_hz_refresh_is_animation_judder_not_an_fps_drop"
+  ]
+ },
+ {
+  "name": "FPS target capped under VRR too",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if hz and hz > 0 and pace.get(\"vrr\") is not True and target > hz:",
+  "new": "    if hz and hz > 0 and target > hz:",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_the_fps_target_never_tops_a_fixed_refresh"
+  ]
+ },
+ {
+  "name": "one lost probe is loss",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "LOSS_MIN_PROBES = 2 ",
+  "new": "LOSS_MIN_PROBES = 1 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_one_lost_probe_is_no_loss_event",
+   "tests/test_analysis_frames_synth.py::test_one_lost_or_slow_ping_in_two_minutes_is_no_network_event"
+  ]
+ },
+ {
+  "name": "burst needs 2 rounds",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "BURST_ROUNDS = 2 ",
+  "new": "BURST_ROUNDS = 3 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_two_lost_rounds_in_a_row_are_a_loss_burst"
+  ]
+ },
+ {
+  "name": "an answer between losses does not end the outage",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        run = run + 1 if prev is not None and between == 0 else 1",
+  "new": "        run = run + 1 if prev is not None else 1",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_two_lost_probes_apart_are_loss_but_no_burst"
+  ]
+ },
+ {
+  "name": "one slow round is a spike",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "SPIKE_PERSIST_ROUNDS = 2 ",
+  "new": "SPIKE_PERSIST_ROUNDS = 1 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_one_slow_reply_is_no_ping_spike",
+   "tests/test_analysis_frames_synth.py::test_one_lost_or_slow_ping_in_two_minutes_is_no_network_event"
+  ]
+ },
+ {
+  "name": "spike persistence over 3 rounds",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "SPIKE_PERSIST_SPAN = 3 ",
+  "new": "SPIKE_PERSIST_SPAN = 4 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_a_ping_spike_lasts_2_of_3_rounds"
+  ]
+ },
+ {
+  "name": "one reply 100 ms over",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "SPIKE_ALONE_MS = 100.0 ",
+  "new": "SPIKE_ALONE_MS = 100.1 ",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_one_reply_100_ms_over_the_minimum_is_a_spike_alone"
+  ]
+ },
+ {
+  "name": "lost rounds not counted as rounds",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        pts = [(r, t, v) for r, (t, v) in enumerate(rounds) if v is not None]",
+  "new": "        pts = [(r, t, v) for r, (t, v) in enumerate([x for x in rounds if x[1] is not None])]",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_a_ping_spike_lasts_2_of_3_rounds"
+  ]
+ },
+ {
+  "name": "pacing makes a mark seen",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        frame_ids = [e.id for e in over if e.kind in (\"stutter\", \"fps_drop\")]",
+  "new": "        frame_ids = [e.id for e in over if e.kind in (\"stutter\", \"fps_drop\", \"pacing\")]",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_a_pacing_episode_does_not_make_a_mark_seen"
+  ]
+ },
+ {
+  "name": "non-finite events kept",
+  "file": "lagdoctor/analysis/events.py",
+  "old": " and math.isfinite(x)\n",
+  "new": "\n",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_an_event_whose_numbers_are_not_finite_is_left_out"
+  ]
+ },
+ {
+  "name": "corrupt lost-probe times kept",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "            lost = sorted(float(x) for x in listed if fa._bounded(x) is not None)",
+  "new": "            lost = sorted(float(x) for x in listed if _num(x) is not None)",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_absurd_values_from_a_corrupt_capture_are_missing_not_events"
+  ]
+ },
+ {
+  "name": "corrupt mark times kept",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "            for m in marks if fa._bounded(m) is not None]",
+  "new": "            for m in marks if _num(m) is not None]",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_absurd_values_from_a_corrupt_capture_are_missing_not_events"
+  ]
+ },
+ {
+  "name": "corrupt server-gap values kept",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        t, ms = fa._bounded(g[0]), fa._bounded(g[1])",
+  "new": "        t, ms = _num(g[0]), _num(g[1])",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_absurd_values_from_a_corrupt_capture_are_missing_not_events"
   ]
  },
  {

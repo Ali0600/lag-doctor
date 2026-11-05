@@ -4,6 +4,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 from e2e_truth import judge, match_events  # noqa: E402
@@ -15,8 +17,8 @@ LOG = {"gl_renderer": "Intel(R) UHD Graphics",
        "hitches": [{"start": ORIGIN + t, "end": ORIGIN + t + 0.15} for t in (3.0, 6.0, 9.0, 12.0)]}
 
 
-def diag(events=(), findings=()):
-    return Diagnosis(lag_type="stutter", headline="x", events=list(events),
+def diag(events=(), findings=(), lag_type="stutter"):
+    return Diagnosis(lag_type=lag_type, headline="x", events=list(events),
                      findings=[Finding(cause=c, title=c, category="stutter", confidence="high", score=1, summary="")
                                for c in findings])
 
@@ -63,9 +65,17 @@ def test_wrong_gpu_is_required_only_when_laglab_ran_on_intel_with_a_discrete_gpu
 
 def test_the_smooth_control_fails_on_any_stutter_or_limit_finding():
     log = {"gl_renderer": "NVIDIA"}
-    assert judge("smooth", log, ORIGIN, diag(), has_discrete_gpu=True).ok
-    assert not judge("smooth", log, ORIGIN, diag([stutter(1, 5.0, "game_stall")]), has_discrete_gpu=True).ok
-    assert not judge("smooth", log, ORIGIN, diag(findings=["gpu_limit"]), has_discrete_gpu=True).ok
+    assert judge("smooth", log, ORIGIN, diag(lag_type="none"), has_discrete_gpu=True).ok
+    assert not judge("smooth", log, ORIGIN, diag([stutter(1, 5.0, "game_stall")], lag_type="none"),
+                     has_discrete_gpu=True).ok
+    assert not judge("smooth", log, ORIGIN, diag(findings=["gpu_limit"], lag_type="none"), has_discrete_gpu=True).ok
+
+
+@pytest.mark.parametrize("lag_type", ["stutter", "pacing", "low_fps", "network", "mixed", "unknown"])
+def test_the_smooth_control_fails_on_any_lag_verdict(lag_type):
+    # no stutter event and no finding, but the verdict still names lag: the user would read "lag" (A2, A8)
+    v = judge("smooth", {"gl_renderer": "NVIDIA"}, ORIGIN, diag(lag_type=lag_type), has_discrete_gpu=True)
+    assert [c.name for c in v.checks if not c.ok] == ["no lag in the control"]
 
 
 def test_a_verdict_with_no_checks_is_not_a_pass():

@@ -4,12 +4,15 @@ Frame-rate conventions (they differ between tools, so both are offered):
 - avg_fps is frames divided by elapsed time. Averaging 1000/frame_ms per frame
   would overweight fast frames and overstate the frame rate.
 - "1% low" has two common definitions: the average of the slowest 1% of frames
-  (low_fps_avg, the CapFrameX-style "1% low average") and the 99th-percentile
-  frame time turned into FPS (low_fps_percentile).
+  (low_fps_avg, FrameView's "1% Low FPS", taking exactly ceil(p * n) frames as
+  LC 2.4 and 2.5 require) and the 99th-percentile frame time turned into FPS
+  (low_fps_percentile). CapFrameX's "1% low average" is neither: it averages
+  every frame >= the quantile, which sweeps in ties (LC 2.5).
 """
 from __future__ import annotations
 
 import bisect
+import heapq
 import math
 from typing import Iterable, Sequence
 
@@ -56,12 +59,13 @@ def avg_fps(frame_ms: Sequence[float]) -> float:
 
 
 def low_fps_avg(frame_ms: Sequence[float], pct: float) -> float:
-    """FPS of the slowest pct% of frames, averaged (at least one frame)."""
+    """FPS of the mean of exactly ceil(pct% of n) slowest frames (LC 2.4, 2.5), so at least one frame."""
     if not frame_ms:
         raise ValueError("no frames")
-    n = max(1, math.floor(len(frame_ms) * pct / 100.0))
-    slowest = sorted(frame_ms, reverse=True)[:n]
-    return 1000.0 / mean(slowest)
+    if not 0.0 < pct <= 100.0:
+        raise ValueError(f"pct must be within (0, 100], got {pct}")
+    k = math.ceil(len(frame_ms) * pct / 100.0)
+    return 1000.0 / mean(heapq.nlargest(k, frame_ms))
 
 
 def low_fps_percentile(frame_ms: Sequence[float], pct: float) -> float:
@@ -69,11 +73,12 @@ def low_fps_percentile(frame_ms: Sequence[float], pct: float) -> float:
     return 1000.0 / percentile(frame_ms, 100.0 - pct)
 
 
-def trailing_median(values: Sequence[float], window: int) -> list[float | None]:
+def trailing_median(values: Sequence[float | None], window: int) -> list[float | None]:
     """Median of the `window` values before each position (excluding it); None until one exists.
 
     Excluding the current value matters: a stutter must be compared with the frames
-    before it, not with a baseline it has already dragged upward.
+    before it, not with a baseline it has already dragged upward. A None value is
+    missing: it keeps its place in the window but never enters the median.
     """
     if window < 1:
         raise ValueError("window must be at least 1")
@@ -86,10 +91,12 @@ def trailing_median(values: Sequence[float], window: int) -> list[float | None]:
             out.append(ordered[mid] if n % 2 else (ordered[mid - 1] + ordered[mid]) / 2.0)
         else:
             out.append(None)
-        bisect.insort(ordered, v)
+        if v is not None:
+            bisect.insort(ordered, v)
         if i >= window:
             old = values[i - window]
-            del ordered[bisect.bisect_left(ordered, old)]
+            if old is not None:
+                del ordered[bisect.bisect_left(ordered, old)]
     return out
 
 
