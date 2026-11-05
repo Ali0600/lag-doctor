@@ -1,0 +1,5 @@
+# A scratch project for tests/test_redfirst.py: the red-first runner is copied into scripts/ and run here.
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+python_files = ["check_*.py"]
