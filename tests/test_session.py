@@ -1,12 +1,20 @@
-"""The capture session, with fake collectors: where results land, one clock, and how a capture ends."""
+"""The capture session, with fake collectors: where results land, one clock, and how a capture ends.
+
+Also lag-doctor's own processes (target["tool_pids"]), and scripts/e2e.py's use of the one-recording lock.
+"""
 from __future__ import annotations
 
+import _winapi
+import importlib
+import json
+import os
 import signal
 import subprocess
 import sys
 import threading
 import time
 import uuid
+from pathlib import Path
 
 import pytest
 
@@ -15,9 +23,12 @@ from lagdoctor.capture import session as sess
 from lagdoctor.capture.base import Collector
 from lagdoctor.capture.session import Session, SessionOptions, session_dir, status_line
 from lagdoctor.model import Capture
+from lagdoctor.winapi import ntquery
 
 TARGET = {"pid": 4242, "create_time": 1, "name": "Game.exe", "exe": r"C:\Games\Game.exe", "adapter_luid": None}
 INVENTORY = {"os": {"name": "Windows 11 Home", "build": 26200}, "adapters": []}
+BASE_PY = getattr(sys, "_base_executable", sys.executable)
+SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 
 
 class Fake(Collector):
@@ -452,3 +463,287 @@ def test_session_dir_never_reuses_a_folder(tmp_path):
     assert a != b and a.name == "20261104-180000-My_Game" and b.name == "20261104-180000-My_Game-2"
     evil = session_dir(tmp_path, {"name": "a/../../b.exe"}, when)        # a process name is untrusted text
     assert evil.resolve().parent == tmp_path.resolve() and evil.name == "20261104-180000-a_.._.._b"
+
+
+# ------------------------------------------------------------- lag-doctor's own processes (tool_pids) ---
+
+class P:
+    def __init__(self, pid, ppid, create_time, name="x.exe"):
+        self.pid, self.ppid, self.create_time, self.name = pid, ppid, create_time, name
+
+
+LAUNCHER, BASE = r"C:\lab\.venv\Scripts\python.exe", r"C:\Python313\python.exe"
+TABLE = {p.pid: p for p in (
+    P(10, 4, 10, "explorer.exe"),
+    P(20, 10, 100, "uv.exe"),
+    P(30, 20, 200, "python.exe"),                 # the venv launcher that started lag-doctor
+    P(40, 30, 300, "python.exe"),                 # lag-doctor (the base interpreter)
+    P(50, 40, 400, "PresentMon-2.6.0-x64.exe"),
+    P(60, 40, 410, "nvidia-smi.exe"),
+    P(70, 40, 420, "python.exe"),                 # LagLab's venv launcher (scripts/e2e.py starts the game)
+    P(80, 70, 430, "python.exe"),                 # the game
+    P(90, 80, 440, "hog.exe"),                    # the game's own child
+    P(95, 40, 250, "old.exe"),                    # names PID 40 as parent but is older: an earlier PID 40's
+    P(100, 4, 50, "python.exe"),                  # the waiting window of an elevated recording
+    P(110, 4, 60, "python.exe"),                  # its launcher (handed over below with a stale create time)
+    P(120, 10, 70, "python.exe"),                 # someone else's Python
+)}
+IMAGES = {30: LAUNCHER, 40: BASE, 70: LAUNCHER, 80: BASE, 100: BASE, 110: LAUNCHER, 120: BASE}
+GAME_AT_80 = {"pid": 80, "create_time": 430}
+
+
+def test_lagdoctors_own_processes_literal_points():
+    image = IMAGES.get
+    assert sess.tool_pids(TABLE, GAME_AT_80, [(100, 50), (110, 61)], me=40, image_path=image,
+                          launcher=LAUNCHER) == [40, 30, 100, 50, 60, 70]
+    assert sess.own_processes(TABLE, me=40, image_path=image, launcher=LAUNCHER) == [(40, 300), (30, 200)]
+    # Not started through the launcher: a parent running our own exe is just a parent.
+    assert sess.own_processes(TABLE, me=40, image_path={30: BASE, 40: BASE}.get, launcher=BASE) == [(40, 300)]
+    assert sess.own_processes(TABLE, me=40, image_path={30: BASE, 40: BASE}.get, launcher=LAUNCHER) == [(40, 300)]
+
+    def unreadable(pid):
+        raise OSError("NtQuerySystemInformation(SystemProcessIdInformation) failed")
+    assert sess.own_processes(TABLE, me=40, image_path=unreadable, launcher=LAUNCHER) == [(40, 300)]
+    assert sess.tool_pids(TABLE, GAME_AT_80, me=999, image_path=image, launcher=LAUNCHER) == []   # not listed
+
+
+class Spawner(Fake):
+    """A collector that starts a real child process `at` seconds in, living `life` seconds (or until stopped)."""
+
+    def __init__(self, name, at, life=None):
+        super().__init__(name, result={"columns": {"t": [0.0]}})
+        self.at, self.life, self.child = at, life, None
+
+    def run(self):
+        self.set_status("ok", tool="fake")
+        for t in self.ticks(0.02):
+            if self.child is None and t >= self.at:
+                code = f"import time; time.sleep({self.life!r})" if self.life else "import sys; sys.stdin.read()"
+                self.child = subprocess.Popen([BASE_PY, "-I", "-c", code], stdin=subprocess.PIPE)
+
+    def on_stop(self):
+        if self.child is not None and self.child.poll() is None:
+            self.child.kill()
+
+
+def _parent_exe_by_wmi() -> str:
+    """Our parent's exe as WMI reports it: a readout independent of ntquery."""
+    out = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                          f"(Get-CimInstance Win32_Process -Filter 'ProcessId={os.getppid()}').ExecutablePath"],
+                         capture_output=True, text=True, timeout=60)
+    return out.stdout.strip()
+
+
+def test_a_capture_lists_lagdoctors_own_processes_and_never_the_games():
+    # The game here is a child of this process with a child of its own, as LagLab is under scripts/e2e.py.
+    game = subprocess.Popen([BASE_PY, "-I", "-c",
+                             "import subprocess, sys; c = subprocess.Popen([sys.executable, '-I', '-c', "
+                             "'import sys; sys.stdin.read()'], stdin=subprocess.PIPE); print(c.pid, flush=True); "
+                             "sys.stdin.read()"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    early = Spawner("frames", at=0.0, life=1.6)       # seen at the first listing (~1 s in), gone by the end
+    late = Spawner("gpu", at=1.8)                     # started after it, running until the stop
+    try:
+        helper = int(game.stdout.readline())
+        created = ntquery.Snapshotter().snapshot()[game.pid].create_time
+        target = {"pid": game.pid, "create_time": created, "name": "python.exe"}
+        s = Session(target, SessionOptions(duration_s=3.0, hotkey=None), collectors=[early, late],
+                    inventory=INVENTORY, alive=lambda: True, printer=lambda line: None)
+        cap = s.run()
+    finally:
+        game.stdin.close()                            # the game ends, and its child with it
+        game.wait(10)
+        for c in (early.child, late.child):
+            if c is not None:
+                c.wait(10)
+    pids = cap.target["tool_pids"]
+    assert early.child is not None and late.child is not None
+    assert os.getpid() in pids and early.child.pid in pids and late.child.pid in pids, pids
+    assert game.pid not in pids and helper not in pids, pids
+    parent_is_launcher = os.path.normcase(_parent_exe_by_wmi()) == os.path.normcase(sys.executable)
+    assert (os.getppid() in pids) is parent_is_launcher, (pids, os.getppid(), parent_is_launcher)
+
+
+def test_a_snapshot_that_fails_leaves_no_tool_list_and_says_why():
+    def broken():
+        raise OSError("NtQuerySystemInformation failed")
+    s = Session(TARGET, SessionOptions(duration_s=0.7, hotkey=None), collectors=full_set(), inventory=INVENTORY,
+                alive=lambda: True, printer=lambda line: None, processes=broken)
+    cap = s.run()
+    assert "tool_pids" not in cap.target and cap.frames
+    assert any("could not list its own processes" in n and "NtQuerySystemInformation failed" in n
+               for n in cap.notes), cap.notes
+
+
+def test_the_tool_list_is_bounded_and_keeps_lagdoctors_own_process():
+    me = os.getpid()
+    table = {me: P(me, 1, 1)}
+    table.update({p: P(p, me, 2) for p in range(1_000_000, 1_000_000 + 4 * 100, 4)})    # 100 children
+    s = Session(TARGET, SessionOptions(duration_s=0.05, hotkey=None), collectors=full_set(), inventory=INVENTORY,
+                alive=lambda: True, printer=lambda line: None, processes=lambda: table)
+    pids = s.run().target["tool_pids"]
+    assert len(pids) == sess.MAX_TOOL_PIDS and me in pids
+
+
+def test_handed_over_processes_count_only_while_they_are_the_same_processes():
+    table = dict(TABLE)
+    s = Session(GAME_AT_80, SessionOptions(duration_s=0.05, hotkey=None, tool_procs=((100, 50), (110, 61))),
+                collectors=full_set(), inventory=INVENTORY, alive=lambda: True, printer=lambda line: None,
+                processes=lambda: table)
+    me = os.getpid()
+    table[me] = P(me, 1, 1)                     # this process, as the snapshot would list it
+    cap = s.run()
+    assert cap.target["tool_pids"] == sorted({me, 100}), cap.target["tool_pids"]
+
+
+# --------------------------------------------------------------------- scripts/e2e.py and the lock ---
+
+def _e2e():
+    if str(SCRIPTS) not in sys.path:
+        sys.path.insert(0, str(SCRIPTS))
+    return importlib.import_module("e2e")
+
+
+class FakeLab:
+    """LagLab's process: writes its pid file and log at once, and has already ended."""
+
+    started: list = []
+
+    def __init__(self, argv, cwd=None, env=None):
+        FakeLab.started.append(list(argv))
+        Path(argv[argv.index("--pid-file") + 1]).write_text(json.dumps({"pid": 4242}), encoding="utf-8")
+        Path(argv[argv.index("--log") + 1]).write_text(json.dumps({"gl_renderer": "fake"}), encoding="utf-8")
+
+    def poll(self):
+        return 0
+
+    def wait(self, timeout=None):
+        return 0
+
+    def kill(self):
+        pass
+
+
+@pytest.fixture
+def e2e_world(monkeypatch, tmp_path):
+    """scripts/e2e.py with ETW rights, a fake LagLab, and a session that notes whether the lock was held."""
+    e2e = _e2e()
+    from lagdoctor import setup as pm_setup
+    from lagdoctor.capture import target as tgt
+    from lagdoctor.winapi import elevation
+    monkeypatch.setattr(sess, "CAPTURE_LOCK_NAME", f"Local\\lagdoctor-test-{uuid.uuid4().hex}")
+    monkeypatch.setattr(e2e.subprocess, "Popen", FakeLab)
+    monkeypatch.setattr(tgt, "find_target", lambda **kw: dict(TARGET))
+    monkeypatch.setattr(pm_setup, "ensure_presentmon", lambda allow_download=False: tmp_path / "pm.exe")
+    monkeypatch.setattr(elevation, "can_trace", lambda: True)
+    FakeLab.started = []
+    held: list[bool] = []
+
+    class Probe(Session):
+        def __init__(self, target, opts, **kw):
+            super().__init__(target, opts, collectors=full_set(), inventory=INVENTORY, alive=lambda: False,
+                             printer=lambda line: None)
+
+        def run(self, *a, **k):
+            other = sess.CaptureLock()
+            held.append(not other.acquire())          # True: the run held the lock while it recorded
+            other.release()
+            return super().run(*a, **k)
+    monkeypatch.setattr(sess, "Session", Probe)
+    return e2e, held
+
+
+def test_the_end_to_end_run_records_under_the_capture_lock_and_lets_it_go(e2e_world, tmp_path):
+    e2e, held = e2e_world
+    e2e.main(["--modes", "smooth", "--duration", "0.1", "--out", str(tmp_path / "e2e")])
+    assert held == [True] and len(FakeLab.started) == 1
+    after = sess.CaptureLock()
+    assert after.acquire()                            # let go once the mode was recorded
+    after.release()
+    results = json.loads((tmp_path / "e2e" / "e2e-results.json").read_text(encoding="utf-8"))
+    assert [r["mode"] for r in results] == ["smooth"] and "error" not in results[0], results
+
+
+def test_the_end_to_end_run_refuses_plainly_while_another_recording_runs(e2e_world, tmp_path, capsys):
+    e2e, held = e2e_world
+    other = sess.CaptureLock()
+    assert other.acquire()
+    try:
+        code = e2e.main(["--modes", "smooth,hitch", "--duration", "0.1", "--out", str(tmp_path / "e2e")])
+    finally:
+        other.release()
+    out = capsys.readouterr().out
+    assert code == 1 and "Another lag-doctor recording is running" in out and "Traceback" not in out
+    assert FakeLab.started == [] and held == []       # LagLab never started; nothing recorded
+    results = json.loads((tmp_path / "e2e" / "e2e-results.json").read_text(encoding="utf-8"))
+    assert [r["mode"] for r in results] == ["smooth"] and "Another lag-doctor recording" in results[0]["error"]
+
+
+def _split_command_line(params: str) -> list[str]:
+    """How the elevated child's command line is split (CommandLineToArgvW), without the program."""
+    import ctypes
+    from ctypes import wintypes
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    k32 = ctypes.WinDLL("kernel32")
+    k32.LocalFree.argtypes = [ctypes.c_void_p]
+    n = ctypes.c_int()
+    argv = shell32.CommandLineToArgvW(f"program.exe {params}", ctypes.byref(n))
+    assert argv, f"CommandLineToArgvW failed: {ctypes.get_last_error()}"
+    try:
+        return [argv[i] for i in range(1, n.value)]
+    finally:
+        k32.LocalFree(ctypes.cast(argv, ctypes.c_void_p))
+
+
+class ShellExecuteRecorder:
+    """Stands in for ShellExecuteExW behind the real relaunch_elevated: records the command, and hands back the
+    handle of a plain child process that exits at once."""
+
+    def __init__(self):
+        self.params: list[str] = []
+        self.children: list[subprocess.Popen] = []
+
+    def __call__(self, ref):
+        info = ref._obj
+        self.params.append(info.lpParameters)
+        child = subprocess.Popen([BASE_PY, "-I", "-c", "pass"])
+        self.children.append(child)
+        me = _winapi.GetCurrentProcess()
+        info.hProcess = _winapi.DuplicateHandle(me, child._handle, me, 0, False, _winapi.DUPLICATE_SAME_ACCESS)
+        return True
+
+
+def test_the_end_to_end_relaunch_hands_over_an_absolute_folder_and_no_empty_argument(monkeypatch, tmp_path):
+    e2e = _e2e()
+    from lagdoctor.winapi import elevation
+    rec = ShellExecuteRecorder()
+    monkeypatch.setattr(elevation, "_ShellExecuteExW", rec)
+    monkeypatch.setattr(elevation, "can_trace", lambda: False)
+    monkeypatch.chdir(tmp_path)
+    try:
+        e2e.main(["--modes", "smooth", "--duration", "0.1", "--out", "rel"])
+    finally:
+        for c in rec.children:
+            c.wait(10)
+    (params,) = rec.params
+    argv = _split_command_line(params)
+    out = argv[argv.index("--out") + 1]
+    assert Path(out).is_absolute() and Path(out) == (tmp_path / "rel").resolve(), params
+    assert all(argv), argv
+    with pytest.raises(SystemExit):
+        e2e.parse(["--modes", " , "])               # no modes: it would be an empty argument when elevated
+
+
+def test_an_end_to_end_relaunch_that_cannot_start_says_so_plainly(monkeypatch, tmp_path, capsys):
+    e2e = _e2e()
+    from lagdoctor.winapi import elevation
+
+    def never(ref):
+        raise AssertionError("a refused command reached ShellExecuteExW")
+    monkeypatch.setattr(elevation, "_ShellExecuteExW", never)
+    monkeypatch.setattr(elevation, "can_trace", lambda: False)
+    monkeypatch.setattr(sys, "executable", "")           # Python could not tell its own path
+    assert e2e.main(["--modes", "smooth", "--duration", "0.1", "--out", str(tmp_path / "e2e")]) == 3
+    out = capsys.readouterr().out
+    assert "could not be started" in out and "Traceback" not in out

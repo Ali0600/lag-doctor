@@ -101,6 +101,24 @@ PUMP_EVERY_S = 1.0              # how often the consumer thread is checked, so i
 SELFTEST_WAIT_S = 4.0           # flush timer 1 s (NE 5.3) plus slack
 SELFTEST_SERVER = "1.1.1.1"     # the default internet anchor (DESIGN network); answers DNS on UDP and TCP
 
+# When lag-doctor itself stops SESSION_NAME by name (closing the console window does, cli._ConsoleControl), it
+# says so first, so the tracker reads its consumer ending as a requested stop, never as one "by itself".
+_external_stop_lock = threading.Lock()
+_external_stop_at: float | None = None          # clock.now() of the latest such stop
+
+
+def expect_external_stop() -> None:
+    """Say that lag-doctor is about to stop the lag-doctor-net session by name itself. Thread-safe; call it
+    before the stop. It counts for every tracker whose session started before it."""
+    global _external_stop_at
+    with _external_stop_lock:
+        _external_stop_at = clock.now()
+
+
+def _stopped_by_us_since(t0: float) -> bool:
+    with _external_stop_lock:
+        return _external_stop_at is not None and _external_stop_at >= t0
+
 
 # ---------------------------------------------------------------- decoding ---
 
@@ -761,6 +779,7 @@ class FlowTracker(Collector):
         self._pid_errors = 0
         self._unknown_seen = 0           # unknown_endpoints count at the last address refresh
         self._started = False            # the ETW session started: only then does an empty list mean "none seen"
+        self._started_at: float | None = None    # clock.now() when it started (for expect_external_stop)
         self._pump_alive_t = 0.0         # last check that found the consumer thread running (capture clock)
         self._pump_dead: tuple[float, Any] | None = None   # (t, ProcessTrace rc) when it was found stopped by itself
         self._lag_max: float | None = None                   # delivery lag of the game's packets (now - timestamp)
@@ -782,6 +801,7 @@ class FlowTracker(Collector):
             return
         self._session = session
         self._started = True
+        self._started_at = clock.now()
         self._pump_alive_t = self.now()
         self.set_status("ok", "Kernel-Network flows; address layout unverified (self-test pending)", TOOL)
         if self._selftest_on:
@@ -959,11 +979,15 @@ class FlowTracker(Collector):
     def _check_pump(self, session: Any, t: float) -> None:
         """Time the consumer thread's state. Only our own stop() ends it on purpose, and that comes after
         the last check, so a stopped thread found here stopped by itself (4201, 998, or its session stopped
-        from outside, NE 5.4)."""
+        from outside, NE 5.4), unless lag-doctor said it stopped the session by name itself since it started
+        (expect_external_stop): then the stop was asked for. (A death by itself in the check period before that
+        reads as asked for too.)"""
         h = _safe_health(session)
         if h.get("pump_alive") is True:
             self._pump_alive_t = t
         elif h.get("pump_alive") is False and self._pump_dead is None:
+            if self._started_at is not None and _stopped_by_us_since(self._started_at):
+                return
             self._pump_dead = (t, h.get("process_trace_rc"))
 
     def _judge_health(self, h: dict) -> None:

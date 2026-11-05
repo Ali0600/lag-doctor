@@ -28,5 +28,15 @@
    "file": "lagdoctor/winapi/elevation.py",
    "old": "        return ctypes.wstring_at(text.value)",
    "new": "        return \"S-1-5-18\"",
-   "tests": ["tests/test_presentmon_elevation.py::test_token_user_sid_matches_whoami"]}
+   "tests": ["tests/test_presentmon_elevation.py::test_token_user_sid_matches_whoami"]},
+  {"name": "an empty argument is launched elevated",
+   "file": "lagdoctor/winapi/elevation.py",
+   "old": "isinstance(a, str) and a and not _CONTROL.search(a)",
+   "new": "isinstance(a, str) and not _CONTROL.search(a)",
+   "tests": ["tests/test_presentmon_elevation.py::test_an_ambiguous_launch_is_refused_before_any_prompt"]},
+  {"name": "a control character is launched elevated",
+   "file": "lagdoctor/winapi/elevation.py",
+   "old": "_CONTROL = re.compile(r\"[\\x00-\\x1f]\")",
+   "new": "_CONTROL = re.compile(r\"[\\x00]\")",
+   "tests": ["tests/test_presentmon_elevation.py::test_an_ambiguous_launch_is_refused_before_any_prompt"]}
 ]

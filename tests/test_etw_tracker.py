@@ -397,6 +397,68 @@ def test_a_consumer_found_stopped_at_the_end_had_stopped_by_itself(monkeypatch):
     assert st.state == "partial" and "ETW consumer stopped by itself" in st.detail, st
 
 
+class StoppedByName(FakeSession):
+    """A consumer that ends when `end()` is called: lag-doctor stopping lag-doctor-net by name (cli, on close)."""
+
+    def end(self):
+        self.ended = True
+
+    def health(self):
+        h = super().health()
+        if getattr(self, "ended", False):
+            h.update(pump_alive=False, process_trace_rc=0)
+        return h
+
+
+def _run_until_ended(say_first, monkeypatch):
+    """Start a tracker, end its consumer from outside (saying first, from another thread, that the stop is
+    ours, when say_first), let consumer checks run, stop it, and return it."""
+    monkeypatch.setattr(nf, "PUMP_EVERY_S", 0.1)
+    made = []
+    tr = FlowTracker((GAME,), selftest=False, local_addrs=lambda: LOCALS,
+                     session_factory=lambda n, p, cb: made.append(StoppedByName(n, p, cb)) or made[-1])
+    tr.start(clock.now())
+    try:
+        assert _wait(lambda: made and made[0].started)
+        time.sleep(0.3)
+        if say_first:
+            t = threading.Thread(target=nf.expect_external_stop)      # the console handler's own thread
+            t.start()
+            t.join()
+        made[0].end()
+        time.sleep(0.6)                                                # several consumer checks see it ended
+    finally:
+        tr.stop()
+    return tr
+
+
+def test_a_consumer_ended_by_lag_doctors_own_stop_by_name_is_a_stop_it_asked_for(monkeypatch):
+    tr = _run_until_ended(True, monkeypatch)
+    st = tr.status()
+    assert st.state == "ok" and "stopped by itself" not in st.detail, st
+    assert tr.result()["health"]["consumer_stopped_t"] is None
+    control = _run_until_ended(False, monkeypatch)                     # the same end, not announced
+    assert "ETW consumer stopped by itself" in control.status().detail
+    assert control.result()["health"]["consumer_stopped_t"] is not None
+
+
+def test_a_stop_by_name_announced_before_the_session_started_does_not_excuse_its_consumer(monkeypatch):
+    nf.expect_external_stop()                                          # an earlier capture in this process
+    time.sleep(0.05)
+    monkeypatch.setattr(nf, "PUMP_EVERY_S", 0.1)
+    monkeypatch.setattr(DyingSession, "after", 0.3)
+    made = []
+    tr = FlowTracker((GAME,), selftest=False, local_addrs=lambda: LOCALS,
+                     session_factory=lambda n, p, cb: made.append(DyingSession(n, p, cb)) or made[-1])
+    tr.start(clock.now())
+    try:
+        assert _wait(lambda: made and made[0].started)
+        time.sleep(0.8)
+    finally:
+        tr.stop()
+    assert "ETW consumer stopped by itself" in tr.status().detail
+
+
 def test_after_the_consumer_died_an_open_gap_ends_where_it_was_last_seen_running():
     # The server went quiet at 10 s while the game kept sending; then the consumer itself stopped. What came
     # after that was never seen, so the server's silence is only known up to the consumer's last sign of life.

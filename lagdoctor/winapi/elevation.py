@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import ctypes
 import os
+import re
 import subprocess
 import time
 from ctypes import wintypes
@@ -36,6 +37,7 @@ SW_SHOWNORMAL = 1
 ERROR_CANCELLED = 1223                   # the user answered No at the UAC prompt (winerror.h)
 WAIT_OBJECT_0, WAIT_TIMEOUT = 0x0, 0x102
 INFINITE_POLL_MS = 250                   # wait in slices so Ctrl+C still reaches Python
+_CONTROL = re.compile(r"[\x00-\x1f]")   # NUL, tab, newline ...: never in an argument of an elevated launch
 
 
 class TOKEN_ELEVATION(ctypes.Structure):
@@ -228,9 +230,11 @@ def launch_elevated(argv: list[str], cwd: str) -> ElevatedChild:
     """Start argv elevated in a new console (one UAC prompt) and return its handle without waiting.
 
     Raises PermissionError (winerror 1223) when the user declines the prompt, OSError otherwise.
-    argv[0] and cwd must be absolute: an elevated launch must never search PATH for its program.
+    argv[0] and cwd must be absolute: an elevated launch must never search PATH for its program. ValueError,
+    before any prompt, for an empty argument or one holding a control character: lag-doctor never builds
+    either, so one means a bug upstream, found here rather than in an elevated window that closes at once.
     """
-    if not argv or not all(isinstance(a, str) and a and "\0" not in a for a in argv):
+    if not argv or not all(isinstance(a, str) and a and not _CONTROL.search(a) for a in argv):
         raise ValueError(f"bad argv for an elevated launch: {argv!r}")
     if not isinstance(cwd, str) or "\0" in cwd:
         raise ValueError(f"bad folder for an elevated launch: {cwd!r}")

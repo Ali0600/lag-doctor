@@ -23,7 +23,7 @@ import threading
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from lagdoctor import __version__, paths
 
@@ -83,7 +83,9 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--presentmon-exe", type=Path, help=argparse.SUPPRESS)
     w.add_argument("--inventory-file", type=Path, help=argparse.SUPPRESS)
     w.add_argument("--parent-sid", type=_sid, help=argparse.SUPPRESS)
-    w.add_argument("--steam-log", help=argparse.SUPPRESS)        # the user's own Steam log, or "" for none
+    w.add_argument("--parent-procs", type=_procs, help=argparse.SUPPRESS)  # the waiting window's pid:create_time
+    w.add_argument("--steam-log", help=argparse.SUPPRESS)        # the user's own Steam log
+    w.add_argument("--no-steam-log", action="store_true", help=argparse.SUPPRESS)   # the user has none
     w.set_defaults(func=cmd_watch)
 
     a = sub.add_parser("analyze", help="re-run the analysis on a saved capture")
@@ -177,6 +179,22 @@ def _sid(text: str) -> str:
     return text.strip()
 
 
+MAX_PARENT_PROCS = 4
+
+
+def _procs(text: str) -> tuple[tuple[int, int], ...]:
+    """'pid:create_time,...': processes of the window that started an elevated recording (lag-doctor's own)."""
+    out = []
+    for part in text.split(","):
+        m = re.fullmatch(r"([0-9]{1,10}):([0-9]{1,20})", part.strip())
+        if not m or not 0 < int(m.group(1)) <= 0xFFFFFFFF:
+            raise argparse.ArgumentTypeError(f"{text!r} is not a list of pid:create_time")
+        out.append((int(m.group(1)), int(m.group(2))))
+    if len(out) > MAX_PARENT_PROCS:
+        raise argparse.ArgumentTypeError(f"at most {MAX_PARENT_PROCS} processes")
+    return tuple(out)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -257,7 +275,7 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     hotkey = None if (args.hotkey or "").lower() in ("", "none", "off") else args.hotkey
     opts = sess.SessionOptions(duration_s=args.duration, network=not args.no_network, server_ip=args.server,
                                hotkey=hotkey, presentmon_exe=exe, frames=frames,
-                               steam_log=getattr(args, "steam_log", None))
+                               steam_log=_steam_log_arg(args), tool_procs=getattr(args, "parent_procs", None) or ())
     if args.out_file:
         cap_path = Path(args.out_file).resolve()
         out_dir = cap_path.parent
@@ -283,6 +301,14 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
         say(f"Capture saved: {cap_path}")
         return 0
     return _analyze_saved(cap, cap_path, out_dir)
+
+
+def _steam_log_arg(args: argparse.Namespace) -> str | None:
+    """The session's steam_log: "" when the parent window found none (--no-steam-log), the log it found, or
+    None (look it up in this account's HKCU)."""
+    if getattr(args, "no_steam_log", False):
+        return ""
+    return getattr(args, "steam_log", None)
 
 
 def _analyze_saved(cap, cap_path: Path, out_dir: Path) -> int:
@@ -320,10 +346,12 @@ class _ConsoleControl:
         self._request_stop = request_stop
         self.net_session: str | None = None
         self._etw = None
+        self._netflows = None
         if network:
-            from lagdoctor.capture.netflows import SESSION_NAME
+            from lagdoctor.capture import netflows
             from lagdoctor.winapi import etw
-            self.net_session, self._etw = SESSION_NAME, etw      # imported now: never inside the handler
+            # Imported now: never inside the handler.
+            self.net_session, self._etw, self._netflows = netflows.SESSION_NAME, etw, netflows
         self._routine = _HANDLER_ROUTINE(self._handle)           # kept referenced while it is registered
         self.registered = False
 
@@ -349,6 +377,7 @@ class _ConsoleControl:
             if event in (CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT):
                 self._request_stop(self.stop, "window closed")
                 if self._etw is not None and self.net_session:
+                    self._netflows.expect_external_stop()        # first: the tracker reads the stop as ours
                     self._etw.stop_session(self.net_session)    # milliseconds; the save may not fit in 5 s
                 self.saved.wait(CLOSE_SAVE_WAIT_S)
                 return True
@@ -370,16 +399,30 @@ def elevation_choice(elevate: bool, no_elevate: bool, interactive: bool, ask: Ca
 
 def elevated_argv(args: argparse.Namespace, target: dict[str, Any], cap_path: Path, *,
                   presentmon_exe: Path | None = None, inventory_file: Path | None = None,
-                  parent_sid: str | None = None, steam_log: Path | str | None = None) -> list[str]:
+                  parent_sid: str | None = None, steam_log: Path | str | None = None,
+                  parent_procs: Iterable[tuple[int, int]] = ()) -> list[str]:
     """The command the elevated child runs: the capture only, for this exact process, into this exact file.
 
     -E -s: the elevated Python ignores PYTHON* variables and the user's own site-packages (-I would also drop
     the project folder from sys.path, which `-m lagdoctor` needs). Paths must be absolute: the child runs in
-    another folder, and perhaps as another account with another profile.
+    another folder, and perhaps as another account with another profile. steam_log as in SessionOptions:
+    None (the child looks in its own HKCU), "" (none: --no-steam-log) or the user's log. Every argument is
+    something the child's own parser accepts; launch_elevated refuses an empty one.
     """
     for p in (cap_path, presentmon_exe, inventory_file, steam_log or None):
         if p is not None and not Path(p).is_absolute():
             raise ValueError(f"the elevated recording needs absolute paths, not {str(p)!r}")
+    if parent_sid:
+        try:
+            parent_sid = _sid(parent_sid)
+        except argparse.ArgumentTypeError as exc:
+            raise ValueError(str(exc)) from None
+    procs = ",".join(f"{int(pid)}:{int(created)}" for pid, created in parent_procs)
+    if procs:
+        try:
+            _procs(procs)
+        except argparse.ArgumentTypeError as exc:
+            raise ValueError(f"the parent window's processes: {exc}") from None
     argv = [sys.executable, "-E", "-s", "-m", "lagdoctor", "watch",
             "--pid", str(int(target["pid"])), "--capture-only",
             "--create-time", str(int(target["create_time"])), "--out-file", str(cap_path)]
@@ -396,8 +439,12 @@ def elevated_argv(args: argparse.Namespace, target: dict[str, Any], cap_path: Pa
         argv += ["--inventory-file", str(inventory_file)]
     if parent_sid:
         argv += ["--parent-sid", parent_sid]
-    if steam_log is not None:
-        argv += ["--steam-log", str(steam_log)]       # "" tells the child there is none (do not look in its HKCU)
+    if procs:
+        argv += ["--parent-procs", procs]
+    if steam_log == "":
+        argv.append("--no-steam-log")                 # none here: the child must not look in its own HKCU
+    elif steam_log is not None:
+        argv += ["--steam-log", str(steam_log)]
     return argv
 
 
@@ -418,10 +465,10 @@ def _watch_elevated(args: argparse.Namespace, target: dict[str, Any], exe: Path 
         # Read here, in the user's own account: an administrator's approval would run the child as that
         # account, whose HKCU and profile are not the user's.
         _write_json(handover, sess._collect_inventory(target))
-        argv = elevated_argv(args, target, cap_path, presentmon_exe=exe, inventory_file=handover,
-                             parent_sid=_own_sid(), steam_log=_own_steam_log())
-        say("Opening the recording in a new window (approve the UAC prompt). Come back here when it ends.")
         try:
+            argv = elevated_argv(args, target, cap_path, presentmon_exe=exe, inventory_file=handover,
+                                 parent_sid=_own_sid(), steam_log=_own_steam_log(), parent_procs=_own_procs())
+            say("Opening the recording in a new window (approve the UAC prompt). Come back here when it ends.")
             child = elevation.launch_elevated(argv, cwd=str(PROJECT_ROOT))
         except PermissionError:
             ended = True
@@ -430,6 +477,11 @@ def _watch_elevated(args: argparse.Namespace, target: dict[str, Any], exe: Path 
         except OSError as exc:
             ended = True
             say(f"The administrator window could not be opened ({exc}), so lag-doctor records without frame timing.")
+            return None
+        except ValueError as exc:               # a command it refused to launch: say so, never a traceback
+            ended = True
+            say(f"The administrator window was not started, because its command was refused ({exc}). lag-doctor "
+                "records without frame timing.")
             return None
         code = _wait_for_child(child, cap_path)
         if code is None:
@@ -505,13 +557,26 @@ def _own_sid() -> str | None:
 
 def _own_steam_log() -> str:
     """This account's Steam download log, read here so an elevated child (perhaps another account) uses it;
-    "" when there is none, so the child does not look in its own HKCU instead."""
+    "" when there is none, so the child does not look in its own HKCU instead (elevated_argv turns "" into
+    --no-steam-log). A log the child would refuse (resolved onto a network share, too long) counts as none."""
     from lagdoctor.capture import netmon
     try:
         found = netmon.find_steam_log()
+        path = str(found.resolve()) if found is not None else ""
+        if path:
+            netmon.given_steam_log(path)
+    except (OSError, ValueError):
+        return ""
+    return path
+
+
+def _own_procs() -> list[tuple[int, int]]:
+    """(pid, create_time) of this process and its venv launcher, for the elevated child's tool list."""
+    from lagdoctor.capture import session as sess
+    try:
+        return sess.own_processes()
     except OSError:
-        found = None
-    return str(found.resolve()) if found is not None else ""
+        return []
 
 
 def _child_args_problem(args: argparse.Namespace) -> str | None:
@@ -524,14 +589,16 @@ def _child_args_problem(args: argparse.Namespace) -> str | None:
         if (flag == "out_file" and value is None) or (value is not None and not Path(value).is_absolute()):
             return f"--{flag.replace('_', '-')} must be an absolute path"
     steam = getattr(args, "steam_log", None)
-    if steam not in (None, ""):
+    if steam is not None and getattr(args, "no_steam_log", False):
+        return "--steam-log and --no-steam-log together"
+    if steam is not None:
         from lagdoctor.capture import netmon
         try:
             netmon.given_steam_log(steam)
         except ValueError:
-            return "--steam-log must be a local file path or empty"
-        if not Path(steam).is_absolute():
-            return "--steam-log must be an absolute path or empty"
+            return "--steam-log must be a local file path"
+        if not Path(steam).is_absolute():             # "" too: --no-steam-log says there is none
+            return "--steam-log must be an absolute path"
     return None
 
 

@@ -18,13 +18,22 @@ import math
 import os
 import re
 import zlib
-from dataclasses import MISSING, asdict, dataclass, field, fields
+from collections import deque
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import MISSING, asdict, dataclass, field, fields, is_dataclass
+from functools import partial
+from operator import is_not
 from pathlib import Path
-from typing import Any, Iterable, Literal
+from typing import Any, Iterable, Iterator, Literal
 
 CAPTURE_SCHEMA = "lagdoctor.capture/1"
 CAPTURE_FAMILY, CAPTURE_VERSION = "lagdoctor.capture", 1
 MAX_CAPTURE_JSON_BYTES = 2 << 30          # uncompressed; a file that expands past this is refused, not loaded
+# gzip level of Capture.save: the fastest. Closing the console window leaves the save 4.5 s (cli). Measured
+# here on a synthetic 30-minute 144 FPS capture (259,200 frames), the whole save: level 1 2.6 s and 12.0 MB,
+# 4 2.9 s and 10.4 MB, 6 5.0 s and 9.6 MB, 9 28.3 s and 9.5 MB (the old save: 36 s, 9.1 MB).
+SAVE_GZIP_LEVEL = 1
+SAVE_PIECES_AHEAD = 4                     # encoded columns waiting for the compressor (memory stays bounded)
 
 
 # ---------------------------------------------------------------- columns ---
@@ -224,8 +233,11 @@ class Capture:
     tool_version: str = ""
 
     def to_json(self) -> dict[str, Any]:
-        data = asdict(self)
-        return _clean_floats(data)
+        return _clean_floats(self._fields())
+
+    def _fields(self) -> dict[str, Any]:
+        """The fields as they are (no copy): _clean_floats and save() turn nested dataclasses into dicts."""
+        return {f.name: getattr(self, f.name) for f in fields(self)}
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "Capture":
@@ -259,12 +271,29 @@ class Capture:
         return cap
 
     def save(self, path: Path) -> Path:
-        """Write atomically: a crash mid-save never leaves a half-written capture."""
+        """Write atomically: a crash mid-save never leaves a half-written capture.
+
+        The same gzip-compressed JSON as ever, written one column at a time with the C encoder, so the save
+        is quick (closing the console window leaves it 4.5 s) and never builds a copy of the whole capture.
+        Floats are written as "%.6f" text, which loads as exactly round(x, 6), the value to_json() holds.
+        One worker thread compresses and writes while the next column is encoded (zlib lets go of the GIL).
+        """
         path = Path(path)
         tmp = path.with_name(path.name + ".tmp")
         try:
-            with gzip.open(tmp, "wt", encoding="utf-8") as f:
-                json.dump(self.to_json(), f, separators=(",", ":"))
+            with open(tmp, "wb") as raw, ThreadPoolExecutor(1, thread_name_prefix="lagdoctor-save") as pool:
+                gz = zlib.compressobj(SAVE_GZIP_LEVEL, zlib.DEFLATED, 31)     # wbits 31: gzip header + CRC
+
+                def put(data: bytes) -> None:                               # runs on the worker, in order
+                    raw.write(gz.compress(data))
+                pending: deque[Future] = deque()
+                for piece in _json_pieces(self._fields(), 2):
+                    pending.append(pool.submit(put, piece.encode("ascii")))  # ensure_ascii: ASCII only
+                    while len(pending) > SAVE_PIECES_AHEAD:
+                        pending.popleft().result()                          # bounded; raises the worker's error
+                while pending:
+                    pending.popleft().result()
+                raw.write(gz.flush())
             os.replace(tmp, path)
         except BaseException:
             try:
@@ -336,17 +365,83 @@ def _read_bounded(f, limit: int) -> bytearray:
     return out
 
 
+_PLAIN = frozenset({int, str, bool, type(None)})         # JSON values _clean_floats leaves alone
+_FLOAT_OR_NONE = frozenset({float, type(None)})
+_SEP = (",", ":")
+_F6 = "%.6f".__mod__
+_not_none = partial(is_not, None)
+
+
 def _clean_floats(obj: Any) -> Any:
-    """JSON has no NaN/inf; store them as None. Round floats to keep files small."""
+    """JSON has no NaN/inf; store them as None. Round floats to keep files small. Dataclasses become dicts."""
     if isinstance(obj, float):
         if math.isnan(obj) or math.isinf(obj):
             return None
         return round(obj, 6)
+    if type(obj) in _PLAIN:
+        return obj
     if isinstance(obj, dict):
         return {k: _clean_floats(v) for k, v in obj.items()}
     if isinstance(obj, (list, tuple)):
         return [_clean_floats(v) for v in obj]
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return _clean_floats(asdict(obj))
     return obj
+
+
+def _json_pieces(obj: Any, depth: int) -> Iterator[str]:
+    """The JSON text of _clean_floats(obj), in pieces: dicts with text keys are opened `depth` levels down, so
+    no piece is bigger than one column."""
+    if depth > 0 and isinstance(obj, dict) and all(isinstance(k, str) for k in obj):
+        sep = "{"
+        for k, v in obj.items():
+            yield sep + json.dumps(k) + ":"
+            sep = ","
+            yield from _json_pieces(v, depth - 1)
+        yield "}" if sep == "," else "{}"
+    elif type(obj) is list:
+        yield _list_json(obj)
+    else:
+        yield json.dumps(_clean_floats(obj), separators=_SEP)
+
+
+def _list_json(col: list) -> str:
+    """json.dumps(_clean_floats(col)) for one list, two to three times as fast for the usual columns. Floats
+    are written with "%.6f": the correctly rounded digits round(x, 6) is built from, so the text loads as
+    exactly the same float (one conversion instead of round()'s two and repr()'s one). Any other list (ints
+    mixed in, NaN, nested rows) goes the generic way."""
+    kinds = set(map(type, col))
+    if kinds <= _PLAIN:
+        return json.dumps(col, separators=_SEP)
+    if kinds <= _FLOAT_OR_NONE and all(map(math.isfinite, filter(_not_none, col))):
+        if type(None) not in kinds:
+            return "[" + _f6_text(col) + "]"
+        nones = [i for i, v in enumerate(col) if v is None]
+        if len(nones) * 8 > len(col):                   # gaps everywhere: one value at a time
+            return "[" + ",".join(["null" if v is None else _F6(v) for v in col]) + "]"
+        parts, start = [], 0
+        for i in nones:
+            if i > start:
+                parts.append(_f6_text(col[start:i]))
+            parts.append("null")
+            start = i + 1
+        if start < len(col):
+            parts.append(_f6_text(col[start:]))
+        return "[" + ",".join(parts) + "]"
+    return json.dumps(_clean_floats(col), separators=_SEP)
+
+
+_F6_BATCH = 512
+_F6_FORMAT = ",".join(["%.6f"] * _F6_BATCH)
+
+
+def _f6_text(values: list) -> str:
+    """'%.6f' of every float, comma-separated: 512 to one formatting call, a third faster than one by one."""
+    full = len(values) - len(values) % _F6_BATCH
+    parts = [_F6_FORMAT % tuple(values[i:i + _F6_BATCH]) for i in range(0, full, _F6_BATCH)]
+    if full < len(values):
+        parts.append(",".join(map(_F6, values[full:])))
+    return ",".join(parts)
 
 
 # -------------------------------------------------------------- diagnosis ---

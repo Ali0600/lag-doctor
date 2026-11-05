@@ -4,6 +4,10 @@ from __future__ import annotations
 import gzip
 import json
 import math
+import random
+import threading
+import time
+from dataclasses import asdict
 
 import pytest
 
@@ -135,15 +139,177 @@ def test_a_capture_that_expands_past_the_limit_is_not_loaded(tmp_path, monkeypat
     assert info.value.kind == "too_large"
 
 
-def test_a_save_that_fails_leaves_no_half_written_file(tmp_path, monkeypatch):
-    import lagdoctor.model as model
+class _FullDisk:
+    """A compressor whose output can never be written: the disk is full."""
 
-    def broken(*a, **k):
+    def compress(self, data):
         raise OSError(28, "There is not enough space on the disk")
-    monkeypatch.setattr(model.json, "dump", broken)
-    with pytest.raises(OSError):
-        _capture().save(tmp_path / "c.ldcap.json.gz")
+
+    def flush(self):
+        return b""
+
+
+@pytest.mark.parametrize("how", ["unencodable", "write", "replace"])
+def test_a_save_that_fails_leaves_no_half_written_file(tmp_path, monkeypatch, how):
+    # Changed on purpose: it made json.dump fail, which the faster save no longer calls. Now the save fails while
+    # encoding, while the worker thread writes (disk full), and at the final rename.
+    import lagdoctor.model as model
+    cap = _capture()
+    if how == "unencodable":
+        cap.notes = ["fine", {"a set"}]
+    elif how == "write":
+        monkeypatch.setattr(model.zlib, "compressobj", lambda *a, **k: _FullDisk())
+    else:
+        def broken(*a, **k):
+            raise OSError(28, "There is not enough space on the disk")
+        monkeypatch.setattr(model.os, "replace", broken)
+    with pytest.raises(TypeError if how == "unencodable" else OSError):
+        cap.save(tmp_path / "c.ldcap.json.gz")
     assert list(tmp_path.iterdir()) == []
+    assert not [t for t in threading.enumerate() if t.name.startswith("lagdoctor-save")]     # its worker is gone
+
+
+# ------------------------------------------------------------------ the fast save (LC-2) ---
+
+def _old_clean(obj):
+    """model._clean_floats as it was when every capture was saved through it: the frozen reference."""
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return round(obj, 6)
+    if isinstance(obj, dict):
+        return {k: _old_clean(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_old_clean(v) for v in obj]
+    return obj
+
+
+def _old_save(cap: Capture, path) -> None:
+    """Capture.save as it was before (asdict, json.dump, gzip level 9)."""
+    with gzip.open(path, "wt", encoding="utf-8") as f:
+        json.dump(_old_clean(asdict(cap)), f, separators=(",", ":"))
+
+
+def _canonical(path) -> str:
+    """What a file loads as, written back out: floats from their exact doubles, ints as ints, bools as bools."""
+    with gzip.open(path, "rb") as f:
+        return json.dumps(json.loads(f.read()), separators=(",", ":"))
+
+
+class _Sub(float):
+    pass
+
+
+def _awkward_capture(seed: int = 3) -> Capture:
+    rnd = random.Random(seed)
+    awkward = [0.0, -0.0, 5e-324, 1e-7, 4.9999995e-7, 5.0000005e-7, 0.0000005, 1.0000005, 2.675, 0.1 + 0.2,
+               123456789.1234565, 1e15 + 0.1, 1e16, 1e22, -1e300, 7.0, -3.5, 16.6]
+    many = awkward + [rnd.choice((-1, 1)) * 10 ** rnd.uniform(-12, 15) for _ in range(5000)]
+    t, acc = [], 0.0
+    for _ in range(3000):
+        acc += rnd.gauss(6.944, 0.3) / 1000 + rnd.random() * 1e-7
+        t.append(acc)
+    return Capture(
+        started_at="2026-11-05T12:00:00+01:00", clock_origin=12345.678901234, duration_s=20.123456789,
+        target={"pid": 4242, "create_time": 133000000000000001, "name": "Gäme.exe", "tool_pids": [4, 8],
+                "presentmon": {"exe": "C:\\pm.exe", "rows": 3}, "scale": 1.23456789},
+        sources={"frames": SourceStatus("ok", "fine", "PresentMon"), "gpu": SourceStatus("partial", "nan\x1b")},
+        inventory={"nested": SourceStatus("ok"), "displays": [{"hz": 144.003001, "modes_hz": [60, 144]}],
+                   "tuple": (1.5, 2.25), "none": None},
+        frames={"t": t, "frame_ms": [round(rnd.gauss(6.944, 0.3), 4) for _ in range(2999)] + [None],
+                "cpu_busy_ms": [None if i % 3 else rnd.random() * 10 for i in range(3000)],      # gaps everywhere
+                "gpu_busy_ms": [math.nan, math.inf, -math.inf] + [rnd.random() for _ in range(100)],
+                "display_ms": many, "displayed": [1, 0, None] * 1000, "sync_interval": [0, -1] * 1500,
+                "allows_tearing": [True, False, None] * 1000, "present_mode": ["Hardware: Indépendant Flip ✓\x1b",
+                                                                              None] * 1500,
+                "anim_error_ms": [None, None] + [rnd.gauss(0, 0.5) for _ in range(1100)] + [None] +
+                                 [rnd.gauss(0, 0.5) for _ in range(511)] + [None, None],      # runs at the edges
+                "hybrid": [1, 2.5, None, 3], "input_latency_ms": [None] * 3000, "frame_type": [],
+                "swap_chain": [_Sub(1.23456789), _Sub(2.0)]},
+        system={"t": [k * 0.25 for k in range(400)], "cpu_total_pct": [rnd.uniform(0, 100) for _ in range(400)]},
+        others=[[k * 0.25 + 1e-9, [[1000 + j, f"p{j}.exe", rnd.uniform(0, 50), rnd.randint(0, 10 ** 6),
+                                    (rnd.uniform(0, 30), None), 133000000000000000 + j] for j in range(8)]]
+                for k in range(50)],
+        net_flows={"server_rx": [[float(k), 64] for k in range(20)], "gaps": [[3.0000004, 300.0, "delay"]],
+                   "server": None},
+        marks=[1.5, 2.0000006], notes=["a note", "ünïcode"], tool_version="0.1.0")
+
+
+def test_a_saved_capture_loads_exactly_what_the_old_save_wrote(tmp_path):
+    """The fast save writes floats as "%.6f": the file must load as exactly the values (and types) the old save's
+    file did, for every column shape, NaN and inf, the edges of the 512-value batches and round()'s halfway cases."""
+    cap = _awkward_capture()
+    new, old = tmp_path / "new.ldcap.json.gz", tmp_path / "old.ldcap.json.gz"
+    cap.save(new)
+    _old_save(cap, old)
+    assert _canonical(new) == _canonical(old)
+    back = Capture.load(new)
+    assert json.dumps(back.to_json()) == json.dumps(cap.to_json())          # and to_json() agrees with the file
+
+
+def test_the_encoder_runs_at_most_a_few_pieces_ahead_of_the_compressor(tmp_path, monkeypatch):
+    """Memory stays bounded: with a slow disk, the save waits instead of queueing every encoded column."""
+    import lagdoctor.model as model
+    submitted, done, leads = [0], [0], []
+    real = model.zlib.compressobj
+
+    class CountingPool(model.ThreadPoolExecutor):
+        def submit(self, fn, *a, **k):
+            submitted[0] += 1
+            return super().submit(fn, *a, **k)
+
+    class SlowDisk:
+        def __init__(self, *a):
+            self.co = real(*a)
+
+        def compress(self, data):
+            time.sleep(0.01)
+            done[0] += 1
+            leads.append(submitted[0] - done[0])
+            return self.co.compress(data)
+
+        def flush(self):
+            return self.co.flush()
+    monkeypatch.setattr(model, "ThreadPoolExecutor", CountingPool)
+    monkeypatch.setattr(model.zlib, "compressobj", SlowDisk)
+    cap = _awkward_capture()
+    path = cap.save(tmp_path / "c.ldcap.json.gz")
+    assert len(leads) > 3 * model.SAVE_PIECES_AHEAD and max(leads) <= model.SAVE_PIECES_AHEAD + 1, leads
+    assert Capture.load(path).frames["displayed"] == cap.frames["displayed"]         # and the file is whole
+
+
+def test_the_save_compresses_at_the_fastest_gzip_level(tmp_path):
+    path = _capture().save(tmp_path / "c.ldcap.json.gz")
+    head = path.read_bytes()[:10]
+    assert head[:3] == b"\x1f\x8b\x08" and head[8] == 4                     # gzip XFL 4: fastest (level 1)
+
+
+def _frames_capture(n: int) -> Capture:
+    rnd = random.Random(1)
+    t, acc = [], 0.0
+    for _ in range(n):
+        acc += rnd.gauss(6.944, 0.3) / 1000
+        t.append(acc)
+    floats = {c: [round(rnd.gauss(6.944, 0.3), 4) for _ in range(n)] for c in
+              ("frame_ms", "cpu_busy_ms", "cpu_wait_ms", "gpu_busy_ms", "display_ms", "anim_error_ms")}
+    return Capture(started_at="2026-11-05T12:00:00+01:00", clock_origin=1.0, duration_s=n / 144, target={},
+                   sources={}, inventory={}, frames={"t": t, **floats, "displayed": [1] * n,
+                                                     "present_mode": ["Hardware: Independent Flip"] * n})
+
+
+def test_the_save_takes_a_fraction_of_the_old_saves_time(tmp_path):
+    # Measured against the old save on the same data, so a busy PC slows both alike. On a 30-minute 144 FPS
+    # capture here: 2.6 s against 36 s.
+    cap = _frames_capture(15_000)
+    t0 = time.perf_counter()
+    _old_save(cap, tmp_path / "old.gz")
+    old = time.perf_counter() - t0
+    new = math.inf
+    for _ in range(3):
+        t0 = time.perf_counter()
+        cap.save(tmp_path / "new.gz")
+        new = min(new, time.perf_counter() - t0)
+    assert new < 0.3 * old, f"the save took {new:.2f} s, the old one {old:.2f} s"
 
 
 def test_diagnosis_json_has_no_nan():
