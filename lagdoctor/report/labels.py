@@ -41,6 +41,7 @@ CAUSES = {
     "hybrid_copy": "frames copied between GPUs",
     "gpu_limit": "GPU at its limit",
     "cpu_limit": "CPU at its limit",
+    "gpu_contention": "another program using the game's GPU",
     "ram_pressure": "low on RAM",
     "power_plan": "power-saving mode",
     "refresh_rate": "screen refresh rate below its maximum",
@@ -85,6 +86,7 @@ TOPICS = {
     "hybrid_copy": "copies between GPUs",
     "gpu_limit": "GPU load",
     "cpu_limit": "CPU load",
+    "gpu_contention": "other programs on the game's GPU",
     "ram_pressure": "RAM",
     "power_plan": "power plan",
     "refresh_rate": "screen refresh rate",
@@ -127,13 +129,16 @@ BOUND = {
 }
 
 
-def severity_text(kind: str, severity: float) -> str:
+def severity_text(kind: str, severity: float, detail: dict | None = None) -> str:
+    """An event's severity in words. A pacing event flagged by its animation error alone (events.py's
+    detail["criterion"] "anim") carries that error as its severity, not a swing (A11)."""
     if kind == "stutter":
         return f"{severity:.0f} ms frame"
     if kind == "fps_drop":
         return f"{severity:.0f}% below normal"
     if kind == "pacing":
-        return f"{severity:.1f} ms swings"
+        anim = isinstance(detail, dict) and detail.get("criterion") == "anim"
+        return f"{severity:.1f} ms animation error" if anim else f"{severity:.1f} ms swings"
     if kind == "net_spike":
         return f"{severity:.0f} ms ping"
     if kind == "net_loss":

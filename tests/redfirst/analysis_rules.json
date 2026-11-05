@@ -266,8 +266,8 @@
  {
   "name": "power cap counted as throttling",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "        if share >= NV_THROTTLE_PCT and power_only:",
-  "new": "        if False:",
+  "old": "        c.neutral(\"gpu_telemetry\", f\"the GPU sat at its software power cap {share:.0f}% of the time: the design limit \"",
+  "new": "        c.support(\"gpu_telemetry\", W_DIRECT, f\"the GPU sat at its software power cap {share:.0f}% of the time: the design limit \"",
   "tests": [
    "tests/test_analysis_rules.py::test_gpu_throttle_at_the_power_limit_alone_is_normal_not_a_fault"
   ]
@@ -508,12 +508,12 @@
   ]
  },
  {
-  "name": "direct readout at 51 %",
+  "name": "uneven pacing weighs as a direct readout",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "UNEVEN_DIRECT_SHARE = 0.50 ",
-  "new": "UNEVEN_DIRECT_SHARE = 0.51 ",
+  "old": "        c.support(\"frame_timing\", W_STEADY, f\"the game's own frame times swung by",
+  "new": "        c.support(\"frame_timing\", W_DIRECT, f\"the game's own frame times swung by",
   "tests": [
-   "tests/test_analysis_rules.py::test_uneven_pacing_over_half_the_capture_is_a_direct_readout"
+   "tests/test_analysis_rules.py::test_uneven_pacing_is_a_steady_metric_never_a_direct_readout"
   ]
  },
  {
@@ -808,8 +808,8 @@
  {
   "name": "local gaps blamed on the server",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    gaps = [ev for ev in e.events if ev.kind == \"net_gap\" and _dict(ev.detail).get(\"kind\") != \"local\"]",
-  "new": "    gaps = [ev for ev in e.events if ev.kind == \"net_gap\"]",
+  "old": "SERVER_GAP_KINDS = (\"delay\", \"loss\") ",
+  "new": "SERVER_GAP_KINDS = (\"delay\", \"loss\", \"local\") ",
   "tests": [
    "tests/test_analysis_rules_network.py::test_server_lag_ignores_gaps_where_the_game_itself_paused"
   ]
@@ -829,7 +829,8 @@
   "old": "TALKER_MIN_BPS = 1e6 ",
   "new": "TALKER_MIN_BPS = 1.01e6 ",
   "tests": [
-   "tests/test_analysis_rules_network.py::test_bandwidth_hog_a_program_moving_1_mb_a_second"
+   "tests/test_analysis_rules_network.py::test_bandwidth_hog_a_program_moving_1_mb_a_second",
+   "tests/test_analysis_rules_network.py::test_the_network_adapters_own_counters_under_1_mb_a_second_rule_a_hog_out"
   ]
  },
  {
@@ -948,6 +949,496 @@
   "new": "        if False:\n            return f, True",
   "tests": [
    "tests/test_analysis_rules_diagnose.py::test_the_headline_names_the_finding_that_claims_the_lags_own_events"
+  ]
+ },
+ {
+  "name": "a verdict-sourced side counted as frame timing",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "              and _dict(ev.detail).get(\"side_source\") != \"verdict\")",
+  "new": "              and True)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_side_the_verdict_stood_in_for_is_no_frame_timing_evidence",
+   "tests/test_analysis_frames_attribute.py::test_the_verdict_stands_in_only_for_a_slow_frame_without_gpu_timing_and_says_so"
+  ]
+ },
+ {
+  "name": "hog pids ordered by PID number",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        pids = sorted(total, key=lambda p: -total[p])",
+  "new": "        pids = sorted(total)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_fix_targets_the_process_that_rose_most_never_the_lowest_pid"
+  ]
+ },
+ {
+  "name": "a steady job of the same name props up the figure",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        during, normal = _name_cpu(e, n.name, merged, set(n.pids) if n.pids else None)",
+  "new": "        during, normal = _name_cpu(e, n.name, merged)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_process_named_is_the_one_that_rose_never_a_steady_one_of_the_same_name"
+  ]
+ },
+ {
+  "name": "rise left out of the fix title",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            up = f\", up {RISE_TEXT[n.col](rise)} when the game lagged\" if rise is not None else \"\"",
+  "new": "            up = \"\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_fix_targets_the_process_that_rose_most_never_the_lowest_pid"
+  ]
+ },
+ {
+  "name": "a game helper told to close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if n.role == \"game_helper\":",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_helper_process_is_named_as_such_and_never_told_to_close"
+  ]
+ },
+ {
+  "name": "game helpers titled as background programs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if helpers and not others:     # A10",
+  "new": "    if False:     # A10",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_helper_process_is_named_as_such_and_never_told_to_close"
+  ]
+ },
+ {
+  "name": "priority fix for a process with the game's name",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if not game or _same_image(n.name, game_name):",
+  "new": "        if not game:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_process_with_the_games_own_name_is_never_offered_nor_told_to_close"
+  ]
+ },
+ {
+  "name": "priority fix without the game's pids",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if not game or _same_image(n.name, game_name):",
+  "new": "        if _same_image(n.name, game_name):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_no_priority_fix_without_the_games_pids_to_exclude"
+  ]
+ },
+ {
+  "name": "a process with the game's name told to close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif _same_image(n.name, game_name):",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_process_with_the_games_own_name_is_never_offered_nor_told_to_close"
+  ]
+ },
+ {
+  "name": "priority params without the name",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "\"exclude\": sorted(game)[:4096], \"name\": n.name,",
+  "new": "\"exclude\": sorted(game)[:4096],",
+  "tests": [
+   "tests/test_analysis_rules.py::test_background_hogs_offers_the_priority_fix_only_with_a_creation_time_and_never_for_the_game"
+  ]
+ },
+ {
+  "name": "game_name taken as any string",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    game_name = _image_name(e.target.get(\"name\"))",
+  "new": "    game_name = e.target.get(\"name\") if isinstance(e.target.get(\"name\"), str) else None",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_priority_fix_names_the_game_only_by_a_real_image_name_and_never_as_empty"
+  ]
+ },
+ {
+  "name": "create time of a pid reused under another name",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return {key: next(iter(cts)) for key, cts in times.items() if len(cts) == 1 and last[key[0]][1] == key[1]}",
+  "new": "    return {key: next(iter(cts)) for key, cts in times.items() if len(cts) == 1}",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_reused_pid_never_pairs_the_hogs_name_with_another_processes_identity"
+  ]
+ },
+ {
+  "name": "create time of a pid reused under the same name",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return {key: next(iter(cts)) for key, cts in times.items() if len(cts) == 1 and last[key[0]][1] == key[1]}",
+  "new": "    return {key: max(cts) for key, cts in times.items() if last[key[0]][1] == key[1]}",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_reused_pid_never_pairs_the_hogs_name_with_another_processes_identity"
+  ]
+ },
+ {
+  "name": "GPU contention from 10.1 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "OTHER_GPU_PCT = attribute.OTHERS_GPU_PCT ",
+  "new": "OTHER_GPU_PCT = 10.1 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_from_ten_percent_of_the_games_gpu"
+  ]
+ },
+ {
+  "name": "a starved game adds nothing",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if starved:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_with_the_game_starved_is_likely_and_names_the_other_gpu_user_with_a_caveat"
+  ]
+ },
+ {
+  "name": "starved with a saturated thread",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": " or (busiest is not None and busiest >= fa.THREAD_BOUND):",
+  "new": ":",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_game_held_by_its_own_cpu_thread_is_not_starved_of_the_gpu"
+  ]
+ },
+ {
+  "name": "GPU limit cleared on a shared GPU",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if m is not None:      # A7",
+  "new": "        if False:      # A7",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_shared_gpu_is_never_checked_and_fine_as_the_limit_nor_read_as_a_frame_cap"
+  ]
+ },
+ {
+  "name": "a shared GPU read as a frame cap",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if shared is not None:     # A7",
+  "new": "    if False:     # A7",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_shared_gpu_is_never_checked_and_fine_as_the_limit_nor_read_as_a_frame_cap"
+  ]
+ },
+ {
+  "name": "the game or lag-doctor named as the other GPU user",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            if p[0] in game or p[0] in tool_pids or p[1].lower() in tool_names:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_never_names_the_game_or_lag_doctor"
+  ]
+ },
+ {
+  "name": "not focused counted on the GPU side",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if share >= UNFOCUSED_SHARE and e.verdict in GATES[\"cpu\"]:",
+  "new": "    if share >= UNFOCUSED_SHARE:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_steady_share_counts_only_while_the_cpu_side_limits_the_game"
+  ]
+ },
+ {
+  "name": "CPU limit cleared in the grey zone",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if busiest is not None and THREAD_WAITING <= busiest < fa.THREAD_BOUND:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_limit_is_never_cleared_in_lc_3_2s_grey_zone"
+  ]
+ },
+ {
+  "name": "grey zone from 0.61",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "THREAD_WAITING = 0.60 ",
+  "new": "THREAD_WAITING = 0.61 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_limit_is_never_cleared_in_lc_3_2s_grey_zone"
+  ]
+ },
+ {
+  "name": "grey zone held under a GPU verdict",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if cause == \"cpu_limit\" and e.verdict != \"gpu\":",
+  "new": "    if cause == \"cpu_limit\":",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_grey_zone_holds_neither_a_gpu_bound_verdict_nor_a_frame_rate_at_the_display"
+  ]
+ },
+ {
+  "name": "display reach held in the grey zone",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"{e.refresh:.0f} Hz display\"), firm=True)",
+  "new": "f\"{e.refresh:.0f} Hz display\"), firm=False)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_grey_zone_holds_neither_a_gpu_bound_verdict_nor_a_frame_rate_at_the_display"
+  ]
+ },
+ {
+  "name": "uneven share past 100 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return evs, min(1.0, _union_s((ev.t_start, ev.t_end) for ev in evs) / e.duration)",
+  "new": "    return evs, (_union_s((ev.t_start, ev.t_end) for ev in evs) / e.duration)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_uneven_pacing_never_covers_more_than_the_whole_capture"
+  ]
+ },
+ {
+  "name": "dropped frames from 10.1 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "DROPPED_PCT = 100.0 * JUDDER_SHARE ",
+  "new": "DROPPED_PCT = 10.1 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsync_judder_claims_dropped_frame_judder_above_a_fixed_refresh"
+  ]
+ },
+ {
+  "name": "dropped frames without the refresh slack",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if fps is None or fps <= hz + REFRESH_SLACK_HZ:",
+  "new": "    if fps is None or fps <= hz:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_dropped_frame_judder_needs_presents_faster_than_the_refresh_and_no_vrr"
+  ]
+ },
+ {
+  "name": "dropped frames under VRR",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "e.bound.get(\"vrr\") is True or dropped is None",
+  "new": "dropped is None",
+  "tests": [
+   "tests/test_analysis_rules.py::test_dropped_frame_judder_needs_presents_faster_than_the_refresh_and_no_vrr"
+  ]
+ },
+ {
+  "name": "torn frames read as dropped",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": " or 0.0) >= QUANTISED_PCT]",
+  "new": " or 0.0) >= 0.0]",
+  "tests": [
+   "tests/test_analysis_rules.py::test_dropped_frame_judder_needs_presents_faster_than_the_refresh_and_no_vrr"
+  ]
+ },
+ {
+  "name": "a cap above the refresh read as sensible",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if fps > hz + REFRESH_SLACK_HZ:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cap_above_the_refresh_is_not_a_sensible_cap",
+   "tests/test_analysis_rules.py::test_a_cap_above_a_60_hz_refresh_gets_the_cap_advice"
+  ]
+ },
+ {
+  "name": "a cap at the refresh read as above it",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if fps > hz + REFRESH_SLACK_HZ:",
+  "new": "    if fps > hz:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cap_at_the_refresh_is_still_a_sensible_one"
+  ]
+ },
+ {
+  "name": "unexplained pacing checked and fine",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    _hold_unexplained_pacing(env, findings, cleared, unchecked)",
+  "new": "    pass",
+  "tests": [
+   "tests/test_analysis_rules.py::test_unexplained_pacing_keeps_the_pacing_causes_open",
+   "tests/test_analysis_rules.py::test_gold_dropped_frame_judder_is_claimed_not_checked_and_fine"
+  ]
+ },
+ {
+  "name": "unexplained pacing held under the uneven share",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if share < UNEVEN_SHARE:",
+  "new": "    if share < 0.0:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_unexplained_pacing_keeps_the_pacing_causes_open"
+  ]
+ },
+ {
+  "name": "claimed pacing held open",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    loose = [ev for ev in e.events if ev.kind == \"pacing\" and ev.id not in claimed]",
+  "new": "    loose = [ev for ev in e.events if ev.kind == \"pacing\"]",
+  "tests": [
+   "tests/test_analysis_rules.py::test_unexplained_pacing_keeps_the_pacing_causes_open"
+  ]
+ },
+ {
+  "name": "animation error read as swings",
+  "file": "lagdoctor/report/labels.py",
+  "old": "        anim = isinstance(detail, dict) and detail.get(\"criterion\") == \"anim\"",
+  "new": "        anim = False",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_pacing_event_flagged_by_its_animation_error_reads_as_animation_error"
+  ]
+ },
+ {
+  "name": "power-limit variant without a default",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if share >= NV_THROTTLE_PCT and limit is not None and default and limit < default:",
+  "new": "    if share >= NV_THROTTLE_PCT and limit is not None:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_power_cap_is_context_and_the_power_limit_variant_needs_a_limit_below_its_default"
+  ]
+ },
+ {
+  "name": "no heat counted against a lowered power cap",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif limited:        # held down by a lowered power cap",
+  "new": "        elif False:        # held down by a lowered power cap",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_power_cap_is_context_and_the_power_limit_variant_needs_a_limit_below_its_default"
+  ]
+ },
+ {
+  "name": "power plan counts the GPU power cap",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    thr = e.gpu(G.THROTTLE_PCT)          # heat or the power brake",
+  "new": "    thr = e.gpu(G.POWER_CAP_PCT)          # heat or the power brake",
+  "tests": [
+   "tests/test_analysis_rules.py::test_power_plan_never_counts_the_gpus_power_cap_as_support"
+  ]
+ },
+ {
+  "name": "talkers of an ETW session that never ran clear",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if isinstance(talkers, list) and e.measured(\"net_flows\") and stopped is None:",
+  "new": "    if isinstance(talkers, list):",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_an_etw_session_that_never_ran_rules_nothing_out"
+  ]
+ },
+ {
+  "name": "talkers of a stopped consumer clear",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if isinstance(talkers, list) and e.measured(\"net_flows\") and stopped is None:",
+  "new": "    if isinstance(talkers, list) and e.measured(\"net_flows\"):",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_an_etw_session_that_never_ran_rules_nothing_out"
+  ]
+ },
+ {
+  "name": "bandwidth hog cleared with nothing measured",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return Unchecked(\"bandwidth_hog\", why + seen)",
+  "new": "    return \"no download or upload was seen\" + seen",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_bandwidth_hog_without_any_traffic_source_is_unchecked",
+   "tests/test_analysis_rules_network.py::test_a_download_log_alone_never_rules_a_bandwidth_hog_out"
+  ]
+ },
+ {
+  "name": "adapter counters from 11 rounds",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NIC_MIN_ROWS = 10 ",
+  "new": "NIC_MIN_ROWS = 11 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_the_adapters_counters_need_ten_probe_rounds_to_rule_a_hog_out"
+  ]
+ },
+ {
+  "name": "no server flow read as packets kept arriving",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if flows_ok and flow is None and not server:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_server_lag_without_a_server_flow_is_unchecked_never_fine"
+  ]
+ },
+ {
+  "name": "kept arriving claimed over any span",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if share >= SERVER_COVER:",
+  "new": "    if True:",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_the_server_kept_arriving_only_where_its_packets_cover_most_of_the_capture"
+  ]
+ },
+ {
+  "name": "server cover 51 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "SERVER_COVER = 0.5 ",
+  "new": "SERVER_COVER = 0.51 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_the_server_kept_arriving_only_where_its_packets_cover_most_of_the_capture"
+  ]
+ },
+ {
+  "name": "kept arriving past the consumer's stop",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    end = min(last, stopped) if stopped is not None else last",
+  "new": "    end = last",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_the_server_kept_arriving_never_past_the_moment_the_etw_consumer_stopped"
+  ]
+ },
+ {
+  "name": "an open gap ignored",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "_dict(ev.detail).get(\"kind\") == \"open\"]",
+  "new": "_dict(ev.detail).get(\"kind\") == \"closed\"]",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_a_server_that_fell_silent_for_good_is_a_lost_connection"
+  ]
+ },
+ {
+  "name": "a lost connection blamed on the server while the internet dropped too",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    gone = [g for g in lost if not any(s.t_start <= g.t_end and g.t_start <= s.t_end for s in inet_lost)]",
+  "new": "    gone = lost",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_a_server_that_fell_silent_for_good_is_a_lost_connection"
+  ]
+ },
+ {
+  "name": "unknown gaps read as local",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "_dict(ev.detail).get(\"kind\") == \"local\"]",
+  "new": "_dict(ev.detail).get(\"kind\") in (\"local\", \"unknown\")]",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_gaps_of_unknown_kind_are_never_read_as_local_nor_as_packets_kept_arriving"
+  ]
+ },
+ {
+  "name": "unknown gaps let the packets keep arriving",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if not (gaps or lost or unsure):",
+  "new": "        if not (gaps or lost):",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_gaps_of_unknown_kind_are_never_read_as_local_nor_as_packets_kept_arriving"
+  ]
+ },
+ {
+  "name": "background recording off still a finding",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if background is False:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_game_dvr_with_background_recording_known_off_is_checked_and_fine"
+  ]
+ },
+ {
+  "name": "unknown background recording read as on",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if background is True:",
+  "new": "    if background is True or dvr is True:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_game_dvr_with_background_recording_unknown_is_advice_only_and_says_so"
+  ]
+ },
+ {
+  "name": "capture numbers unbounded in the rules",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return float(n) if n is not None and abs(n) <= attribute.MAX_COUNT else None",
+  "new": "    return float(n) if n is not None else None",
+  "tests": [
+   "tests/test_analysis_rules.py::test_absurd_values_from_a_corrupt_capture_are_missing_never_evidence"
+  ]
+ },
+ {
+  "name": "a gated verdict escapes the hold",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            res = _gated(rule, env)\n        held = _holds_open(",
+  "new": "            return _gated(rule, env)\n        held = _holds_open(",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_shared_gpu_holds_the_gated_verdict_open_too"
   ]
  }
 ]

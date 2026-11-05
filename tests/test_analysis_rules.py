@@ -7,6 +7,7 @@ test_analysis_rules_diagnose.py; the network rules are in test_analysis_rules_ne
 from __future__ import annotations
 
 import copy
+import re
 
 import pytest
 
@@ -185,6 +186,43 @@ def test_score_orders_by_label_then_s_then_share_then_fix():
     assert sc("medium", 2.0, 0.5, False) > sc("medium", 2.0, 0.4, True)
     assert sc("medium", 2.0, 0.5, True) > sc("medium", 2.0, 0.5, False)
     assert 0.0 <= sc("low", 0.0, 0.0, False) and sc("high", 99.0, 5.0, True) <= 1.0
+
+
+def test_a_pacing_event_flagged_by_its_animation_error_reads_as_animation_error():
+    # A11: an anim-only pacing event's severity is the animation-error p95, never "0.0 ms swings"
+    from lagdoctor.report import labels
+    assert labels.severity_text("pacing", 6.41, {"criterion": "anim"}) == "6.4 ms animation error"
+    assert labels.severity_text("pacing", 6.41, {"criterion": "both"}) == "6.4 ms swings"
+    assert labels.severity_text("pacing", 6.41) == "6.4 ms swings"              # the old two-argument call
+    assert labels.severity_text("pacing", 6.41, "junk") == "6.4 ms swings"
+
+
+def test_absurd_values_from_a_corrupt_capture_are_missing_never_evidence():
+    # A15: a hand-edited or corrupt capture's 1e308 must not crash a rule or turn up as a number in the report
+    huge = 1e308
+    sys_ = synth.system_table(30, ram_avail_mb=lambda t: huge if t < 3 else 8000.0, game_shared_mb=huge,
+                              vram_used_mb=huge, hard_faults_ps=huge, disk_read_ms=huge, cpu_perf_pct=huge,
+                              cpu_perf_limit_pct=huge, thermal_limit_pct=huge, commit_pct=huge, game_focused=huge,
+                              game_gpu_pct=huge, gpu_other_pct=huge, game_top_thread_pct=huge)
+    cap = make(adapter=NV, ok=("frames", "system", "gpu", "network", "net_flows"), system=sys_,
+               gpu=synth.gpu_table(30, nv_temp_c=huge, nv_throttle_pct=huge, nv_power_cap_pct=huge,
+                                   nv_util_pct=huge, nv_power_limit_w=huge),
+               inventory={"ram_gb": huge, "nvidia": {"temp_target_c": 75, "power_default_w": huge}},
+               others=[[0.25 * k, [[9000, "hog.exe", huge, huge, huge, 134000000000009000]]] for k in range(1, 121)])
+    cap.network = synth.network_table(30, inet_rtt_ms=huge, gw_rtt_ms=huge, server_rtt_ms=huge, wifi_rssi_dbm=huge,
+                                      wifi_signal_pct=huge, wifi_channel=huge, nic_rx_bps=huge, nic_tx_bps=huge)
+    cap.net_flows = {"downloads": [{"t": 5.0, "source": "steam", "mbps": huge}], "download_sources": ["steam"],
+                     "talkers": [{"pid": 9000, "name": "hog.exe", "rx_bytes": huge, "tx_bytes": huge}],
+                     "wifi_scans": [huge, 5.0], "server": {"ip": "203.0.113.7", "first_rx_t": huge, "last_rx_t": huge}}
+    findings, cleared, unchecked = full_run(cap, stats={"avg_fps": 40.0, "dropped_pct": huge},
+                                            bound={"verdict": "gpu", "r": 0.95})
+    absurd = re.compile(r"\binf\b|\bnan\b|e\+\d|\d{16}")         # inf, nan, 1e+308, or a 300-digit number
+    assert not [w for w in unchecked.values() if w.startswith("the check failed")], unchecked
+    for f in findings:
+        for ev in f.evidence:
+            assert ev.value is None or abs(ev.value) <= 1e15, (f.cause, ev.text, ev.value)
+            assert not absurd.search(ev.text), (f.cause, ev.text)
+    assert not [t for t in list(cleared.values()) + list(unchecked.values()) if absurd.search(t)]
 
 
 def test_sentence_keeps_a_process_name_lower_case():
@@ -410,6 +448,97 @@ def test_cpu_limit_costs_nothing_once_the_game_reaches_ninety_percent_of_the_ref
     assert isinstance(res, kind)
 
 
+@pytest.mark.parametrize("verdict", ["waiting", "capped", "vsync"])
+@pytest.mark.parametrize("busiest, kind", [(0.599, rules.Cleared), (0.60, rules.Unchecked), (0.75, rules.Unchecked),
+                                           (0.849, rules.Unchecked)])
+def test_cpu_limit_is_never_cleared_in_lc_3_2s_grey_zone(verdict, busiest, kind):
+    # A6 (LC 3.2): "neither" (waiting) needs the busiest thread below 0.6; up to 0.85 the CPU is not ruled out
+    res = run("cpu_limit", make(system=threads(100 * busiest)), stats={"avg_fps": 45.0},
+              bound={"verdict": verdict, "r": 0.23, "busiest_thread": busiest})
+    assert isinstance(res, kind)
+    if kind is rules.Unchecked:
+        assert f"{100 * busiest:.0f}% of a CPU" in res.text and "not ruled out" in res.text
+
+
+def test_the_grey_zone_holds_neither_a_gpu_bound_verdict_nor_a_frame_rate_at_the_display():
+    grey = make(system=threads(75.0))
+    res = run("cpu_limit", grey, stats={"avg_fps": 45.0}, bound={"verdict": "gpu", "r": 0.97, "busiest_thread": 0.75})
+    assert isinstance(res, rules.Cleared)                          # r >= 0.9: the GPU limits the game
+    res = run("cpu_limit", grey, stats={"avg_fps": 140.0},
+              bound={"verdict": "cpu_main", "r": 0.3, "busiest_thread": 0.75})
+    assert isinstance(res, rules.Cleared) and "already reaches" in res.text
+
+
+# ------------------------------------------------------------------------ GPU contention ---
+
+def contention(other_pct, game_pct=18.0, others=None):
+    sys_ = synth.system_table(30, gpu_other_pct=other_pct, game_gpu_pct=game_pct, game_top_thread_pct=30.0)
+    rows = others if others is not None else \
+        [[0.25 * k, [[7777, "python.exe", 100.0, 0.0, 100.0], [2656, "dwm.exe", 3.0, 0.0, 3.0]]] for k in range(1, 121)]
+    return make(adapter=NV, system=sys_, others=rows)
+
+
+STARVED = {"verdict": "capped", "r": 0.2, "cap_fps": 58.0, "busiest_thread": 0.3, "gpu_ms": 3.4, "ft_ms": 17.2}
+
+
+@pytest.mark.parametrize("pct, kind", [(10.0, Finding), (9.9, rules.Cleared)])
+def test_gpu_contention_from_ten_percent_of_the_games_gpu(pct, kind):
+    # A7, LC 4.6: another process on the game adapter's engine >= 10 %
+    res = run("gpu_contention", contention(pct), stats={"avg_fps": 130.0}, bound={"verdict": "gpu", "r": 0.95})
+    assert isinstance(res, kind)
+    if kind is Finding:
+        assert res.confidence == "medium"
+
+
+def test_gpu_contention_with_the_game_starved_is_likely_and_names_the_other_gpu_user_with_a_caveat():
+    res = run("gpu_contention", contention(80.0), stats={"avg_fps": 58.0}, bound=STARVED)
+    assert is_finding(res, "high") and res.title == "Another program kept the game's GPU 80% busy: python.exe"
+    text = " ".join(e.text for e in res.evidence)
+    assert "80% busy" in text and "58 FPS on a 144 Hz screen" in text
+    assert "python.exe (process 7777" in text and "covers any GPU" in text
+
+
+def test_a_game_held_by_its_own_cpu_thread_is_not_starved_of_the_gpu():
+    res = run("gpu_contention", contention(80.0), stats={"avg_fps": 58.0}, bound=dict(STARVED, busiest_thread=0.85))
+    assert is_finding(res, "medium")                               # the contention alone, without the starving
+    res = run("gpu_contention", contention(80.0), stats={"avg_fps": 58.0}, bound=dict(STARVED, busiest_thread=0.84))
+    assert is_finding(res, "high")
+
+
+def test_gpu_contention_never_names_the_game_or_lag_doctor():
+    rows = [[0.25 * k, [[4242, "game.exe", 50.0, 0.0, 100.0], [5555, "python.exe", 30.0, 0.0, 90.0],
+                        [6000, "PresentMon-2.6.0-x64.exe", 5.0, 0.0, 80.0]]] for k in range(1, 121)]
+    cap = contention(80.0, others=rows)
+    cap.target.update(pids=[4242], tool_pids=[5555],
+                      presentmon={"exe": r"C:\Users\x\AppData\Local\lag-doctor\PresentMon-2.6.0-x64.exe"})
+    res = run("gpu_contention", cap, stats={"avg_fps": 58.0}, bound=STARVED)
+    assert is_finding(res) and res.title == "Another program kept the game's GPU 80% busy"
+    assert not any(n in e.text for e in res.evidence for n in ("game.exe", "python.exe", "PresentMon"))
+
+
+def test_a_shared_gpu_is_never_checked_and_fine_as_the_limit_nor_read_as_a_frame_cap():
+    # A7: other programs' GPU work makes a steady, low frame rate that reads like a cap with the GPU idle
+    cap = contention(80.0)
+    gpu = run("gpu_limit", cap, stats={"avg_fps": 58.0}, bound=STARVED)
+    assert isinstance(gpu, rules.Unchecked) and "80% busy" in gpu.text
+    assert isinstance(run("frame_cap", cap, stats={"avg_fps": 58.0}, bound=STARVED), rules.Unchecked)
+    quiet = contention(2.0)                                         # control: the same capture without contention
+    assert isinstance(run("gpu_limit", quiet, stats={"avg_fps": 58.0}, bound=STARVED), rules.Cleared)
+    assert is_finding(run("frame_cap", quiet, stats={"avg_fps": 58.0}, bound=STARVED))
+
+
+def test_a_shared_gpu_holds_the_gated_verdict_open_too():
+    # the hold runs after the gate: a GPU-limit finding the "capped" verdict gates off is no "checked and fine"
+    # either (the engine busy and NVIDIA 99 % busy make the finding; contention makes the cap verdict unsure)
+    cap = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=synth.gpu_table(30, nv_util_pct=99.0),
+               system=synth.system_table(30, gpu_other_pct=40.0, game_gpu_pct=95.0, game_top_thread_pct=30.0))
+    res = run("gpu_limit", cap, stats={"avg_fps": 58.0}, bound=STARVED)
+    assert isinstance(res, rules.Unchecked) and "40% busy" in res.text
+    cap.system = synth.system_table(30, gpu_other_pct=2.0, game_gpu_pct=95.0, game_top_thread_pct=30.0)
+    res = run("gpu_limit", cap, stats={"avg_fps": 58.0}, bound=STARVED)      # control: the gate clears it
+    assert isinstance(res, rules.Cleared) and res.text.startswith("The GPU is not what limits the frame rate")
+
+
 # ------------------------------------------------------------------------------ throttling ---
 
 def nv(share, **cols):
@@ -425,9 +554,48 @@ def test_gpu_throttle_needs_thirty_percent_of_the_time_held_down(share, kind):
         assert res.confidence == "high"
 
 
-def test_gpu_throttle_at_the_power_limit_alone_is_normal_not_a_fault():
-    cap = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=nv(80.0, nv_reasons="sw_power_cap"))
-    assert run("gpu_throttle", cap, bound={"verdict": "gpu"}) is None
+@pytest.mark.parametrize("reasons", ["sw_power_cap", "gpu_idle,sw_power_cap", "applications_clocks_setting,sw_power_cap",
+                                     "sync_boost,sw_power_cap", "gpu_idle", ""])
+def test_gpu_throttle_at_the_power_limit_alone_is_normal_not_a_fault(reasons):
+    # The collector keeps the SW power cap out of nv_throttle_pct (its own column, nv_power_cap_pct, LC 4.1, 4.2).
+    # This test used to put the cap's share in nv_throttle_pct and lean on the reason names, which one idle
+    # second (a gpu_idle sample) defeated; whatever the reasons say, the cap share is never throttling now.
+    cap = make(adapter=NV, ok=("frames", "system", "gpu"),
+               gpu=nv(0.0, nv_power_cap_pct=80.0, nv_reasons=reasons, nv_power_limit_w=88.8))
+    res = run("gpu_throttle", cap, bound={"verdict": "gpu"})
+    assert isinstance(res, rules.Cleared) and "power brake only 0%" in res.text
+
+
+@pytest.mark.parametrize("reasons", ["sw_power_cap", "gpu_idle,sw_power_cap", ""])
+def test_gpu_throttle_reads_the_heat_and_brake_share_whatever_the_reason_names_say(reasons):
+    # nv_throttle_pct is heat plus the HW power brake only, a direct readout (LC 4.2): no reason-name heuristic
+    # may turn it into "the normal power limit"
+    cap = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=nv(80.0, nv_reasons=reasons))
+    res = run("gpu_throttle", cap, bound={"verdict": "gpu"})
+    assert is_finding(res, "high") and "heat or its power brake 80%" in res.evidence[0].text
+
+
+def test_the_power_cap_is_context_and_the_power_limit_variant_needs_a_limit_below_its_default():
+    # LC 4.2: sw_power_cap counts only with the enforced limit under the GPU's default (battery, a quiet mode)
+    def cap_of(limit_w, default_w):
+        inv = {"nvidia": {"temp_target_c": 75, "power_default_w": default_w}} if default_w else None
+        return make(adapter=NV, ok=("frames", "system", "gpu"), inventory=inv,
+                    gpu=nv(0.0, nv_power_cap_pct=90.0, nv_reasons="sw_power_cap", nv_power_limit_w=limit_w))
+    low = run("gpu_throttle", cap_of(35.0, 80.0), bound={"verdict": "gpu"})
+    assert is_finding(low, "medium") and "below its 80 W default" in low.evidence[0].text
+    for limit, default in ((88.8, 80.0), (80.0, 80.0), (35.0, None)):        # above, at, or default unknown
+        res = run("gpu_throttle", cap_of(limit, default), bound={"verdict": "gpu"})
+        assert isinstance(res, rules.Cleared), (limit, default)
+
+
+def test_power_plan_never_counts_the_gpus_power_cap_as_support():
+    quiet = {"power": dict(POWER)}
+    capped = make(adapter=NV, ok=("frames", "system", "gpu"), inventory=quiet,
+                  gpu=nv(0.0, nv_power_cap_pct=100.0, nv_reasons="sw_power_cap"))
+    res = run("power_plan", capped)
+    assert is_finding(res, "medium") and not any("GPU" in e.text for e in res.evidence)
+    hot = make(adapter=NV, ok=("frames", "system", "gpu"), inventory=quiet, gpu=nv(60.0))
+    assert is_finding(run("power_plan", hot), "high")                  # heat or the power brake does count
 
 
 def test_gpu_throttle_counts_the_target_temperature():
@@ -673,6 +841,91 @@ def test_vsync_judder_leaves_caps_low_fps_and_uneven_presents_to_their_own_rules
                bound={"verdict": "gpu", "quantised_pct": 100.0}) is None
 
 
+def anim_pacing(t0=0.5, t1=29.5, ms=6.4, i=1):
+    """A pacing event only the animation-error test flagged (events.py detail["criterion"] "anim")."""
+    return LagEvent(i, "pacing", t0, t1, ms, {"criterion": "anim", "anim_p95_ms": ms, "swing_pct": 0.0,
+                                              "present_swing_pct": 0.0, "quantised_pct": 100.0})
+
+
+def sixty_hz(**kw):
+    return make(inventory={"displays": [dict(DISPLAY, hz=60.0, max_hz=60, modes_hz=[60])]}, **kw)
+
+
+ABOVE = {"quantised_pct": 100.0, "vrr": False, "ft_ms": 11.1, "r": 0.2}          # ~90 FPS presented
+ONE_REFRESH = synth.frames_table([11.1] * 300, display_ms=1000.0 / 60.0, displayed=1)
+
+
+@pytest.mark.parametrize("dropped, kind", [(10.0, Finding), (9.9, rules.Cleared)])
+def test_vsync_judder_claims_dropped_frame_judder_above_a_fixed_refresh(dropped, kind):
+    # A11: ~90 FPS into a 60 Hz composed screen: every shown frame holds one refresh (no 1P/2P judder), a third of
+    # the frames are never shown, and only the animation error sees the jerky motion
+    res = run("vsync_judder", sixty_hz(), frames=ONE_REFRESH, stats={"avg_fps": 60.0, "dropped_pct": dropped},
+              bound=dict(ABOVE, verdict="waiting", refresh_hz=60.0), events=[anim_pacing()])
+    assert isinstance(res, kind)
+    if kind is Finding:
+        assert res.event_ids == [1] and res.title == "Frames are dropped: the game runs faster than the 60 Hz screen"
+        assert any(f.title.startswith("Cap the frame rate at 60 FPS") for f in res.fixes)
+
+
+def test_dropped_frame_judder_needs_presents_faster_than_the_refresh_and_no_vrr():
+    def judged(fps=90.0, **bound):
+        frames = synth.frames_table([1000.0 / fps] * 300, display_ms=1000.0 / 60.0, displayed=1)
+        return run("vsync_judder", sixty_hz(), frames=frames, stats={"avg_fps": 60.0, "dropped_pct": 33.0},
+                   bound={**ABOVE, "verdict": "waiting", "refresh_hz": 60.0, **bound}, events=[anim_pacing()])
+    assert is_finding(judged(61.1))                                     # 61.1 FPS: past the 1 Hz slack
+    assert isinstance(judged(60.9), rules.Cleared)                      # within it: no frame to drop
+    assert isinstance(judged(vrr=True), rules.Cleared)                  # VRR shows frames as they come
+    short = judged(quantised_pct=None, ft_ms=None, verdict="unknown")   # too short for a bound verdict (LC 2.6)
+    assert is_finding(short) and short.event_ids == [1]
+    smeared = run("vsync_judder", sixty_hz(), frames=ONE_REFRESH, stats={"avg_fps": 60.0, "dropped_pct": 33.0},
+                  bound=dict(ABOVE, verdict="waiting", refresh_hz=60.0),
+                  events=[LagEvent(1, "pacing", 0.5, 29.5, 6.4, {"criterion": "anim", "quantised_pct": 89.9})])
+    assert not is_finding(smeared)                                      # not on whole refreshes: tearing, not drops
+
+
+@pytest.mark.parametrize("cap_fps", [86.0, 61.1])
+def test_a_cap_above_the_refresh_is_not_a_sensible_cap(cap_fps):
+    # A11: frames past a fixed refresh are never shown; with the dropped-frame judder in the frames, the cap claims it
+    bound = dict(ABOVE, verdict="capped", cap_fps=cap_fps, refresh_hz=60.0, ft_ms=1000.0 / cap_fps)
+    res = run("frame_cap", sixty_hz(), stats={"dropped_pct": 30.0}, bound=bound, events=[anim_pacing()])
+    assert is_finding(res, "medium") and res.event_ids == [1]
+    assert res.title == f"A frame-rate cap above the refresh rate drops frames: {cap_fps:.0f} FPS on a 60 Hz screen"
+    assert [f.title for f in res.fixes][:2] == ["Cap the frame rate at 60 FPS (the refresh rate)", "Or turn on VSync"]
+    quiet = run("frame_cap", sixty_hz(), stats={"dropped_pct": 30.0}, bound=bound)       # no judder seen
+    assert quiet is None
+
+
+def test_a_cap_at_the_refresh_is_still_a_sensible_one():
+    bound = {"verdict": "capped", "cap_fps": 61.0, "refresh_hz": 60.0, "r": 0.2}       # within the 1 Hz slack
+    res = run("frame_cap", sixty_hz(), stats={"dropped_pct": 30.0}, bound=bound, events=[anim_pacing()])
+    assert isinstance(res, rules.Cleared) and "a sensible cap" in res.text
+
+
+def full_run(cap, *, stats=None, bound=None, events=()):
+    st = {"frames": 3000, "avg_fps": 60.0, "duration_s": cap.duration_s}
+    st.update(stats or {})
+    b = {"verdict": "unknown", "notes": [], "refresh_hz": 144.0}
+    b.update(bound or {})
+    return rules.run_rules(cap, {"frames": {}, "stats": st, "bound": b, "events": list(events), "event_causes": {}})
+
+
+def test_unexplained_pacing_keeps_the_pacing_causes_open():
+    # A11: an anim-only pacing event over the whole capture that no rule claims (too few frames dropped for the
+    # dropped-frame judder) once left "frame pacing: checked and fine" under a capture that juddered throughout
+    findings, cleared, unchecked = full_run(sixty_hz(), stats={"dropped_pct": 5.0},
+                                            bound=dict(ABOVE, verdict="waiting", refresh_hz=60.0),
+                                            events=[anim_pacing()])
+    assert not any(1 in f.event_ids for f in findings)
+    assert "uneven_pacing" not in cleared and "6.4 ms animation error" in unchecked["uneven_pacing"]
+    short = anim_pacing(0.5, 3.4)                                    # 9.7 % of the capture: under the uneven share
+    _, cleared, _ = full_run(sixty_hz(), stats={"dropped_pct": 5.0}, bound=dict(ABOVE, verdict="waiting",
+                                                                                 refresh_hz=60.0), events=[short])
+    assert "uneven_pacing" in cleared
+    claimed = anim_pacing()                                          # a cap finding claims it: fine to clear
+    findings, cleared, _ = full_run(make(), bound={"verdict": "capped", "cap_fps": 100.0, "r": 0.1}, events=[claimed])
+    assert any(f.cause == "frame_cap" and 1 in f.event_ids for f in findings) and "uneven_pacing" in cleared
+
+
 # -------------------------------------------------------------------------- uneven pacing ---
 
 def pacing(t0, t1, present_swing):
@@ -689,10 +942,20 @@ def test_uneven_pacing_counts_only_uneven_presents_not_display_judder(swing, kin
     assert isinstance(run("uneven_pacing", make(), events=[pacing(0.0, 29.0, swing)]), kind)
 
 
-@pytest.mark.parametrize("span, conf", [(15.0, "high"), (14.9, "medium")])           # half of 30 s
-def test_uneven_pacing_over_half_the_capture_is_a_direct_readout(span, conf):
+@pytest.mark.parametrize("span", [14.9, 15.0, 29.0])
+def test_uneven_pacing_is_a_steady_metric_never_a_direct_readout(span):
+    # A1 (LC 5.1): weight 4 is for a direct readout (a throttle counter, FrameType); one frame-time pattern is a
+    # steady metric past its threshold (2), so it is "possible" on its own however long it lasts. This test used to
+    # pin "likely" from half the capture on, which made hitches' own swings outrank the hitches.
     res = run("uneven_pacing", make(), events=[pacing(1.0, 1.0 + span, 70.0)])
-    assert is_finding(res, conf) and res.event_ids == [1]
+    assert is_finding(res, "medium") and res.event_ids == [1]
+
+
+def test_uneven_pacing_never_covers_more_than_the_whole_capture():
+    # A11: an event can start before the first row (a replay); the share is clamped to 100 %
+    res = run("uneven_pacing", make(), events=[pacing(-0.5, 30.5, 70.0)])
+    assert is_finding(res) and res.evidence[0].value == pytest.approx(100.0)
+    assert "over 100% of the capture" in res.evidence[0].text
 
 
 # ------------------------------------------------------------------------------ frame cap ---
@@ -741,7 +1004,8 @@ def test_windowed_composition_is_fine_with_flip_and_unchecked_without_frame_timi
 
 
 @pytest.mark.parametrize("settings, kind, conf", [
-    ({"background_recording": True}, Finding, "medium"), ({"game_dvr": True}, Finding, "low"),
+    ({"background_recording": True}, Finding, "medium"), ({"game_dvr": True, "background_recording": True}, Finding,
+                                                           "medium"),
     ({}, rules.Cleared, None), ({"game_dvr": None, "background_recording": None}, rules.Unchecked, None)])
 def test_game_dvr(settings, kind, conf):
     res = run("game_dvr", make(inventory={"settings": dict(SETTINGS, **settings)}))
@@ -750,6 +1014,20 @@ def test_game_dvr(settings, kind, conf):
         assert res.confidence == conf
         fix = next(f for f in res.fixes if f.fix_id)
         assert fix.fix_id == "game_dvr_off" and fix.params == {} and fix.needs_restart == "game"
+
+
+def test_game_dvr_with_background_recording_known_off_is_checked_and_fine():
+    # CC-6: this used to read "Background recording is on" with the fix offered, while the setting said off
+    res = run("game_dvr", make(inventory={"settings": dict(SETTINGS, game_dvr=True, background_recording=False)}))
+    assert isinstance(res, rules.Cleared) and res.text.startswith("Background recording is off")
+
+
+def test_game_dvr_with_background_recording_unknown_is_advice_only_and_says_so():
+    # CC-6: Windows' default state (GameDVR_Enabled = 1, the capture values absent, WT 8): unknown, not "on"
+    res = run("game_dvr", make(inventory={"settings": dict(SETTINGS, game_dvr=True, background_recording=None)}))
+    assert is_finding(res, "low")
+    assert res.title == "Game Bar capture is on; whether it records in the background is unknown"
+    assert not any(f.fix_id for f in res.fixes) and "Background recording is on" not in res.title
 
 
 @pytest.mark.parametrize("mode, kind", [(False, Finding), (True, rules.Cleared), (None, rules.Unchecked)])
@@ -768,6 +1046,24 @@ def test_not_focused_needs_ten_percent_of_the_capture_behind_another_window(behi
     sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= behind_s + 1e-9 else 1)
     res = run("not_focused", make(system=sys_))
     assert isinstance(res, kind), sum(1 for v in sys_[S.GAME_FOCUSED] if v == 0)
+
+
+@pytest.mark.parametrize("verdict, kind", [("gpu", type(None)), ("capped", type(None)), ("vsync", type(None)),
+                                           ("waiting", type(None)), ("cpu_main", Finding), ("cpu_all", Finding),
+                                           ("mixed", Finding), ("unknown", Finding)])
+def test_not_focused_steady_share_counts_only_while_the_cpu_side_limits_the_game(verdict, kind):
+    # A9 (LC 5.1): a window behind others gets less CPU time, which costs frames only on the CPU side
+    sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 6.0 else 1)       # 20 % of the capture
+    res = run("not_focused", make(system=sys_), bound={"verdict": verdict})
+    assert isinstance(res, kind), res
+
+
+def test_not_focused_linked_to_the_stutters_counts_on_any_side():
+    sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 6.0 else 1)
+    res = run("not_focused", make(system=sys_), bound={"verdict": "gpu"},
+              events=[stutter(i, 3.0 * i, "not_focused") for i in range(1, 7)],
+              causes={"not_focused": lift("supports", a=6, n=6)})
+    assert is_finding(res, "medium") and res.event_ids == [1, 2, 3, 4, 5, 6]
 
 
 def test_not_focused_linked_to_the_stutters_counts_even_when_mostly_in_front():
@@ -837,11 +1133,102 @@ def test_background_hogs_offers_the_priority_fix_only_with_a_creation_time_and_n
     res = run("background_hogs", hogs(hog_others(300.0, create=True)), events=hog_events(), causes=causes)
     fix = next(f for f in res.fixes if f.fix_id)
     assert fix.fix_id == "background_priority"
-    assert fix.params["exclude"] and 20000 not in fix.params["exclude"]      # the game's pids, for the fix to refuse
-    assert {k: v for k, v in fix.params.items() if k != "exclude"} == {
-        "pid": 20000, "create_time": 134000000000020000, "class": "below_normal"}
+    # SEC-2: the params fixes/priority.py now requires; game_name is the target's own name
+    assert fix.params == {"pid": 20000, "create_time": 134000000000020000, "class": "below_normal", "exclude": [4242],
+                          "name": "hog.exe", "game_name": "game.exe"}
     game = hogs(hog_others(300.0, create=True), target={"pids": [4242, 20000, 20004]})
     assert not any(f.fix_id for f in run("background_hogs", game, events=hog_events(), causes=causes).fixes)
+
+
+@pytest.mark.parametrize("name, want", [("game.exe", "game.exe"), (None, None), ("", None), (42, None),
+                                        ("evil\nname.exe", None)])
+def test_the_priority_fix_names_the_game_only_by_a_real_image_name_and_never_as_empty(name, want):
+    # SEC-2: game_name is the target's image name or None when unknown, never '' (the fix refuses '')
+    cap = hogs(hog_others(300.0, create=True), target={"name": name})
+    res = run("background_hogs", cap, events=hog_events(), causes={"background_cpu": lift("supports", a=5, n=5)})
+    fix = next(f for f in res.fixes if f.fix_id)
+    assert fix.params["game_name"] == want and fix.params["name"] == "hog.exe"
+
+
+def test_no_priority_fix_without_the_games_pids_to_exclude():
+    # SEC-2: the fix refuses an empty "exclude"; without the game's PIDs it could not tell the game apart
+    cap = hogs(hog_others(300.0, create=True), target={"pid": None, "pids": []})
+    res = run("background_hogs", cap, events=hog_events(), causes={"background_cpu": lift("supports", a=5, n=5)})
+    assert is_finding(res) and not any(f.fix_id for f in res.fixes)
+
+
+def reused_others(later_name):
+    """hog.exe (pid 1000) busy at the lag moments; later the same PID listed as `later_name`, a new process."""
+    rows = []
+    for k in range(1, 121):
+        t = k * 0.25
+        hot = any(te - 0.5 <= t <= te + 0.4 for te in (5.0, 10.0, 15.0, 20.0, 25.0))
+        procs = [[7777, "python.exe", 100.0, 0.0, 100.0, 134000000000007777]]
+        if t < 26.0:
+            procs.append([1000, "hog.exe", 300.0 if hot else 0.0, 0.0, 0.0, 134000000000001000])
+        else:
+            procs.append([1000, later_name, 1.0, 0.0, 0.0, 134000000000009999])
+        rows.append([t, procs])
+    return rows
+
+
+def test_a_reused_pid_never_pairs_the_hogs_name_with_another_processes_identity():
+    # SEC-2: hog.exe (pid 1000) exits and updater.exe gets pid 1000; the fix must never lower updater.exe
+    causes = {"background_cpu": lift("supports", a=5, n=5)}
+    evs = [stutter(i, 5.0 * i, "background_cpu", process="hog.exe", process_pids=[1000],
+                   process_rises=[[1000, 300.0]]) for i in range(1, 6)]
+    res = run("background_hogs", hogs(reused_others("updater.exe")), events=evs, causes=causes)
+    assert is_finding(res) and not any(f.fix_id for f in res.fixes)
+    same = run("background_hogs", hogs(reused_others("hog.exe")), events=evs, causes=causes)   # reused, same name
+    assert not any(f.fix_id for f in same.fixes)
+    rows = [[t, [p for p in procs if p[1] != "updater.exe"]] for t, procs in reused_others("updater.exe")]
+    fix = next(f for f in run("background_hogs", hogs(rows), events=evs, causes=causes).fixes if f.fix_id)
+    assert (fix.params["pid"], fix.params["create_time"], fix.params["name"]) == (1000, 134000000000001000, "hog.exe")
+
+
+def test_a_process_with_the_games_own_name_is_never_offered_nor_told_to_close():
+    # SEC-2: a multi-process game (Electron, CEF): the chosen process is the GPU one, its renderer a sibling
+    others = [[t, [[p[0], "Game.exe" if p[1] == "hog.exe" else p[1]] + p[2:] for p in procs]]
+              for t, procs in hog_others(300.0, create=True)]
+    evs = [stutter(i, 5.0 * i, "background_cpu", process="Game.exe", process_pids=[20000, 20004],
+                   process_rises=[[20000, 150.0], [20004, 150.0]]) for i in range(1, 6)]
+    res = run("background_hogs", hogs(others, target={"name": "game.exe"}), events=evs,
+              causes={"background_cpu": lift("supports", a=5, n=5)})
+    assert is_finding(res) and not any(f.fix_id for f in res.fixes)
+    assert not any(f.title.startswith("Pause or close Game.exe") for f in res.fixes)
+    assert any(f.title.startswith("Check what Game.exe") for f in res.fixes)
+
+
+def test_the_fix_targets_the_process_that_rose_most_never_the_lowest_pid():
+    # A5: python.exe 7777 (a steady training job) wobbles +1 %; python.exe 20004 rose 50 % at every stutter
+    rows = []
+    for k in range(1, 121):
+        t = k * 0.25
+        hot = any(te - 0.5 <= t <= te + 0.4 for te in (5.0, 10.0, 15.0, 20.0, 25.0))
+        rows.append([t, [[7777, "python.exe", 101.0 if hot else 100.0, 0.0, 100.0, 134000000000007777],
+                         [20004, "python.exe", 50.0 if hot else 0.0, 0.0, 0.0, 134000000000020004]]])
+    evs = [stutter(i, 5.0 * i, "background_cpu", process="python.exe", process_pids=[20004, 7777],
+                   process_rises=[[20004, 50.0], [7777, 1.0]]) for i in range(1, 6)]
+    res = run("background_hogs", hogs(rows), events=evs, causes={"background_cpu": lift("supports", a=5, n=5)})
+    fix = next(f for f in res.fixes if f.fix_id)
+    assert fix.params["pid"] == 20004 and "up 50% of a CPU" in fix.title
+    advice = next(f for f in res.fixes if f.title.startswith("Pause or close"))
+    assert advice.title.endswith("(process 20004, 7777)")          # the biggest rise first
+
+
+def test_the_games_own_helper_process_is_named_as_such_and_never_told_to_close():
+    # A10: a child of the game (in target "pids") that works at each stutter is part of the game
+    evs = [stutter(i, 5.0 * i, "background_cpu", process="ShaderCompileWorker.exe", process_role="game_helper",
+                   process_pids=[8888], process_rises=[[8888, 300.0]]) for i in range(1, 6)]
+    others = [[t, [[8888, "ShaderCompileWorker.exe"] + p[2:] if p[1] == "hog.exe" else p for p in procs]]
+              for t, procs in hog_others(300.0, pids=(8888,), create=True)]
+    res = run("background_hogs", hogs(others, target={"pids": [4242, 8888]}), events=evs,
+              causes={"background_cpu": lift("supports", a=5, n=5)})
+    assert is_finding(res) and res.title.startswith("The game's own helper processes got busy")
+    assert not any(f.fix_id for f in res.fixes)
+    assert not any(f.title.startswith("Pause or close") for f in res.fixes)
+    assert any(f.title.startswith("ShaderCompileWorker.exe (process 8888) is the game's own helper") for f in res.fixes)
+    assert any("helper process of the game, ShaderCompileWorker.exe used 300%" in e.text for e in res.evidence)
 
 
 # --------------------------------------------------------------------------------- disks ---
@@ -899,6 +1286,16 @@ def test_the_cpu_side_counts_when_seventy_percent_of_the_events_show_it(cpu_side
     evs = [stutter(i, 3.0 * i, "game_cpu_spike", side="cpu" if i <= cpu_side else "gpu") for i in range(1, 11)]
     res = run("game_cpu_spike", make(), events=evs, causes={"game_cpu_spike": lift("supports", a=10, n=10)})
     assert is_finding(res, conf)
+
+
+def test_a_side_the_verdict_stood_in_for_is_no_frame_timing_evidence():
+    # A3: attribute.py marks a side taken from the overall verdict (its frames had no GPU timing); only the
+    # event's own frame split is a separate instrument from the CPU counters that named the cause
+    evs = [stutter(i, 3.0 * i, "game_cpu_spike", side_source="verdict") for i in range(1, 10)]
+    res = run("game_cpu_spike", make(), events=evs, causes={"game_cpu_spike": lift("supports")})
+    assert is_finding(res, "medium") and not any("CPU side was slow" in e.text for e in res.evidence)
+    evs = [stutter(i, 3.0 * i, "game_cpu_spike", side_source="frames") for i in range(1, 10)]
+    assert is_finding(run("game_cpu_spike", make(), events=evs, causes={"game_cpu_spike": lift("supports")}), "high")
 
 
 def test_stutter_cause_verdicts_from_the_lift_test():
@@ -964,3 +1361,84 @@ def test_marks_never_rule_out_the_residual_causes_they_were_not_judged_for():
     res = run("game_stall", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0}, events=marks,
               causes=causes)
     assert res is None
+
+
+# ------------------------------------------------------- end to end on LagLab-like captures ---
+
+def judged(s):
+    """diagnose() of a synthetic LagLab capture and the real end-to-end judge's verdict on it."""
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    from e2e_truth import judge
+    from lagdoctor.analysis.diagnose import diagnose
+    d = diagnose(s.cap)
+    return d, judge(s.log["mode"], s.log, s.cap.clock_origin, d, has_discrete_gpu=True)
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+@pytest.mark.parametrize("mode", synth.MODES)
+def test_every_laglab_scenario_passes_the_judge_with_the_measured_os_wakeup_hiccups(mode, seed):
+    d, v = judged(synth.laglab(mode, seed=seed, hiccups=synth.MEASURED_HICCUP_RATE))
+    assert v.ok, [(c.name, c.detail) for c in v.checks if not c.ok]
+    assert not [w for w in d.unchecked.values() if w.startswith("the check failed")]
+
+
+def test_the_training_job_on_the_games_gpu_is_named_and_no_cap_or_idle_gpu_is_claimed():
+    # A7, the review's scenario A2: the ML job keeps the game's GPU 80 % busy; the game runs steadily under 90 % of
+    # the refresh with its own GPU work short. Before: "a frame-rate cap", and the GPU "checked and fine".
+    d, _ = judged(synth.laglab("smooth", gpu_other_pct=80.0))
+    f = next(f for f in d.findings if f.cause == "gpu_contention")
+    assert f.confidence == "high" and f.title == "Another program kept the game's GPU 80% busy: python.exe"
+    assert "gpu_limit" not in d.cleared and "gpu_limit" in d.unchecked
+    assert not [f for f in d.findings if f.cause == "frame_cap"] and "frame_cap" in d.unchecked
+    quiet, _ = judged(synth.laglab("smooth"))                      # control: the job on the other GPU
+    assert "gpu_contention" in quiet.cleared and "gpu_limit" in quiet.cleared
+
+
+def test_a_cap_above_a_60_hz_refresh_gets_the_cap_advice():
+    # A11: 86 FPS into a 60 Hz composed screen drops every third frame; the cap rule claims the judder
+    d, _ = judged(synth.laglab("smooth", fps_cap=86.0, refresh_hz=60.0))
+    pacing = [e for e in d.events if e.kind == "pacing"]
+    f = next(f for f in d.findings if f.cause == "frame_cap")
+    assert pacing and set(f.event_ids) == {e.id for e in pacing}
+    assert f.title == "A frame-rate cap above the refresh rate drops frames: 86 FPS on a 60 Hz screen"
+    assert f.fixes[0].title == "Cap the frame rate at 60 FPS (the refresh rate)"
+    assert not [e for e in d.events if e.kind == "fps_drop"]
+
+
+@pytest.fixture(scope="module")
+def gold_case_5(presentmon_exe, gold_etl_dir):
+    """PresentMon's gold test_case_5 (PresentBench, ~86 FPS) replayed (--etl_file needs no rights), 60 Hz panel."""
+    import time
+    from lagdoctor.capture import presentmon as pm
+    from lagdoctor.model import Capture
+    src = pm.PresentMonSource(24892, exe=presentmon_exe, etl_file=gold_etl_dir / "test_case_5.etl")
+    src.start(0.0)
+    deadline = time.monotonic() + 60.0
+    while src._thread is not None and src._thread.is_alive():
+        assert time.monotonic() < deadline, "the replay did not finish in 60 s"
+        time.sleep(0.1)
+    src.stop()
+    assert src.status().state == "ok", src.status()
+    cols = {k: list(v) for k, v in src.result()["columns"].items()}
+    t0 = min(x for x in cols[F.T] if isinstance(x, float))
+    cols[F.T] = [x - t0 if isinstance(x, float) else x for x in cols[F.T]]
+    inv = {"cpu": {"threads": 16}, "settings": {"hags": None},
+           "displays": [{"device": r"\\.\DISPLAY1", "primary": True, "hz": 60.0}]}
+    return Capture(started_at="2026-11-04T00:00:00+00:00", clock_origin=0.0,
+                   duration_s=max(x for x in cols[F.T] if isinstance(x, float)), target={"pid": 24892},
+                   sources={"frames": SourceStatus("ok")}, inventory=inv, frames=cols)
+
+
+def test_gold_dropped_frame_judder_is_claimed_not_checked_and_fine(gold_case_5):
+    # A11 on PresentMon's own output: 2.9 s is too short for a bound verdict (LC 2.6), yet a third of the frames
+    # were never shown; before, uneven_pacing was "checked and fine" and the headline said no lag stood out
+    from lagdoctor.analysis.diagnose import diagnose
+    from lagdoctor.report import labels
+    d = diagnose(gold_case_5)
+    pacing = [e for e in d.events if e.kind == "pacing"]
+    assert len(pacing) == 1
+    assert labels.severity_text("pacing", pacing[0].severity, pacing[0].detail).endswith("ms animation error")
+    f = next(f for f in d.findings if f.cause == "vsync_judder")
+    assert f.event_ids == [pacing[0].id] and f.title.startswith("Frames are dropped")
