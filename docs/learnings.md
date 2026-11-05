@@ -72,3 +72,53 @@ from the Windows theme. `--blink-settings=preferredColorScheme=1` forces light.
 **Why it came up**: both "light" and "dark" report screenshots came out dark, and the phone-width check
 measured 492 px.
 **Takeaway**: check narrow layouts inside a fixed-width iframe, and set the colour scheme explicitly.
+
+### A second Ctrl+C lands in your cleanup, not in the wait it interrupted
+On Windows, a SIGINT that arrives while the main thread sits in `Thread.join()` or `Event.wait()` is held
+until that wait returns, then raised as `KeyboardInterrupt` right there. A tool that stops quietly for a few
+seconds after the first Ctrl+C invites a second one, which escapes the `finally` doing the stopping and saving.
+**Why it came up**: the review reproduced a whole recording lost to a second Ctrl+C during the stop phase.
+**Takeaway**: say "stopping and saving..." at once, and defer SIGINT (count the presses) around cleanup and
+saves you cannot afford to lose.
+
+### Closing a console window gives you five seconds, and sign-out gives you nothing
+Clicking a console's X sends CTRL_CLOSE_EVENT; Windows terminates the process when the handler returns, or
+after 5 s. A process that loads user32.dll never receives CTRL_LOGOFF or CTRL_SHUTDOWN at all, and without a
+handler neither `finally` nor `atexit` runs.
+**Why it came up**: the elevated recording runs in its own console window, and closing it lost the capture
+and left a kernel ETW session running until reboot.
+**Takeaway**: register a native console control handler; on close, release external state (trace sessions,
+child processes) first, then save within the budget; put helper children in a kill-on-close job object.
+
+### Private ETW sessions are a different animal
+A private (in-process) ETW session is allowed unelevated, but it cannot be real time (it logs to a file,
+delivered when you stop), it is invisible to QUERY/STOP by name (4201), and a same-name start returns 183.
+Skipping CloseTrace leaks 2 handles per session while the .etl file still deletes fine.
+**Why it came up**: the network tracker's test suite proves the consumer path with private sessions,
+because the real Kernel-Network session needs admin rights.
+**Takeaway**: a private session tests the consumer, not the controller; count handles to catch leaks that
+a file deletion would not show.
+
+### A process handle outlives the process
+`OpenProcess` keeps succeeding on a process that has exited for as long as anyone holds a handle to it, and
+`SetPriorityClass(REALTIME)` unelevated reports success while setting HIGH.
+**Why it came up**: the priority fix spawns, lowers and restores a test child, and must never act on a PID
+Windows has handed to another process.
+**Takeaway**: check identity (create time) and liveness (exit code) on the handle you then act through,
+better still without any handle first, and verify a write by reading the effective value back.
+
+### Rates from a counter that refreshes on its own grid are quantised
+NVML refreshes utilisation, power and its cumulative throttle counters together every ~500 ms. A rate taken
+between free-running reads read 35 % instead of 40 %, or 50 %/150 % of continuous throttling, depending on
+phase.
+**Why it came up**: the GPU sampler's throttle share wandered until it read just after each refresh.
+**Takeaway**: find a source's refresh grid before computing rates from it, then align reads to the grid or
+average over several periods.
+
+### A median baseline collapses on a quantised series
+When a series can only take whole multiples of a period (displayed frame intervals on a fixed-refresh
+screen), its median is the lower mode: one refresh at 120 FPS on 144 Hz, though the regular cadence also
+holds frames for two. Any "N x baseline" rule then fires on a one-refresh slip.
+**Why it came up**: the smooth control case got "stutters" from single frames held three refreshes.
+**Takeaway**: on quantised data, compare against the longest regular value the cadence produces, not the
+median alone.

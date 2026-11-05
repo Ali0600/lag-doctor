@@ -13,8 +13,55 @@
   `wifi_scan_spikes` rule, once a capture shows ping spikes lined up with `wifi_scans`.
 - **Asking for location permission** to see the access point (BSSID) and detect roaming exactly.
   Revisit hook: `Wlan.bssid()` already returns `None` when the permission is off.
+- **Compact frame storage for long captures** (`array('d')` columns, interned strings, or rows spilled to a
+  temp file and streamed into the gzip writer). Today a frame costs about 0.7 KB of RAM and a 3-hour 240 FPS
+  evening about 1.8 GiB. Revisit hook: `PresentMonSource`'s `SeriesBuilder` and `Capture.save`.
+- **Elevate only code the user cannot write** (an install under Program Files or a signed frozen exe, or the
+  elevated relay above). Today `--elevate` runs the checkout's Python as administrator. Revisit hook:
+  `cli.elevated_argv`.
 
 ---
+
+## 2026-11-04: Stutters on a display that only changes on a refresh
+
+At 120 FPS on a 144 Hz panel the display alternates 1- and 2-refresh holds, so the trailing median of
+displayed intervals (LC 2.4's baseline) is one refresh (6.94 ms). One late OS wake-up then holds a frame for
+3 refreshes (20.8 ms), which passed "2.5x the median and 8 ms above it" though it is only 6.9 ms longer than
+the cadence's own regular 2-refresh hold.
+- **On a quantised series, measure the excess against the longest regular hold (chosen)**: a stutter needs
+  D >= 2.5 M and D - max(M, E) >= 8 ms, with E = ceil(Mp/P - 0.05) x P from the presented cadence Mp and the
+  refresh period P. A 4-refresh hold and every real hitch still count; a 3-refresh slip does not.
+- **CapFrameX's mean baseline**: would sit at 8.33 ms; rejected because LC 2.4 chose the median for its
+  robustness to the very spikes it measures.
+- **Allow a few stutters in the smooth control**: rejected; it would hide a misleading verdict from users.
+  The end-to-end judge stays strict and now also requires lag type "none" for the control.
+Revisit hook: `analysis/events._stutters`.
+
+## 2026-11-04: Low frame rate means below 80 % of the target
+
+- **80 % of the target (chosen)**: LC 2.4's low-FPS episode and CHI '23 (experience stays acceptable while
+  the 5th-percentile FPS is within about 80 % of the target).
+- **0.9 x refresh**: what the first build used, borrowed from LC 4.14's cap rule; rejected, it made a
+  GPU-bound 120 FPS game on a 144 Hz panel "low frame rate" for the whole capture.
+Revisit hook: `analysis/diagnose.lag_time`.
+
+## 2026-11-04: An NVIDIA power cap is not throttling
+
+- **Separate columns (chosen)**: `nv_throttle_pct` counts only thermal slowdown and the hardware power brake;
+  `nv_power_cap_pct` holds the software power-cap share, reported as context (LC 4.1, 4.2: during GPU-bound play
+  the power cap is the design limit).
+- **One summed column with a name heuristic in the rule**: rejected; one idle second's `gpu_idle` reason turned
+  a normal power cap into a "likely" throttling finding.
+
+## 2026-11-04: One recording at a time
+
+Both ETW sessions have fixed names and each start removes a session of the same name, so a second capture
+silently ended the first one's frame and network tracing.
+- **A machine-wide lock held for the whole recording (chosen)**: a second `watch` refuses before starting
+  anything.
+- **A unique session name per capture**: would let two captures coexist, but orphan clean-up by a fixed name
+  is what keeps a crashed run from leaving a trace session behind until reboot. Revisit hook: the session
+  names in `capture/presentmon.py` and `capture/netflows.py`.
 
 ## 2026-11-04: How frame timing gets ETW rights
 
