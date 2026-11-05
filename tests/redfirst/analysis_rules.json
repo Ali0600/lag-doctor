@@ -464,8 +464,8 @@
  {
   "name": "judder judged under a cap",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if e.verdict == \"capped\":\n        return None",
-  "new": "    if False:\n        return None",
+  "old": "    if e.verdict == \"capped\":\n        return None                        # a cap that does not divide the refresh",
+  "new": "    if False:\n        return None                        # a cap that does not divide the refresh",
   "tests": [
    "tests/test_analysis_rules.py::test_vsync_judder_leaves_caps_low_fps_and_uneven_presents_to_their_own_rules"
   ]
@@ -817,10 +817,65 @@
  {
   "name": "router-only loss counted",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    elif near:",
-  "new": "    elif False:",
+  "old": "        _steady_loss(c, against=not near)",
+  "new": "        _steady_loss(c, against=True)",
   "tests": [
    "tests/test_analysis_rules_network.py::test_packet_loss"
+  ]
+ },
+ {
+  "name": "steady ping loss from one lost probe",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if lost >= ev_mod.LOSS_MIN_PROBES and pct >= ev_mod.LOSS_PCT:",
+  "new": "    if pct >= ev_mod.LOSS_PCT:",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_steady_ping_loss_counts_from_two_lost_probes_and_one_percent"
+  ]
+ },
+ {
+  "name": "steady ping loss only past 1 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if lost >= ev_mod.LOSS_MIN_PROBES and pct >= ev_mod.LOSS_PCT:",
+  "new": "    if lost >= ev_mod.LOSS_MIN_PROBES and pct > ev_mod.LOSS_PCT:",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_steady_ping_loss_counts_from_two_lost_probes_and_one_percent"
+  ]
+ },
+ {
+  "name": "steady ping loss never counted",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if lost >= ev_mod.LOSS_MIN_PROBES and pct >= ev_mod.LOSS_PCT:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_steady_ping_loss_on_the_real_path_is_never_called_no_loss"
+  ]
+ },
+ {
+  "name": "lost pings worded as none lost",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif lost == 0:",
+  "new": "    elif True:",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_steady_ping_loss_counts_from_two_lost_probes_and_one_percent"
+  ]
+ },
+ {
+  "name": "the router's lost pings hide the internet's",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif not against:\n        return",
+  "new": "    elif True:\n        return",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_steady_ping_loss_counts_from_two_lost_probes_and_one_percent"
+  ]
+ },
+ {
+  "name": "the game's own pauses said as no gap",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "\"pausing its own sending\" if local else",
+  "new": "\"pausing its own sending\" if False else",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_server_lag_ignores_gaps_where_the_game_itself_paused",
+   "tests/test_analysis_rules_network.py::test_a_capture_whose_only_server_gap_was_the_game_pausing_says_so"
   ]
  },
  {
@@ -961,12 +1016,48 @@
   ]
  },
  {
-  "name": "GPU contention from 10.1 %",
+  "name": "GPU contention from its own predicate, not the shared one",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "OTHER_GPU_PCT = attribute.OTHERS_GPU_PCT ",
-  "new": "OTHER_GPU_PCT = 10.1 ",
+  "old": "    if _contention(e) is None:",
+  "new": "    if m < 10.1:",
   "tests": [
    "tests/test_analysis_rules.py::test_gpu_contention_from_ten_percent_of_the_games_gpu"
+  ]
+ },
+ {
+  "name": "the contention verdict not shared with the bound",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        e.memo[\"contention\"] = fa.gpu_shared(e.cap, e.tick_spans)",
+  "new": "        e.memo[\"contention\"] = None",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_shared_gpu_is_never_checked_and_fine_as_the_limit_nor_read_as_a_frame_cap"
+  ]
+ },
+ {
+  "name": "a shared GPU's cadence called VSync judder",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if share >= JUDDER_SHARE and shared is not None and e.verdict == \"unknown\":",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_a_shared_gpu_never_turns_a_cadence_into_vsync_judder"
+  ]
+ },
+ {
+  "name": "the other GPU user named by any adapter",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if anywhere:           # an older capture",
+  "new": "        if True:           # an older capture",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_names_the_user_of_the_games_own_gpu_where_the_table_says_it"
+  ]
+ },
+ {
+  "name": "the other GPU user named without the any-adapter caveat",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if anywhere:           # an older capture",
+  "new": "        if False:           # an older capture",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_with_the_game_starved_is_likely_and_names_the_other_gpu_user_with_a_caveat"
   ]
  },
  {
@@ -1074,7 +1165,7 @@
   "old": "DROPPED_PCT = 100.0 * JUDDER_SHARE ",
   "new": "DROPPED_PCT = 10.1 ",
   "tests": [
-   "tests/test_analysis_rules.py::test_vsync_judder_claims_dropped_frame_judder_above_a_fixed_refresh"
+   "tests/test_analysis_rules.py::test_dropped_frames_is_its_own_cause_above_a_fixed_refresh"
   ]
  },
  {
@@ -1181,10 +1272,96 @@
  {
   "name": "power plan counts the GPU power cap",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    thr = e.gpu(G.THROTTLE_PCT)          # heat or the power brake",
-  "new": "    thr = e.gpu(G.POWER_CAP_PCT)          # heat or the power brake",
+  "old": "    heat = _heat_share(e)                # heat or the power brake; never the power cap",
+  "new": "    heat = (0.0, st.mean(e.gpu(G.POWER_CAP_PCT) or [0.0]), 0, 1)                # heat or the power brake; never the power cap",
   "tests": [
    "tests/test_analysis_rules.py::test_power_plan_never_counts_the_gpus_power_cap_as_support"
+  ]
+ },
+ {
+  "name": "power plan counts an earlier capture's power cap as heat",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    share = st.mean([x if named else 0.0 for x, named in rows]) if attribute.cap_in_throttle(e.cap) else full",
+  "new": "    share = full",
+  "tests": [
+   "tests/test_analysis_rules.py::test_an_earlier_captures_power_cap_is_never_read_as_throttling",
+   "tests/test_analysis_rules.py::test_an_earlier_capture_counts_only_the_readings_that_named_heat_or_the_brake"
+  ]
+ },
+ {
+  "name": "an earlier capture's power cap cleared as no throttling",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif old and full >= NV_THROTTLE_PCT:",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_an_earlier_captures_power_cap_is_never_read_as_throttling",
+   "tests/test_analysis_rules.py::test_an_earlier_capture_counts_only_the_readings_that_named_heat_or_the_brake"
+  ]
+ },
+ {
+  "name": "an earlier capture's low share not said to hold the power cap",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "+ (\", the power cap included\" if old else \"\") + \")\",",
+  "new": "+ \")\",",
+  "tests": [
+   "tests/test_analysis_rules.py::test_an_earlier_captures_low_share_still_rules_throttling_out"
+  ]
+ },
+ {
+  "name": "the dropped-frame judder claimed as VSync judder again",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    q = _fin(e.bound.get(\"quantised_pct\"))\n    hz = e.refresh\n    if not hz:",
+  "new": "    if _dropped_judder(e) is not None:\n        return _dropped_frames_finding(c, _dropped_judder(e), cap_fps=None)\n    q = _fin(e.bound.get(\"quantised_pct\"))\n    hz = e.refresh\n    if not hz:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_dropped_frames_is_its_own_cause_above_a_fixed_refresh",
+   "tests/test_analysis_rules.py::test_gold_dropped_frame_judder_is_claimed_not_checked_and_fine"
+  ]
+ },
+ {
+  "name": "dropped frames claimed under a cap as well",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if e.verdict == \"capped\":\n        return None                        # frame_cap's case",
+  "new": "    if False:\n        return None                        # frame_cap's case",
+  "tests": [
+   "tests/test_analysis_rules.py::test_dropped_frame_judder_needs_presents_faster_than_the_refresh_and_no_vrr"
+  ]
+ },
+ {
+  "name": "dropped frames cleared by a cadence above the refresh",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif fps is not None and fps <= hz + REFRESH_SLACK_HZ:",
+  "new": "    elif fps is not None:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_dropped_frames_is_its_own_cause_above_a_fixed_refresh"
+  ]
+ },
+ {
+  "name": "dropped frames with no rule",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    Rule(\"dropped_frames\", \"frame_timing\", (\"frames\",), None, _dropped_frames, \"pacing\"),\n",
+  "new": "",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gold_dropped_frame_judder_is_claimed_not_checked_and_fine",
+   "tests/test_analysis_rules.py::test_dropped_frames_is_its_own_cause_above_a_fixed_refresh"
+  ]
+ },
+ {
+  "name": "the dropped-frames label missing",
+  "file": "lagdoctor/report/labels.py",
+  "old": "    \"dropped_frames\": \"frames dropped (the game runs faster than the screen)\",\n",
+  "new": "",
+  "tests": [
+   "tests/test_report.py::test_every_cause_has_a_problem_label_and_a_neutral_topic",
+   "tests/test_analysis_rules.py::test_gold_dropped_frame_judder_is_claimed_not_checked_and_fine"
+  ]
+ },
+ {
+  "name": "dropped frames checked and fine under unexplained pacing",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    for cause in (\"uneven_pacing\", \"vsync_judder\", \"dropped_frames\"):",
+  "new": "    for cause in (\"uneven_pacing\", \"vsync_judder\"):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_unexplained_pacing_keeps_the_pacing_causes_open"
   ]
  },
  {

@@ -485,6 +485,76 @@ def test_gpu_throttle_from_the_1_hz_nvidia_rows():
     assert firsts(events) == ["gpu_throttle"] * 6 and summary["gpu_throttle"]["label"] == "supports"
 
 
+@pytest.mark.parametrize("hot_reasons, label", [("sw_power_cap", "not_measured"),
+                                                ("sw_thermal_slowdown,sw_power_cap", "supports")])
+def test_an_earlier_captures_throttle_share_links_to_stutters_only_where_heat_was_named(hot_reasons, label):
+    # Item 11: before the power-cap split nv_throttle_pct held the SW power cap too, which engages whenever the GPU
+    # works hardest, so a reading that names neither heat nor the brake says nothing about either
+    rows = SeriesBuilder(G.ALL)
+    for s in range(1, 30):
+        hot = any(h <= s <= h + 1.0 for h in TIMES)
+        rows.add(t=float(s), nv_throttle_pct=90.0 if hot else 0.0, nv_reasons=hot_reasons if hot else "")
+    gpu = rows.build()
+    events, today = analyse(lag_cap(stutter_gpu_ms=158.0, gpu_rows=dict(gpu)))
+    assert today["gpu_throttle"]["label"] == "supports"          # control: today the column is heat and the brake
+    del gpu[G.POWER_CAP_PCT]
+    events, earlier = analyse(lag_cap(stutter_gpu_ms=158.0, gpu_rows=gpu))
+    assert earlier["gpu_throttle"]["label"] == label
+    assert ("gpu_throttle" in firsts(events)) is (label == "supports")
+
+
+def with_game_adapter(rows, game_gpu):
+    """others rows as the sampler writes them now (A10): a create time (field 6), then the busiest engine on the
+    game's own adapter (gpu_game_pct, field 7), from `game_gpu` by name (absent: no engine there, None)."""
+    return [list(p) + [134000000000000000 + p[0], game_gpu.get(p[1])] for p in rows]
+
+
+def test_the_game_adapter_gpu_field_is_read_where_a_row_has_it_bounded():
+    # Item 12 (A10): field 7 (the game's adapter) where the row has it, a missing value as 0; else field 5 (any
+    # adapter), said so. Both bounded like every percentage (A15: past 1e7 a value is corrupt, so missing)
+    row = [9100, "renderer.exe", 5.0, 0.0, 90.0, 134000000000009100]
+    assert at.game_gpu_pct(row) == (90.0, True)
+    assert at.game_gpu_pct(row + [40.0]) == (40.0, False)
+    assert at.game_gpu_pct(row + [None]) == (0.0, False)                     # no engine on the game's adapter
+    assert at.game_gpu_pct(row + [1e7]) == (1e7, False) and at.game_gpu_pct(row + [1.0001e7]) == (0.0, False)
+    assert at.game_gpu_pct(row[:4] + [1e7]) == (1e7, True) and at.game_gpu_pct(row[:4] + [1.0001e7]) == (0.0, True)
+
+
+JOB_QUIET = [[7777, "python.exe", 100.0, 0.0, 5.0], [2656, "dwm.exe", 3.0, 0.0, 3.0]]
+JOB_HOT = [[7777, "python.exe", 100.0, 0.0, 95.0], [2656, "dwm.exe", 3.0, 0.0, 3.0]]   # its own GPU got busier
+
+
+def gpu_blame_cap(quiet, hot):
+    cap = lag_cap(during={S.GPU_OTHER_PCT: 40.0}, others_during=OTHERS + [])
+    cap.others = [[t, hot if rows is not OTHERS else quiet] for t, rows in cap.others]
+    return cap
+
+
+def test_a_gpu_user_on_another_adapter_is_never_blamed_for_the_games_gpu():
+    # Item 12 (A10): at each stutter the game's GPU gets 38 points busier, and the training job's busiest engine
+    # rises too, on the other GPU. Field 5 (any adapter) blamed the job; field 7 says it has no engine on the game's
+    quiet = with_game_adapter(JOB_QUIET, {"dwm.exe": 3.0})
+    events, _ = analyse(gpu_blame_cap(quiet, with_game_adapter(JOB_HOT, {"dwm.exe": 3.0})))
+    assert firsts(events) == ["background_gpu"] * 6 and all("process" not in e.detail for e in events)
+    renderer = [9100, "renderer.exe", 5.0, 0.0, 40.0]                       # this one rose on the game's GPU
+    cap = gpu_blame_cap(quiet, with_game_adapter(JOB_HOT + [renderer], {"dwm.exe": 3.0, "renderer.exe": 40.0}))
+    events, _ = analyse(cap)
+    assert {e.detail.get("process") for e in events} == {"renderer.exe"}
+    line = next(w for w in events[0].detail["why"] if w.startswith("the program that rose the most"))
+    assert line.startswith("the program that rose the most: renderer.exe reached ")
+    assert line.endswith("% of a GPU engine, against 0% normally")             # the game's adapter: no caveat
+    hog = next(f for f in diagnosed(gpu_blame_cap(quiet, with_game_adapter(
+        JOB_HOT + [renderer], {"dwm.exe": 3.0, "renderer.exe": 40.0}))).findings if f.cause == "background_hogs")
+    assert "renderer.exe" in hog.title and "python.exe" not in hog.title
+
+
+def test_an_older_table_blames_by_any_adapter_and_says_so():
+    # the fallback for captures without field 7: the busiest engine on any adapter, with the caveat
+    events, _ = analyse(gpu_blame_cap(JOB_QUIET, JOB_HOT))
+    assert {e.detail.get("process") for e in events} == {"python.exe"}
+    assert any("(its busiest engine on any adapter)" in w for w in events[0].detail["why"])
+
+
 # ------------------------------------------------------------------------------- the baseline ---
 
 def test_dense_events_relax_the_quiet_guard():

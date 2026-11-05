@@ -149,7 +149,7 @@ def network_events(evs: list[LagEvent]) -> list[LagEvent]:
 
 def _dropped_ids(env: rules._Env) -> set[int]:
     """A11: the pacing events of dropped-frame judder (frames made faster than a fixed refresh, never shown),
-    by the one predicate vsync_judder and frame_cap share."""
+    by the one predicate dropped_frames and frame_cap share."""
     try:
         dj = rules._dropped_judder(env)
     except Exception:  # noqa: BLE001 - the rules that use it already reported their failure as "the check failed"
@@ -161,9 +161,11 @@ def lag_time(evs: list[LagEvent], findings: list[Finding], stats: dict[str, Any]
              frames_ok: bool, dropped: Iterable[int] = ()) -> dict[str, float]:
     """Seconds of lag per lag type.
 
-    - stutter: the stutter events' spans; low_fps: the FPS drops, plus the steady time of a game that runs under
-      80 % of its target (the refresh rate; a cap or a VSync lock is its own target, so never low FPS), whatever
-      holds it there, the CPU, the GPU or neither (A6).
+    - stutter: the stutter events' spans; low_fps: the FPS drops, plus the steady time of a game whose steady
+      frame rate (bound "steady_fps": outside stutters and FPS drops, so freezes never lower it, A1) is under 80 %
+      of its target (the refresh rate; a cap or a VSync lock is its own target, so never low FPS), whatever holds
+      it there, the CPU, the GPU or neither (A6). A cadence other programs' GPU work may set is no cap (A7:
+      frames.bound says "unknown" then).
     - pacing: only where a confident pacing finding claims it (a cap's uneven display hold is the cap's setting,
       not the game's pacing), or where any confident finding claims dropped-frame judder (`dropped`: frames never
       shown jerk the picture whichever rule names them, A11); never the time of a stutter or FPS drop (A1).
@@ -190,7 +192,7 @@ def lag_time(evs: list[LagEvent], findings: list[Finding], stats: dict[str, Any]
     floor = max(NET_MIN_S, NET_MIN_SHARE * dur) if dur is not None and dur > 0 else NET_MIN_S
     if len(net) < NET_MIN_EVENTS and out["network"] < floor:
         out["network"] = 0.0
-    fps, hz = rules._fin(stats.get("avg_fps")), rules._fin(b.get("refresh_hz"))
+    fps, hz = rules._fin(b.get("steady_fps")), rules._fin(b.get("refresh_hz"))
     target = hz if hz is not None and hz > 0 else LOW_FPS_NO_REFRESH
     if frames_ok and b.get("verdict") not in OWN_TARGET and fps is not None and fps < LOW_FPS_FRAC * target:
         out["low_fps"] += max(0.0, rules._fin(b.get("steady_s")) or 0.0)

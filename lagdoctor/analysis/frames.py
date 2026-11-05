@@ -59,6 +59,8 @@ BOUND_MIN_S = 10.0           # LC 2.6: a bound verdict needs >= 10 s ...
 BOUND_MIN_FRAMES = 300       # LC 2.6: ... and >= 300 app frames of steady state
 ENGINE_GPU_PCT = 95.0        # LC 3.4: frames not measured -> 3D engine >= 95 % = "GPU-limited (probable)"
 CONF_MARGIN = 0.05           # [inferred] a ratio this close to a threshold makes the verdict "medium"
+SHARED_GPU_PCT = 10.0        # LC 4.6, 10 row 4.6: other programs on the game adapter's engine >= 10 % share it;
+                             # the game's own GPU busy then reads short (PM 3.2), whatever holds its frame rate
 MAD_TO_SD = 1.4826           # MAD x 1.4826 estimates the standard deviation of normal data
 IQR_TO_SD = 1.349            # the interquartile range of normal data is 1.349 standard deviations
 
@@ -401,6 +403,20 @@ def _window_means(cap: Capture, column: str, spans: list[tuple[float, float]]) -
     return [math.fsum(xs) / len(xs) for b, xs in bins.items() if b not in tainted and len(xs) >= 3]
 
 
+def gpu_others_median(cap: Capture, tick_spans: list[tuple[float, float]]) -> float | None:
+    """The median share other programs kept the game adapter's engine busy (S.GPU_OTHER_PCT, 1 s windows that
+    touch no lag event); None when it was not measured."""
+    vals = _window_means(cap, S.GPU_OTHER_PCT, tick_spans)
+    return st.median(vals) if vals else None
+
+
+def gpu_shared(cap: Capture, tick_spans: list[tuple[float, float]]) -> float | None:
+    """A7 (LC 4.6): gpu_others_median when it is SHARED_GPU_PCT or more, else None. The one predicate for the bound
+    verdict below and rules' gpu_contention: a GPU shared this much paces a game as evenly as a frame-rate cap."""
+    m = gpu_others_median(cap, tick_spans)
+    return m if m is not None and m >= SHARED_GPU_PCT else None
+
+
 # ----------------------------------------------------------------- the classifier ---
 
 def _quantised_share(d: list[float], period: float) -> float | None:
@@ -455,7 +471,9 @@ def bound(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent]) -> dict
 
     Frames inside stutter or FPS-drop events, and sampler ticks within one tick of them, are left out.
     busiest_thread is a fraction of one logical CPU (0.85 = LC 3.2's main-thread limit); r is
-    (median GPU busy - HAGS margin) / median app frame time.
+    (median GPU busy - HAGS margin) / median app frame time; steady_fps is the frame rate of those steady
+    frames (displayed ones where display is tracked). While other programs share the game's GPU (gpu_shared),
+    a regular cadence is not taken for a cap, nor a short GPU busy for waiting: the verdict is "unknown" (A7).
     """
     events = list(events)
     spans = _merged_spans(events, FRAME_EVENT_KINDS)
@@ -471,7 +489,7 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
     out: dict[str, Any] = {"verdict": "unknown", "r": None, "ft_ms": None, "gpu_ms": None, "busiest_thread": None,
                            "cap_fps": None, "refresh_hz": hz, "vsync": None, "vrr": None, "confidence": "low",
                            "notes": notes, "gpu_busy_pct": None, "quantised_pct": None, "steady_frames": 0,
-                           "steady_s": 0.0}
+                           "steady_s": 0.0, "steady_fps": None}
 
     means = _window_means(cap, S.GAME_TOP_THREAD_PCT, tick_spans)
     busiest = st.median(means) / 100.0 if means else None
@@ -484,6 +502,13 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
     frame_ms = [float(fm[i]) for i in rows if _pos(_at(fm, i))]
     out["steady_frames"] = len(frame_ms)
     out["steady_s"] = math.fsum(frame_ms) / 1000.0
+    row_set = set(rows)
+    d_rows, _, d_vals, source = display_series(fr)
+    d = [x for i, x in zip(d_rows, d_vals) if i in row_set] if source == "display" else []
+    # A1, A6: the frame rate outside stutters and FPS drops, counted like avg_fps (displayed frames where display
+    # is tracked), so freezes never make a steady game "low FPS"
+    shown = d if source == "display" else frame_ms
+    out["steady_fps"] = 1000.0 * len(shown) / math.fsum(shown) if shown else None
     if len(frame_ms) < BOUND_MIN_FRAMES or out["steady_s"] < BOUND_MIN_S:
         if frame_ms:
             notes.append(f"only {len(frame_ms)} steady frames over {out['steady_s']:.1f} s; a verdict needs "
@@ -530,9 +555,6 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
     else:
         notes.append("no GPU busy timing for most frames")
 
-    row_set = set(rows)
-    d_rows, _, d_vals, source = display_series(fr)
-    d = [x for i, x in zip(d_rows, d_vals) if i in row_set] if source == "display" else []
     vsync = False
     if period and d:
         q = _quantised_share(d, period)
@@ -586,6 +608,15 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
         verdict, conf = "waiting", ("medium" if near(r, R_CPU) or near(busiest, THREAD_BOUND) else "high")
     else:
         verdict, conf = "mixed", "medium"
+    shared = gpu_shared(cap, tick_spans)
+    if shared is not None and verdict in ("capped", "waiting"):
+        # A7 (LC 4.6, PM 3.2): other programs' GPU work paces the game as evenly as a cap and leaves its own GPU
+        # busy short, so neither "a cap" nor "waiting on something else" can be told from a shared GPU
+        notes.insert(0, f"other programs kept the game's GPU {shared:.0f}% busy (median of 1 s windows; "
+                        f"{SHARED_GPU_PCT:.0f}% or more), so a frame-rate cap, the shared GPU or something else "
+                        "may hold the frame rate")
+        verdict, conf = "unknown", "low"
+        out["cap_fps"] = None
     out["verdict"], out["confidence"] = verdict, conf
     return out
 

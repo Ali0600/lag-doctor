@@ -583,7 +583,17 @@
   "old": "LOSS_PCT = 1.0 ",
   "new": "LOSS_PCT = 1.05 ",
   "tests": [
-   "tests/test_analysis_frames_events.py::test_loss_also_needs_1_percent_of_its_15_s_window"
+   "tests/test_analysis_frames_events.py::test_loss_also_needs_1_percent_of_its_15_s_window",
+   "tests/test_analysis_rules_network.py::test_steady_ping_loss_counts_from_two_lost_probes_and_one_percent"
+  ]
+ },
+ {
+  "name": "loss from 0.99 %",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "LOSS_PCT = 1.0 ",
+  "new": "LOSS_PCT = 0.99 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_steady_ping_loss_counts_from_two_lost_probes_and_one_percent"
   ]
  },
  {
@@ -856,21 +866,39 @@
   ]
  },
  {
-  "name": "cadence slack 5 % (wider)",
+  "name": "cadence slack 0.5 % (wider)",
   "file": "lagdoctor/analysis/events.py",
-  "old": "CADENCE_SLACK = 0.05 ",
-  "new": "CADENCE_SLACK = 0.07 ",
+  "old": "CADENCE_SLACK = 0.005 ",
+  "new": "CADENCE_SLACK = 0.0052 ",
   "tests": [
-   "tests/test_analysis_frames_events.py::test_the_cadence_rule_holds_k_refreshes_up_to_5_percent_past_k_periods"
+   "tests/test_analysis_frames_events.py::test_the_cadence_rule_holds_k_refreshes_only_within_half_a_percent_of_k_periods"
   ]
  },
  {
-  "name": "cadence slack 5 % (narrower)",
+  "name": "cadence slack 0.5 % (narrower)",
   "file": "lagdoctor/analysis/events.py",
-  "old": "CADENCE_SLACK = 0.05 ",
-  "new": "CADENCE_SLACK = 0.03 ",
+  "old": "CADENCE_SLACK = 0.005 ",
+  "new": "CADENCE_SLACK = 0.0048 ",
   "tests": [
-   "tests/test_analysis_frames_events.py::test_the_cadence_rule_holds_k_refreshes_up_to_5_percent_past_k_periods"
+   "tests/test_analysis_frames_events.py::test_the_cadence_rule_holds_k_refreshes_only_within_half_a_percent_of_k_periods"
+  ]
+ },
+ {
+  "name": "cadence slack back at 5 %",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "CADENCE_SLACK = 0.005 ",
+  "new": "CADENCE_SLACK = 0.05 ",
+  "tests": [
+   "tests/test_analysis_frames_synth.py::test_a_cap_just_under_the_refresh_has_no_stutters_with_the_measured_hiccups"
+  ]
+ },
+ {
+  "name": "no cadence slack: jitter reads as one more refresh",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "CADENCE_SLACK = 0.005 ",
+  "new": "CADENCE_SLACK = 0.0 ",
+  "tests": [
+   "tests/test_analysis_frames_synth.py::test_a_game_held_to_the_refresh_still_stutters_when_it_misses_two_refreshes"
   ]
  },
  {
@@ -956,7 +984,26 @@
   "new": "LOSS_MIN_PROBES = 1 ",
   "tests": [
    "tests/test_analysis_frames_events.py::test_one_lost_probe_is_no_loss_event",
-   "tests/test_analysis_frames_synth.py::test_one_lost_or_slow_ping_in_two_minutes_is_no_network_event"
+   "tests/test_analysis_frames_synth.py::test_one_lost_or_slow_ping_in_two_minutes_is_no_network_event",
+   "tests/test_analysis_rules_network.py::test_steady_ping_loss_counts_from_two_lost_probes_and_one_percent"
+  ]
+ },
+ {
+  "name": "steady loss needs 3 lost probes",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "LOSS_MIN_PROBES = 2 ",
+  "new": "LOSS_MIN_PROBES = 3 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_steady_ping_loss_counts_from_two_lost_probes_and_one_percent"
+  ]
+ },
+ {
+  "name": "loss share from the RTT rows, not the probe table",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    return (float(lost), float(sent)) if sent and lost is not None and 0 <= lost <= sent else None",
+  "new": "    return None",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_steady_ping_loss_on_the_real_path_is_never_called_no_loss"
   ]
  },
  {
@@ -1652,10 +1699,181 @@
  {
   "name": "others table read unbounded",
   "file": "lagdoctor/analysis/attribute.py",
-  "old": "            cpu, io, gpu = fa._bounded(e[2]), read(\"io_bps\", e[3]), fa._bounded(e[4])",
-  "new": "            cpu, io, gpu = (_num(x) for x in e[2:5])",
+  "old": "            cpu, io = fa._bounded(e[2]), read(\"io_bps\", e[3])  # %, bytes/s",
+  "new": "            cpu, io = (_num(x) for x in e[2:4])  # %, bytes/s",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_absurd_values_from_a_corrupt_capture_are_missing_never_evidence"
+  ]
+ },
+ {
+  "name": "the game adapter's GPU field read unbounded",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        x, anywhere = fa._bounded(p[6]), False",
+  "new": "        x, anywhere = _num(p[6]), False",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_game_adapter_gpu_field_is_read_where_a_row_has_it_bounded"
+  ]
+ },
+ {
+  "name": "the any-adapter GPU field read unbounded",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        x, anywhere = (fa._bounded(p[4]) if isinstance(p, (list, tuple)) and len(p) >= 5 else None), True",
+  "new": "        x, anywhere = (_num(p[4]) if isinstance(p, (list, tuple)) and len(p) >= 5 else None), True",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_game_adapter_gpu_field_is_read_where_a_row_has_it_bounded"
+  ]
+ },
+ {
+  "name": "field 7 ignored: GPU blamed by any adapter",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if isinstance(p, (list, tuple)) and len(p) >= 7:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_gpu_user_on_another_adapter_is_never_blamed_for_the_games_gpu",
+   "tests/test_analysis_frames_attribute.py::test_the_game_adapter_gpu_field_is_read_where_a_row_has_it_bounded",
+   "tests/test_analysis_rules.py::test_gpu_contention_names_the_user_of_the_games_own_gpu_where_the_table_says_it"
+  ]
+ },
+ {
+  "name": "the any-adapter caveat on the game adapter's figure",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    where = \" (its busiest engine on any adapter)\" if col == \"gpu\" and others.gpu_any_adapter else \"\"",
+  "new": "    where = \" (its busiest engine on any adapter)\" if col == \"gpu\" else \"\"",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_gpu_user_on_another_adapter_is_never_blamed_for_the_games_gpu"
+  ]
+ },
+ {
+  "name": "the any-adapter caveat dropped",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            any_adapter = any_adapter or anywhere",
+  "new": "            any_adapter = False",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_an_older_table_blames_by_any_adapter_and_says_so"
+  ]
+ },
+ {
+  "name": "an earlier capture's throttle share read as heat",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    return bool(fa._col(gpu, G.T)) and G.POWER_CAP_PCT not in gpu",
+  "new": "    return False",
+  "tests": [
+   "tests/test_analysis_rules.py::test_an_earlier_captures_power_cap_is_never_read_as_throttling",
+   "tests/test_analysis_frames_attribute.py::test_an_earlier_captures_throttle_share_links_to_stutters_only_where_heat_was_named"
+  ]
+ },
+ {
+  "name": "an earlier capture's power-cap readings linked to stutters",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "[x if not old or named or x == 0 else None for _, x, named in rows]",
+  "new": "[x for _, x, named in rows]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_an_earlier_captures_throttle_share_links_to_stutters_only_where_heat_was_named"
+  ]
+ },
+ {
+  "name": "an earlier capture's quiet readings unknown too",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "[x if not old or named or x == 0 else None for _, x, named in rows]",
+  "new": "[x if not old or named else None for _, x, named in rows]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_an_earlier_captures_throttle_share_links_to_stutters_only_where_heat_was_named"
+  ]
+ },
+ {
+  "name": "no reading names heat",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    return isinstance(reasons, str) and any(r.strip().lower() in HEAT_REASONS for r in reasons.split(\",\"))",
+  "new": "    return False",
+  "tests": [
+   "tests/test_analysis_rules.py::test_an_earlier_capture_counts_only_the_readings_that_named_heat_or_the_brake",
+   "tests/test_analysis_frames_attribute.py::test_an_earlier_captures_throttle_share_links_to_stutters_only_where_heat_was_named"
+  ]
+ },
+ {
+  "name": "the thermal slowdown missing from the heat reasons",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "HEAT_REASONS = (\"sw_thermal_slowdown\", ",
+  "new": "HEAT_REASONS = (",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_heat_reason_names_cover_the_collectors",
+   "tests/test_analysis_rules.py::test_an_earlier_capture_counts_only_the_readings_that_named_heat_or_the_brake"
+  ]
+ },
+ {
+  "name": "a shared GPU from 10.05 %",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "SHARED_GPU_PCT = 10.0 ",
+  "new": "SHARED_GPU_PCT = 10.05 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_regular_cadence_on_a_shared_gpu_is_no_cap",
+   "tests/test_analysis_rules.py::test_gpu_contention_from_ten_percent_of_the_games_gpu"
+  ]
+ },
+ {
+  "name": "a shared GPU from 9.85 %",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "SHARED_GPU_PCT = 10.0 ",
+  "new": "SHARED_GPU_PCT = 9.85 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_regular_cadence_on_a_shared_gpu_is_no_cap",
+   "tests/test_analysis_rules.py::test_gpu_contention_from_ten_percent_of_the_games_gpu"
+  ]
+ },
+ {
+  "name": "a shared GPU's cadence read as a cap",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if shared is not None and verdict in (\"capped\", \"waiting\"):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_regular_cadence_on_a_shared_gpu_is_no_cap",
+   "tests/test_analysis_rules_diagnose.py::test_a_steady_rate_other_programs_gpu_work_may_set_is_no_cap_and_counts_as_low_fps"
+  ]
+ },
+ {
+  "name": "a shared GPU read as waiting on something else",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if shared is not None and verdict in (\"capped\", \"waiting\"):",
+  "new": "    if shared is not None and verdict in (\"capped\",):",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_short_gpu_busy_on_a_shared_gpu_is_not_waiting_on_something_else"
+  ]
+ },
+ {
+  "name": "a shared GPU overrides every verdict",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if shared is not None and verdict in (\"capped\", \"waiting\"):",
+  "new": "    if shared is not None:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_shared_gpu_leaves_the_other_verdicts_alone"
+  ]
+ },
+ {
+  "name": "a shared GPU keeps the cap's rate",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        verdict, conf = \"unknown\", \"low\"\n        out[\"cap_fps\"] = None",
+  "new": "        verdict, conf = \"unknown\", \"low\"",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_regular_cadence_on_a_shared_gpu_is_no_cap"
+  ]
+ },
+ {
+  "name": "the steady rate counts frames never shown",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    shown = d if source == \"display\" else frame_ms",
+  "new": "    shown = frame_ms",
+  "tests": [
+   "tests/test_analysis_frames.py::test_the_steady_frame_rate_is_the_displayed_rate_outside_lag_events"
+  ]
+ },
+ {
+  "name": "the steady rate over every frame, the freezes included",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    d = [x for i, x in zip(d_rows, d_vals) if i in row_set] if source == \"display\" else []",
+  "new": "    d = list(d_vals) if source == \"display\" else []",
+  "tests": [
+   "tests/test_analysis_frames.py::test_the_steady_frame_rate_is_the_displayed_rate_outside_lag_events",
+   "tests/test_analysis_rules_diagnose.py::test_freezes_never_make_a_steady_frame_rate_low"
   ]
  }
 ]

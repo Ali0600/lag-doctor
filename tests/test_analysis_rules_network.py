@@ -155,6 +155,19 @@ def test_server_lag_ignores_gaps_where_the_game_itself_paused():
     cap = net(inet_rtt_ms=7.0, flows=dict(FLOWS), ok=ETW)
     res = run("server_lag", cap, events=[gap(i, 5.0 * i, 300.0, "local") for i in range(1, 5)])
     assert isinstance(res, rules.Cleared) and "kept arriving from 0 s to 30 s (97% of the capture" in res.text
+    # item 10: a "local" gap is a silence of 100 ms or more in the server's packets too, so never "no gap"
+    assert "no gap" not in res.text
+    assert "the only gaps of 100 ms or more came from the game pausing its own sending" in res.text
+    quiet = run("server_lag", cap)                                      # control: no gap at all
+    assert isinstance(quiet, rules.Cleared) and "97% of the capture; no gap of 100 ms or more)" in quiet.text
+
+
+def test_a_capture_whose_only_server_gap_was_the_game_pausing_says_so():
+    # item 10 on the real path: one 531 ms gap with the game's own sending paused too (NE 4.6 "local")
+    from lagdoctor.analysis.diagnose import diagnose
+    d = diagnose(synth.laglab("smooth", server_gaps=[(5.98, 531.25, "local")]).cap)
+    assert d.cleared["server_lag"] == ("The game server's packets kept arriving from 0 s to 30 s (98% of the capture; "
+                                       "the only gap of 100 ms or more came from the game pausing its own sending).")
 
 
 def test_server_lag_without_a_server_flow_is_unchecked_never_fine():
@@ -218,7 +231,43 @@ def test_packet_loss():
     assert is_finding(res, "medium") and "3 of 30" in res.evidence[0].text and "burst" in res.evidence[0].text
     router = LagEvent(1, "net_loss", 9.75, 10.25, 10.0, {"target": "gateway", "lost_15s": 3, "sent_15s": 30})
     assert run("packet_loss", net(inet_rtt_ms=7.0), events=[router]) is None       # NE 7 row 9
-    assert isinstance(run("packet_loss", net(inet_rtt_ms=7.0)), rules.Cleared)
+    res = run("packet_loss", net(inet_rtt_ms=7.0))
+    assert isinstance(res, rules.Cleared) and res.text == "No ping to the internet was lost (0 of 60)."
+
+
+def probes(lost, sent):
+    return {"probes": {"internet": {"sent": sent, "lost": lost, "from_t": 0.5}}}
+
+
+@pytest.mark.parametrize("lost, sent, kind, text", [
+    (2, 200, Finding, "1.0% of pings to the internet were lost over the capture (2 of 200; 1% or more is bad)"),
+    (2, 201, rules.Cleared, "Only 2 of 201 pings to the internet were lost (0.995% over the capture; under 1%)."),
+    (1, 50, type(None), None),                       # one lost probe is no outage (NE 2.4), even at 2 %
+    (0, 60, rules.Cleared, "No ping to the internet was lost (0 of 60).")])
+def test_steady_ping_loss_counts_from_two_lost_probes_and_one_percent(lost, sent, kind, text):
+    # Item 7 (NE 2.2): loss too spread out for any 15 s window to hold a loss event was "checked and fine",
+    # worded "no ping was lost" beside the share that was
+    res = run("packet_loss", net(inet_rtt_ms=7.0, flows=probes(lost, sent)))
+    assert isinstance(res, kind)
+    if kind is Finding:
+        assert res.confidence == "medium" and res.evidence[0].text == text + "." and res.event_ids == []
+    elif kind is rules.Cleared:
+        assert res.text == text
+    router = LagEvent(1, "net_loss", 9.75, 10.25, 10.0, {"target": "gateway", "lost_15s": 3, "sent_15s": 30})
+    with_router = run("packet_loss", net(inet_rtt_ms=7.0, flows=probes(lost, sent)), events=[router])
+    assert isinstance(with_router, Finding) == (kind is Finding)    # the router's own pings never hide it ...
+    assert not isinstance(with_router, rules.Cleared)                # ... nor clear it (NE 7 row 9)
+
+
+def test_steady_ping_loss_on_the_real_path_is_never_called_no_loss():
+    # Item 7: 6 of 240 internet probes lost, one every 20 s (2.5 %): no 15 s window holds two, so no loss event
+    from lagdoctor.analysis.diagnose import diagnose
+    d = diagnose(synth.laglab("smooth", duration_s=120.0, net_losses=[10.0, 30.0, 50.0, 70.0, 90.0, 110.0]).cap)
+    assert not [e for e in d.events if e.kind == "net_loss"] and d.stats["loss_pct"] == pytest.approx(2.5)
+    assert "packet_loss" not in d.cleared
+    f = next(f for f in d.findings if f.cause == "packet_loss")
+    assert f.evidence[0].text == ("2.5% of pings to the internet were lost over the capture (6 of 240; 1% or more "
+                                  "is bad).")
 
 
 def test_vpn_route():
