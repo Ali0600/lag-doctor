@@ -286,15 +286,20 @@ because `0` or junk means *every process*):
 **system (WT 11).** One sampler thread at 4 Hz:
 - One `PdhQuery` with exactly the WT 11.1 counter list. Never `% Processor Time`, `% Idle Time`, `\Process(*)`,
   `\Thread(*)`, `\System\*` or `\Network Interface(*)` (WT 11.3).
-- One `Snapshotter.snapshot(threads_for=game_pids)` per tick. Per-process and per-thread CPU over the trailing
-  1 s window (thread times move in 15.625 ms steps, WT 3.5); clamp each thread to 100; key by (id, CreateTime).
+- One `Snapshotter.snapshot(threads_for={game pid})` per tick. Per-process and per-thread CPU are the delta
+  over the last tick (about 250 ms), stored sharp so a 150 ms hitch shows in the tick that holds it; clamp each
+  thread to 100; key by (id, CreateTime). Thread times move in 15.625 ms steps (WT 3.5), so the analysis judges
+  saturation over ≥ 1 s (the mean of 4 ticks), never from one tick.
+- The `game_*` columns are the target process only. Every other process, the game's own child processes
+  included, counts as "other" (a child that burns CPU is still competing with the game's render thread).
 - GPU Engine: keep per-sample values unclamped, average over the trailing 1 s, clamp only the average
   (single samples reached 3,652 %, WT verify log). Game GPU % = the game's busiest engine type on its adapter.
 - `cpu_total_pct` / `cpu_max_core_pct` from `% User Time + % Privileged Time` per CPU over 1 s;
   `cpu_perf_pct` from `% Processor Performance`, `cpu_perf_limit_pct` from `% Performance Limit` (_Total);
   `thermal_limit_pct` = lowest `% Passive Limit`; `dpc_pct` / `interrupt_pct` = busiest CPU.
-- `game_focused` from `windows.foreground_pid() in game_pids`.
-- Children: `game_pids` = the target plus any process whose `ppid` chain leads to it (`create_time` checked).
+- `game_focused` from `windows.foreground_pid() == game pid`.
+- `game_pids` (reported for the network tracker) = the target plus any process whose `ppid` chain leads to
+  it, `create_time` checked so a reused PID never joins.
 
 **gpu (WT 4.4).** NVML via ctypes at 1 Hz, started only when the game's adapter is the NVIDIA GPU or still
 unknown (do not wake a sleeping dGPU, WT 11.5.7). `nv_throttle_pct` = Δ(cumulative throttle ns of the thermal
