@@ -26,30 +26,37 @@ CAPTURE_SCHEMA = "lagdoctor.capture/1"
 # ---------------------------------------------------------------- columns ---
 
 class F:
-    """Frame columns: one row per frame the game presented (from PresentMon)."""
+    """Frame columns: one row per frame the game presented (from PresentMon 2.6, --qpc_time).
 
-    T = "t"                                # s, capture clock: CPU start of the frame
-    FRAME_MS = "frame_ms"                  # time since the previous present (the app's frame time)
-    CPU_BUSY_MS = "cpu_busy_ms"            # CPU time spent building the frame
-    CPU_WAIT_MS = "cpu_wait_ms"            # CPU time spent blocked (e.g. inside Present)
+    PresentMon writes some missing values as 0 instead of NA (MsCPUBusy, MsCPUWait,
+    MsBetweenAppStart, and MsGPUBusy on frames that are not the app's own); the
+    parser stores those as None. See docs/research/presentmon.md section 2.3.
+    """
+
+    T = "t"                                # s, capture clock: when the app called Present (TimeInQPC)
+    FRAME_MS = "frame_ms"                  # MsBetweenPresents: time since the previous present
+    CPU_BUSY_MS = "cpu_busy_ms"            # MsCPUBusy: wall time from the last Present's return to this call
+                                           # (an in-game frame limiter's sleep counts here: not CPU load)
+    CPU_WAIT_MS = "cpu_wait_ms"            # MsCPUWait: time blocked (e.g. inside Present)
     GPU_LATENCY_MS = "gpu_latency_ms"      # CPU start -> GPU start
     GPU_BUSY_MS = "gpu_busy_ms"            # time the GPU was actually working on the frame
     GPU_WAIT_MS = "gpu_wait_ms"            # GPU idle time inside the frame
     DISPLAYED = "displayed"                # 1 shown, 0 dropped/never shown, None unknown
-    DISPLAY_MS = "display_ms"              # how long it stayed on screen (between display changes)
-    DISPLAY_LATENCY_MS = "display_latency_ms"
+    DISPLAY_MS = "display_ms"              # MsBetweenDisplayChange: how long the previous frame stayed on screen
+    DISPLAY_LATENCY_MS = "display_latency_ms"  # MsCPUBusy + MsUntilDisplayed: CPU start -> on screen
     INPUT_LATENCY_MS = "input_latency_ms"  # input -> photon, when PresentMon could measure it
+    ANIM_ERROR_MS = "anim_error_ms"        # MsAnimationError: animation time vs display time (can be negative)
     PRESENT_MODE = "present_mode"          # e.g. "Hardware: Independent Flip", "Composed: Flip"
     RUNTIME = "runtime"                    # "DXGI", "D3D9", "Other" (Vulkan/OpenGL)
-    SYNC_INTERVAL = "sync_interval"        # 0 = no VSync
+    SYNC_INTERVAL = "sync_interval"        # 0 = no VSync, -1 = unknown
     ALLOWS_TEARING = "allows_tearing"      # 1/0
     SWAP_CHAIN = "swap_chain"              # swap chain address (a process may have several)
-    FRAME_TYPE = "frame_type"              # e.g. "Application", or a frame-generation type
-    HYBRID = "hybrid"                      # 1 cross-adapter copy, 0 none, None not tracked
+    FRAME_TYPE = "frame_type"              # "Application", or a frame-generation type
+    HYBRID = "hybrid"                      # 1 cross-adapter copy; 0 means only "not seen" (weak evidence)
 
     ALL = (T, FRAME_MS, CPU_BUSY_MS, CPU_WAIT_MS, GPU_LATENCY_MS, GPU_BUSY_MS, GPU_WAIT_MS,
-           DISPLAYED, DISPLAY_MS, DISPLAY_LATENCY_MS, INPUT_LATENCY_MS, PRESENT_MODE, RUNTIME,
-           SYNC_INTERVAL, ALLOWS_TEARING, SWAP_CHAIN, FRAME_TYPE, HYBRID)
+           DISPLAYED, DISPLAY_MS, DISPLAY_LATENCY_MS, INPUT_LATENCY_MS, ANIM_ERROR_MS, PRESENT_MODE,
+           RUNTIME, SYNC_INTERVAL, ALLOWS_TEARING, SWAP_CHAIN, FRAME_TYPE, HYBRID)
 
 
 class S:
@@ -60,9 +67,10 @@ class S:
     CPU_TOTAL_PCT = "cpu_total_pct"            # 0-100 over all logical CPUs
     CPU_MAX_CORE_PCT = "cpu_max_core_pct"      # busiest logical CPU, 0-100
     CPU_PERF_PCT = "cpu_perf_pct"              # effective speed vs base clock (>100 = turbo); drops = throttling
+    CPU_PERF_LIMIT_PCT = "cpu_perf_limit_pct"  # Processor Information % Performance Limit; 100 = no power/thermal cap
     THERMAL_LIMIT_PCT = "thermal_limit_pct"    # lowest ACPI passive limit; 100 = not thermally limited
-    DPC_PCT = "dpc_pct"                        # time in deferred procedure calls (driver work)
-    INTERRUPT_PCT = "interrupt_pct"
+    DPC_PCT = "dpc_pct"                        # time in deferred procedure calls (driver work), busiest CPU
+    INTERRUPT_PCT = "interrupt_pct"            # busiest CPU
     # The game process (read without opening a handle to it)
     GAME_CPU_PCT = "game_cpu_pct"              # 100 = one full logical CPU
     GAME_TOP_THREAD_PCT = "game_top_thread_pct"  # busiest game thread, 100 = one full logical CPU
@@ -74,6 +82,7 @@ class S:
     GAME_IO_READ_BPS = "game_io_read_bps"
     GAME_IO_WRITE_BPS = "game_io_write_bps"
     GAME_IO_OPS_PS = "game_io_ops_ps"
+    GAME_FOCUSED = "game_focused"              # 1 if the game owns the foreground window (Windows deprioritises it if not)
     # GPU, from Windows counters (all vendors)
     GAME_GPU_PCT = "game_gpu_pct"              # the game's busiest engine type (normally 3D) on its adapter
     GPU_PCT = "gpu_pct"                        # that engine type on the game's adapter, all processes
@@ -87,17 +96,18 @@ class S:
     HARD_FAULTS_PS = "hard_faults_ps"          # Memory\\Pages Input/sec: reads from disk to satisfy page faults
     DISK_BUSY_PCT = "disk_busy_pct"            # 100 - % idle, busiest physical disk
     DISK_READ_BPS = "disk_read_bps"
+    DISK_READ_MS = "disk_read_ms"              # Avg. Disk sec/Read x 1000, busiest physical disk
     DISK_QUEUE = "disk_queue"
 
-    ALL = (T, CPU_TOTAL_PCT, CPU_MAX_CORE_PCT, CPU_PERF_PCT, THERMAL_LIMIT_PCT, DPC_PCT, INTERRUPT_PCT,
-           GAME_CPU_PCT, GAME_TOP_THREAD_PCT, GAME_TOP_THREAD_ID, GAME_THREADS, GAME_WS_MB,
+    ALL = (T, CPU_TOTAL_PCT, CPU_MAX_CORE_PCT, CPU_PERF_PCT, CPU_PERF_LIMIT_PCT, THERMAL_LIMIT_PCT, DPC_PCT,
+           INTERRUPT_PCT, GAME_CPU_PCT, GAME_TOP_THREAD_PCT, GAME_TOP_THREAD_ID, GAME_THREADS, GAME_WS_MB,
            GAME_PRIVATE_MB, GAME_PAGE_FAULTS_PS, GAME_IO_READ_BPS, GAME_IO_WRITE_BPS, GAME_IO_OPS_PS,
-           GAME_GPU_PCT, GPU_PCT, GPU_OTHER_PCT, VRAM_USED_MB, GAME_VRAM_MB, GAME_SHARED_MB,
-           RAM_AVAIL_MB, COMMIT_PCT, HARD_FAULTS_PS, DISK_BUSY_PCT, DISK_READ_BPS, DISK_QUEUE)
+           GAME_FOCUSED, GAME_GPU_PCT, GPU_PCT, GPU_OTHER_PCT, VRAM_USED_MB, GAME_VRAM_MB, GAME_SHARED_MB,
+           RAM_AVAIL_MB, COMMIT_PCT, HARD_FAULTS_PS, DISK_BUSY_PCT, DISK_READ_BPS, DISK_READ_MS, DISK_QUEUE)
 
 
 class G:
-    """NVIDIA columns from nvidia-smi (about 1 per second). Absent on other GPUs."""
+    """NVIDIA columns from NVML (nvidia-smi as fallback), about 1 per second. Absent on other GPUs."""
 
     T = "t"
     UTIL_PCT = "nv_util_pct"
@@ -109,12 +119,18 @@ class G:
     CLOCK_MAX_MHZ = "nv_clock_max_mhz"
     PSTATE = "nv_pstate"
     REASONS = "nv_reasons"     # comma-separated active clock-event (throttle) reasons, "" = none
+    THROTTLE_PCT = "nv_throttle_pct"  # share of the interval the clock was held down by heat or power (0-100)
 
-    ALL = (T, UTIL_PCT, MEM_USED_MB, TEMP_C, POWER_W, POWER_LIMIT_W, CLOCK_MHZ, CLOCK_MAX_MHZ, PSTATE, REASONS)
+    ALL = (T, UTIL_PCT, MEM_USED_MB, TEMP_C, POWER_W, POWER_LIMIT_W, CLOCK_MHZ, CLOCK_MAX_MHZ, PSTATE, REASONS,
+           THROTTLE_PCT)
 
 
 class N:
-    """Network columns (about 4 per second). RTT None in a row = that probe was lost."""
+    """Network columns (about 4 per second). RTT None in a row = that probe was lost or not sent this tick.
+
+    The game server's own packet stream (needs ETW) lives in Capture.net_flows, written by the
+    net_flows collector, so each series keeps exactly one writer.
+    """
 
     T = "t"
     GW_RTT_MS = "gw_rtt_ms"            # to the default gateway (your router)
@@ -122,16 +138,16 @@ class N:
     SERVER_RTT_MS = "server_rtt_ms"    # to the game server, when it answers pings
     WIFI_SIGNAL_PCT = "wifi_signal_pct"
     WIFI_RSSI_DBM = "wifi_rssi_dbm"
-    WIFI_BSSID = "wifi_bssid"          # access point; a change = roaming
+    WIFI_BSSID = "wifi_bssid"          # access point; a change = roaming (needs location permission)
+    WIFI_CHANNEL = "wifi_channel"      # a change without a BSSID also hints at roaming
     WIFI_RX_MBPS = "wifi_rx_mbps"
     WIFI_TX_MBPS = "wifi_tx_mbps"
+    WIFI_RETRIES_PS = "wifi_retries_ps"  # driver-reported retransmissions per second
     NIC_RX_BPS = "nic_rx_bps"          # whole adapter, all processes
     NIC_TX_BPS = "nic_tx_bps"
-    GAME_RX_PPS = "game_rx_pps"        # packets/s from the game server (needs ETW)
-    GAME_RX_GAP_MS = "game_rx_gap_ms"  # longest silence from the server in this tick (needs ETW)
 
     ALL = (T, GW_RTT_MS, INET_RTT_MS, SERVER_RTT_MS, WIFI_SIGNAL_PCT, WIFI_RSSI_DBM, WIFI_BSSID,
-           WIFI_RX_MBPS, WIFI_TX_MBPS, NIC_RX_BPS, NIC_TX_BPS, GAME_RX_PPS, GAME_RX_GAP_MS)
+           WIFI_CHANNEL, WIFI_RX_MBPS, WIFI_TX_MBPS, WIFI_RETRIES_PS, NIC_RX_BPS, NIC_TX_BPS)
 
 
 class SeriesBuilder:
@@ -301,6 +317,8 @@ class Diagnosis:
     events: list[LagEvent] = field(default_factory=list)
     findings: list[Finding] = field(default_factory=list)
     measured: dict[str, str] = field(default_factory=dict)   # source -> "ok" / why it was not measured
+    cleared: dict[str, str] = field(default_factory=dict)    # cause -> what was measured that rules it out
+    unchecked: dict[str, str] = field(default_factory=dict)  # cause -> why it could not be checked
 
     def to_json(self) -> dict[str, Any]:
         return _clean_floats(asdict(self))

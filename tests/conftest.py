@@ -1,14 +1,49 @@
-"""Shared test fixtures."""
+"""Shared test fixtures.
+
+Builders: put fixtures only your own tests use in your own test module, not here.
+"""
 from __future__ import annotations
 
+import hashlib
+import os
 import uuid
 import winreg
+from pathlib import Path
 
 import pytest
 
 from lagdoctor.fixes.registry import RegistryBackend
 
 SANDBOX_PARENT = r"Software\LagDoctorTest"
+
+# The real PresentMon download, outside LAGDOCTOR_HOME (which every test redirects).
+PRESENTMON_VERSION = "2.6.0"
+PRESENTMON_SHA256 = "b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af"
+
+
+def _localappdata() -> Path:
+    return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
+
+
+@pytest.fixture(scope="session")
+def presentmon_exe() -> Path:
+    """The verified PresentMon 2.6.0 exe. Skips (with the reason) when it was never downloaded."""
+    exe = (_localappdata() / "lag-doctor" / "presentmon" / PRESENTMON_VERSION
+           / f"PresentMon-{PRESENTMON_VERSION}-x64.exe")
+    if not exe.is_file():
+        pytest.skip(f"PresentMon not downloaded ({exe}); run `uv run python -m lagdoctor setup`")
+    digest = hashlib.sha256(exe.read_bytes()).hexdigest()
+    assert digest == PRESENTMON_SHA256, f"{exe} has SHA-256 {digest}, expected the pinned 2.6.0 release"
+    return exe
+
+
+@pytest.fixture(scope="session")
+def gold_etl_dir() -> Path:
+    """PresentMon's own gold ETW captures (Tests/Gold of v2.6.0), for --etl_file replays without admin."""
+    d = Path(os.environ.get("LAGDOCTOR_TESTDATA") or _localappdata() / "lag-doctor" / "testdata") / "presentmon-gold"
+    if not (d / "test_case_0.etl").is_file():
+        pytest.skip(f"gold ETL captures not found in {d} (see {d / 'SOURCE.txt'} for where they come from)")
+    return d
 
 
 @pytest.fixture
