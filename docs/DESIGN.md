@@ -96,6 +96,43 @@ Rules every collector follows:
   it does not call `OpenProcess` on the game. (Other processes may be opened with
   `PROCESS_QUERY_LIMITED_INFORMATION` to read an exe path, never more.)
 
+### What each collector's `result()` returns
+
+The session copies these into the `Capture`. Keys not listed here go nowhere, so add them here first.
+
+| collector (`name`) | `result()` keys → Capture field |
+|---|---|
+| `frames` (capture/presentmon.py) | `columns` (F) → `frames`; `swap_chains` `{address: frame_count}` and `presentmon` `{version, exe, args, exit_code, stderr_tail}` → `target["presentmon"]` |
+| `system` (capture/sysmon.py) | `columns` (S) → `system`; `others` → `others`; `game_adapter_luid` (the adapter whose 3D engine the game used most, `"0xHHHHHHHH_0xLLLLLLLL"`, PDH's luid format) → `target["adapter_luid"]` |
+| `gpu` (capture/gpumon.py) | `columns` (G) → `gpu`; `gpu_name`, `clock_max_mhz`, `mem_total_mb` → `inventory["nvidia"]` |
+| `network` (capture/netmon.py) | `columns` (N) → `network`; `targets` `{gateway, internet, server}` (IP strings or None) and `interface` `{name, kind: "wifi"/"ethernet"/"other", ssid, band, channel}` → `net_flows["targets"]`, `inventory["network"]` |
+| `net_flows` (capture/netflows.py) | `server` `{ip, port, proto, rx_packets, tx_packets, rx_bytes, tx_bytes}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8; `gaps` `[[t, ms], ...]` silences from the server over 3x its normal interval → `net_flows` |
+
+`others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct], ...]]`, top 8 non-game processes by CPU at that
+tick, `cpu_pct` with 100 = one logical CPU.
+
+### Inventory keys (capture/inventory.py)
+
+A value of `None` means unknown. Rules and the report read exactly these keys.
+
+```
+os        {name, build}                                   e.g. {"name": "Windows 11 Home", "build": 26200}
+cpu       {name, cores, threads, hybrid}                  hybrid: P+E cores (bool)
+ram_gb    float
+laptop    bool
+adapters  [{luid, name, vendor, vram_mb, integrated}]     added by the session from winapi/dxgi
+displays  [{device, name, adapter, internal, primary, width, height, hz, max_hz}]
+          max_hz = highest refresh offered at the current resolution
+power     {scheme_guid, scheme_name, overlay, on_battery, battery_saver}
+          overlay: "best_performance" / "balanced" / "best_efficiency" / None
+settings  {game_mode, game_dvr_background, hags, windowed_optimizations, vrr, memory_integrity}   bools
+game      {exe, drive, media, free_gb, gpu_preference, monitor_device}
+          media: "SSD" / "HDD" / "Unknown"; gpu_preference: 0 = let Windows decide, 1 = power saving,
+          2 = high performance, None = not set; monitor_device: the display the game window is on
+network   {name, kind, ssid, band, channel}               from the network collector
+nvidia    {gpu_name, clock_max_mhz, mem_total_mb}         from the gpu collector
+```
+
 ## Target selection (capture/target.py)
 
 `find_target(name=None, pid=None, auto=False)` returns `{pid, name, exe, window_title, monitor, how}`:
@@ -113,6 +150,20 @@ Rules every collector follows:
 - Stats: `avg_fps` (frames / time), `low1_fps` and `low01_fps` (average of the slowest 1% / 0.1%),
   `p99_frame_ms`, `median_frame_ms`, `worst_frame_ms`, `stutters_per_min`, `dropped_pct`,
   `gpu_bound_pct`, `cpu_bound_pct`, `display_bound_pct`, `refresh_hz`, `present_mode` (most common).
+
+`Diagnosis.stats` keys (missing or None = not measured; the report shows "-" for those):
+
+```
+frames, duration_s                      int, float       frames analysed (main swap chain), seconds
+avg_fps, low1_fps, low01_fps            float            frames/time; average of the slowest 1% / 0.1%
+median_frame_ms, p99_frame_ms, worst_frame_ms   float
+stutters, stutters_per_min              int, float
+dropped_pct                             float            % of frames never displayed
+gpu_bound_pct, cpu_bound_pct, display_bound_pct float    % of frames
+refresh_hz, present_mode                float, str       the game's display; most common present mode
+ping_gw_ms, ping_inet_ms, ping_server_ms float           medians
+jitter_ms, loss_pct                     float            internet anchor
+```
 
 ### Lag events (analysis/events.py)
 - **stutter**: frame time well above the trailing median of the frames before it (multiple *and*
