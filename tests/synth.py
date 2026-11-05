@@ -31,7 +31,7 @@ import random
 from dataclasses import dataclass, field, fields
 from typing import Any, Sequence
 
-from lagdoctor.model import F, N, S, Capture, SeriesBuilder, SourceStatus
+from lagdoctor.model import F, G, N, S, Capture, SeriesBuilder, SourceStatus
 
 ORIGIN = 5000.0                   # perf_counter() at capture t = 0
 REFRESH_HZ = 144.003              # this laptop's internal panel, QueryDisplayConfig rational (LC 3.3, L4)
@@ -458,6 +458,34 @@ def system_table(seconds: float, **cols: Any) -> dict[str, list]:
         b.add(t=t, **{c: (v(t) if callable(v) else v) for c, v in cols.items()})
         k += 1
     return b.build()
+
+
+def gpu_table(seconds: float, **cols: Any) -> dict[str, list]:
+    """G rows once a second (NVML's rate, DESIGN gpu) from 1 s to `seconds`; each column a constant or f(t)."""
+    b = SeriesBuilder(G.ALL)
+    k = 1
+    while k <= seconds:
+        b.add(t=float(k), **{c: (v(float(k)) if callable(v) else v) for c, v in cols.items()})
+        k += 1
+    return b.build()
+
+
+def network_table(seconds: float, **cols: Any) -> dict[str, list]:
+    """N rows every 0.5 s (one probe round, DESIGN network) from 0.5 s to `seconds`; constants or f(t)."""
+    b = SeriesBuilder(N.ALL)
+    k = 1
+    while k * NET_ROUND_S <= seconds:
+        t = k * NET_ROUND_S
+        b.add(t=t, **{c: (v(t) if callable(v) else v) for c, v in cols.items()})
+        k += 1
+    return b.build()
+
+
+def sources(ok: Sequence[str] = (), **other: SourceStatus) -> dict[str, SourceStatus]:
+    """Capture.sources: "ok" for the names in `ok`, any SourceStatus given by keyword, nothing else."""
+    out: dict[str, SourceStatus] = {name: SourceStatus("ok") for name in ok}
+    out.update(other)
+    return out
 
 
 def capture(frames: dict | None = None, system: dict | None = None, *, hz: float | None = None,

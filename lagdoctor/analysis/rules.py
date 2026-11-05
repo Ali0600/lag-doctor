@@ -1,0 +1,2040 @@
+"""Session rules and scoring: what the whole capture says about each cause of lag.
+
+DESIGN.md "Session rules" and "Scoring" (LC 4, 5; NE 2, 7). Each Rule is a pure function fn(cap, ctx) that
+collects evidence items, each in one evidence family and weighted by LC 5.1's points, and hands them to the
+scorer. The scorer returns a Finding (with a confidence), a Cleared entry (what was measured that rules the
+cause out), an Unchecked entry (why it could not be checked), or None when the measurements said nothing
+either way ("evidence or silence", DESIGN principle 2). run_rules() checks each rule's sources first and
+holds side-specific findings to the bound verdict's gate (LC 5.1).
+
+Constants cite their research section: LC = docs/research/lag-causes.md, NE = network-and-etw.md,
+WT = windows-telemetry.md, PM = presentmon.md. Thresholds tagged [inferred] there are defaults to tune.
+
+A capture can come from disk, so every value read here is checked (a non-number counts as missing), and
+nothing taken from the capture (process names, adapter names, paths) is trusted beyond being text.
+"""
+from __future__ import annotations
+
+import bisect
+import math
+import ntpath
+import re
+from dataclasses import dataclass
+from typing import Any, Callable, Iterable
+
+from lagdoctor.analysis import attribute
+from lagdoctor.analysis import events as ev_mod
+from lagdoctor.analysis import frames as fa
+from lagdoctor.analysis import stats as st
+from lagdoctor.model import F, G, N, S, Capture, Evidence, Finding, FixSuggestion, LagEvent
+from lagdoctor.report import labels
+
+# ---- scoring (LC 5.1, 5.3) -----------------------------------------------------------------------
+W_STATIC = 1.0               # LC 5.1: a static setting that makes a cause more likely
+W_STEADY = 2.0               # LC 5.1: a steady-state metric past its threshold
+W_EVENT_STRONG = 3.0         # LC 5.1, 5.2: an event-linked signal with lift >= 4
+W_DIRECT = 4.0               # LC 5.1: a direct readout of the cause
+STATIC_CAP = 2.0             # LC 5.1: static configuration adds at most +2 (so it never makes "likely" alone)
+LIKELY_S = 4.0               # LC 5.3: Likely needs S >= 4 ...
+LIKELY_COVERAGE = 0.6        # LC 5.3: ... the key family supporting, and coverage >= 0.6
+POSSIBLE_S = 2.0             # LC 5.3: Possible: 2 <= S < 4
+CLEARED_S = -2.0             # LC 5.3: Checked, fine: S <= -2 ...
+CLEARED_COVERAGE = 0.6       # LC 5.3: ... and coverage >= 0.6
+MIN_COVERAGE = 0.5           # LC 5.3: Not enough data below coverage 0.5
+CONTRA_WEIGHT = 2.0          # LC 5.2: an event-linked "contradicts" weighs 2
+HALF = 0.5                   # LC 5.2: marks stand in for frame events at half weight
+
+# Side-specific causes need a bound verdict on their side (LC 5.1; DESIGN, Session rules). "gpu_event" is for
+# a GPU-side stutter cause: the stutter's own frame split already chose its side (attribute.py), but no
+# GPU-side cause is reported while one CPU thread or every core limits the game.
+GATES = {
+    "gpu": frozenset({"gpu", "mixed"}),
+    "cpu": frozenset({"cpu_main", "cpu_all", "mixed", "unknown"}),
+    "gpu_event": frozenset({"gpu", "mixed", "capped", "vsync", "waiting", "unknown"}),
+}
+
+# ---- limits (LC 3.1, 3.4, 4.1, 4.4, 4.14) --------------------------------------------------------
+LIMIT_FPS_FRAC = 0.90        # [inferred, LC 4.14's 0.9 x refresh]: at or above it the display sets the pace,
+                             # so a GPU or CPU limit costs nothing the player sees
+ENGINE_BUSY_PCT = 90.0       # LC 4.1: the game's 3D engine >= 90 % on its render adapter
+ENGINE_IDLE_PCT = 50.0       # [inferred] a 3D engine under half busy cannot be the limit
+ENGINE_PROBABLE_PCT = fa.ENGINE_GPU_PCT   # LC 3.4: no frame timing -> 3D engine >= 95 % = "GPU-limited (probable)"
+NV_UTIL_PCT = 95.0           # LC 4.1: utilization.gpu >= 95 %
+# ---- throttling (LC 4.2, 4.5, 10) ----------------------------------------------------------------
+NV_THROTTLE_PCT = attribute.NV_THROTTLE_PCT   # LC 10 (4.2): held down by heat or power >= 30 % of the time
+CPU_LIMIT_SHARE = attribute.LIMIT_SHARE       # LC 4.5: % Performance Limit < 100 on >= 25 % of samples
+CPU_PERF_DROP = attribute.PERF_DROP_FRAC      # LC 4.5: % Processor Performance >= 20 % below the start
+CPU_BUSY_FOR_THROTTLE = 0.70  # LC 4.5: throttling matters when the game is CPU-bound or near it (thread >= 0.7)
+PERF_BASE_S = 120.0          # LC 4.5: "the run's first two minutes"
+PERF_MIN_SAMPLES = 8         # [inferred] fewer samples on either side of the comparison say nothing
+# ---- memory (LC 4.3, 4.7) ------------------------------------------------------------------------
+VRAM_FULL_FRAC = attribute.VRAM_FULL_FRAC     # LC 4.3: dedicated VRAM >= 90 % of its size
+SHARED_SPILL_MB = 512.0      # LC 4.3: the game's shared GPU memory > 512 MiB ...
+SHARED_RISE_MB_PER_MIN = 256.0   # LC 4.3: ... or rising >= 256 MiB per minute
+RAM_WARN_FRAC = attribute.RAM_LOW_FRAC        # LC 4.7 (PAL, S30): available < 10 % of RAM is a warning
+RAM_CRIT_FRAC = 0.05         # LC 4.7 (PAL, S30): < 5 % is critical ...
+RAM_CRIT_MB = attribute.RAM_LOW_MB            # LC 4.7 (PAL, S30): ... as is < 64 MB
+FAULTS_WARN_PS = attribute.FAULTS_RISE_PS     # LC 4.7 (PAL, S30): Pages Input/sec > 1000 is a warning
+COMMIT_WARN_PCT = 80.0       # LC 4.7 (PAL, S30): % Committed Bytes In Use > 80 % warning ...
+COMMIT_CRIT_PCT = 90.0       # LC 4.7 (PAL, S30): ... > 90 % critical
+DISK_READ_WARN_MS = attribute.DISK_READ_MS    # LC 4.8 (PAL, S30): Avg. Disk sec/Read > 15 ms is a warning
+# ---- display and pacing (LC 2.4, 3.3, 4.13, 4.14; DESIGN) ----------------------------------------
+REFRESH_SLACK_HZ = 1.0       # [inferred] 143.98 Hz on a "144 Hz" mode is the maximum, not below it
+JUDDER_SHARE = 0.10          # LC 2.4: VSync judder = median D one period and >= 10 % of intervals at 2 periods
+QUANTISED_PCT = 100.0 * fa.VSYNC_SHARE        # LC 3.3: >= 90 % of displayed intervals on whole refresh periods
+CAP_FRAC = 0.90              # LC 4.14: a cap at C < 0.9 x refresh is misconfigured ...
+CAP_R_MAX = 0.70             # LC 4.14: ... when r < 0.7 (the GPU has room to go faster)
+UNEVEN_SHARE = 0.10          # DESIGN: uneven pacing covers >= 10 % of the capture
+UNEVEN_PRESENT_PCT = 100.0 * ev_mod.PACING_SHARE   # LC 2.4's "> 10 % of swings >= 4 ms", on the game's presents
+UNEVEN_DIRECT_SHARE = 0.50   # [inferred] uneven presents over half the capture are a direct readout of the cause
+# ---- background, focus, disk, shaders (DESIGN; LC 4.6, 4.8, 4.9, 4.19) ---------------------------
+HOG_MIN_CPU_PCT = 25.0       # DESIGN: non-game processes summing >= 25 % of one CPU across the lag events
+UNFOCUSED_SHARE = 0.10       # [inferred] not the foreground window for >= 10 % of the capture
+SIDE_SHARE = 0.70            # [inferred] the CPU side was slow in >= 70 % of a cause's events
+EARLY_FRACTION = 1.0 / 3.0   # LC 4.9: shader stutter bunches up early ("first minutes") ...
+EARLY_SHARE = 0.60           # [inferred] ... here: >= 60 % of the game's own stutters in the first third
+MIN_EVENTS = attribute.LIFT_MIN_EVENTS        # LC 2.6, 5.2: a stutter cause needs >= 5 events
+# ---- network (NE 2.2, 2.3, 3.3, 3.5, 7) ----------------------------------------------------------
+INET_NOTICEABLE_MS = 60.0    # NE 2.2: internet / server RTT p50 >= 60 ms is noticeable ...
+INET_BAD_MS = 100.0          # NE 2.2: ... > 100 ms is bad
+GW_BAD_P95_MS = 30.0         # NE 2.2: gateway RTT on Wi-Fi p95 > 30 ms is bad ...
+GW_GOOD_P95_MS = 10.0        # NE 2.2: ... < 10 ms is good
+GW_LOCAL_MS = 10.0           # [inferred] a router median above this means the delay starts on the local hop
+RSSI_WEAK_DBM = -70.0        # NE 7 row 2: RSSI < -70 dBm is a weak signal
+BLOAT_UTIL = 0.70            # NE 2.3: loaded = throughput >= 70-80 % of capacity
+BLOAT_IDLE_UTIL = 0.20       # NE 2.3: the idle baseline is taken while throughput < 20 %
+BLOAT_RISE_MS = 30.0         # NE 2.3: anchor RTT p50 - idle baseline >= 30 ms
+BLOAT_MIN_BPS = 1e6          # [inferred] a peak under 1 MB/s (8 Mbit/s) never loaded a broadband link
+BLOAT_MIN_ROWS = 4           # [inferred] loaded and idle rounds each needed to compare
+SCAN_BEFORE_S = 3.0          # NE 3.5, 7 row 1 (corrected window): a scan's cost shows in [-3 s, +1 s] ...
+SCAN_AFTER_S = 1.0
+SCAN_SPIKE_MS = 20.0         # [inferred] ... as a router ping >= 20 ms above (and >= 2x) its normal level
+SCAN_ALIGNED_MIN = 3         # NE 7 row 1: high when >= 3 aligned spikes
+ROAM_SPIKE_S = 3.0           # [inferred] a ping spike this close to an access-point change goes with it
+SERVER_GAPS_MIN = 3          # [inferred] repeated gaps, not one, point at the server or its route
+TALKER_MIN_BPS = 1e6         # [inferred] a non-game process moving >= 1 MB/s on average is a bandwidth user
+DOWNLOAD_NEAR_S = 5.0        # [inferred] pings this close to a logged download rate count as "during" it
+
+OK_STATES = ("ok", "partial")
+SOURCE_TEXT = {"frames": "frame timing (PresentMon)", "system": "the system sampler",
+               "gpu": "NVIDIA telemetry (NVML)", "network": "the ping and Wi-Fi monitor",
+               "net_flows": "the game's own network traffic (ETW)"}
+BALANCED_GUID = "381b4222-f694-41f0-9685-ff5bb260df2e"   # WT 7.1: GUID_TYPICAL_POWER_SAVINGS (Balanced)
+QUIET_PLAN_WORDS = ("silent", "quiet", "power saver", "battery saver", "eco", "whisper")   # [inferred]
+PERFORMANCE_PLAN_WORDS = ("performance", "turbo")        # [inferred] plans worth switching to
+LOW_POWER_MODES = ("battery_saver", "better_battery")    # LC 4.12: effective mode 0 / 1
+HARD_DISK = "HDD"            # DESIGN inventory game.media (WT 9.5)
+SOLID_STATE = "SSD"
+# Values that end up in a fix's params come from the capture file, so they are checked for shape first.
+DEVICE_RE = re.compile(r"\\\\\.\\DISPLAY\d{1,3}")                  # DESIGN refresh_rate: "\\.\DISPLAY1"
+GUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+EXE_MAX_CHARS = 1024         # [inferred] longer than any real install path, short enough to bound
+
+_num = fa._num
+
+
+# ------------------------------------------------------------------------------- results ---
+
+@dataclass
+class Cleared:
+    """A cause that was checked and ruled out, with what was measured."""
+
+    cause: str
+    text: str
+
+
+@dataclass
+class Unchecked:
+    """A cause that could not be checked, with why."""
+
+    cause: str
+    text: str
+
+
+@dataclass
+class Rule:
+    """DESIGN's rule record. `family` is the key family (LC 10); `alt` families may stand in for it, but only
+    to support a cause (LC 4.1: "probable" from utilisation alone). `needs` are sources that must all have been
+    measured ("a|b": either one); `gate` names the bound-verdict gate a Finding must pass."""
+
+    cause: str
+    family: str
+    needs: tuple[str, ...]
+    gate: str | None
+    fn: Callable[[Capture, dict], Any]
+    category: str = "setup"
+    alt: tuple[str, ...] = ()
+
+
+@dataclass
+class _Item:
+    family: str
+    weight: float
+    sign: int                 # +1 supports, -1 contradicts, 0 measured and neutral
+    text: str
+    value: float | None = None
+    unit: str = ""
+    threshold: float | None = None
+
+
+# ------------------------------------------------------------------------- the capture ---
+
+def _fin(v: Any) -> float | None:
+    n = _num(v)
+    return float(n) if n is not None else None
+
+
+def _text(v: Any, limit: int = 200) -> str | None:
+    """A string from the capture, cut to a sane length; None when it is not a non-empty string."""
+    if not isinstance(v, str) or not v.strip():
+        return None
+    s = "".join(ch for ch in v.strip() if ch.isprintable())
+    return s[:limit] or None
+
+
+def _dict(v: Any) -> dict:
+    return v if isinstance(v, dict) else {}
+
+
+class _Env:
+    """What every rule reads, derived once per capture."""
+
+    def __init__(self, cap: Capture, ctx: dict) -> None:
+        ctx = ctx if isinstance(ctx, dict) else {}
+        self.cap = cap
+        self.fr = _dict(ctx.get("frames"))
+        self.stats = _dict(ctx.get("stats"))
+        self.bound = _dict(ctx.get("bound"))
+        self.events = [e for e in ctx.get("events") or [] if isinstance(e, LagEvent)]
+        self.causes = _dict(ctx.get("event_causes"))
+        v = self.bound.get("verdict")
+        self.verdict = v if isinstance(v, str) and v else "unknown"
+        self.inv = _dict(cap.inventory)
+        self.target = _dict(cap.target)
+        self.sources = cap.sources if isinstance(cap.sources, dict) else {}
+        self.attributed = [e for e in self.events if e.kind in attribute.ATTRIBUTED_KINDS]
+        self.tick_spans = fa._merged_spans(self.events, fa.FRAME_EVENT_KINDS, pad=fa.TICK_PAD_S)
+        dur = _fin(cap.duration_s)
+        self.duration = dur if dur is not None and dur > 0 else None
+        self.refresh = fa.refresh_hz(cap)
+        self.display = fa.game_display(cap)
+        self.adapters = [a for a in self.inv.get("adapters") or [] if isinstance(a, dict) and a.get("software") is not True]
+        self.game_adapter = self.adapter(self.target.get("adapter_luid"))
+        self.power = _dict(self.inv.get("power"))
+        self.settings = _dict(self.inv.get("settings"))
+        self.game = _dict(self.inv.get("game"))
+
+    # sources ------------------------------------------------------------------------------
+    def _rows(self, name: str) -> int:
+        table = {"frames": self.fr, "system": self.cap.system, "gpu": self.cap.gpu, "network": self.cap.network}
+        if name == "frames":
+            n = _num(self.stats.get("frames"))
+            return int(n) if n is not None else 0
+        if name in table:
+            return len(fa._col(table[name], "t"))
+        return 1
+
+    def measured(self, name: str) -> bool:
+        s = self.sources.get(name)
+        return s is not None and getattr(s, "state", None) in OK_STATES and self._rows(name) > 0
+
+    def why(self, name: str) -> str:
+        s = self.sources.get(name)
+        if s is None:
+            return "not recorded in this capture"
+        if getattr(s, "state", None) in OK_STATES:
+            return "it ran but recorded nothing" if name != "frames" else "PresentMon ran but recorded no frames from the game"
+        return _text(getattr(s, "detail", None), 300) or str(getattr(s, "state", "not measured"))
+
+    def need(self, name: str) -> str:
+        return f"needs {SOURCE_TEXT.get(name, name)}, which was not measured: {self.why(name)}"
+
+    @property
+    def frames_measured(self) -> bool:
+        return self.measured("frames")
+
+    # columns ------------------------------------------------------------------------------
+    def sys_rows(self, column: str) -> list[tuple[float, float]]:
+        t, v = fa._col(self.cap.system, S.T), fa._col(self.cap.system, column)
+        out = [(float(a), float(b)) for a, b in ((_num(ti), _num(fa._at(v, i))) for i, ti in enumerate(t))
+               if a is not None and b is not None]
+        out.sort(key=lambda p: p[0])
+        return out
+
+    def sys(self, column: str) -> list[float]:
+        return [v for _, v in self.sys_rows(column)]
+
+    def steady(self, column: str) -> list[float]:
+        """1 s means of a 4 Hz column, leaving out windows that touch a stutter or FPS drop."""
+        return fa._window_means(self.cap, column, self.tick_spans)
+
+    def gpu(self, column: str) -> list[float]:
+        t, v = fa._col(self.cap.gpu, G.T), fa._col(self.cap.gpu, column)
+        return [float(x) for x in (_num(fa._at(v, i)) for i, ti in enumerate(t) if _num(ti) is not None)
+                if x is not None]
+
+    def gpu_text(self, column: str) -> list[str]:
+        return [x for x in fa._col(self.cap.gpu, column) if isinstance(x, str)]
+
+    def net(self, column: str) -> list[tuple[float, float | None]]:
+        """An RTT column: events.py's reading, where a value <= 0 is a lost or unsent probe (None)."""
+        return ev_mod._net_rows(self.cap, column)
+
+    def net_values(self, column: str) -> list[float]:
+        return [v for _, v in self.net(column) if v is not None]
+
+    def net_readings(self, column: str) -> list[float]:
+        """Every finite value of an N column whose readings can be zero or negative (RSSI in dBm, quality)."""
+        t, v = fa._col(self.cap.network, N.T), fa._col(self.cap.network, column)
+        return [float(x) for x in (_num(fa._at(v, i)) for i, ti in enumerate(t) if _num(ti) is not None)
+                if x is not None]
+
+    # inventory ----------------------------------------------------------------------------
+    def adapter(self, luid: Any) -> dict | None:
+        if not isinstance(luid, str):
+            return None
+        return next((a for a in self.adapters if isinstance(a.get("luid"), str) and a["luid"].lower() == luid.lower()), None)
+
+    @property
+    def avg_fps(self) -> float | None:
+        return _fin(self.stats.get("avg_fps"))
+
+    def flows(self) -> dict:
+        return _dict(self.cap.net_flows)
+
+    def on_wifi(self) -> bool | None:
+        kind = _dict(self.inv.get("network")).get("kind")
+        if kind == "wifi":
+            return True
+        if kind in ("ethernet", "other"):
+            return False
+        if self.net_readings(N.WIFI_RSSI_DBM) or self.net_readings(N.WIFI_SIGNAL_PCT):
+            return True
+        return None
+
+
+def _env(cap: Capture, ctx: dict) -> _Env:
+    """The derived view, cached in ctx so the rules of one run_rules() call share it."""
+    if isinstance(ctx, dict):
+        env = ctx.get("_env")
+        if isinstance(env, _Env) and env.cap is cap:
+            return env
+        env = _Env(cap, ctx)
+        ctx["_env"] = env
+        return env
+    return _Env(cap, {})
+
+
+def _is_integrated(a: dict | None) -> bool:
+    return isinstance(a, dict) and (a.get("integrated") is True or a.get("hybrid") == "integrated")
+
+
+def _is_discrete(a: dict | None) -> bool:
+    return isinstance(a, dict) and a.get("software") is not True and (a.get("integrated") is False
+                                                                      or a.get("hybrid") == "discrete")
+
+
+def _name(a: dict | None, fallback: str = "a GPU") -> str:
+    return _text(a.get("name"), 80) if isinstance(a, dict) and _text(a.get("name"), 80) else fallback
+
+
+def _exe_path(v: Any) -> str | None:
+    """The game's exe as a fix may use it: an absolute Windows path to an .exe, printable, no '..' parts."""
+    if not isinstance(v, str) or not v or len(v) > EXE_MAX_CHARS or not v.isprintable():
+        return None
+    if not ntpath.isabs(v) or not v.lower().endswith(".exe") or ".." in re.split(r"[\\/]", v):
+        return None
+    return v
+
+
+def _union_s(spans: Iterable[tuple[float, float]]) -> float:
+    total, end = 0.0, -math.inf
+    for a, b in sorted(spans):
+        if b <= end:
+            continue
+        total += b - max(a, end)
+        end = b
+    return total
+
+
+# --------------------------------------------------------------------------------- scoring ---
+
+class _Case:
+    """One rule's evidence for one capture, and LC 5's verdict on it."""
+
+    def __init__(self, cap: Capture, ctx: dict, cause: str) -> None:
+        self.env = _env(cap, ctx)
+        self.cause = cause
+        self.rule = RULE_BY_CAUSE[cause]
+        self.items: list[_Item] = []
+        self.missing: dict[str, tuple[float, str]] = {}
+
+    def support(self, family: str, weight: float, text: str, value: float | None = None, unit: str = "",
+                threshold: float | None = None) -> None:
+        self.items.append(_Item(family, weight, +1, text, value, unit, threshold))
+
+    def against(self, family: str, weight: float, text: str, value: float | None = None, unit: str = "",
+                threshold: float | None = None) -> None:
+        self.items.append(_Item(family, weight, -1, text, value, unit, threshold))
+
+    def neutral(self, family: str, text: str, value: float | None = None, unit: str = "",
+                threshold: float | None = None, weight: float = W_STEADY) -> None:
+        self.items.append(_Item(family, weight, 0, text, value, unit, threshold))
+
+    def lack(self, family: str, weight: float, why: str) -> None:
+        """A family this rule would have used but that was not measured (it lowers coverage)."""
+        if family not in self.missing:
+            self.missing[family] = (weight, why)
+
+    def score(self) -> tuple[float, float, dict[str, list[_Item]]]:
+        """(S, coverage C, items by family): per family only the strongest supporting and the strongest
+        contradicting item count, static support is capped at +2 (LC 5.1, 5.3)."""
+        fams: dict[str, list[_Item]] = {}
+        for it in self.items:
+            fams.setdefault(it.family, []).append(it)
+        s = 0.0
+        for fam, its in fams.items():
+            sup = max((i.weight for i in its if i.sign > 0), default=0.0)
+            con = max((i.weight for i in its if i.sign < 0), default=0.0)
+            if fam == "static":
+                sup = min(sup, STATIC_CAP)
+            s += sup - con
+        got = sum(max(i.weight for i in its) for its in fams.values())
+        lost = sum(w for fam, (w, _) in self.missing.items() if fam not in fams)
+        coverage = got / (got + lost) if got + lost > 0 else 0.0
+        return s, coverage, fams
+
+    def conclude(self, title: str = "", summary: str = "", fixes: Iterable[FixSuggestion] = (),
+                 event_ids: Iterable[int] = ()) -> Any:
+        s, coverage, fams = self.score()
+        rule = self.rule
+        key_measured = rule.family in fams or any(i.sign > 0 for f in rule.alt for i in fams.get(f, []))
+        if not key_measured:
+            why = next((self.missing[f][1] for f in (rule.family,) + rule.alt if f in self.missing), None)
+            return Unchecked(self.cause, why or "not measured")
+        if coverage < MIN_COVERAGE:
+            gaps = "; ".join(w for f, (_, w) in self.missing.items() if f not in fams)
+            return Unchecked(self.cause, f"not enough data: {gaps}")
+        key_supports = any(i.sign > 0 for i in fams.get(rule.family, []))
+        if s >= LIKELY_S and key_supports and coverage >= LIKELY_COVERAGE:
+            conf = "high"
+        elif s >= POSSIBLE_S:
+            conf = "medium"
+        elif s > 0:
+            conf = "low"
+        elif s <= CLEARED_S and coverage >= CLEARED_COVERAGE:
+            against = sorted((i for i in self.items if i.sign < 0), key=lambda i: -i.weight)
+            return Cleared(self.cause, _sentence("; ".join(i.text for i in against[:2])))
+        else:
+            return None                      # measured, but no evidence either way: silence
+        ordered = (sorted((i for i in self.items if i.sign > 0), key=lambda i: -i.weight)
+                   + [i for i in self.items if i.sign == 0]
+                   + sorted((i for i in self.items if i.sign < 0), key=lambda i: -i.weight))
+        evidence = [Evidence(_sentence(i.text), i.value, i.unit, i.threshold) for i in ordered]
+        fixes = list(fixes)
+        ids = sorted({int(i) for i in event_ids})
+        attributed = {e.id for e in self.env.attributed}
+        share = len(attributed & set(ids)) / len(attributed) if attributed else 0.0
+        return Finding(cause=self.cause, title=title or labels.cause_text(self.cause).capitalize(),
+                       category=rule.category, confidence=conf,
+                       score=_score(conf, s, share, any(f.fix_id for f in fixes)),
+                       summary=summary, evidence=evidence, fixes=fixes, event_ids=ids)
+
+
+TIERS = {"low": 0, "medium": 1, "high": 2}
+
+
+def _score(conf: str, s: float, share: float, has_fix: bool) -> float:
+    """0..1 in DESIGN's ranking order: label, then S, then explained share of events, then an auto-fix.
+    Each key outweighs everything after it: S moves in steps of 0.5 (20 points), more than a whole share
+    (10 points); one event in 1,000 of share (0.01 points) outweighs the auto-fix bonus (0.005)."""
+    tier = TIERS.get(conf, 0)
+    raw = (tier * 1000.0 + min(max(s, 0.0), 20.0) * 40.0 + min(max(share, 0.0), 1.0) * 10.0
+           + (0.005 if has_fix else 0.0))
+    return round(raw / (2 * 1000.0 + 20.0 * 40.0 + 10.0 + 0.005), 9)
+
+
+def _sentence(text: str) -> str:
+    """Capitalised, with a full stop; a first word that is a file or process name ("python.exe") keeps its case."""
+    text = text.strip()
+    if not text:
+        return text
+    first = text.split(" ", 1)[0]
+    if "." not in first.rstrip(".,;:") and "\\" not in first:
+        text = text[0].upper() + text[1:]
+    return text if text.endswith((".", "!", "?")) else text + "."
+
+
+def _advice(title: str, detail: str = "") -> FixSuggestion:
+    return FixSuggestion(title=title, detail=detail)
+
+
+# ------------------------------------------------------------------------------- run_rules ---
+
+def run_rules(cap: Capture, ctx: dict) -> tuple[list[Finding], dict[str, str], dict[str, str]]:
+    """Every rule over one capture: (findings best first, cleared {cause: what was measured},
+    unchecked {cause: why it could not be checked}). ctx is DESIGN's {"frames", "stats", "bound", "events",
+    "event_causes"}."""
+    env = _env(cap, ctx)
+    findings: list[Finding] = []
+    cleared: dict[str, str] = {}
+    unchecked: dict[str, str] = {}
+    for rule in RULES:
+        res = run_rule(rule, cap, ctx, env)
+        if isinstance(res, Finding):
+            findings.append(res)
+        elif isinstance(res, Cleared):
+            cleared[rule.cause] = res.text
+        elif isinstance(res, Unchecked):
+            unchecked[rule.cause] = res.text
+    findings.sort(key=lambda f: -f.score)
+    return findings, cleared, unchecked
+
+
+def run_rule(rule: Rule, cap: Capture, ctx: dict, env: _Env | None = None) -> Any:
+    """One rule: its sources first (not measured -> Unchecked), then the rule, then its gate."""
+    env = env or _env(cap, ctx)
+    for need in rule.needs:
+        names = need.split("|")
+        if not any(env.measured(n) for n in names):
+            return Unchecked(rule.cause, env.need(names[0]))
+    try:
+        res = rule.fn(cap, ctx)
+    except Exception as exc:  # noqa: BLE001 - one broken rule must not hide the rest; it says it failed
+        return Unchecked(rule.cause, f"the check failed ({type(exc).__name__}: {exc})")
+    if isinstance(res, Finding) and rule.gate and env.verdict not in GATES[rule.gate]:
+        return _gated(rule, env)
+    return res
+
+
+def _gated(rule: Rule, env: _Env) -> Any:
+    """LC 5.1: the bound verdict is a gate, not evidence."""
+    v = env.verdict
+    side = "the CPU" if rule.gate == "cpu" else "the GPU"
+    if v == "unknown":
+        notes = [n for n in env.bound.get("notes") or [] if isinstance(n, str)]
+        return Unchecked(rule.cause, f"whether {side} limits the frame rate could not be judged"
+                         + (f" ({notes[0]})" if notes else ""))
+    return Cleared(rule.cause, _sentence(f"{side} is not what limits the frame rate: "
+                                         f"it is limited by {labels.BOUND.get(v, v)}"))
+
+
+# ----------------------------------------------------------------------------- GPU and CPU ---
+
+def _wrong_gpu(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "wrong_gpu")
+    e = c.env
+    if not e.adapters:
+        c.lack("gpu_engine", W_DIRECT, "the list of graphics adapters was not read")
+        return c.conclude()
+    discrete = [a for a in e.adapters if _is_discrete(a)]
+    if not discrete:
+        c.against("gpu_engine", W_DIRECT, f"this PC has no discrete GPU ({', '.join(_name(a) for a in e.adapters)}), "
+                                          "so the game cannot be on the wrong one")
+        return c.conclude()
+    game = e.game_adapter
+    if game is None:
+        why = e.need("system") if not e.measured("system") else "the game's 3D engine was never seen busy"
+        c.lack("gpu_engine", W_DIRECT, f"which GPU the game rendered on is unknown: {why}")
+        return c.conclude()
+    if _is_discrete(game):
+        c.against("gpu_engine", W_DIRECT, f"the game rendered on {_name(game)}, the discrete GPU")
+        return c.conclude()
+    if not _is_integrated(game):
+        c.lack("gpu_engine", W_DIRECT, f"whether {_name(game)} is the integrated or the discrete GPU is unknown")
+        return c.conclude()
+    best = max(discrete, key=lambda a: _fin(a.get("vram_mb")) or 0.0)
+    c.support("gpu_engine", W_DIRECT, f"the game's 3D work ran on {_name(game)} (integrated) although "
+                                      f"{_name(best)} (discrete) is in this PC")
+    v, fps = e.verdict, e.avg_fps
+    if not e.frames_measured:
+        c.lack("frame_timing", W_STEADY, e.need("frames"))
+    elif v == "gpu":
+        c.support("frame_timing", W_STEADY, "and the integrated GPU is what limits the frame rate"
+                  + (f" ({fps:.0f} FPS)" if fps else ""))
+    elif v == "mixed":
+        c.neutral("frame_timing", "the integrated GPU shares the limit with the CPU")
+    elif v == "unknown":
+        c.lack("frame_timing", W_STEADY, "whether the GPU limits the frame rate could not be judged")
+    else:
+        c.against("frame_timing", W_STEADY, f"right now the frame rate is limited by {labels.BOUND.get(v, v)}, "
+                                            "not by the GPU, so the faster GPU would mostly add headroom")
+    fixes = [_gpu_preference_fix(e, best)]
+    limited = v == "gpu"
+    summary = (f"Windows ran the game on {_name(game)} instead of {_name(best)}. "
+               + ("That integrated GPU is what holds the frame rate down." if limited else
+                  "It is not the limit at the moment, but the discrete GPU would give the game far more headroom."))
+    return c.conclude(f"The game ran on the integrated GPU, not on {_name(best)}", summary, fixes)
+
+
+def _gpu_preference_fix(e: _Env, best: dict) -> FixSuggestion:
+    exe = _exe_path(e.target.get("exe")) or _exe_path(e.game.get("exe"))
+    pref = _num(e.game.get("gpu_preference"))
+    if pref == 2:
+        return _advice(f"Pick {_name(best)} in the game's own settings or in the GPU maker's control panel",
+                       "Windows is already set to High performance for this game, yet it still rendered on the "
+                       "integrated GPU: OpenGL and Vulkan games may ignore the Windows setting (WT 8).")
+    if exe:
+        return FixSuggestion(
+            title=f"Run the game on {_name(best)} (Windows graphics preference: High performance)",
+            detail="Takes effect the next time the game starts. The registry format behind this setting is "
+                   "community-documented, not Microsoft-documented (WT 8); OpenGL and Vulkan games may ignore it.",
+            fix_id="gpu_preference", params={"exe": exe, "preference": 2}, needs_restart="game")
+    return _advice("Set the game to High performance in Settings > System > Display > Graphics",
+                   "lag-doctor could not tell which program file the game runs from, so it cannot set this itself.")
+
+
+def _hybrid_copy(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "hybrid_copy")
+    e = c.env
+    game = e.game_adapter
+    if game is None:
+        c.lack("static", W_DIRECT, "which GPU the game rendered on is unknown"
+               + (f": {e.need('system')}" if not e.measured("system") else ""))
+        return c.conclude()
+    disp = e.display
+    shown_on = e.adapter(disp.get("adapter_luid")) if disp else None
+    if shown_on is None:
+        c.lack("static", W_DIRECT, "which GPU drives the game's display is unknown")
+        return c.conclude()
+    screen = _text(disp.get("name"), 80) or _text(disp.get("device"), 40) or "the game's display"
+    if shown_on is game:
+        c.against("static", W_DIRECT, f"the game renders on {_name(game)}, which also drives {screen}: "
+                                      "no copy between GPUs")
+        return c.conclude()
+    c.support("static", W_DIRECT, f"the game renders on {_name(game)} but {screen} is driven by {_name(shown_on)}, "
+                                  "so every frame is copied across")
+    hybrid = [_num(x) for x in e.fr.get(F.HYBRID) or []]
+    if any(x == 1 for x in hybrid):
+        c.support("frame_timing", W_DIRECT, "PresentMon marked the game's frames as cross-adapter presents "
+                                            "(HybridPresent = 1)")
+    elif e.frames_measured:
+        c.neutral("frame_timing", "PresentMon did not mark the frames as cross-adapter, but it only can when the "
+                                  "game creates its swap chain during the capture (PM 9)")
+    oem = [t for t in _dict(e.inv.get("oem")).get("tools") or [] if isinstance(t, str)]
+    armoury = any("armoury" in t.lower() for t in oem)
+    fixes = [_advice("Let the discrete GPU drive the screen directly",
+                     "Use the laptop's MUX / dGPU-only mode" + (" (Armoury Crate GPU mode \"Ultimate\")" if armoury
+                                                                else "") + "; switching usually needs a reboot."),
+             _advice("Or play on a monitor wired to the discrete GPU", "Its frames then need no copy.")]
+    return c.conclude(f"Frames are copied from {_name(game)} to {_name(shown_on)}, which drives the screen",
+                      "The game renders on one GPU while the screen hangs off the other, so every frame is copied "
+                      "across before it is shown. That costs frame rate and adds delay.", fixes)
+
+
+def _fps_reaches_display(e: _Env) -> bool:
+    fps, hz = e.avg_fps, e.refresh
+    return fps is not None and hz is not None and fps >= LIMIT_FPS_FRAC * hz
+
+
+def _gpu_limit(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "gpu_limit")
+    e = c.env
+    b, v = e.bound, e.verdict
+    r = _fin(b.get("r"))
+    if e.frames_measured:
+        if v in ("gpu", "mixed") and _fps_reaches_display(e):
+            return Cleared("gpu_limit", _sentence(f"the GPU sets the pace, but at {e.avg_fps:.0f} FPS the game "
+                                                  f"already reaches the {e.refresh:.0f} Hz display"))
+        g, ft = _fin(b.get("gpu_ms")), _fin(b.get("ft_ms"))
+        detail = f" (r = {r:.2f})" if r is not None else ""
+        if v == "gpu" and r is not None:
+            c.support("frame_timing", W_STEADY, f"the GPU was busy {g:.1f} ms of each {ft:.1f} ms frame{detail}; "
+                                                f"GPU-bound at {fa.R_GPU:.2f} or more", r, "", fa.R_GPU)
+        elif v == "gpu":
+            c.support("frame_timing", W_STEADY, "frame timing shows the GPU as the limit")
+        elif v == "mixed":
+            c.support("frame_timing", W_STATIC, f"borderline: the GPU was busy for {100 * (r or 0):.0f}% of each "
+                                                f"frame (between {100 * fa.R_CPU:.0f}% and {100 * fa.R_GPU:.0f}%)",
+                      r, "", fa.R_GPU)
+        elif v == "unknown":
+            notes = [n for n in b.get("notes") or [] if isinstance(n, str)]
+            c.lack("frame_timing", W_STEADY, "the frame-rate limit could not be judged" + (f": {notes[0]}" if notes else ""))
+        else:
+            c.against("frame_timing", W_STEADY, f"the frame rate is limited by {labels.BOUND.get(v, v)}{detail}")
+    else:
+        c.lack("frame_timing", W_STEADY, e.need("frames"))
+    engine = e.steady(S.GAME_GPU_PCT)
+    if engine:
+        m = st.median(engine)
+        probable = not e.frames_measured
+        need = ENGINE_PROBABLE_PCT if probable else ENGINE_BUSY_PCT
+        if m >= need:
+            c.support("gpu_engine", W_STEADY, f"the game kept its GPU's 3D engine {m:.0f}% busy ({need:.0f}% or more)"
+                      + (": probably GPU-limited" if probable else ""), m, "%", need)
+        elif m < ENGINE_IDLE_PCT:
+            c.against("gpu_engine", W_STEADY, f"the game's 3D engine was only {m:.0f}% busy", m, "%", ENGINE_IDLE_PCT)
+        else:
+            c.neutral("gpu_engine", f"the game's 3D engine was {m:.0f}% busy", m, "%", ENGINE_BUSY_PCT)
+    elif not e.measured("system"):
+        c.lack("gpu_engine", W_STEADY, e.need("system"))
+    util = e.gpu(G.UTIL_PCT) if e.measured("gpu") else []
+    if util:
+        m = st.median(util)
+        if m >= NV_UTIL_PCT:
+            c.support("gpu_telemetry", W_STEADY, f"NVIDIA reported the GPU {m:.0f}% busy ({NV_UTIL_PCT:.0f}% or more)",
+                      m, "%", NV_UTIL_PCT)
+        throttle = e.gpu(G.THROTTLE_PCT)
+        if throttle and st.mean(throttle) >= NV_THROTTLE_PCT:
+            c.neutral("gpu_telemetry", f"the GPU was also held down by heat or power {st.mean(throttle):.0f}% of the "
+                                       "time (see GPU throttling)")
+    fps = e.avg_fps
+    fixes = [_advice("Lower the render resolution, or use an upscaler (DLSS, FSR or XeSS)"),
+             _advice("Turn down the heaviest graphics settings", "Ray tracing, shadows and volumetric effects first."),
+             _advice("Cap the frame rate a few FPS below the refresh rate if the screen supports VRR",
+                     "An even frame rate feels smoother than one that swings at the GPU's limit.")]
+    title = "The graphics card (GPU) is at its limit" + (f" at {fps:.0f} FPS" if fps else "")
+    return c.conclude(title, "The GPU is busy for practically the whole of every frame, so it decides the frame "
+                             "rate. Lighter graphics settings are the way to more FPS.", fixes)
+
+
+def _cpu_limit(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "cpu_limit")
+    e = c.env
+    b, v = e.bound, e.verdict
+    if v in ("cpu_main", "cpu_all", "mixed", "unknown") and _fps_reaches_display(e):
+        return Cleared("cpu_limit", _sentence(f"at {e.avg_fps:.0f} FPS the game already reaches the "
+                                              f"{e.refresh:.0f} Hz display"))
+    r, busiest = _fin(b.get("r")), _fin(b.get("busiest_thread"))
+    if v in ("cpu_main", "cpu_all") and r is not None:
+        c.support("frame_timing", W_STEADY, f"the GPU was busy only {100 * r:.0f}% of each frame "
+                                            f"(r = {r:.2f}, {fa.R_CPU:.2f} or less): it waits on the CPU",
+                  r, "", fa.R_CPU)
+    elif v == "mixed":
+        c.support("frame_timing", W_STATIC, f"borderline: the GPU was busy {100 * (r or 0):.0f}% of each frame")
+    elif v == "unknown":
+        notes = [n for n in b.get("notes") or [] if isinstance(n, str)]
+        c.lack("frame_timing", W_STEADY, "the frame-rate limit could not be judged" + (f": {notes[0]}" if notes else ""))
+    else:
+        c.against("frame_timing", W_STEADY, f"the frame rate is limited by {labels.BOUND.get(v, v)}")
+    if busiest is not None:
+        if busiest >= fa.THREAD_BOUND:
+            c.support("cpu_threads", W_STEADY, f"the game's busiest thread ran {100 * busiest:.0f}% of a CPU "
+                                               f"({100 * fa.THREAD_BOUND:.0f}% or more, 1 s windows)",
+                      100 * busiest, "%", 100 * fa.THREAD_BOUND)
+        elif v == "cpu_all":
+            c.support("cpu_threads", W_STEADY, "the game kept every CPU core busy")
+        else:
+            c.against("cpu_threads", W_STEADY, f"the game's busiest thread ran only {100 * busiest:.0f}% of a CPU",
+                      100 * busiest, "%", 100 * fa.THREAD_BOUND)
+    else:
+        c.lack("cpu_threads", W_STEADY, "the game's thread CPU use was not measured")
+    others = _others_steady(e)
+    if others is not None and others >= attribute.OTHERS_ONE_PCT:
+        c.neutral("background", f"other programs used {others:.0f}% of a CPU meanwhile (100% = one logical CPU)")
+    fps = e.avg_fps
+    one = v != "cpu_all"
+    fixes = [_advice("Turn down CPU-heavy settings", "Crowd density, view distance, simulation detail and physics."),
+             _advice("Close CPU-heavy programs while playing"),
+             _advice("Frame generation can smooth the picture", "Only if the base frame rate is already acceptable: "
+                                                                "the delay stays tied to the base rate.")]
+    title = ("One game thread maxes out the CPU" if one else "The CPU is maxed out on every core") + \
+            (f" at {fps:.0f} FPS" if fps else "")
+    return c.conclude(title, "The GPU sits idle for most of each frame while the game's CPU work finishes, so the "
+                             "CPU decides the frame rate.", fixes)
+
+
+def _others_steady(e: _Env) -> float | None:
+    """Median CPU of the listed non-game processes per tick (100 = one logical CPU)."""
+    sums = []
+    for row in e.cap.others if isinstance(e.cap.others, list) else []:
+        if isinstance(row, (list, tuple)) and len(row) == 2 and isinstance(row[1], (list, tuple)):
+            sums.append(math.fsum(float(x) for x in (_num(p[2]) for p in row[1]
+                                                     if isinstance(p, (list, tuple)) and len(p) >= 3)
+                                  if x is not None and x >= 0))
+    return st.median(sums) if sums else None
+
+
+def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "gpu_throttle")
+    e = c.env
+    thr = e.gpu(G.THROTTLE_PCT)
+    if thr:
+        share = st.mean(thr)
+        reasons = {r.strip().lower() for x in e.gpu_text(G.REASONS) for r in x.split(",") if r.strip()}
+        power_only = bool(reasons) and all("power" in r and "brake" not in r for r in reasons)
+        if share >= NV_THROTTLE_PCT and power_only:
+            c.neutral("gpu_telemetry", f"the GPU sat at its power limit {share:.0f}% of the time, which is normal "
+                                       "for a GPU-bound laptop (LC 4.1)", share, "%", NV_THROTTLE_PCT)
+        elif share >= NV_THROTTLE_PCT:
+            c.support("gpu_telemetry", W_DIRECT, f"the NVIDIA GPU was held down by heat or power {share:.0f}% of the "
+                                                 f"time ({NV_THROTTLE_PCT:.0f}% or more)", share, "%", NV_THROTTLE_PCT)
+        else:
+            c.against("gpu_telemetry", W_STEADY, f"the GPU was held down by heat or power only {share:.0f}% of the "
+                                                 f"time (under {NV_THROTTLE_PCT:.0f}%)", share, "%", NV_THROTTLE_PCT)
+    else:
+        c.lack("gpu_telemetry", W_DIRECT, "NVML reported no throttle readings")
+    temps = e.gpu(G.TEMP_C)
+    target = _fin(_dict(e.inv.get("nvidia")).get("temp_target_c"))
+    if temps and target:
+        hot = st.percentile(temps, 95.0)
+        if hot >= target:
+            c.support("gpu_telemetry", W_STEADY, f"the GPU reached {hot:.0f} °C, at or above its {target:.0f} °C "
+                                                 "target temperature", hot, "°C", target)
+    _event_link(c, "gpu_throttle", "gpu_telemetry", "the GPU slowing down")
+    _quiet_power_hint(c)
+    fixes = [_advice("Give the laptop more air", "Raise its back, keep the vents clear and clean."),
+             _advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
+             _advice("Cap the frame rate a little lower", "A capped GPU runs cooler and holds its clock.")]
+    return c.conclude("The GPU slows down from heat or power limits",
+                      "The NVIDIA driver held the GPU's clock down for much of the capture, which lowers the frame "
+                      "rate while the GPU is the limit.", fixes)
+
+
+def _quiet_power_hint(c: _Case) -> None:
+    """LC 4.2, 4.5, 4.12: a quiet power plan, battery or power saving make throttling more likely (static, +1)."""
+    for why in _power_problems(c.env):
+        c.support("static", W_STATIC, why)
+        return
+
+
+def _cpu_throttle(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "cpu_throttle")
+    e = c.env
+    limit = e.sys(S.CPU_PERF_LIMIT_PCT)
+    thermal = e.sys(S.THERMAL_LIMIT_PCT)
+    perf_rows = e.sys_rows(S.CPU_PERF_PCT)
+    held = False
+    if limit:
+        share = sum(1 for x in limit if x < 100.0) / len(limit)
+        if share >= CPU_LIMIT_SHARE:
+            held = True
+            c.support("cpu_limits", W_STEADY, f"the CPU was held below full speed (% Performance Limit under 100) in "
+                                              f"{100 * share:.0f}% of samples ({100 * CPU_LIMIT_SHARE:.0f}% or more)",
+                      100 * share, "%", 100 * CPU_LIMIT_SHARE)
+    if thermal and min(thermal) < 100.0:
+        held = True
+        c.support("cpu_limits", W_STEADY, f"the CPU's thermal zone limited it to {min(thermal):.0f}% (passive limit)",
+                  min(thermal), "%", 100.0)
+    if len(perf_rows) >= 2 * PERF_MIN_SAMPLES:
+        t0 = perf_rows[0][0]
+        split = t0 + min(PERF_BASE_S, (perf_rows[-1][0] - t0) / 3.0)
+        first = [v for t, v in perf_rows if t <= split]
+        rest = [v for t, v in perf_rows if t > split]
+        if len(first) >= PERF_MIN_SAMPLES and len(rest) >= PERF_MIN_SAMPLES:
+            a, b = st.median(first), st.median(rest)
+            if a > 0 and b <= (1.0 - CPU_PERF_DROP) * a:
+                held = True
+                c.support("cpu_limits", W_STEADY, f"the CPU's speed fell from {a:.0f}% to {b:.0f}% of its base clock "
+                                                  f"({100 * CPU_PERF_DROP:.0f}% or more down)", b, "%", (1 - CPU_PERF_DROP) * a)
+    if not (limit or thermal or perf_rows):
+        c.lack("cpu_limits", W_STEADY, "no CPU speed or limit counters were read")
+    elif not held:
+        c.against("cpu_limits", W_STEADY, "the CPU ran at full speed: no power or thermal limit and no speed drop")
+    busiest = _fin(e.bound.get("busiest_thread"))
+    if busiest is not None and busiest < CPU_BUSY_FOR_THROTTLE:
+        c.against("cpu_threads", W_STEADY, f"the game's busiest thread used only {100 * busiest:.0f}% of a CPU, so CPU "
+                                           "speed is not what holds it back", 100 * busiest, "%", 100 * CPU_BUSY_FOR_THROTTLE)
+    _event_link(c, "cpu_throttle", "cpu_limits", "the CPU slowing down")
+    _quiet_power_hint(c)
+    fixes = [_advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
+             _advice("Give the laptop more air", "Raise its back, keep the vents clear and clean."),
+             _advice("Cap the frame rate a little lower", "Less CPU work per second means less heat.")]
+    return c.conclude("The CPU slows down from heat or power limits",
+                      "Windows reported the processor running below its full speed while the game needed it.", fixes)
+
+
+def _vram_overflow(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "vram_overflow")
+    e = c.env
+    game = e.game_adapter
+    if _is_integrated(game):
+        return Cleared("vram_overflow", _sentence(f"the game runs on {_name(game)}, an integrated GPU that uses system "
+                                                  "memory by design, so its video memory cannot overflow"))
+    size = _fin(game.get("vram_mb")) if game else None
+    used = e.sys(S.VRAM_USED_MB)
+    shared_rows = e.sys_rows(S.GAME_SHARED_MB)
+    full = False
+    if not size or size <= 0:
+        c.lack("gpu_engine", W_STEADY, "the video memory size of the game's GPU is unknown")
+    elif used:
+        top = st.percentile(used, 95.0)
+        full = top >= VRAM_FULL_FRAC * size
+        if full:
+            c.support("gpu_engine", W_STEADY, f"video memory was {top / 1024:.1f} of {size / 1024:.1f} GB full "
+                                              f"({100 * top / size:.0f}%, {100 * VRAM_FULL_FRAC:.0f}% or more)",
+                      100 * top / size, "%", 100 * VRAM_FULL_FRAC)
+        else:
+            c.against("gpu_engine", W_STEADY, f"video memory was at most {100 * top / size:.0f}% full",
+                      100 * top / size, "%", 100 * VRAM_FULL_FRAC)
+    else:
+        c.lack("gpu_engine", W_STEADY, "the GPU memory counters were not read")
+    if shared_rows and full:     # LC 4.3: shared use only means a spill while dedicated memory is pinned
+        vals = [v for _, v in shared_rows]
+        peak = max(vals)
+        k = max(1, len(vals) // 10)            # the median of the first and of the last tenth, a step apart in time
+        head, tail = shared_rows[:k], shared_rows[-k:]
+        minutes = (st.median([t for t, _ in tail]) - st.median([t for t, _ in head])) / 60.0
+        rise = ((st.median([v for _, v in tail]) - st.median([v for _, v in head])) / minutes
+                if minutes > 0 else 0.0)
+        if peak > SHARED_SPILL_MB:
+            c.support("gpu_engine", W_STEADY, f"the game spilled {peak:.0f} MB into shared system memory "
+                                              f"(over {SHARED_SPILL_MB:.0f} MB)", peak, "MB", SHARED_SPILL_MB)
+        elif rise >= SHARED_RISE_MB_PER_MIN:
+            c.support("gpu_engine", W_STEADY, f"the game's shared GPU memory grew {rise:.0f} MB a minute "
+                                              f"({SHARED_RISE_MB_PER_MIN:.0f} or more)", rise, "MB/min",
+                      SHARED_RISE_MB_PER_MIN)
+    _event_link(c, "vram_overflow", "gpu_engine", "video memory spilling over")
+    fixes = [_advice("Lower texture quality and the render resolution"),
+             _advice("Turn off ray tracing or frame generation", "Both take extra video memory."),
+             _advice("Close other GPU-heavy programs while playing")]
+    return c.conclude("Video memory is full", "The game needs more video memory than the GPU has, so data spills "
+                                              "into slower system memory and frames stall while it moves.", fixes)
+
+
+def _ram_pressure(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "ram_pressure")
+    e = c.env
+    ram_gb = _fin(e.inv.get("ram_gb"))
+    avail = e.sys(S.RAM_AVAIL_MB)
+    if avail:
+        low = min(avail)
+        total = ram_gb * 1024.0 if ram_gb and ram_gb > 0 else None
+        if total and low < RAM_CRIT_FRAC * total or low < RAM_CRIT_MB:
+            c.support("memory", W_STEADY, f"free RAM fell to {low:.0f} MB" + (f" of {total / 1024:.1f} GB" if total else "")
+                      + f" (critical: under {100 * RAM_CRIT_FRAC:.0f}% or {RAM_CRIT_MB:.0f} MB)", low, "MB",
+                      RAM_CRIT_FRAC * total if total else RAM_CRIT_MB)
+        elif total and low < RAM_WARN_FRAC * total:
+            c.support("memory", W_STEADY, f"free RAM fell to {low:.0f} MB of {total / 1024:.1f} GB "
+                                          f"(under {100 * RAM_WARN_FRAC:.0f}%)", low, "MB", RAM_WARN_FRAC * total)
+        elif total:
+            c.against("memory", W_STEADY, f"at least {low / 1024:.1f} GB of {total / 1024:.1f} GB RAM stayed free "
+                                          f"({100 * low / total:.0f}%)", low, "MB", RAM_WARN_FRAC * total)
+        else:
+            c.neutral("memory", f"at least {low:.0f} MB of RAM stayed free (the RAM size is unknown)")
+    faults = e.sys(S.HARD_FAULTS_PS)
+    if faults:
+        hi = st.percentile(faults, 95.0)
+        if hi > FAULTS_WARN_PS:
+            c.support("memory", W_STEADY, f"Windows read {hi:,.0f} pages a second from disk to satisfy memory "
+                                          f"(over {FAULTS_WARN_PS:,.0f})", hi, "/s", FAULTS_WARN_PS)
+    commit = e.sys(S.COMMIT_PCT)
+    if commit:
+        top = max(commit)
+        if top > COMMIT_CRIT_PCT:
+            c.support("memory", W_STEADY, f"committed memory reached {top:.0f}% of the limit (critical over "
+                                          f"{COMMIT_CRIT_PCT:.0f}%)", top, "%", COMMIT_CRIT_PCT)
+        elif top > COMMIT_WARN_PCT:
+            c.support("memory", W_STATIC, f"committed memory reached {top:.0f}% of the limit (over "
+                                          f"{COMMIT_WARN_PCT:.0f}%)", top, "%", COMMIT_WARN_PCT)
+    if not (avail or faults or commit):
+        c.lack("memory", W_STEADY, "no memory counters were read")
+    _event_link(c, "memory_paging", "memory", "Windows paging memory to disk")
+    fixes = [_advice("Close memory-heavy programs while playing", "Browsers with many tabs are the usual ones."),
+             _advice("Keep the page file system-managed"), _advice("Add RAM if this happens often")]
+    return c.conclude("The PC is low on RAM", "Free memory ran short, so Windows moved memory to and from the disk "
+                                              "while the game ran, which stalls frames.", fixes)
+
+
+# ---------------------------------------------------------------------------------- setup ---
+
+def _power_problems(e: _Env) -> list[str]:
+    p = e.power
+    out = []
+    if p.get("on_battery") is True:
+        pct = _num(p.get("battery_pct"))
+        out.append("the laptop ran on battery" + (f" ({pct:.0f}%)" if pct is not None else ""))
+    if p.get("saver") is True:
+        out.append("battery saver is on")
+    mode = p.get("effective_mode")
+    if mode in LOW_POWER_MODES:
+        out.append(f"Windows' effective power mode is {str(mode).replace('_', ' ')}")
+    if p.get("slider") == "best_efficiency":
+        out.append("the power mode is set to Best power efficiency")
+    name = _text(p.get("scheme_name"), 80)
+    if name and any(w in name.lower() for w in QUIET_PLAN_WORDS):
+        out.append(f"the active power plan is \"{name}\", a quiet, power-saving plan")
+    return out
+
+
+def _better_scheme(e: _Env) -> tuple[str, str] | None:
+    """The plan to switch to: Balanced if this PC lists it (LC 4.12), else a listed performance plan."""
+    active = str(e.power.get("scheme_guid") or "").lower()
+    schemes = []
+    for s in e.power.get("schemes") or []:
+        if isinstance(s, (list, tuple)) and len(s) == 2 and isinstance(s[0], str) and isinstance(s[1], str):
+            guid = s[0].strip("{}").lower()
+            if GUID_RE.fullmatch(guid):
+                schemes.append((guid, _text(s[1], 80) or guid))
+    for guid, name in schemes:
+        if guid == BALANCED_GUID and guid != active:
+            return guid, name
+    for guid, name in schemes:
+        if guid != active and any(w in name.lower() for w in PERFORMANCE_PLAN_WORDS):
+            return guid, name
+    return None
+
+
+def _power_plan(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "power_plan")
+    e = c.env
+    p = e.power
+    known = [k for k in ("on_battery", "saver", "slider", "effective_mode", "scheme_name") if p.get(k) is not None]
+    if not known:
+        c.lack("static", W_DIRECT, "the power settings were not read")
+        return c.conclude()
+    problems = _power_problems(e)
+    if not problems:
+        name = _text(p.get("scheme_name"), 80)
+        parts = ["plugged in" if p.get("on_battery") is False else "power source unknown"]
+        if p.get("saver") is False:
+            parts.append("battery saver off")
+        if name:
+            parts.append(f"power plan \"{name}\"")
+        if isinstance(p.get("slider"), str):
+            parts.append(f"power mode {p['slider'].replace('_', ' ')}")
+        c.against("static", W_DIRECT, ", ".join(parts))
+        return c.conclude()
+    c.support("static", W_DIRECT, "; ".join(problems))
+    limit = e.sys(S.CPU_PERF_LIMIT_PCT)
+    if limit:
+        share = sum(1 for x in limit if x < 100.0) / len(limit)
+        if share >= CPU_LIMIT_SHARE:
+            c.support("cpu_limits", W_STEADY, f"and the CPU was held below full speed in {100 * share:.0f}% of samples",
+                      100 * share, "%", 100 * CPU_LIMIT_SHARE)
+    thr = e.gpu(G.THROTTLE_PCT)
+    if thr and st.mean(thr) >= NV_THROTTLE_PCT:
+        c.support("gpu_telemetry", W_STEADY, f"and the GPU was held down {st.mean(thr):.0f}% of the time",
+                  st.mean(thr), "%", NV_THROTTLE_PCT)
+    fixes: list[FixSuggestion] = []
+    name = _text(p.get("scheme_name"), 80)
+    quiet = name is not None and any(w in name.lower() for w in QUIET_PLAN_WORDS)
+    better = _better_scheme(e) if quiet else None
+    if better:
+        fixes.append(FixSuggestion(title=f"Switch the power plan from \"{name}\" to \"{better[1]}\"",
+                                   detail="A standard Windows setting; lag-doctor saves the current plan first, and "
+                                          "`lagdoctor undo` puts it back.",
+                                   fix_id="power_plan", params={"scheme": better[0]}))
+    if p.get("on_battery") is True:
+        fixes.append(_advice("Plug in the charger while gaming", "Windows and the GPU driver cap power on battery."))
+    if p.get("saver") is True:
+        fixes.append(_advice("Turn off battery saver while gaming"))
+    if p.get("slider") == "best_efficiency" or p.get("effective_mode") in LOW_POWER_MODES:
+        fixes.append(_advice("Set the power mode to Best performance", "Settings > System > Power & battery."))
+    oem = [t for t in _dict(e.inv.get("oem")).get("tools") or [] if isinstance(t, str)]
+    if quiet and any("armoury" in t.lower() for t in oem):
+        fixes.append(_advice("Set Armoury Crate's operating mode to Performance or Turbo",
+                             "The maker's fan and power mode can hold the laptop back even under a Windows plan."))
+    return c.conclude("Power saving is holding the PC back", _sentence("; ".join(problems)) +
+                      " Power saving lowers how fast the CPU and GPU may run.", fixes)
+
+
+def _refresh_rate(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "refresh_rate")
+    e = c.env
+    d = e.display
+    if d is None:
+        c.lack("static", W_DIRECT, "the game's display was not found")
+        return c.conclude()
+    hz, top = _fin(d.get("hz")), _fin(d.get("max_hz"))
+    screen = _text(d.get("name"), 80) or _text(d.get("device"), 40) or "the game's display"
+    if hz is None or top is None or hz <= 0 or top <= 0:
+        c.lack("static", W_DIRECT, f"the refresh rates of {screen} were not read")
+        return c.conclude()
+    if top - hz <= REFRESH_SLACK_HZ:
+        c.against("static", W_DIRECT, f"{screen} already runs at its maximum, {hz:.0f} Hz", hz, "Hz", top)
+        return c.conclude()
+    c.support("static", W_DIRECT, f"{screen} runs at {hz:.0f} Hz but offers {top:.0f} Hz at this resolution",
+              hz, "Hz", top)
+    fps = e.avg_fps
+    if e.frames_measured and (e.verdict == "vsync" or (fps is not None and fps >= LIMIT_FPS_FRAC * hz)):
+        c.support("frame_timing", W_STEADY, f"and the game's {fps:.0f} FPS is held to that {hz:.0f} Hz refresh"
+                  if fps else "and the game is held to that refresh rate")
+    device = d.get("device") if isinstance(d.get("device"), str) and DEVICE_RE.fullmatch(d["device"]) else None
+    battery = e.power.get("on_battery") is True
+    note = " A lower rate saves battery, so keep it if that is on purpose." if battery else ""
+    fixes = ([FixSuggestion(title=f"Set {screen} to {top:.0f} Hz", detail="Windows tests the mode first; "
+                            "`lagdoctor undo` puts the old rate back." + note, fix_id="refresh_rate",
+                            params={"device": device, "hz": int(round(top))})]
+             if device else
+             [_advice(f"Set {screen} to {top:.0f} Hz", "Settings > System > Display > Advanced display." + note)])
+    return c.conclude(f"The screen runs at {hz:.0f} Hz, below its {top:.0f} Hz maximum",
+                      "The display refreshes less often than it can, so it can show fewer frames per second than "
+                      "the game makes.", fixes)
+
+
+def _vsync_judder(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "vsync_judder")
+    e = c.env
+    if e.verdict == "capped":
+        return None                        # a cap that does not divide the refresh: the frame_cap rule's case
+    q = _fin(e.bound.get("quantised_pct"))
+    hz = e.refresh
+    if q is None or not hz:
+        c.lack("frame_timing", W_STEADY, "the display's refresh rate or the displayed frame times are unknown")
+        return c.conclude()
+    if e.bound.get("vrr") is True or q < QUANTISED_PCT:
+        c.against("frame_timing", W_STEADY, f"frames are not tied to refresh periods ({q:.0f}% on whole periods): "
+                                            "VRR or VSync off", q, "%", QUANTISED_PCT)
+        return c.conclude()
+    period = 1000.0 / hz
+    _, _, d, source = fa.display_series(e.fr)
+    if source != "display" or not d:
+        c.lack("frame_timing", W_STEADY, "the displayed frame times were not measured")
+        return c.conclude()
+    k = [max(1, round(x / period)) for x in d]
+    if st.median(k) != 1:
+        return None                        # under half the refresh rate: that is low FPS, not judder
+    if _uneven_presents(e):
+        return None                        # the game's own uneven frames: the uneven_pacing rule's case
+    share = sum(1 for x in k if x >= 2) / len(k)
+    ids = [ev.id for ev in e.events if ev.kind == "pacing"]
+    if share >= JUDDER_SHARE:
+        c.support("frame_timing", W_STEADY, f"{100 * share:.0f}% of frames stayed on screen for 2 or more refreshes "
+                                            f"({2 * period:.1f} ms) while most took one ({period:.1f} ms): judder "
+                                            f"({100 * JUDDER_SHARE:.0f}% or more)", 100 * share, "%", 100 * JUDDER_SHARE)
+    else:
+        c.against("frame_timing", W_STEADY, f"{100 * (1 - share):.0f}% of frames were shown for one refresh: no judder",
+                  100 * share, "%", 100 * JUDDER_SHARE)
+    fixes = [_advice("Turn on VRR (G-SYNC or FreeSync) if the screen supports it"),
+             _advice(f"Or cap the frame rate at {hz / 2:.0f} FPS (half the refresh)", "Every frame then stays on "
+                                                                                 "screen for the same time."),
+             _advice("Or turn VSync off", "That trades judder for tearing.")]
+    return c.conclude("VSync judder: frames alternate between one and two refreshes",
+                      "The game runs a little slower than the screen refreshes, so with VSync some frames stay up "
+                      "twice as long as others, which looks jerky.", fixes, ids)
+
+
+def _uneven_present_events(e: _Env) -> list[LagEvent]:
+    """Pacing events where the game's own presents swing, not just the display (frames.py's detail)."""
+    out = []
+    for ev in e.events:
+        if ev.kind != "pacing":
+            continue
+        pct = _fin(ev.detail.get("present_swing_pct")) if isinstance(ev.detail, dict) else None
+        if pct is not None and pct > UNEVEN_PRESENT_PCT:
+            out.append(ev)
+    return out
+
+
+def _uneven_share(e: _Env) -> tuple[list[LagEvent], float | None]:
+    """(the uneven-present pacing events, the share of the capture they cover); one predicate for both rules."""
+    evs = _uneven_present_events(e)
+    if e.duration is None:
+        return evs, None
+    return evs, _union_s((ev.t_start, ev.t_end) for ev in evs) / e.duration
+
+
+def _uneven_presents(e: _Env) -> bool:
+    _, share = _uneven_share(e)
+    return share is not None and share >= UNEVEN_SHARE
+
+
+def _uneven_pacing(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "uneven_pacing")
+    e = c.env
+    uneven, share = _uneven_share(e)
+    if share is None:
+        c.lack("frame_timing", W_STEADY, "the capture's length is unknown")
+        return c.conclude()
+    if share >= UNEVEN_SHARE:
+        swing = max(_fin(ev.detail.get("present_swing_pct")) or 0.0 for ev in uneven)
+        sev = st.median([float(ev.severity) for ev in uneven])
+        w = W_DIRECT if share >= UNEVEN_DIRECT_SHARE else W_STEADY
+        c.support("frame_timing", w, f"the game's own frame times swung by {ev_mod.PACING_SWING_MS:.0f} ms or more on "
+                                     f"up to {swing:.0f}% of frames (median swing {sev:.1f} ms), over "
+                                     f"{100 * share:.0f}% of the capture ({100 * UNEVEN_SHARE:.0f}% or more)",
+                  100 * share, "%", 100 * UNEVEN_SHARE)
+    else:
+        judder = [ev for ev in e.events if ev.kind == "pacing" and ev not in uneven]
+        c.against("frame_timing", W_STEADY,
+                  f"the game presented its frames evenly (uneven stretches: {100 * share:.0f}% of the capture)"
+                  + ("; the uneven display comes from the screen's refresh, not the game" if judder else ""),
+                  100 * share, "%", 100 * UNEVEN_SHARE)
+    fixes = [_advice("Cap the frame rate a little below what the PC can hold", "In the game, the GPU driver or RTSS: "
+                                                                               "an even cadence feels smoother."),
+             _advice("Turn on VRR (G-SYNC or FreeSync) if the screen supports it")]
+    return c.conclude("Uneven frame pacing: frame times keep swinging",
+                      "The game hands over its frames at uneven intervals, so motion looks jerky even when the "
+                      "average frame rate is fine.", fixes, [ev.id for ev in uneven])
+
+
+def _frame_cap(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "frame_cap")
+    e = c.env
+    v, b = e.verdict, e.bound
+    if v == "unknown":
+        notes = [n for n in b.get("notes") or [] if isinstance(n, str)]
+        c.lack("frame_timing", W_STEADY, "the frame-rate limit could not be judged" + (f": {notes[0]}" if notes else ""))
+        return c.conclude()
+    if v != "capped":
+        c.against("frame_timing", W_STEADY, f"no frame-rate cap: the frame rate is limited by {labels.BOUND.get(v, v)}")
+        return c.conclude()
+    fps, hz, r = _fin(b.get("cap_fps")), e.refresh, _fin(b.get("r"))
+    if fps is None:
+        c.lack("frame_timing", W_STEADY, "the cap's rate was not measured")
+        return c.conclude()
+    if not hz:
+        return Unchecked("frame_cap", f"the game is capped at {fps:.0f} FPS, but the display's refresh rate is "
+                                      "unknown, so the cap cannot be compared with it")
+    if fps >= CAP_FRAC * hz:
+        c.against("frame_timing", W_STEADY, f"capped at {fps:.0f} FPS, within {100 * (1 - CAP_FRAC):.0f}% of the "
+                                            f"{hz:.0f} Hz refresh: a sensible cap", fps, "FPS", CAP_FRAC * hz)
+        return c.conclude()
+    if r is not None and r >= CAP_R_MAX:
+        c.neutral("frame_timing", f"capped at {fps:.0f} FPS, but the GPU is already busy {100 * r:.0f}% of each "
+                                  "frame, so raising the cap would gain little", fps, "FPS", CAP_FRAC * hz)
+        return c.conclude()
+    c.support("frame_timing", W_STEADY, f"the game is capped at {fps:.0f} FPS, under {100 * CAP_FRAC:.0f}% of the "
+                                        f"{hz:.0f} Hz refresh ({CAP_FRAC * hz:.0f} FPS)", fps, "FPS", CAP_FRAC * hz)
+    k = hz / fps
+    if abs(k - round(k)) > 0.05:
+        c.support("frame_timing", W_STEADY, f"{hz:.0f} is not a whole multiple of {fps:.0f}, so frames stay on screen "
+                                            "for uneven times (some one refresh, some two)")
+    ids = [ev.id for ev in e.events if ev.kind == "pacing"]
+    fixes = [_advice(f"Raise the cap to {hz:.0f} FPS, or a few FPS below it with VRR",
+                     "Caps live in the game's settings, the GPU driver (e.g. NVIDIA's Max Frame Rate) or RTSS."),
+             _advice(f"Or cap at {hz / 2:.0f} FPS (half the refresh)", "Every frame then stays up equally long.")]
+    return c.conclude(f"A frame-rate cap holds the game at {fps:.0f} FPS on a {hz:.0f} Hz screen",
+                      "The game could run faster than its cap, and a cap that does not divide the refresh rate "
+                      "shows frames for uneven times.", fixes, ids)
+
+
+def _windowed_composition(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "windowed_composition")
+    e = c.env
+    mode = _text(e.stats.get("present_mode"), 80)
+    runtime = _text(e.stats.get("runtime"), 20)
+    if e.frames_measured and mode:
+        if mode.startswith("Composed: Copy"):
+            c.support("frame_timing", W_STEADY, f"PresentMon shows \"{mode}\" (blt model): every frame is copied "
+                                                "before Windows composes the screen, which adds delay")
+        else:
+            c.against("frame_timing", W_STEADY, f"the game presents with \"{mode}\", not the slower copy (blt) model")
+    elif e.frames_measured:
+        c.lack("frame_timing", W_STEADY, "PresentMon reported no present mode")
+    else:
+        c.lack("frame_timing", W_STEADY, e.need("frames"))
+    setting = e.settings.get("windowed_optimizations")
+    if setting is False:
+        c.support("static", W_STATIC, "Windows' \"Optimizations for windowed games\" is off")
+    elif setting is True:
+        c.neutral("static", "Windows' \"Optimizations for windowed games\" is on", weight=W_STATIC)
+    fixes: list[FixSuggestion] = []
+    if setting is False and runtime in (None, "DXGI"):
+        fixes.append(FixSuggestion(title="Turn on Windows' \"Optimizations for windowed games\"",
+                                   detail="It moves DirectX 10 and 11 games in windowed and borderless mode to the "
+                                          "faster flip model. The registry format behind it is community-documented "
+                                          "(WT 8).", fix_id="windowed_optimizations_on", needs_restart="game"))
+    fixes.append(_advice("Or switch the game to exclusive fullscreen, or borderless with flip model"))
+    return c.conclude("Windowed mode adds a copy and delay", "The game's frames are copied and then composed with the "
+                                                              "desktop, which adds delay and costs frame rate.", fixes)
+
+
+def _game_dvr(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "game_dvr")
+    e = c.env
+    dvr, background = e.settings.get("game_dvr"), e.settings.get("background_recording")
+    if dvr is None and background is None:
+        c.lack("static", W_DIRECT, "the Game Bar capture settings were not read")
+        return c.conclude()
+    if background is True:
+        c.support("static", W_STEADY, "background recording (\"record what happened\") is on, so Windows keeps "
+                                      "encoding the screen while you play")
+    elif dvr is True:
+        c.support("static", W_STATIC, "Game Bar's game capture (Game DVR) is on; whether it records in the background "
+                                      "is unknown")
+    else:
+        c.against("static", W_DIRECT, "Game Bar capture and background recording are off")
+        return c.conclude()
+    fixes = [FixSuggestion(title="Turn off Game Bar capture and background recording",
+                           detail="Changes two of your own Windows settings; the registry meaning is community-"
+                                  "documented (WT 8). Restart the game afterwards.",
+                           fix_id="game_dvr_off", needs_restart="game"),
+             _advice("Also check NVIDIA Instant Replay or other recorders", "They cost the same kind of GPU time.")]
+    return c.conclude("Background recording is on", "Recording the screen in the background uses GPU time the game "
+                                                     "could have.", fixes)
+
+
+def _game_mode_off(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "game_mode_off")
+    e = c.env
+    mode = e.settings.get("game_mode")
+    if mode is None:
+        c.lack("static", W_DIRECT, "the Game Mode setting was not read")
+        return c.conclude()
+    if mode is True:
+        c.against("static", W_DIRECT, "Game Mode is on")
+        return c.conclude()
+    c.support("static", W_STATIC, "Game Mode is off")
+    fixes = [FixSuggestion(title="Turn Game Mode on", detail="A standard Windows setting (Settings > Gaming > Game "
+                                                             "Mode); `lagdoctor undo` puts it back.",
+                           fix_id="game_mode_on")]
+    return c.conclude("Game Mode is off", "Game Mode lets Windows favour the game over background work.", fixes)
+
+
+def _not_focused(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "not_focused")
+    e = c.env
+    vals = [v for v in e.sys(S.GAME_FOCUSED) if v in (0.0, 1.0)]
+    if not vals:
+        c.lack("foreground", W_STEADY, "the foreground window was not recorded")
+        return c.conclude()
+    share = sum(1 for v in vals if v == 0.0) / len(vals)
+    linked = _dict(e.causes.get("not_focused")).get("label") == "supports"
+    if share >= UNFOCUSED_SHARE:
+        c.support("foreground", W_STEADY, f"the game was not the active window for {100 * share:.0f}% of the capture "
+                                          f"({100 * UNFOCUSED_SHARE:.0f}% or more)", 100 * share, "%", 100 * UNFOCUSED_SHARE)
+    elif not linked:     # mostly in front is no evidence against stutters that all came while it was behind
+        c.against("foreground", W_STEADY, f"the game was the active window {100 * (1 - share):.0f}% of the time",
+                  100 * share, "%", 100 * UNFOCUSED_SHARE)
+    _event_link(c, "not_focused", "foreground", "another window being in front")
+    battery = e.power.get("on_battery") is True
+    fixes = [_advice("Keep the game in front while you play", "Click into its window; Windows gives background "
+                                                              "windows a lower priority"
+                     + (", and on battery an even lower speed." if battery else "."))]
+    ids = [ev.id for ev in e.attributed if ev.causes and ev.causes[0] == "not_focused"]
+    return c.conclude("The game was not the active window", "Windows lowers the priority of windows that are not in "
+                                                            "front, so the game got less CPU time.", fixes, ids)
+
+
+# ------------------------------------------------------------------------- background, disk ---
+
+def _event_link(c: _Case, cause: str, family: str, phrase: str, contradict: bool = True) -> bool:
+    """Add attribute()'s lift-test verdict for `cause` as an event-linked item (LC 5.2). True if it supports.
+    "neutral" and "too_few_events" were measured but say nothing either way; "not_measured" lowers coverage."""
+    entry = c.env.causes.get(cause)
+    if not isinstance(entry, dict):
+        return False
+    label, a, n = entry.get("label"), _num(entry.get("a")), _num(entry.get("n"))
+    if label == "not_measured":
+        c.lack(family, W_STEADY, _text(entry.get("why"), 200) or f"{phrase} was not measured")
+        return False
+    if a is None or not n:
+        return False
+    half = bool(entry.get("half_weight"))
+    what = "marked moments" if half else "stutters and FPS drops"
+    lift = _fin(entry.get("lift"))
+    share = 100 * a / n
+    if label == "supports":
+        w = _fin(entry.get("weight")) or W_STEADY
+        c.support(family, w, f"{a:.0f} of {n:.0f} {what} coincided with {phrase}"
+                  + (f" (lift {lift:.1f})" if lift is not None else ""), share, "%", 100 * attribute.LIFT_MIN_SHARE)
+        return True
+    if label == "contradicts" and contradict:
+        c.against(family, CONTRA_WEIGHT * (HALF if half else 1.0),
+                  f"only {a:.0f} of {n:.0f} {what} coincided with {phrase}", share, "%",
+                  100 * attribute.CONTRA_MAX_SHARE)
+    else:
+        c.neutral(family, f"{a:.0f} of {n:.0f} {what} coincided with {phrase}", share, "%",
+                  100 * attribute.LIFT_MIN_SHARE)
+    return False
+
+
+def _first_cause_ids(e: _Env, causes: Iterable[str]) -> list[int]:
+    want = set(causes)
+    return [ev.id for ev in e.attributed if ev.causes and ev.causes[0] in want]
+
+
+def _name_cpu(e: _Env, name: str, spans: list[tuple[float, float]]) -> tuple[float | None, float | None]:
+    """(mean CPU % of every process named `name` over the spans, median over the other ticks): 100 = one CPU."""
+    during, normal = [], []
+    starts = [a for a, _ in spans]
+    for row in e.cap.others if isinstance(e.cap.others, list) else []:
+        if not (isinstance(row, (list, tuple)) and len(row) == 2 and _num(row[0]) is not None
+                and isinstance(row[1], (list, tuple))):
+            continue
+        t = float(row[0])
+        total = math.fsum(float(x) for x in (_num(p[2]) for p in row[1] if isinstance(p, (list, tuple)) and len(p) >= 3
+                                             and p[1] == name) if x is not None and x >= 0)
+        i = bisect.bisect_right(starts, t) - 1
+        (during if i >= 0 and t <= spans[i][1] else normal).append(total)
+    return (st.mean(during) if during else None), (st.median(normal) if normal else None)
+
+
+def _background_hogs(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "background_hogs")
+    e = c.env
+    if not e.attributed:
+        return None                          # no stutter or FPS drop to explain
+    kinds = ("background_cpu", "background_disk", "background_gpu")
+    entries = {k: e.causes.get(k) for k in kinds if isinstance(e.causes.get(k), dict)}
+    if entries and all(v.get("label") == "too_few_events" for v in entries.values()):
+        n = len(e.attributed)
+        return Unchecked("background_hogs", f"only {n} stutter{'s' if n != 1 else ''} and FPS drops: linking them to "
+                                            f"another program needs at least {MIN_EVENTS}")
+    if not entries or all(v.get("label") == "not_measured" for v in entries.values()):
+        c.lack("background", W_EVENT_STRONG, "no CPU, disk or GPU readings for other programs")
+        return c.conclude()
+    # Any one mechanism (CPU, disk, GPU) makes the cause; the others staying quiet is no evidence against it.
+    some_support = any(v.get("label") == "supports" for v in entries.values())
+    linked = False
+    for k, phrase in (("background_cpu", "another program's CPU use rising"),
+                      ("background_disk", "another program's disk use rising"),
+                      ("background_gpu", "another program's GPU use rising")):
+        linked = _event_link(c, k, "background", phrase, contradict=not some_support) or linked
+    blamed = [ev for ev in e.attributed if ev.causes and ev.causes[0] in kinds]
+    names: dict[str, list[LagEvent]] = {}
+    for ev in blamed:
+        name = _text(ev.detail.get("process"), 80) if isinstance(ev.detail, dict) else None
+        if name:
+            names.setdefault(name, []).append(ev)
+    named = []
+    for name, evs in sorted(names.items(), key=lambda kv: -len(kv[1])):
+        spans = sorted((ev.t_start - attribute.WINDOW_BEFORE_S, ev.t_end + attribute.WINDOW_AFTER_S) for ev in evs)
+        merged: list[tuple[float, float]] = []
+        for a, b in spans:
+            if merged and a <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+            else:
+                merged.append((a, b))
+        during, normal = _name_cpu(e, name, merged)
+        pids = sorted({p for ev in evs for p in ev.detail.get("process_pids") or [] if isinstance(p, int)})
+        many = f" ({len(pids)} processes)" if len(pids) > 1 else ""
+        if during is not None and during >= HOG_MIN_CPU_PCT:
+            named.append((name, pids))
+            c.neutral("background", f"{name}{many} used {during:,.0f}% of a CPU during {len(evs)} of "
+                                    f"{len(e.attributed)} stutters and FPS drops, against {normal or 0:,.0f}% "
+                                    "normally (100% = one logical CPU)", during, "%", HOG_MIN_CPU_PCT)
+        elif during is None:
+            named.append((name, pids))
+            c.neutral("background", f"{name}{many} rose the most during {len(evs)} of {len(e.attributed)} stutters "
+                                    "and FPS drops (its disk or GPU use)")
+    if not linked and named:
+        c.support("background", W_STATIC, f"{len(blamed)} of {len(e.attributed)} stutters and FPS drops were best "
+                                          "explained by another program, too few to be sure")
+    if _dict(e.causes.get("background_cpu")).get("label") == "supports":
+        _cpu_side_item(c, [ev.id for ev in blamed if ev.causes[0] == "background_cpu"])
+    fixes = _hog_fixes(e, named)
+    who = ", ".join(n for n, _ in named[:3]) or "other programs"
+    return c.conclude(f"Background programs got busy when the game lagged: {who}",
+                      "Other programs' work rose exactly when the game stuttered or dropped frames, taking time the "
+                      "game needed.", fixes, [ev.id for ev in blamed])
+
+
+def _hog_fixes(e: _Env, named: list[tuple[str, list[int]]]) -> list[FixSuggestion]:
+    game = {p for p in e.target.get("pids") or [] if isinstance(p, int)}
+    if isinstance(e.target.get("pid"), int):
+        game.add(e.target["pid"])
+    create = _create_times(e)
+    fixes: list[FixSuggestion] = []
+    for name, pids in named[:2]:
+        for pid in pids:
+            ct = create.get(pid)
+            if pid in game or ct is None or not 0 < pid <= 0xFFFFFFFF:     # DESIGN: a valid, non-game PID
+                continue
+            fixes.append(FixSuggestion(title=f"Lower the priority of {name} (process {pid}) for this session",
+                                       detail="Below-normal priority until it exits; `lagdoctor undo` puts it back. "
+                                              "lag-doctor refuses services, protected processes and the game.",
+                                       fix_id="background_priority",
+                                       params={"pid": pid, "create_time": ct, "class": "below_normal"}))
+            break
+    for name, pids in named[:3]:
+        shown = ", ".join(str(p) for p in pids[:4]) + (" ..." if len(pids) > 4 else "")
+        fixes.append(_advice(f"Pause or close {name} while you play" + (f" (process {shown})" if shown else ""),
+                             "Check it is not something you need first; lag-doctor never closes programs itself."))
+    fixes.append(_advice("Pause downloads and updates while playing", "Steam, Epic, the browser, Windows Update."))
+    return fixes
+
+
+def _create_times(e: _Env) -> dict[int, int]:
+    """pid -> creation time, when the others table carries it as an optional sixth field (not in DESIGN yet)."""
+    out: dict[int, int] = {}
+    for row in e.cap.others if isinstance(e.cap.others, list) else []:
+        if isinstance(row, (list, tuple)) and len(row) == 2 and isinstance(row[1], (list, tuple)):
+            for p in row[1]:
+                if (isinstance(p, (list, tuple)) and len(p) >= 6 and isinstance(p[0], int) and isinstance(p[5], int)
+                        and not isinstance(p[5], bool) and p[5] > 0):
+                    out[p[0]] = p[5]
+    return out
+
+
+def _hdd_streaming(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "hdd_streaming")
+    e = c.env
+    media = e.game.get("media")
+    drive = _text(e.game.get("drive"), 8)
+    where = f" ({drive})" if drive else ""
+    if media == SOLID_STATE:
+        c.against("static", W_DIRECT, f"the game is installed on an SSD{where}")
+        return c.conclude()
+    if media != HARD_DISK:
+        c.lack("static", W_DIRECT, "the type of the game's drive is unknown")
+        return c.conclude()
+    c.support("static", W_DIRECT, f"the game is installed on a hard disk (HDD){where}")
+    _event_link(c, "asset_streaming", "disk", "the game reading from disk")
+    lat = e.sys(S.DISK_READ_MS)
+    if lat and st.percentile(lat, 95.0) > DISK_READ_WARN_MS:
+        p95 = st.percentile(lat, 95.0)
+        c.support("disk", W_STEADY, f"disk reads took up to {p95:.0f} ms (95th percentile; over "
+                                    f"{DISK_READ_WARN_MS:.0f} ms is slow)", p95, "ms", DISK_READ_WARN_MS)
+    fixes = [_advice("Move the game to an SSD", "Most launchers can move an installed game (Steam: Properties > "
+                                                "Installed Files)."),
+             _advice("Close other disk-heavy programs while playing")]
+    return c.conclude("The game is on a hard drive (HDD)", "Hard drives take far longer to load game data than "
+                                                           "SSDs, so streaming new areas makes the game wait.",
+                      fixes, _first_cause_ids(e, ("asset_streaming",)))
+
+
+def _shader_compile(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "shader_compile")
+    e = c.env
+    own = [ev for ev in e.attributed if ev.kind == "stutter" and ev.causes and ev.causes[0] == "game_cpu_spike"]
+    if not own:
+        return None
+    if len(own) < MIN_EVENTS:
+        return Unchecked("shader_compile", f"only {len(own)} stutters came from the game's own work: too few to tell "
+                                           "whether they bunch up at the start")
+    if e.duration is None:
+        c.lack("frame_timing", W_STEADY, "the capture's length is unknown")
+        return c.conclude()
+    early = sum(1 for ev in own if ev.t_start < EARLY_FRACTION * e.duration)
+    share = early / len(own)
+    if share >= EARLY_SHARE:
+        c.support("frame_timing", W_STATIC, f"{early} of {len(own)} stutters from the game's own work came in the first "
+                                            f"third of the capture ({100 * EARLY_SHARE:.0f}% or more)",
+                  100 * share, "%", 100 * EARLY_SHARE)
+    else:
+        c.against("frame_timing", W_STEADY, f"the game's own stutters were spread through the capture ({early} of "
+                                            f"{len(own)} in the first third)", 100 * share, "%", 100 * EARLY_SHARE)
+    fixes = [_advice("Let the game finish compiling shaders", "Many games do it in a loading step; play through "
+                                                              "once and the stutter fades."),
+             _advice("Record the same route a second time", "If the stutters drop by half or more, it was shader "
+                                                            "compilation (LC 4.9)."),
+             _advice("Expect it again after a game or GPU driver update", "Those clear the shader cache.")]
+    return c.conclude("Possible shader-compilation stutter early in the session",
+                      "The game's own stutters bunched up at the start, as when it compiles shaders the first time "
+                      "it draws something.", fixes, [ev.id for ev in own])
+
+
+# ------------------------------------------------------------------- stutter causes (LC 5.2) ---
+
+STUTTER_CAUSES = {
+    # cause: (key family, phrase, CPU side?, title, advice)
+    "game_cpu_spike": ("cpu_threads", "the game's own CPU work", True,
+                       "Stutters from the game's own CPU work",
+                       [("Turn down CPU-heavy settings", "Simulation detail, crowds, view distance."),
+                        ("Update the game and the GPU driver", "Loading and compile stutters are often fixed there.")]),
+    "asset_streaming": ("disk", "the game reading from disk", True, "Stutters while the game loads from disk",
+                        [("Install the game on a fast SSD", ""),
+                         ("Lower texture quality or streaming settings", "Less data to load per second."),
+                         ("Close other disk-heavy programs while playing", "")]),
+    "driver_dpc": ("interrupts", "a driver holding up the CPU", False, "Stutters while a driver held up the CPU",
+                   [("Update or briefly disable Wi-Fi, audio and RGB utilities, then test again", ""),
+                    ("Run LatencyMon to name the driver", "It needs administrator rights; lag-doctor cannot name it.")]),
+    "gpu_spike": ("frame_timing", "a moment of heavy GPU work", False, "Stutters from moments of heavy GPU work",
+                  [("Turn down the heaviest graphics effects", "Spikes like these often come from effects or a "
+                                                               "shader used for the first time.")]),
+    "game_stall": ("frame_timing", "the game waiting on itself", True, "Stutters where the game waited on itself",
+                   [("Nothing on this PC moved at those moments", "The game paused on its own (a lock, a sync, a "
+                                                                  "server). Update the game; check its forums."),
+                    ("Note where in the game it happens", "Stalls at the same spots point at the game.")]),
+}
+RESIDUAL_CAUSES = ("gpu_spike", "game_stall")
+
+
+def _stutter_cause(cap: Capture, ctx: dict, cause: str) -> Any:
+    c = _Case(cap, ctx, cause)
+    e = c.env
+    family, phrase, cpu_side, title, advice = STUTTER_CAUSES[cause]
+    if not e.causes:
+        if not e.frames_measured:
+            return Unchecked(cause, e.need("frames") + "; press the lag key when it lags to mark moments instead")
+        return None                          # no stutter or FPS drop to explain
+    entry = e.causes.get(cause)
+    if not isinstance(entry, dict):
+        return None
+    label, n = entry.get("label"), _num(entry.get("n")) or 0
+    ids = _first_cause_ids(e, (cause,))
+    half = bool(entry.get("half_weight"))
+    what = "marked moments" if half else "stutters and FPS drops"
+    if label == "not_measured":
+        return Unchecked(cause, _text(entry.get("why"), 200) or "its signal was not measured")
+    if label == "too_few_events":
+        return (Unchecked(cause, f"only {n:.0f} {what}: blaming a cause needs at least {MIN_EVENTS}") if ids else None)
+    if cause in RESIDUAL_CAUSES:
+        _residual_items(c, entry, ids, phrase, what)
+    else:
+        _event_link(c, cause, family, phrase)
+        if label not in ("supports", "contradicts") and ids:
+            c.support(family, W_STATIC, f"{len(ids)} of {n:.0f} {what} were best explained by {phrase}, too few to be "
+                                        "sure")
+    if cpu_side and not half:
+        _cpu_side_item(c, ids)
+    for ev in e.attributed:
+        if ev.id in ids and isinstance(ev.detail.get("why"), list) and len(ev.detail["why"]) > 1:
+            c.neutral(family, f"for example at {ev.t_start:.1f} s: {_text(ev.detail['why'][1], 200)}")
+            break
+    fixes = [_advice(t, d) for t, d in advice]
+    share = _fin(entry.get("share")) or 0.0
+    return c.conclude(f"{title} ({len(ids)} of {n:.0f})",
+                      _sentence(f"{len(ids)} of {n:.0f} {what} were best explained by {phrase} "
+                                f"({100 * share:.0f}%)"), fixes, ids)
+
+
+def _cpu_side_item(c: _Case, ids: list[int]) -> None:
+    """Frame-timing evidence for a CPU-side cause: in most of its events the slow frame's GPU busy share was low
+    (attribute.py's per-event split, LC 3.1), a separate instrument from the CPU counters that named the cause."""
+    if not ids:
+        return
+    want = set(ids)
+    cpu = sum(1 for ev in c.env.attributed if ev.id in want and _dict(ev.detail).get("side") == "cpu")
+    if cpu / len(want) >= SIDE_SHARE:
+        c.support("frame_timing", W_STEADY, f"the GPU sat idle through most of the slow frame in {cpu} of "
+                                            f"{len(want)} of them, so the CPU side was slow",
+                  100 * cpu / len(want), "%", 100 * SIDE_SHARE)
+
+
+def _residual_items(c: _Case, entry: dict, ids: list[int], phrase: str, what: str) -> None:
+    """gpu_spike / game_stall have no signal of their own: they are what is left when nothing measured moved."""
+    e = c.env
+    label, a, n = entry.get("label"), _num(entry.get("a")) or 0, _num(entry.get("n")) or 0
+    if label == "supports":
+        c.support("frame_timing", W_STEADY, f"in {a:.0f} of {n:.0f} {what} no other measured cause moved, which "
+                                            f"leaves {phrase}", 100 * a / n if n else None, "%",
+                  100 * attribute.LIFT_MIN_SHARE)
+    elif label == "contradicts":
+        c.against("frame_timing", CONTRA_WEIGHT, f"only {a:.0f} of {n:.0f} {what} were left unexplained like this")
+    elif ids:
+        c.support("frame_timing", W_STATIC, f"{len(ids)} of {n:.0f} {what} were left unexplained like this, too few "
+                                            "to be sure")
+    else:
+        c.neutral("frame_timing", f"{a:.0f} of {n:.0f} {what} were left unexplained like this")
+    for other, (fam, _, _, _, _) in STUTTER_CAUSES.items():
+        o = e.causes.get(other)
+        if other not in RESIDUAL_CAUSES and isinstance(o, dict) and o.get("label") == "not_measured":
+            c.lack(fam, W_STEADY, f"{labels.cause_text(other)} was not measured, so it was not ruled out")
+    if c.cause == "game_stall" and ids:
+        thread = e.sys_rows(S.GAME_TOP_THREAD_PCT)
+        levels = []
+        for ev in e.attributed:
+            if ev.id in ids:
+                xs = [v for t, v in thread if ev.t_start - attribute.WINDOW_BEFORE_S <= t <= ev.t_end + attribute.WINDOW_AFTER_S]
+                if xs:
+                    levels.append(max(xs))
+        if levels and st.median(levels) < 100.0 * attribute.THREAD_BUSY:
+            c.support("cpu_threads", W_STEADY, f"the game's busiest thread stayed under {100 * attribute.THREAD_BUSY:.0f}% "
+                                               f"of a CPU through them (median peak {st.median(levels):.0f}%): it was "
+                                               "waiting, not working", st.median(levels), "%", 100 * attribute.THREAD_BUSY)
+
+
+def _stutter_rule(cause: str) -> Callable[[Capture, dict], Any]:
+    def fn(cap: Capture, ctx: dict) -> Any:
+        return _stutter_cause(cap, ctx, cause)
+    fn.__name__ = f"_{cause}"
+    return fn
+
+
+# -------------------------------------------------------------------------------- network ---
+
+def _not_wifi(c: _Case) -> Cleared | Unchecked | None:
+    """For the Wi-Fi rules: the verdict when the PC is wired (ruled out) or its link type is unknown, else None."""
+    on = c.env.on_wifi()
+    if on is False:
+        return Cleared(c.cause, "The PC is on a wired connection, not Wi-Fi.")
+    if on is None:
+        return Unchecked(c.cause, "no Wi-Fi readings: the PC may be wired, or its Wi-Fi could not be read")
+    return None
+
+
+def _wifi_weak(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "wifi_weak")
+    e = c.env
+    done = _not_wifi(c)
+    if done is not None:
+        return done
+    rssi = [x for x in e.net_readings(N.WIFI_RSSI_DBM) if -120.0 <= x <= 0.0]
+    if not rssi:     # NE 3.3 (verify #50): link quality 0..100 maps linearly onto -100..-50 dBm
+        rssi = [-100.0 + q / 2.0 for q in e.net_readings(N.WIFI_SIGNAL_PCT) if 0 <= q <= 100]
+    if rssi:
+        m = st.median(rssi)
+        if m < RSSI_WEAK_DBM:
+            c.support("wifi", W_STEADY, f"the Wi-Fi signal was {m:.0f} dBm (weaker than {RSSI_WEAK_DBM:.0f} dBm)",
+                      m, "dBm", RSSI_WEAK_DBM)
+        else:
+            c.against("wifi", W_STEADY, f"the Wi-Fi signal was {m:.0f} dBm (stronger than {RSSI_WEAK_DBM:.0f} dBm)",
+                      m, "dBm", RSSI_WEAK_DBM)
+    else:
+        c.lack("wifi", W_STEADY, "the Wi-Fi signal strength was not read")
+    gw = e.net_values(N.GW_RTT_MS)
+    if len(gw) >= 10:
+        p95 = st.percentile(gw, 95.0)
+        if p95 > GW_BAD_P95_MS:
+            c.support("network_path", W_STEADY, f"pings to your router took up to {p95:.0f} ms (95th percentile; over "
+                                                f"{GW_BAD_P95_MS:.0f} ms is bad on Wi-Fi)", p95, "ms", GW_BAD_P95_MS)
+        elif p95 < GW_GOOD_P95_MS:
+            c.against("network_path", W_STEADY, f"pings to your router took at most {p95:.0f} ms (95th percentile)",
+                      p95, "ms", GW_GOOD_P95_MS)
+    fixes = [_advice("Move closer to the router, or remove what is in between"),
+             _advice("Use the 5 GHz band", "It is faster and less crowded than 2.4 GHz."),
+             _advice("Use a network cable", "Ethernet takes Wi-Fi out of the picture.")]
+    return c.conclude("Weak Wi-Fi signal", "A weak signal makes Wi-Fi resend packets, which shows as ping spikes and "
+                                           "lag.", fixes)
+
+
+def _changes(values: list[Any]) -> int:
+    seen = [v for v in values if v is not None]
+    return sum(1 for a, b in zip(seen, seen[1:]) if a != b)
+
+
+def _wifi_roaming(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "wifi_roaming")
+    e = c.env
+    done = _not_wifi(c)
+    if done is not None:
+        return done
+    t = fa._col(cap.network, N.T)
+    bssid = [_text(x, 40) for x in fa._col(cap.network, N.WIFI_BSSID)]
+    chans = [(_num(ti), _num(ch)) for ti, ch in zip(t, fa._col(cap.network, N.WIFI_CHANNEL))]
+    chans = [(float(a), int(b)) for a, b in chans if a is not None and b is not None]
+    roams = _changes(bssid)
+    hops = _changes([ch for _, ch in chans])
+    if roams:       # never print the access point's address: it locates the user (NE 3.6)
+        c.support("wifi", W_DIRECT, f"the PC switched Wi-Fi access points {roams} time{'s' if roams != 1 else ''} "
+                                    "during the capture")
+    elif hops:
+        c.support("wifi", W_STEADY, f"the Wi-Fi channel changed {hops} time{'s' if hops != 1 else ''} "
+                                    f"({chans[0][1]} to {chans[-1][1]}): most likely a switch of access point")
+    elif chans:
+        c.against("wifi", W_STEADY, f"the PC stayed on Wi-Fi channel {chans[0][1]} throughout"
+                  + ("" if any(bssid) else " (the access point itself is only visible with location permission)"))
+    else:
+        c.lack("wifi", W_STEADY, "the Wi-Fi channel was not read")
+    if roams or hops:
+        times = [ta for (ta, a), (_, b) in zip(chans, chans[1:]) if a != b]
+        spikes = [ev for ev in e.events if ev.kind in ("net_spike", "net_loss")]
+        near = sum(1 for x in times if any(ev.t_start - ROAM_SPIKE_S <= x <= ev.t_end + ROAM_SPIKE_S for ev in spikes))
+        if near:
+            c.support("network_path", W_STEADY, f"pings spiked or were lost within {ROAM_SPIKE_S:.0f} s of {near} of "
+                                                "those switches")
+    fixes = [_advice("Stay close to one access point", "With a mesh or several access points, the PC hops between "
+                                                       "them when the signal is borderline."),
+             _advice("Use a network cable")]
+    return c.conclude("Wi-Fi switched access points", "Each switch of access point briefly interrupts the "
+                                                      "connection, which shows as a lag spike.", fixes)
+
+
+def _peaks(rows: list[tuple[float, float | None]], times: list[float], before: float,
+           after: float) -> list[float | None]:
+    """The highest value of rows within [t - before, t + after] for each t."""
+    ts = [t for t, _ in rows]
+    out = []
+    for x in times:
+        lo, hi = bisect.bisect_left(ts, x - before), bisect.bisect_right(ts, x + after)
+        vals = [v for _, v in rows[lo:hi] if v is not None]
+        out.append(max(vals) if vals else None)
+    return out
+
+
+def _wifi_scan_spikes(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "wifi_scan_spikes")
+    e = c.env
+    done = _not_wifi(c)
+    if done is not None:
+        return done
+    scans_raw = e.flows().get("wifi_scans")
+    if not isinstance(scans_raw, list):
+        c.lack("network_path", W_DIRECT, "Wi-Fi scan notifications were not recorded")
+        return c.conclude()
+    scans = sorted(float(x) for x in scans_raw if _num(x) is not None)
+    if not scans:
+        dur = f"{e.duration:.0f} s " if e.duration else ""
+        return Unchecked("wifi_scan_spikes", f"no Wi-Fi background scan happened during the {dur}capture (they come "
+                                             "about once a minute)")
+    gw = e.net(N.GW_RTT_MS)
+
+    def near_scan(t: float) -> bool:
+        i = bisect.bisect_right(scans, t + SCAN_BEFORE_S) - 1      # the last scan that starts a window holding t
+        return i >= 0 and scans[i] - SCAN_BEFORE_S <= t <= scans[i] + SCAN_AFTER_S
+
+    quiet = [v for t, v in gw if v is not None and not near_scan(t)]
+    if len(quiet) < 10:
+        c.lack("network_path", W_DIRECT, "too few router pings outside the scans to compare with")
+        return c.conclude()
+    base = st.median(quiet)
+    peaks = _peaks(gw, scans, SCAN_BEFORE_S, SCAN_AFTER_S)
+    hits = [p for p in peaks if p is not None and p >= max(2.0 * base, base + SCAN_SPIKE_MS)]
+    if len(hits) >= SCAN_ALIGNED_MIN and len(hits) / len(scans) >= 0.5:
+        c.support("network_path", W_DIRECT, f"pings to the router spiked around {len(hits)} of {len(scans)} Wi-Fi "
+                                            f"background scans (up to {max(hits):.0f} ms against {base:.0f} ms "
+                                            f"normally; {SCAN_ALIGNED_MIN} or more)", len(hits), "", SCAN_ALIGNED_MIN)
+    elif hits:
+        c.support("network_path", W_STATIC, f"pings to the router spiked around {len(hits)} of {len(scans)} Wi-Fi "
+                                            f"background scans (up to {max(hits):.0f} ms)", len(hits), "", SCAN_ALIGNED_MIN)
+    else:
+        c.against("network_path", W_STEADY, f"no ping spike around any of the {len(scans)} Wi-Fi background scans",
+                  0, "", SCAN_ALIGNED_MIN)
+    fixes = [_advice("Turn off Wi-Fi background scanning while gaming", "Some Wi-Fi tools call it a media streaming "
+                                                                        "or gaming mode; Windows turns scanning back "
+                                                                        "on when Wi-Fi reconnects."),
+             _advice("Use a network cable")]
+    return c.conclude("Ping spikes during Wi-Fi background scans", "About once a minute Windows has the Wi-Fi "
+                                                                  "adapter look for other networks, and the "
+                                                                  "connection stalls while it does.", fixes)
+
+
+def _bufferbloat(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "bufferbloat")
+    e = c.env
+    t = fa._col(cap.network, N.T)
+    rows = []
+    for i, ti in enumerate(t):
+        x = _num(ti)
+        if x is None:
+            continue
+        rx, tx = _fin(fa._at(fa._col(cap.network, N.NIC_RX_BPS), i)), _fin(fa._at(fa._col(cap.network, N.NIC_TX_BPS), i))
+        inet, gw = _fin(fa._at(fa._col(cap.network, N.INET_RTT_MS), i)), _fin(fa._at(fa._col(cap.network, N.GW_RTT_MS), i))
+        rows.append((rx, tx, inet if inet is not None and inet > 0 else None, gw if gw is not None and gw > 0 else None))
+    rx_peak = max((r[0] for r in rows if r[0] is not None), default=None)
+    tx_peak = max((r[1] for r in rows if r[1] is not None), default=None)
+    if rx_peak is None and tx_peak is None:
+        c.lack("network_path", W_EVENT_STRONG, "the network adapter's traffic counters were not read")
+        return c.conclude()
+    peak = max(rx_peak or 0.0, tx_peak or 0.0)
+    if peak < BLOAT_MIN_BPS:
+        return Unchecked("bufferbloat", f"the connection was never busy during the capture (peak "
+                                        f"{8 * peak / 1e6:.1f} Mbit/s), so ping under load could not be measured")
+
+    def util(r: tuple) -> float:
+        return max((r[0] or 0.0) / rx_peak if rx_peak else 0.0, (r[1] or 0.0) / tx_peak if tx_peak else 0.0)
+
+    loaded = [r for r in rows if util(r) >= BLOAT_UTIL]
+    idle = [r for r in rows if util(r) < BLOAT_IDLE_UTIL]
+    li, ii = [r[2] for r in loaded if r[2] is not None], [r[2] for r in idle if r[2] is not None]
+    if len(li) < BLOAT_MIN_ROWS or len(ii) < BLOAT_MIN_ROWS:
+        return Unchecked("bufferbloat", "the connection was busy too briefly to compare ping under load with idle")
+    base, busy = min(ii), st.median(li)
+    rise = busy - base
+    lg, ig = [r[3] for r in loaded if r[3] is not None], [r[3] for r in idle if r[3] is not None]
+    gw_rise = st.median(lg) - min(ig) if lg and ig else None
+    mbps = 8 * peak / 1e6
+    if rise >= BLOAT_RISE_MS and (gw_rise is None or gw_rise < GW_LOCAL_MS):
+        c.support("network_path", W_EVENT_STRONG, f"while the connection was busy (up to {mbps:.0f} Mbit/s), ping to "
+                                                  f"the internet rose {rise:.0f} ms over its idle {base:.0f} ms "
+                                                  f"({BLOAT_RISE_MS:.0f} ms or more)"
+                  + (f", while the router stayed within {gw_rise:.0f} ms" if gw_rise is not None else ""),
+                  rise, "ms", BLOAT_RISE_MS)
+    elif rise >= BLOAT_RISE_MS:
+        c.neutral("network_path", f"ping rose {rise:.0f} ms under load, but so did the router's ({gw_rise:.0f} ms): "
+                                  "the queue is on your own network (Wi-Fi), not the internet link")
+    else:
+        c.against("network_path", W_STEADY, f"while the connection was busy (up to {mbps:.0f} Mbit/s), ping rose only "
+                                            f"{rise:.0f} ms", rise, "ms", BLOAT_RISE_MS)
+    fixes = [_advice("Pause or limit the download or upload while playing"),
+             _advice("Turn on smart queue management (SQM) or QoS on the router", "It keeps game packets from "
+                                                                                    "waiting behind downloads.")]
+    return c.conclude("Ping rises whenever the connection is busy (bufferbloat)",
+                      "The router queues too much data when the line is full, so game packets wait behind downloads.",
+                      fixes)
+
+
+def _isp_latency(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "isp_latency")
+    e = c.env
+    inet, gw = e.net_values(N.INET_RTT_MS), e.net_values(N.GW_RTT_MS)
+    targets = _dict(e.flows().get("targets"))
+    anchor = _text(targets.get("internet"), 60) or "the internet"
+    if len(inet) < 10:
+        c.lack("network_path", W_STEADY, "too few pings to the internet were answered")
+        return c.conclude()
+    m = st.median(inet)
+    g = st.median(gw) if gw else None
+    if m >= INET_NOTICEABLE_MS and (g is None or g < GW_LOCAL_MS):
+        c.support("network_path", W_STEADY, f"ping to {anchor} was {m:.0f} ms (median; {INET_NOTICEABLE_MS:.0f}-"
+                                            f"{INET_BAD_MS:.0f} ms is noticeable, over {INET_BAD_MS:.0f} bad)"
+                  + (f" while your router answered in {g:.0f} ms" if g is not None else ""), m, "ms", INET_NOTICEABLE_MS)
+    elif m >= INET_NOTICEABLE_MS:
+        c.neutral("network_path", f"ping to {anchor} was {m:.0f} ms, but your router itself took {g:.0f} ms: the delay "
+                                  "starts on your own network")
+    else:
+        c.against("network_path", W_STEADY, f"ping to {anchor} was {m:.0f} ms (median; under "
+                                            f"{INET_NOTICEABLE_MS:.0f} ms is good)", m, "ms", INET_NOTICEABLE_MS)
+    fixes = [_advice("Check at another time of day", "If evenings are worse, the provider's network is busy."),
+             _advice("Contact your internet provider if it is always high")]
+    return c.conclude(f"High ping to the internet ({m:.0f} ms)", "Every packet takes long to reach the internet, "
+                                                                 "before it even gets to the game server.", fixes)
+
+
+def _server_lag(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "server_lag")
+    e = c.env
+    server = e.net_values(N.SERVER_RTT_MS)
+    if not e.measured("net_flows") and not server:
+        return Unchecked("server_lag", "needs the game's own network traffic (ETW rights) or a game server that "
+                                       f"answers pings: {e.why('net_flows')}")
+    inet = e.net_values(N.INET_RTT_MS)
+    inet_med = st.median(inet) if inet else None
+    inet_spikes = [ev for ev in e.events if ev.kind == "net_spike" and _dict(ev.detail).get("target") == "internet"]
+    gaps = [ev for ev in e.events if ev.kind == "net_gap" and _dict(ev.detail).get("kind") != "local"]
+    local = [ev for ev in e.events if ev.kind == "net_gap" and _dict(ev.detail).get("kind") == "local"]
+    flat = [g for g in gaps if not any(s.t_start <= g.t_end and g.t_start <= s.t_end for s in inet_spikes)]
+    ids = [g.id for g in flat]
+    if e.measured("net_flows"):
+        if len(flat) >= SERVER_GAPS_MIN:
+            c.support("network_path", W_STEADY, f"the game server went quiet {len(flat)} times (longest "
+                                                f"{max(g.severity for g in flat):.0f} ms) while the internet answered "
+                                                "normally", len(flat), "", SERVER_GAPS_MIN)
+        elif flat:
+            c.support("network_path", W_STATIC, f"the game server went quiet {len(flat)} time"
+                                                f"{'s' if len(flat) != 1 else ''} (longest "
+                                                f"{max(g.severity for g in flat):.0f} ms)", len(flat), "", SERVER_GAPS_MIN)
+        else:
+            c.against("network_path", W_STEADY, f"the game server's packets kept arriving (no gap of "
+                                                f"{ev_mod.GAP_MIN_MS:.0f} ms or more)", 0, "", SERVER_GAPS_MIN)
+        if local:
+            c.neutral("network_path", f"{len(local)} gap{'s' if len(local) != 1 else ''} came from the game itself "
+                                      "pausing its own sending, not the network")
+        if _dict(e.flows()).get("layout") == "unverified":
+            c.neutral("network_path", "which address is the server is not verified on this PC yet (NE 4.4)")
+    if server:
+        m = st.median(server)
+        if m > INET_BAD_MS and (inet_med is None or inet_med < INET_NOTICEABLE_MS):
+            c.support("network_path", W_STEADY, f"ping to the game server was {m:.0f} ms (median)"
+                      + (f" against {inet_med:.0f} ms to the internet" if inet_med is not None else ""),
+                      m, "ms", INET_BAD_MS)
+        elif m <= INET_NOTICEABLE_MS:
+            c.against("network_path", W_STEADY, f"ping to the game server was {m:.0f} ms (median)", m, "ms",
+                      INET_NOTICEABLE_MS)
+        else:
+            c.neutral("network_path", f"ping to the game server was {m:.0f} ms (median)"
+                      + (f" against {inet_med:.0f} ms to the internet" if inet_med is not None else ""),
+                      m, "ms", INET_BAD_MS)
+    fixes = [_advice("Pick a closer server or region in the game", "Nothing on this PC can fix the server's own lag."),
+             _advice("Check the game's server status page")]
+    return c.conclude("The game server or its route lags", "Your own connection answered normally while the game "
+                                                           "server's packets were late or missing.", fixes, ids)
+
+
+def _packet_loss(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "packet_loss")
+    e = c.env
+    losses = [ev for ev in e.events if ev.kind == "net_loss"]
+    far = [ev for ev in losses if _dict(ev.detail).get("target") in ("internet", "server")]
+    near = [ev for ev in losses if _dict(ev.detail).get("target") == "gateway"]
+    if far:
+        worst = max(far, key=lambda ev: ev.severity)
+        d = _dict(worst.detail)
+        c.support("network_path", W_STEADY, f"{d.get('lost_15s', 0)} of {d.get('sent_15s', 0)} pings to the "
+                                            f"{d.get('target')} were lost within 15 s ({worst.severity:.1f}%; "
+                                            f"{ev_mod.LOSS_PCT:.0f}% or more is bad)" + (", in a burst" if d.get("burst")
+                                                                                        else ""),
+                  worst.severity, "%", ev_mod.LOSS_PCT)
+    elif near:
+        c.neutral("network_path", "pings to your router were lost while the internet answered: routers often drop "
+                                  "pings to themselves (NE 7 row 9)")
+    else:
+        inet = [v for _, v in e.net(N.INET_RTT_MS)]
+        if len(inet) < 10:
+            c.lack("network_path", W_STEADY, "too few pings to the internet were sent")
+            return c.conclude()
+        pct = _fin(e.stats.get("loss_pct"))
+        c.against("network_path", W_STEADY, "no ping to the internet was lost"
+                  + (f" ({pct:.1f}% over the capture)" if pct is not None and pct > 0 else ""),
+                  pct or 0.0, "%", ev_mod.LOSS_PCT)
+    wifi = e.on_wifi()
+    fixes = ([_advice("On Wi-Fi: move closer to the router or use a cable")] if wifi else []) + \
+        [_advice("Check the network cable and the router", "Restart the router; contact the provider if it keeps "
+                                                           "happening.")]
+    return c.conclude("Packet loss", "Some packets never arrived, so the game had to guess or wait, which shows as "
+                                     "rubber-banding.", fixes, [ev.id for ev in far])
+
+
+def _vpn_route(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "vpn_route")
+    e = c.env
+    route = e.flows().get("route")
+    if not isinstance(route, dict) or route.get("vpn") not in (True, False):
+        c.lack("static", W_DIRECT, "the network route was not read")
+        return c.conclude()
+    desc = _text(route.get("description"), 80) or "the network adapter"
+    if route["vpn"] is False:
+        c.against("static", W_DIRECT, f"internet traffic leaves through \"{desc}\" directly, not a VPN")
+        return c.conclude()
+    c.support("static", W_DIRECT, f"internet traffic leaves through a VPN or tunnel (\"{desc}\")")
+    inet = e.net_values(N.INET_RTT_MS)
+    if len(inet) >= 10 and st.median(inet) >= INET_NOTICEABLE_MS:
+        c.support("network_path", W_STEADY, f"and ping to the internet was {st.median(inet):.0f} ms (median)",
+                  st.median(inet), "ms", INET_NOTICEABLE_MS)
+    fixes = [_advice("Leave the game out of the VPN (split tunnelling), or disconnect the VPN while playing")]
+    return c.conclude("Traffic goes through a VPN", "A VPN adds a detour and a hop to every packet the game sends.",
+                      fixes)
+
+
+def _bandwidth_hog(cap: Capture, ctx: dict) -> Any:
+    c = _Case(cap, ctx, "bandwidth_hog")
+    e = c.env
+    flows = e.flows()
+    downloads = flows.get("downloads")
+    talkers = flows.get("talkers")
+    if not isinstance(downloads, list) and not isinstance(talkers, list):
+        c.lack("background", W_STEADY, "downloads and per-program traffic were not recorded")
+        return c.conclude()
+    dl = []
+    for d in downloads if isinstance(downloads, list) else []:
+        if isinstance(d, dict) and _fin(d.get("mbps")) and _fin(d.get("mbps")) > 0 and _num(d.get("t")) is not None:
+            dl.append((float(d["t"]), _text(d.get("source"), 40) or "a download", float(d["mbps"])))
+    if dl:
+        t0, src, rate = max(dl, key=lambda x: x[2])
+        c.support("background", W_STEADY, f"{src} was downloading at up to {rate:.0f} Mbit/s during the capture")
+        inet = e.net(N.INET_RTT_MS)
+        times = [t for t, _, _ in dl]
+        during = [v for t, v in inet if v is not None and any(abs(t - x) <= DOWNLOAD_NEAR_S for x in times)]
+        other = [v for t, v in inet if v is not None and not any(abs(t - x) <= DOWNLOAD_NEAR_S for x in times)]
+        if len(during) >= BLOAT_MIN_ROWS and len(other) >= BLOAT_MIN_ROWS and \
+                st.median(during) - st.median(other) >= BLOAT_RISE_MS:
+            c.support("network_path", W_STEADY, f"and ping to the internet rose to {st.median(during):.0f} ms while it "
+                                                f"ran, from {st.median(other):.0f} ms")
+    game = {p for p in e.target.get("pids") or [] if isinstance(p, int)}
+    heavy = []
+    for tk in talkers if isinstance(talkers, list) else []:
+        if not isinstance(tk, dict) or tk.get("pid") in game or tk.get("pid") == e.target.get("pid"):
+            continue
+        moved = (_fin(tk.get("rx_bytes")) or 0.0) + (_fin(tk.get("tx_bytes")) or 0.0)
+        if e.duration and moved / e.duration >= TALKER_MIN_BPS:
+            heavy.append((moved, _text(tk.get("name"), 60) or f"process {tk.get('pid')}"))
+    for moved, name in sorted(heavy, reverse=True)[:2]:
+        c.support("background", W_STEADY, f"{name} moved {moved / 1e6:,.0f} MB ({8 * moved / e.duration / 1e6:.0f} "
+                                          "Mbit/s on average)")
+    if not dl and not heavy:
+        c.against("background", W_STEADY, "no download or upload was seen during the capture"
+                  + ("" if isinstance(talkers, list) else " (Steam and Windows Update only: per-program traffic "
+                                                           "needs ETW rights)"))
+    fixes = [_advice("Pause the download while you play", "Steam: Settings > Downloads > \"Allow downloads during "
+                                                          "gameplay\" off."),
+             _advice("Limit Windows Update's background bandwidth", "Settings > Windows Update > Advanced options > "
+                                                                    "Delivery Optimization.")]
+    return c.conclude("A download is using your bandwidth", "Another program's download or upload filled the "
+                                                            "connection while you played.", fixes)
+
+
+# ----------------------------------------------------------------------------- the rule list ---
+
+RULES: list[Rule] = [
+    Rule("wrong_gpu", "gpu_engine", (), None, _wrong_gpu, "fps"),
+    Rule("hybrid_copy", "static", (), "gpu", _hybrid_copy, "fps"),
+    Rule("gpu_limit", "frame_timing", ("frames|system",), "gpu", _gpu_limit, "fps", alt=("gpu_engine",)),
+    Rule("cpu_limit", "cpu_threads", ("frames", "system"), "cpu", _cpu_limit, "fps"),
+    Rule("gpu_throttle", "gpu_telemetry", ("gpu",), "gpu", _gpu_throttle, "fps"),
+    Rule("cpu_throttle", "cpu_limits", ("system",), "cpu", _cpu_throttle, "fps"),
+    Rule("vram_overflow", "gpu_engine", ("system",), "gpu", _vram_overflow, "stutter"),
+    Rule("ram_pressure", "memory", ("system",), None, _ram_pressure, "stutter"),
+    Rule("power_plan", "static", (), None, _power_plan, "setup"),
+    Rule("refresh_rate", "static", (), None, _refresh_rate, "setup"),
+    Rule("vsync_judder", "frame_timing", ("frames",), None, _vsync_judder, "pacing"),
+    Rule("uneven_pacing", "frame_timing", ("frames",), None, _uneven_pacing, "pacing"),
+    Rule("frame_cap", "frame_timing", ("frames",), None, _frame_cap, "setup"),
+    Rule("windowed_composition", "frame_timing", (), None, _windowed_composition, "latency"),
+    Rule("game_dvr", "static", (), None, _game_dvr, "setup"),
+    Rule("game_mode_off", "static", (), None, _game_mode_off, "setup"),
+    Rule("not_focused", "foreground", ("system",), None, _not_focused, "fps"),
+    Rule("background_hogs", "background", ("frames", "system"), None, _background_hogs, "stutter"),
+    Rule("hdd_streaming", "static", (), None, _hdd_streaming, "stutter", alt=("disk",)),
+    Rule("shader_compile", "frame_timing", ("frames",), None, _shader_compile, "stutter"),
+    Rule("game_cpu_spike", "cpu_threads", (), None, _stutter_rule("game_cpu_spike"), "stutter"),
+    Rule("asset_streaming", "disk", (), None, _stutter_rule("asset_streaming"), "stutter"),
+    Rule("driver_dpc", "interrupts", (), None, _stutter_rule("driver_dpc"), "stutter"),
+    Rule("gpu_spike", "frame_timing", (), "gpu_event", _stutter_rule("gpu_spike"), "stutter"),
+    Rule("game_stall", "frame_timing", (), None, _stutter_rule("game_stall"), "stutter"),
+    Rule("wifi_weak", "wifi", ("network",), None, _wifi_weak, "network"),
+    Rule("wifi_roaming", "wifi", ("network",), None, _wifi_roaming, "network"),
+    Rule("wifi_scan_spikes", "network_path", ("network",), None, _wifi_scan_spikes, "network"),
+    Rule("bufferbloat", "network_path", ("network",), None, _bufferbloat, "network"),
+    Rule("isp_latency", "network_path", ("network",), None, _isp_latency, "network"),
+    Rule("server_lag", "network_path", ("network|net_flows",), None, _server_lag, "network"),
+    Rule("packet_loss", "network_path", ("network",), None, _packet_loss, "network"),
+    Rule("vpn_route", "static", ("network",), None, _vpn_route, "network", alt=("network_path",)),
+    Rule("bandwidth_hog", "background", ("network",), None, _bandwidth_hog, "network"),
+]
+RULE_BY_CAUSE: dict[str, Rule] = {r.cause: r for r in RULES}
+GPU_SIDE = tuple(r.cause for r in RULES if r.gate in ("gpu", "gpu_event"))
+CPU_SIDE = tuple(r.cause for r in RULES if r.gate == "cpu")

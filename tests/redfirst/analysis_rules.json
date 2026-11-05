@@ -1,0 +1,935 @@
+[
+ {
+  "name": "likely at S >= 4",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "LIKELY_S = 4.0 ",
+  "new": "LIKELY_S = 4.01 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_labels_follow_lc_5_3_at_their_edges"
+  ]
+ },
+ {
+  "name": "possible at S >= 2",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "POSSIBLE_S = 2.0 ",
+  "new": "POSSIBLE_S = 2.01 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_labels_follow_lc_5_3_at_their_edges"
+  ]
+ },
+ {
+  "name": "cleared at S <= -2",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "CLEARED_S = -2.0 ",
+  "new": "CLEARED_S = -2.01 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_minus_two_is_checked_and_fine_and_less_is_silence"
+  ]
+ },
+ {
+  "name": "static capped at +2",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "STATIC_CAP = 2.0 ",
+  "new": "STATIC_CAP = 4.0 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_static_configuration_adds_at_most_two_and_never_makes_likely_alone"
+  ]
+ },
+ {
+  "name": "likely coverage 0.6",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "LIKELY_COVERAGE = 0.6 ",
+  "new": "LIKELY_COVERAGE = 0.61 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_likely_needs_coverage_of_point_six"
+  ]
+ },
+ {
+  "name": "not enough data under 0.5",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "MIN_COVERAGE = 0.5 ",
+  "new": "MIN_COVERAGE = 0.51 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_coverage_under_one_half_is_not_enough_data"
+  ]
+ },
+ {
+  "name": "cleared coverage 0.6",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "CLEARED_COVERAGE = 0.6 ",
+  "new": "CLEARED_COVERAGE = 0.61 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cleared_needs_coverage_of_point_six"
+  ]
+ },
+ {
+  "name": "families summed, not maxed",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            sup = max((i.weight for i in its if i.sign > 0), default=0.0)",
+  "new": "            sup = sum(i.weight for i in its if i.sign > 0)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_only_the_strongest_item_per_family_counts"
+  ]
+ },
+ {
+  "name": "likely without the key family",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if s >= LIKELY_S and key_supports and coverage >= LIKELY_COVERAGE:",
+  "new": "        if s >= LIKELY_S and coverage >= LIKELY_COVERAGE:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_likely_needs_the_key_family_supporting"
+  ]
+ },
+ {
+  "name": "unmeasured key family not unchecked",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if not key_measured:\n",
+  "new": "        if False:\n",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_key_family_that_was_not_measured_is_unchecked_with_the_reason"
+  ]
+ },
+ {
+  "name": "stand-in family counts against too",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "key_measured = rule.family in fams or any(i.sign > 0 for f in rule.alt for i in fams.get(f, []))",
+  "new": "key_measured = rule.family in fams or any(f in fams for f in rule.alt)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_stand_in_family_counts_only_to_support"
+  ]
+ },
+ {
+  "name": "share drops out of the ranking",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "min(max(share, 0.0), 1.0) * 10.0",
+  "new": "min(max(share, 0.0), 1.0) * 0.001",
+  "tests": [
+   "tests/test_analysis_rules.py::test_score_orders_by_label_then_s_then_share_then_fix"
+  ]
+ },
+ {
+  "name": "unmeasured source not unchecked",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if not any(env.measured(n) for n in names):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_rule_whose_source_was_not_measured_is_unchecked_with_its_reason"
+  ]
+ },
+ {
+  "name": "either-source need read as one name",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        names = need.split(\"|\")",
+  "new": "        names = [need]",
+  "tests": [
+   "tests/test_analysis_rules.py::test_either_source_satisfies_an_or_need"
+  ]
+ },
+ {
+  "name": "source with no rows counts as measured",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "getattr(s, \"state\", None) in OK_STATES and self._rows(name) > 0",
+  "new": "getattr(s, \"state\", None) in OK_STATES",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_source_that_ran_but_recorded_nothing_is_not_measured",
+   "tests/test_analysis_rules_diagnose.py::test_frames_that_ran_but_recorded_nothing_are_not_measured"
+  ]
+ },
+ {
+  "name": "gate removed",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if isinstance(res, Finding) and rule.gate and env.verdict not in GATES[rule.gate]:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_side_finding_passes_only_a_gpu_or_mixed_verdict",
+   "tests/test_analysis_rules_diagnose.py::test_a_gpu_side_cause_is_never_reported_while_one_cpu_thread_limits_the_game"
+  ]
+ },
+ {
+  "name": "gpu gate lets cpu_main through",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    \"gpu\": frozenset({\"gpu\", \"mixed\"}),",
+  "new": "    \"gpu\": frozenset({\"gpu\", \"mixed\", \"cpu_main\"}),",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_a_gpu_side_cause_is_never_reported_while_one_cpu_thread_limits_the_game"
+  ]
+ },
+ {
+  "name": "gpu_event gate lets cpu_main through",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    \"gpu_event\": frozenset({\"gpu\", \"mixed\", \"capped\", \"vsync\", \"waiting\", \"unknown\"}),",
+  "new": "    \"gpu_event\": frozenset({\"gpu\", \"mixed\", \"capped\", \"vsync\", \"waiting\", \"unknown\", \"cpu_main\"}),",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_spike_is_never_reported_while_the_cpu_limits_the_game"
+  ]
+ },
+ {
+  "name": "gated unknown verdict reads as cleared",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if v == \"unknown\":\n        notes = [n for n in env.bound",
+  "new": "    if False:\n        notes = [n for n in env.bound",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_side_finding_passes_only_a_gpu_or_mixed_verdict"
+  ]
+ },
+ {
+  "name": "a crashing rule takes the run down",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    except Exception as exc:  # noqa: BLE001 - one broken rule",
+  "new": "    except KeyError as exc:  # noqa: BLE001 - one broken rule",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_rule_that_crashes_is_unchecked_and_says_so"
+  ]
+ },
+ {
+  "name": "limit at 92 % of refresh",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "LIMIT_FPS_FRAC = 0.90 ",
+  "new": "LIMIT_FPS_FRAC = 0.92 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_limit_costs_nothing_once_the_game_reaches_ninety_percent_of_the_refresh",
+   "tests/test_analysis_rules.py::test_cpu_limit_costs_nothing_once_the_game_reaches_ninety_percent_of_the_refresh"
+  ]
+ },
+ {
+  "name": "3D engine busy at 90.1 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "ENGINE_BUSY_PCT = 90.0 ",
+  "new": "ENGINE_BUSY_PCT = 90.1 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_limit_is_likely_with_the_3d_engine_at_ninety_percent"
+  ]
+ },
+ {
+  "name": "probable GPU limit at 95.1 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "ENGINE_PROBABLE_PCT = fa.ENGINE_GPU_PCT ",
+  "new": "ENGINE_PROBABLE_PCT = 95.1 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_limit_without_frame_timing_needs_the_engine_at_ninety_five_percent"
+  ]
+ },
+ {
+  "name": "NVIDIA busy at 95.1 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NV_UTIL_PCT = 95.0 ",
+  "new": "NV_UTIL_PCT = 95.1 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_limit_counts_nvidia_utilisation_at_ninety_five_percent"
+  ]
+ },
+ {
+  "name": "wrong GPU not marked down while capped",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        c.against(\"frame_timing\", W_STEADY, f\"right now the frame rate is limited by",
+  "new": "        c.against(\"frame_timing\", 0.0, f\"right now the frame rate is limited by",
+  "tests": [
+   "tests/test_analysis_rules.py::test_wrong_gpu_while_capped_is_still_reported_but_only_possible"
+  ]
+ },
+ {
+  "name": "preference already set ignored",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if pref == 2:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_wrong_gpu_offers_advice_not_the_fix_when_the_preference_is_already_set"
+  ]
+ },
+ {
+  "name": "exe path shape not checked",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if not ntpath.isabs(v) or not v.lower().endswith(\".exe\") or \"..\" in re.split(r\"[\\\\/]\", v):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_wrong_gpu_never_offers_the_fix_for_a_path_that_is_not_a_plain_absolute_exe"
+  ]
+ },
+ {
+  "name": "exe control characters allowed",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": " or len(v) > EXE_MAX_CHARS or not v.isprintable():",
+  "new": " or len(v) > EXE_MAX_CHARS:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_wrong_gpu_never_offers_the_fix_for_a_path_that_is_not_a_plain_absolute_exe"
+  ]
+ },
+ {
+  "name": "GPU throttle at 30.1 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NV_THROTTLE_PCT = attribute.NV_THROTTLE_PCT ",
+  "new": "NV_THROTTLE_PCT = 30.1 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_throttle_needs_thirty_percent_of_the_time_held_down"
+  ]
+ },
+ {
+  "name": "power cap counted as throttling",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if share >= NV_THROTTLE_PCT and power_only:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_throttle_at_the_power_limit_alone_is_normal_not_a_fault"
+  ]
+ },
+ {
+  "name": "target temperature exclusive",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if hot >= target:",
+  "new": "        if hot > target:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_throttle_counts_the_target_temperature"
+  ]
+ },
+ {
+  "name": "CPU limit share 26 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "CPU_LIMIT_SHARE = attribute.LIMIT_SHARE ",
+  "new": "CPU_LIMIT_SHARE = 0.26 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_throttle_needs_a_quarter_of_samples_below_full_speed"
+  ]
+ },
+ {
+  "name": "thermal passive limit ignored",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if thermal and min(thermal) < 100.0:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_throttle_counts_a_thermal_passive_limit"
+  ]
+ },
+ {
+  "name": "CPU speed drop 19 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "CPU_PERF_DROP = attribute.PERF_DROP_FRAC ",
+  "new": "CPU_PERF_DROP = 0.19 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_throttle_counts_a_speed_drop_of_twenty_percent_from_the_start"
+  ]
+ },
+ {
+  "name": "near CPU-bound at 0.71",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "CPU_BUSY_FOR_THROTTLE = 0.70 ",
+  "new": "CPU_BUSY_FOR_THROTTLE = 0.71 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_throttle_needs_the_game_near_cpu_bound"
+  ]
+ },
+ {
+  "name": "VRAM full at 90.1 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "VRAM_FULL_FRAC = attribute.VRAM_FULL_FRAC ",
+  "new": "VRAM_FULL_FRAC = 0.901 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vram_overflow_needs_ninety_percent_of_video_memory"
+  ]
+ },
+ {
+  "name": "shared spill counted with VRAM free",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if shared_rows and full:",
+  "new": "    if shared_rows:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vram_overflow_counts_shared_spill_only_while_video_memory_is_full"
+  ]
+ },
+ {
+  "name": "spill level 512.2 MB",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "SHARED_SPILL_MB = 512.0 ",
+  "new": "SHARED_SPILL_MB = 512.2 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vram_overflow_spill_is_over_512_mb"
+  ]
+ },
+ {
+  "name": "spill rate 258 MB/min",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "SHARED_RISE_MB_PER_MIN = 256.0 ",
+  "new": "SHARED_RISE_MB_PER_MIN = 258.0 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vram_overflow_spill_rate_of_256_mb_a_minute"
+  ]
+ },
+ {
+  "name": "integrated GPU VRAM judged",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if _is_integrated(game):\n        return Cleared(\"vram_overflow\"",
+  "new": "    if False:\n        return Cleared(\"vram_overflow\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vram_overflow_on_an_integrated_gpu_is_ruled_out"
+  ]
+ },
+ {
+  "name": "RAM warning 9.99 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "RAM_WARN_FRAC = attribute.RAM_LOW_FRAC ",
+  "new": "RAM_WARN_FRAC = 0.0999 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_ram_pressure_warns_under_ten_percent_free"
+  ]
+ },
+ {
+  "name": "RAM critical 4.99 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "RAM_CRIT_FRAC = 0.05 ",
+  "new": "RAM_CRIT_FRAC = 0.0499 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_ram_pressure_is_critical_under_five_percent"
+  ]
+ },
+ {
+  "name": "RAM critical 63 MB",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "RAM_CRIT_MB = attribute.RAM_LOW_MB ",
+  "new": "RAM_CRIT_MB = 63.0 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_ram_pressure_is_critical_under_64_mb_when_the_ram_size_is_unknown"
+  ]
+ },
+ {
+  "name": "hard faults 1000.2/s",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "FAULTS_WARN_PS = attribute.FAULTS_RISE_PS ",
+  "new": "FAULTS_WARN_PS = 1000.2 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_ram_pressure_counts_over_1000_hard_faults_a_second"
+  ]
+ },
+ {
+  "name": "commit critical 89.9 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "COMMIT_CRIT_PCT = 90.0 ",
+  "new": "COMMIT_CRIT_PCT = 89.9 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_ram_pressure_counts_commit_charge_over_80_and_90_percent"
+  ]
+ },
+ {
+  "name": "commit warning 80.2 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "COMMIT_WARN_PCT = 80.0 ",
+  "new": "COMMIT_WARN_PCT = 80.2 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_ram_pressure_counts_commit_charge_over_80_and_90_percent"
+  ]
+ },
+ {
+  "name": "refresh slack 1.2 Hz",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "REFRESH_SLACK_HZ = 1.0 ",
+  "new": "REFRESH_SLACK_HZ = 1.2 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_refresh_rate_below_its_maximum_by_more_than_one_hertz"
+  ]
+ },
+ {
+  "name": "device name matched as a prefix",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "DEVICE_RE.fullmatch(d[\"device\"])",
+  "new": "DEVICE_RE.match(d[\"device\"])",
+  "tests": [
+   "tests/test_analysis_rules.py::test_refresh_rate_never_offers_the_fix_for_an_odd_device_name"
+  ]
+ },
+ {
+  "name": "plan GUID shape not checked",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            if GUID_RE.fullmatch(guid):",
+  "new": "            if True:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_power_plan_picks_a_performance_plan_when_balanced_is_not_listed_and_never_a_junk_guid"
+  ]
+ },
+ {
+  "name": "VSync judder at 11 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "JUDDER_SHARE = 0.10 ",
+  "new": "JUDDER_SHARE = 0.11 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsync_judder_needs_ten_percent_of_frames_held_two_refreshes"
+  ]
+ },
+ {
+  "name": "quantised at 90.1 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "QUANTISED_PCT = 100.0 * fa.VSYNC_SHARE ",
+  "new": "QUANTISED_PCT = 90.1 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsync_judder_needs_ninety_percent_of_frames_on_whole_refreshes"
+  ]
+ },
+ {
+  "name": "judder judged under a cap",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if e.verdict == \"capped\":\n        return None",
+  "new": "    if False:\n        return None",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsync_judder_leaves_caps_low_fps_and_uneven_presents_to_their_own_rules"
+  ]
+ },
+ {
+  "name": "judder judged on uneven presents",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if _uneven_presents(e):\n        return None",
+  "new": "    if False:\n        return None",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsync_judder_leaves_caps_low_fps_and_uneven_presents_to_their_own_rules"
+  ]
+ },
+ {
+  "name": "uneven pacing at 11 % of the capture",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "UNEVEN_SHARE = 0.10 ",
+  "new": "UNEVEN_SHARE = 0.11 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_uneven_pacing_needs_ten_percent_of_the_capture"
+  ]
+ },
+ {
+  "name": "present swing threshold inclusive",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if pct is not None and pct > UNEVEN_PRESENT_PCT:",
+  "new": "        if pct is not None and pct >= UNEVEN_PRESENT_PCT:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_uneven_pacing_counts_only_uneven_presents_not_display_judder"
+  ]
+ },
+ {
+  "name": "display judder counted as uneven pacing",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "UNEVEN_PRESENT_PCT = 100.0 * ev_mod.PACING_SHARE ",
+  "new": "UNEVEN_PRESENT_PCT = -1.0 ",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_smooth_control_gets_no_limit_pacing_or_stutter_finding",
+   "tests/test_analysis_rules_diagnose.py::test_every_laglab_scenario_passes_the_end_to_end_judge"
+  ]
+ },
+ {
+  "name": "direct readout at 51 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "UNEVEN_DIRECT_SHARE = 0.50 ",
+  "new": "UNEVEN_DIRECT_SHARE = 0.51 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_uneven_pacing_over_half_the_capture_is_a_direct_readout"
+  ]
+ },
+ {
+  "name": "cap misconfigured under 92 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "CAP_FRAC = 0.90 ",
+  "new": "CAP_FRAC = 0.92 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_frame_cap_under_ninety_percent_of_the_refresh_is_misconfigured"
+  ]
+ },
+ {
+  "name": "cap room at r 0.71",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "CAP_R_MAX = 0.70 ",
+  "new": "CAP_R_MAX = 0.71 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_frame_cap_needs_the_gpu_to_have_room"
+  ]
+ },
+ {
+  "name": "blt model not detected",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if mode.startswith(\"Composed: Copy\"):",
+  "new": "        if mode.startswith(\"Composed: Kopy\"):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windowed_composition_flags_the_blt_model_and_offers_the_switch_only_for_dxgi"
+  ]
+ },
+ {
+  "name": "windowed switch offered for OpenGL",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if setting is False and runtime in (None, \"DXGI\"):",
+  "new": "    if setting is False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windowed_composition_flags_the_blt_model_and_offers_the_switch_only_for_dxgi"
+  ]
+ },
+ {
+  "name": "background recording weighs 1",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        c.support(\"static\", W_STEADY, \"background recording",
+  "new": "        c.support(\"static\", W_STATIC, \"background recording",
+  "tests": [
+   "tests/test_analysis_rules.py::test_game_dvr"
+  ]
+ },
+ {
+  "name": "Game Mode off weighs 4",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    c.support(\"static\", W_STATIC, \"Game Mode is off\")",
+  "new": "    c.support(\"static\", W_DIRECT, \"Game Mode is off\")",
+  "tests": [
+   "tests/test_analysis_rules.py::test_game_mode_off"
+  ]
+ },
+ {
+  "name": "not focused at 11 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "UNFOCUSED_SHARE = 0.10 ",
+  "new": "UNFOCUSED_SHARE = 0.11 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_needs_ten_percent_of_the_capture_behind_another_window"
+  ]
+ },
+ {
+  "name": "in front counted against linked stutters",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif not linked:",
+  "new": "    else:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_linked_to_the_stutters_counts_even_when_mostly_in_front"
+  ]
+ },
+ {
+  "name": "hog named from 25.1 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "HOG_MIN_CPU_PCT = 25.0 ",
+  "new": "HOG_MIN_CPU_PCT = 25.1 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_background_hogs_names_programs_using_a_quarter_cpu_during_the_lag"
+  ]
+ },
+ {
+  "name": "quiet disk counted against a CPU hog",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "contradict=not some_support",
+  "new": "contradict=True",
+  "tests": [
+   "tests/test_analysis_rules.py::test_background_hogs_quiet_disk_and_gpu_are_no_evidence_against_a_cpu_hog"
+  ]
+ },
+ {
+  "name": "priority fix offered for the game",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            if pid in game or ct is None or not 0 < pid <= 0xFFFFFFFF:",
+  "new": "            if ct is None or not 0 < pid <= 0xFFFFFFFF:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_background_hogs_offers_the_priority_fix_only_with_a_creation_time_and_never_for_the_game"
+  ]
+ },
+ {
+  "name": "slow disk reads at 15.2 ms",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "DISK_READ_WARN_MS = attribute.DISK_READ_MS ",
+  "new": "DISK_READ_WARN_MS = 15.2 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_hdd_streaming_counts_slow_disk_reads_over_15_ms"
+  ]
+ },
+ {
+  "name": "shader stutter early share 61 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "EARLY_SHARE = 0.60 ",
+  "new": "EARLY_SHARE = 0.61 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_shader_compile_needs_sixty_percent_of_the_games_own_stutters_early"
+  ]
+ },
+ {
+  "name": "stutter cause needs 6 events",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "MIN_EVENTS = attribute.LIFT_MIN_EVENTS ",
+  "new": "MIN_EVENTS = 6 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_shader_compile_needs_five_of_the_games_own_stutters"
+  ]
+ },
+ {
+  "name": "CPU side at 71 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "SIDE_SHARE = 0.70 ",
+  "new": "SIDE_SHARE = 0.71 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_cpu_side_counts_when_seventy_percent_of_the_events_show_it"
+  ]
+ },
+ {
+  "name": "game stall without the idle thread",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if levels and st.median(levels) < 100.0 * attribute.THREAD_BUSY:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_game_waiting_on_itself_needs_its_thread_idle_too"
+  ]
+ },
+ {
+  "name": "unmeasured causes not ruled out keep coverage",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            c.lack(fam, W_STEADY, f\"{labels.cause_text(other)} was not measured",
+  "new": "            c.neutral(fam, f\"{labels.cause_text(other)} was not measured",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_residual_cause_loses_coverage_when_another_cause_was_not_measured"
+  ]
+ },
+ {
+  "name": "weak Wi-Fi at -69.9 dBm",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "RSSI_WEAK_DBM = -70.0 ",
+  "new": "RSSI_WEAK_DBM = -69.9 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_wifi_weak_below_minus_70_dbm"
+  ]
+ },
+ {
+  "name": "negative RSSI dropped as a lost ping",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    rssi = [x for x in e.net_readings(N.WIFI_RSSI_DBM) if -120.0 <= x <= 0.0]",
+  "new": "    rssi = e.net_values(N.WIFI_RSSI_DBM)",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_wifi_weak_below_minus_70_dbm"
+  ]
+ },
+ {
+  "name": "router p95 bad at 30.2 ms",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "GW_BAD_P95_MS = 30.0 ",
+  "new": "GW_BAD_P95_MS = 30.2 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_wifi_weak_counts_a_router_ping_p95_over_30_ms"
+  ]
+ },
+ {
+  "name": "router p95 good under 9.8 ms",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "GW_GOOD_P95_MS = 10.0 ",
+  "new": "GW_GOOD_P95_MS = 9.8 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_wifi_weak_a_fast_router_ping_under_10_ms_speaks_against"
+  ]
+ },
+ {
+  "name": "access point address printed",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"the PC switched Wi-Fi access points {roams} time{'s' if roams != 1 else ''} \"",
+  "new": "f\"the PC switched to {[b for b in bssid if b][-1]} {roams} time{'s' if roams != 1 else ''} \"",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_wifi_roaming_counts_access_point_changes_and_never_prints_them"
+  ]
+ },
+ {
+  "name": "scan spikes need 4",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "SCAN_ALIGNED_MIN = 3 ",
+  "new": "SCAN_ALIGNED_MIN = 4 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_wifi_scan_spikes_three_aligned_spikes_are_likely"
+  ]
+ },
+ {
+  "name": "scan spike 20.2 ms",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "SCAN_SPIKE_MS = 20.0 ",
+  "new": "SCAN_SPIKE_MS = 20.2 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_wifi_scan_spike_is_20_ms_over_the_routers_normal_ping"
+  ]
+ },
+ {
+  "name": "bufferbloat rise 30.1 ms",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "BLOAT_RISE_MS = 30.0 ",
+  "new": "BLOAT_RISE_MS = 30.1 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_bufferbloat_ping_rising_30_ms_under_load"
+  ]
+ },
+ {
+  "name": "local hop at 10.1 ms",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "GW_LOCAL_MS = 10.0 ",
+  "new": "GW_LOCAL_MS = 10.1 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_bufferbloat_with_the_router_rising_too_is_the_local_hop",
+   "tests/test_analysis_rules_network.py::test_isp_latency_with_a_slow_router_starts_at_home"
+  ]
+ },
+ {
+  "name": "busy link from 1.01 MB/s",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "BLOAT_MIN_BPS = 1e6 ",
+  "new": "BLOAT_MIN_BPS = 1.01e6 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_bufferbloat_needs_a_connection_that_was_ever_busy"
+  ]
+ },
+ {
+  "name": "noticeable ping 60.1 ms",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "INET_NOTICEABLE_MS = 60.0 ",
+  "new": "INET_NOTICEABLE_MS = 60.1 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_isp_latency_from_60_ms"
+  ]
+ },
+ {
+  "name": "bad server ping over 101 ms",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "INET_BAD_MS = 100.0 ",
+  "new": "INET_BAD_MS = 101.0 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_server_lag_from_server_pings_and_unchecked_without_either_source"
+  ]
+ },
+ {
+  "name": "server lag needs 4 gaps",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "SERVER_GAPS_MIN = 3 ",
+  "new": "SERVER_GAPS_MIN = 4 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_server_lag_needs_three_gaps_while_the_internet_answers"
+  ]
+ },
+ {
+  "name": "local gaps blamed on the server",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    gaps = [ev for ev in e.events if ev.kind == \"net_gap\" and _dict(ev.detail).get(\"kind\") != \"local\"]",
+  "new": "    gaps = [ev for ev in e.events if ev.kind == \"net_gap\"]",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_server_lag_ignores_gaps_where_the_game_itself_paused"
+  ]
+ },
+ {
+  "name": "router-only loss counted",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif near:",
+  "new": "    elif False:",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_packet_loss"
+  ]
+ },
+ {
+  "name": "talker from 1.01 MB/s",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "TALKER_MIN_BPS = 1e6 ",
+  "new": "TALKER_MIN_BPS = 1.01e6 ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_bandwidth_hog_a_program_moving_1_mb_a_second"
+  ]
+ },
+ {
+  "name": "the game's own traffic blamed",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if not isinstance(tk, dict) or tk.get(\"pid\") in game or tk.get(\"pid\") == e.target.get(\"pid\"):",
+  "new": "        if not isinstance(tk, dict):",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_bandwidth_hog_from_a_logged_download_and_from_per_program_traffic"
+  ]
+ },
+ {
+  "name": "0 stutters claimed without frames",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "        stats[\"stutters\"] = stats[\"stutters_per_min\"] = None     # not measured, so never \"0 stutters\"",
+  "new": "        pass",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_without_frame_timing_frame_rules_are_unchecked_and_nothing_claims_no_stutter"
+  ]
+ },
+ {
+  "name": "no frames reads as no lag",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "        return \"none\" if frames_ok else \"unknown\"",
+  "new": "        return \"none\"",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_lag_type_is_the_category_with_the_most_lag_time",
+   "tests/test_analysis_rules_diagnose.py::test_without_frame_timing_frame_rules_are_unchecked_and_nothing_claims_no_stutter"
+  ]
+ },
+ {
+  "name": "mixed from 51 %",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "MIXED_FRAC = 0.5 ",
+  "new": "MIXED_FRAC = 0.51 ",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_lag_type_is_the_category_with_the_most_lag_time"
+  ]
+ },
+ {
+  "name": "low FPS under 92 % of refresh",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "LOW_FPS_FRAC = rules.LIMIT_FPS_FRAC ",
+  "new": "LOW_FPS_FRAC = 0.92 ",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_a_frame_rate_the_hardware_holds_under_the_refresh_counts_as_low_fps_time"
+  ]
+ },
+ {
+  "name": "low FPS reference 60.2 without a refresh",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "LOW_FPS_NO_REFRESH = 60.0 ",
+  "new": "LOW_FPS_NO_REFRESH = 60.2 ",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_a_frame_rate_the_hardware_holds_under_the_refresh_counts_as_low_fps_time"
+  ]
+ },
+ {
+  "name": "GPU-bound time not low FPS",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "HARDWARE_LIMITS = (\"gpu\", \"cpu_main\", \"cpu_all\", \"mixed\")",
+  "new": "HARDWARE_LIMITS = (\"cpu_main\", \"cpu_all\", \"mixed\")",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_a_frame_rate_the_hardware_holds_under_the_refresh_counts_as_low_fps_time"
+  ]
+ },
+ {
+  "name": "unconfident pacing claims lag time",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "claimed = {i for f in findings if f.category == \"pacing\" and f.confidence in CONFIDENT for i in f.event_ids}",
+  "new": "claimed = {i for f in findings if f.category == \"pacing\" for i in f.event_ids}",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_pacing_counts_only_where_a_confident_pacing_finding_claims_it"
+  ]
+ },
+ {
+  "name": "partial source reads ok",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "            out[name] = f\"partial: {detail}\" if detail else \"partial\"",
+  "new": "            out[name] = \"ok\"",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_measured_says_ok_or_why_for_every_source"
+  ]
+ },
+ {
+  "name": "missing standard source left out",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "    for name in STANDARD_SOURCES:\n",
+  "new": "    for name in ():\n",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_measured_says_ok_or_why_for_every_source"
+  ]
+ },
+ {
+  "name": "empty frames read as measured",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "    if out.get(\"frames\") == \"ok\" and not stats.get(\"frames\"):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_frames_that_ran_but_recorded_nothing_are_not_measured"
+  ]
+ },
+ {
+  "name": "rule of three from a failed source",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "    three = _rule_of_three(stats) if env.frames_measured else None",
+  "new": "    three = _rule_of_three(stats)",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_frame_rows_from_a_source_that_failed_never_back_a_no_hitch_claim"
+  ]
+ },
+ {
+  "name": "headline ignores which finding claims the events",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "        if ids & set(f.event_ids):\n            return f, True",
+  "new": "        if False:\n            return f, True",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_names_the_finding_that_claims_the_lags_own_events"
+  ]
+ }
+]
