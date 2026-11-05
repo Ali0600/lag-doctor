@@ -58,7 +58,7 @@ def make_diagnosis(headline="Your game stutters while loading from disk.", evide
                           category="stutter", confidence="high", score=0.9, summary="It reads mid-frame.",
                           evidence=[Evidence(evidence_text)],
                           fixes=[FixSuggestion("Move the game to an SSD", "Steam: Properties > Installed Files"),
-                                 FixSuggestion("Use the High performance power plan", fix_id="power_high_performance",
+                                 FixSuggestion("Use the High performance power plan", fix_id="power_plan",
                                                needs_restart="game")])],
         measured={"frames": "ok", "net_flows": "needs ETW rights"})
 
@@ -151,7 +151,7 @@ def test_lost_pings_are_drawn_as_marks():
 
 def test_fix_commands_and_restart_notes_are_shown():
     page = html_report.render(make_diagnosis(), make_capture())
-    assert "lagdoctor fix power_high_performance" in page
+    assert "lagdoctor fix power_plan" in page
     assert "Restart the game afterwards." in page
     assert "lagdoctor undo" in page
 
@@ -161,7 +161,8 @@ def test_console_is_ascii_and_wrapped_even_with_unicode_input():
     text = console.render(d, make_capture(), width=80)
     assert text.isascii()
     assert all(len(line) <= 80 for line in text.splitlines()), max(text.splitlines(), key=len)
-    assert "lagdoctor fix power_high_performance" in text
+    # The command sits alone on its own line, so a copy never picks up prose or a line break.
+    assert "       run: lagdoctor fix power_plan" in text.splitlines()
 
 
 def test_write_is_atomic(tmp_path):
@@ -208,3 +209,55 @@ def test_nice_ticks_and_clock_format_literal_points():
     assert charts.nice_ticks(0, 40, 4) == [0, 10, 20, 30, 40]
     assert charts.nice_ticks(0, 300, 8) == [0, 50, 100, 150, 200, 250, 300]
     assert charts.fmt_clock(0) == "0:00" and charts.fmt_clock(75.4) == "1:15" and charts.fmt_clock(3600) == "60:00"
+
+
+def test_checked_and_fine_and_could_not_check_are_both_shown():
+    d = make_diagnosis()
+    d.cleared = {"gpu_throttle": "the GPU held 2100 MHz with no throttle reason for the whole capture"}
+    d.unchecked = {"driver_dpc": "interrupt counters were not readable"}
+    page = html_report.render(d, make_capture())
+    assert "<h2>Checked and fine</h2>" in page and "held 2100 MHz" in page
+    assert "Causes that could not be checked" in page and "interrupt counters were not readable" in page
+    text = console.render(d, make_capture())
+    assert "Checked and fine: the GPU slowing down (heat or power)" in text
+    assert "Could not check: a driver holding up the CPU (interrupt counters were not readable)" in text
+
+
+def test_nothing_cleared_means_no_checked_and_fine_section():
+    page = html_report.render(make_diagnosis(), make_capture())
+    assert "Checked and fine" not in page
+    assert "Checked and fine" not in console.render(make_diagnosis(), make_capture())
+
+
+def test_the_limited_by_tile_shows_the_bound_verdict():
+    d = make_diagnosis()
+    d.stats["bound"] = "cpu_main"
+    page = html_report.render(d, make_capture())
+    assert '<div class="v">CPU (1 thread)</div><div class="k">Limited by</div>' in page
+    assert "limited by CPU (1 thread)" in console.render(d, make_capture())
+    d.stats.pop("bound")
+    assert '<div class="v">-</div><div class="k">Limited by</div>' in html_report.render(d, make_capture())
+
+
+def test_the_frame_chart_uses_only_the_main_swap_chain():
+    cap = make_capture(n_frames=3000, spike_at=())
+    n = len(cap.frames[F.T])
+    cap.frames[F.SWAP_CHAIN] = ["0x1A2B"] * n
+    cap.frames[F.SWAP_CHAIN][500] = "0x0"            # one frame of a side chain ...
+    cap.frames[F.FRAME_MS][500] = 900.0              # ... that is very slow
+    d = make_diagnosis()
+    d.stats["main_chain"] = "0x1A2B"
+    assert "the worst took 900 ms" not in html_report.render(d, cap)
+    d.stats.pop("main_chain")                        # without a main chain every frame is charted
+    assert "the worst took 900 ms" in html_report.render(d, cap)
+
+
+def test_console_shows_at_most_three_findings():
+    d = make_diagnosis()
+    base = d.findings[0]
+    d.findings = [Finding(cause=f"c{i}", title=f"Finding number {i}", category="stutter", confidence="medium",
+                          score=1 - i / 10, summary="") for i in range(5)]
+    text = console.render(d, make_capture())
+    assert "3. Finding number 2" in text and "Finding number 3" not in text
+    assert "... and 2 more in the full report." in text
+    assert base.title not in text

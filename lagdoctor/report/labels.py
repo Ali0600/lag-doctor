@@ -59,6 +59,27 @@ CAUSES = {
     "server_lag": "game server or route",
     "packet_loss": "packet loss",
     "bandwidth_hog": "a download using your bandwidth",
+    "not_focused": "the game not being the active window",
+    "frame_cap": "a frame-rate cap",
+    "shader_compile": "shader compilation",
+    "vpn_route": "traffic going through a VPN",
+}
+
+# What limited the frame rate (analysis/frames.bound verdicts): a short form for a stat tile,
+# and a phrase for sentences.
+BOUND_SHORT = {
+    "gpu": "GPU", "cpu_main": "CPU (1 thread)", "cpu_all": "CPU", "waiting": "waiting",
+    "vsync": "VSync", "capped": "FPS cap", "mixed": "CPU + GPU", "unknown": "-",
+}
+BOUND = {
+    "gpu": "the graphics card (GPU)",
+    "cpu_main": "one busy game thread on the CPU",
+    "cpu_all": "the CPU, on every core",
+    "waiting": "neither the CPU nor the GPU: the game is waiting on something",
+    "vsync": "VSync: the screen's refresh rate",
+    "capped": "a frame-rate cap",
+    "mixed": "both the CPU and the GPU",
+    "unknown": "not measured",
 }
 
 

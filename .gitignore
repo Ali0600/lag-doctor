@@ -7,3 +7,6 @@ __pycache__/
 captures/
 reports/
 *.ldcap.json
+
+# agent worktrees created by the build workflow
+.claude/worktrees/

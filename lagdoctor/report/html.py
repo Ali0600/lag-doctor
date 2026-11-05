@@ -106,12 +106,13 @@ def _not_measured_note(cap: Capture, source: str) -> str:
 
 def _tiles(d: Diagnosis) -> str:
     s = d.stats
+    bound = s.get("bound")
     tiles = [
         ("Average FPS", _fmt(s.get("avg_fps"))),
         ("1% low FPS", _fmt(s.get("low1_fps"))),
         ("Stutters / min", _fmt(s.get("stutters_per_min"), "{:.1f}")),
         ("Worst frame", _fmt(s.get("worst_frame_ms"), suffix=" ms")),
-        ("GPU-bound frames", _fmt(s.get("gpu_bound_pct"), suffix="%")),
+        ("Limited by", e(labels.BOUND_SHORT.get(bound, bound)) if bound else "-"),
         ("Ping (internet)", _fmt(s.get("ping_inet_ms"), suffix=" ms")),
         ("Jitter", _fmt(s.get("jitter_ms"), "{:.1f}", " ms")),
         ("Packet loss", _fmt(s.get("loss_pct"), "{:.1f}", "%")),
@@ -120,8 +121,18 @@ def _tiles(d: Diagnosis) -> str:
         f'<div class="tile"><div class="v">{v}</div><div class="k">{e(k)}</div></div>' for k, v in tiles) + "</section>"
 
 
-def _frame_chart(d: Diagnosis, cap: Capture) -> str:
+def _main_frames(d: Diagnosis, cap: Capture) -> tuple[list, list]:
+    """Frame times of the swap chain the analysis used; a game's tiny side chains would only add noise."""
     t, ms = cap.frames.get(F.T) or [], cap.frames.get(F.FRAME_MS) or []
+    chain, chains = d.stats.get("main_chain"), cap.frames.get(F.SWAP_CHAIN)
+    if chain is not None and chains and len(chains) == len(t):
+        keep = [i for i, c in enumerate(chains) if c == chain]
+        t, ms = [t[i] for i in keep], [ms[i] for i in keep]
+    return t, ms
+
+
+def _frame_chart(d: Diagnosis, cap: Capture) -> str:
+    t, ms = _main_frames(d, cap)
     vals = clean(ms)
     if not t or not vals:
         return _not_measured_note(cap, "frames")
@@ -264,13 +275,16 @@ def _pc(cap: Capture) -> str:
                                 f"(max {_fmt(dsp.get('max_hz'))} Hz)"))
     pw = inv.get("power") or {}
     if pw:
-        rows.append(("Power", f"plan {pw.get('scheme_name') or '?'}; mode {pw.get('overlay') or '?'}; "
-                              f"{'on battery' if pw.get('on_battery') else 'plugged in'}"))
+        mode = (pw.get("slider") or "?").replace("_", " ")
+        battery = {True: "on battery", False: "plugged in"}.get(pw.get("on_battery"), "power source unknown")
+        rows.append(("Power", f"plan {pw.get('scheme_name') or '?'}; power mode {mode}; {battery}"))
     st = inv.get("settings") or {}
     if st:
         rows.append(("Settings", f"Game Mode {_yes_no(st.get('game_mode'))}; background recording "
-                                 f"{_yes_no(st.get('game_dvr_background'))}; GPU scheduling {_yes_no(st.get('hags'))};"
-                                 f" windowed-game optimisations {_yes_no(st.get('windowed_optimizations'))}"))
+                                 f"{_yes_no(st.get('background_recording'))}; GPU scheduling "
+                                 f"{_yes_no(st.get('hags'))}; windowed-game optimisations "
+                                 f"{_yes_no(st.get('windowed_optimizations'))}; memory integrity "
+                                 f"{_yes_no(st.get('memory_integrity'))}"))
     game = inv.get("game") or {}
     if game:
         rows.append(("Game file", f"{game.get('exe') or '?'} on {game.get('drive') or '?'} "
@@ -284,6 +298,15 @@ def _pc(cap: Capture) -> str:
     return f'<div class="tablewrap"><table><tbody>{body}</tbody></table></div>'
 
 
+def _cleared(d: Diagnosis) -> str:
+    if not d.cleared:
+        return ""
+    items = "".join(f"<li><strong>{e(labels.cause_text(c))}</strong>: {e(why)}</li>"
+                    for c, why in sorted(d.cleared.items()))
+    return ("<h2>Checked and fine</h2><p class=\"muted\">These were measured and ruled out:</p>"
+            f"<ul>{items}</ul>")
+
+
 def _not_measured(d: Diagnosis, cap: Capture) -> str:
     items = []
     for src, st in sorted(cap.sources.items()):
@@ -292,10 +315,17 @@ def _not_measured(d: Diagnosis, cap: Capture) -> str:
     for what, why in sorted(d.measured.items()):
         if why != "ok" and what not in cap.sources:
             items.append(f"<li><strong>{e(what)}</strong>: {e(why)}</li>")
-    if not items:
+    unchecked = "".join(f"<li><strong>{e(labels.cause_text(c))}</strong>: {e(why)}</li>"
+                        for c, why in sorted(d.unchecked.items()))
+    if not items and not unchecked:
         return ""
-    return ("<h2>Not measured</h2><p class=\"muted\">These were not checked, so they are not ruled out:</p>"
-            f"<ul>{''.join(items)}</ul>")
+    out = "<h2>Not measured</h2>"
+    if items:
+        out += ("<p class=\"muted\">These were not measured, so they are not ruled out:</p>"
+                f"<ul>{''.join(items)}</ul>")
+    if unchecked:
+        out += f"<p class=\"muted\">Causes that could not be checked:</p><ul>{unchecked}</ul>"
+    return out
 
 
 def render(d: Diagnosis, cap: Capture, capture_path: Path | None = None) -> str:
@@ -330,6 +360,7 @@ def render(d: Diagnosis, cap: Capture, capture_path: Path | None = None) -> str:
         f"<h2>Network</h2>{_network_chart(cap)}"
         f"<h2>Worst moments</h2>{_events(d)}"
         f"<h2>This PC</h2>{_pc(cap)}"
+        f"{_cleared(d)}"
         f"{_not_measured(d, cap)}"
         f"<footer>{footer}</footer></main></body></html>")
 
