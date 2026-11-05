@@ -60,6 +60,9 @@ ENGINE_BUSY_PCT = 90.0       # LC 4.1: the game's 3D engine >= 90 % on its rende
 ENGINE_IDLE_PCT = 50.0       # [inferred] a 3D engine under half busy cannot be the limit
 ENGINE_PROBABLE_PCT = fa.ENGINE_GPU_PCT   # LC 3.4: no frame timing -> 3D engine >= 95 % = "GPU-limited (probable)"
 NV_UTIL_PCT = 95.0           # LC 4.1: utilization.gpu >= 95 %
+THREAD_WAITING = 0.60        # LC 3.2: "Neither" (waiting) needs the busiest thread below 0.6 of a CPU; from here to
+                             # frames.THREAD_BOUND (0.85) is a grey zone where the CPU is not ruled out (A6)
+OTHER_GPU_PCT = attribute.OTHERS_GPU_PCT      # LC 4.6, 10 row 4.6: another process on the game adapter's engine >= 10 %
 # ---- throttling (LC 4.2, 4.5, 10) ----------------------------------------------------------------
 NV_THROTTLE_PCT = attribute.NV_THROTTLE_PCT   # LC 10 (4.2): held down by heat or power >= 30 % of the time
 CPU_LIMIT_SHARE = attribute.LIMIT_SHARE       # LC 4.5: % Performance Limit < 100 on >= 25 % of samples
@@ -86,7 +89,8 @@ CAP_FRAC = 0.90              # LC 4.14: a cap at C < 0.9 x refresh is misconfigu
 CAP_R_MAX = 0.70             # LC 4.14: ... when r < 0.7 (the GPU has room to go faster)
 UNEVEN_SHARE = 0.10          # DESIGN: uneven pacing covers >= 10 % of the capture
 UNEVEN_PRESENT_PCT = 100.0 * ev_mod.PACING_SHARE   # LC 2.4's "> 10 % of swings >= 4 ms", on the game's presents
-UNEVEN_DIRECT_SHARE = 0.50   # [inferred] uneven presents over half the capture are a direct readout of the cause
+DROPPED_PCT = 100.0 * JUDDER_SHARE   # [inferred, LC 2.4's 10 % judder share] frames never shown while the game
+                             # presents faster than a fixed refresh: dropped-frame judder (A11)
 # ---- background, focus, disk, shaders (DESIGN; LC 4.6, 4.8, 4.9, 4.19) ---------------------------
 HOG_MIN_CPU_PCT = 25.0       # DESIGN: non-game processes summing >= 25 % of one CPU across the lag events
 UNFOCUSED_SHARE = 0.10       # [inferred] not the foreground window for >= 10 % of the capture
@@ -112,7 +116,10 @@ SCAN_SPIKE_MS = 20.0         # [inferred] ... as a router ping >= 20 ms above (a
 SCAN_ALIGNED_MIN = 3         # NE 7 row 1: high when >= 3 aligned spikes
 ROAM_SPIKE_S = 3.0           # [inferred] a ping spike this close to an access-point change goes with it
 SERVER_GAPS_MIN = 3          # [inferred] repeated gaps, not one, point at the server or its route
+SERVER_COVER = 0.5           # [inferred] "the server's packets kept arriving" needs them seen over most of the capture
+SERVER_GAP_KINDS = ("delay", "loss")   # NE 4.6, DESIGN net_flows: the server's packets late (a burst after), or lost
 TALKER_MIN_BPS = 1e6         # [inferred] a non-game process moving >= 1 MB/s on average is a bandwidth user
+NIC_MIN_ROWS = 10            # [inferred] probe rounds with the adapter's byte counters read, to clear a bandwidth hog
 DOWNLOAD_NEAR_S = 5.0        # [inferred] pings this close to a logged download rate count as "during" it
 
 OK_STATES = ("ok", "partial")
@@ -137,10 +144,12 @@ _num = fa._num
 
 @dataclass
 class Cleared:
-    """A cause that was checked and ruled out, with what was measured."""
+    """A cause that was checked and ruled out, with what was measured. `firm`: a reason that stands even where
+    the capture holds the cause open (_holds_open), e.g. the frame rate already reaching the display."""
 
     cause: str
     text: str
+    firm: bool = False
 
 
 @dataclass
@@ -180,8 +189,9 @@ class _Item:
 # ------------------------------------------------------------------------- the capture ---
 
 def _fin(v: Any) -> float | None:
+    """A finite number within attribute.MAX_COUNT, else None: a corrupt 1e308 is missing, never evidence (A15)."""
     n = _num(v)
-    return float(n) if n is not None else None
+    return float(n) if n is not None and abs(n) <= attribute.MAX_COUNT else None
 
 
 def _text(v: Any, limit: int = 200) -> str | None:
@@ -214,8 +224,9 @@ class _Env:
         self.sources = cap.sources if isinstance(cap.sources, dict) else {}
         self.attributed = [e for e in self.events if e.kind in attribute.ATTRIBUTED_KINDS]
         self.tick_spans = fa._merged_spans(self.events, fa.FRAME_EVENT_KINDS, pad=fa.TICK_PAD_S)
-        dur = _fin(cap.duration_s)
-        self.duration = dur if dur is not None and dur > 0 else None
+        dur = fa._bounded(cap.duration_s)
+        self.duration = float(dur) if dur is not None and dur > 0 else None
+        self.memo: dict[str, Any] = {}         # values more than one rule reads, worked out once
         self.refresh = fa.refresh_hz(cap)
         self.display = fa.game_display(cap)
         self.adapters = [a for a in self.inv.get("adapters") or [] if isinstance(a, dict) and a.get("software") is not True]
@@ -256,7 +267,8 @@ class _Env:
     # columns ------------------------------------------------------------------------------
     def sys_rows(self, column: str) -> list[tuple[float, float]]:
         t, v = fa._col(self.cap.system, S.T), fa._col(self.cap.system, column)
-        out = [(float(a), float(b)) for a, b in ((_num(ti), _num(fa._at(v, i))) for i, ti in enumerate(t))
+        out = [(float(a), float(b)) for a, b in ((fa._bounded(ti), attribute.read(column, fa._at(v, i)))
+                                                 for i, ti in enumerate(t))
                if a is not None and b is not None]
         out.sort(key=lambda p: p[0])
         return out
@@ -270,8 +282,8 @@ class _Env:
 
     def gpu(self, column: str) -> list[float]:
         t, v = fa._col(self.cap.gpu, G.T), fa._col(self.cap.gpu, column)
-        return [float(x) for x in (_num(fa._at(v, i)) for i, ti in enumerate(t) if _num(ti) is not None)
-                if x is not None]
+        return [x for x in (attribute.read(column, fa._at(v, i)) for i, ti in enumerate(t)
+                            if fa._bounded(ti) is not None) if x is not None]
 
     def gpu_text(self, column: str) -> list[str]:
         return [x for x in fa._col(self.cap.gpu, column) if isinstance(x, str)]
@@ -284,10 +296,10 @@ class _Env:
         return [v for _, v in self.net(column) if v is not None]
 
     def net_readings(self, column: str) -> list[float]:
-        """Every finite value of an N column whose readings can be zero or negative (RSSI in dBm, quality)."""
+        """Every sane value of an N column whose readings can be zero or negative (RSSI in dBm, quality)."""
         t, v = fa._col(self.cap.network, N.T), fa._col(self.cap.network, column)
-        return [float(x) for x in (_num(fa._at(v, i)) for i, ti in enumerate(t) if _num(ti) is not None)
-                if x is not None]
+        return [x for x in (attribute.read(column, fa._at(v, i)) for i, ti in enumerate(t)
+                            if fa._bounded(ti) is not None) if x is not None]
 
     # inventory ----------------------------------------------------------------------------
     def adapter(self, luid: Any) -> dict | None:
@@ -487,12 +499,14 @@ def run_rules(cap: Capture, ctx: dict) -> tuple[list[Finding], dict[str, str], d
             cleared[rule.cause] = res.text
         elif isinstance(res, Unchecked):
             unchecked[rule.cause] = res.text
+    _hold_unexplained_pacing(env, findings, cleared, unchecked)
     findings.sort(key=lambda f: -f.score)
     return findings, cleared, unchecked
 
 
 def run_rule(rule: Rule, cap: Capture, ctx: dict, env: _Env | None = None) -> Any:
-    """One rule: its sources first (not measured -> Unchecked), then the rule, then its gate."""
+    """One rule: its sources first (not measured -> Unchecked), then the rule, then its gate; a cause the
+    capture holds open is never checked and fine (_holds_open)."""
     env = env or _env(cap, ctx)
     for need in rule.needs:
         names = need.split("|")
@@ -500,11 +514,61 @@ def run_rule(rule: Rule, cap: Capture, ctx: dict, env: _Env | None = None) -> An
             return Unchecked(rule.cause, env.need(names[0]))
     try:
         res = rule.fn(cap, ctx)
+        if isinstance(res, Finding) and rule.gate and env.verdict not in GATES[rule.gate]:
+            res = _gated(rule, env)
+        held = _holds_open(rule.cause, env) if isinstance(res, Cleared) and not res.firm else None
     except Exception as exc:  # noqa: BLE001 - one broken rule must not hide the rest; it says it failed
         return Unchecked(rule.cause, f"the check failed ({type(exc).__name__}: {exc})")
-    if isinstance(res, Finding) and rule.gate and env.verdict not in GATES[rule.gate]:
-        return _gated(rule, env)
-    return res
+    return Unchecked(rule.cause, held) if held else res
+
+
+def _holds_open(cause: str, e: _Env) -> str | None:
+    """Why `cause` must not be listed as checked and fine in this capture even where its own evidence says so:
+    the measurement it would be cleared on cannot tell. One predicate for every Cleared path of a rule, its gate's
+    included."""
+    if cause == "gpu_limit":
+        m = _contention(e)
+        if m is not None:      # A7: the game's GPU time was shared, so "the GPU is not the limit" cannot be told
+            return (f"other programs kept the game's GPU {m:.0f}% busy (median of 1 s windows), so whether the "
+                    "game's own GPU work is the limit could not be told")
+    if cause == "cpu_limit" and e.verdict != "gpu":
+        busiest = _fin(e.bound.get("busiest_thread"))
+        if busiest is not None and THREAD_WAITING <= busiest < fa.THREAD_BOUND:      # A6, LC 3.2
+            return (f"the game's busiest thread ran {100 * busiest:.0f}% of a CPU, between "
+                    f"{100 * THREAD_WAITING:.0f}% (waiting) and {100 * fa.THREAD_BOUND:.0f}% (CPU-bound): the CPU "
+                    "may be close to its limit, so it is not ruled out")
+    return None
+
+
+def _contention(e: _Env) -> float | None:
+    """A7 (LC 4.6): the median 1 s share other programs kept the game adapter's engine busy, outside lag events,
+    when it is OTHER_GPU_PCT or more; else None."""
+    if "contention" not in e.memo:
+        vals = e.steady(S.GPU_OTHER_PCT)
+        m = st.median(vals) if vals else None
+        e.memo["contention"] = m if m is not None and m >= OTHER_GPU_PCT else None
+    return e.memo["contention"]
+
+
+def _hold_unexplained_pacing(e: _Env, findings: list[Finding], cleared: dict[str, str],
+                             unchecked: dict[str, str]) -> None:
+    """A11: uneven pacing that no finding claims, over UNEVEN_SHARE of the capture or more, leaves the pacing
+    causes open: "frame pacing: checked and fine" would deny what the frames showed."""
+    claimed = {i for f in findings for i in f.event_ids}
+    loose = [ev for ev in e.events if ev.kind == "pacing" and ev.id not in claimed]
+    if not loose or e.duration is None:
+        return
+    share = min(1.0, _union_s((ev.t_start, ev.t_end) for ev in loose) / e.duration)
+    if share < UNEVEN_SHARE:
+        return
+    worst = max(loose, key=lambda ev: ev.severity)
+    why = (f"uneven pacing covered {100 * share:.0f}% of the capture (worst "
+           f"{labels.severity_text('pacing', worst.severity, worst.detail)}) and no rule explained it, so it is not "
+           "ruled out")
+    for cause in ("uneven_pacing", "vsync_judder"):
+        if cause in cleared:
+            del cleared[cause]
+            unchecked[cause] = why
 
 
 def _gated(rule: Rule, env: _Env) -> Any:
@@ -635,12 +699,13 @@ def _gpu_limit(cap: Capture, ctx: dict) -> Any:
     if e.frames_measured:
         if v in ("gpu", "mixed") and _fps_reaches_display(e):
             return Cleared("gpu_limit", _sentence(f"the GPU sets the pace, but at {e.avg_fps:.0f} FPS the game "
-                                                  f"already reaches the {e.refresh:.0f} Hz display"))
+                                                  f"already reaches the {e.refresh:.0f} Hz display"), firm=True)
         g, ft = _fin(b.get("gpu_ms")), _fin(b.get("ft_ms"))
         detail = f" (r = {r:.2f})" if r is not None else ""
         if v == "gpu" and r is not None:
-            c.support("frame_timing", W_STEADY, f"the GPU was busy {g:.1f} ms of each {ft:.1f} ms frame{detail}; "
-                                                f"GPU-bound at {fa.R_GPU:.2f} or more", r, "", fa.R_GPU)
+            busy = (f"the GPU was busy {g:.1f} ms of each {ft:.1f} ms frame" if g is not None and ft is not None
+                    else f"the GPU was busy {100 * r:.0f}% of each frame")
+            c.support("frame_timing", W_STEADY, f"{busy}{detail}; GPU-bound at {fa.R_GPU:.2f} or more", r, "", fa.R_GPU)
         elif v == "gpu":
             c.support("frame_timing", W_STEADY, "frame timing shows the GPU as the limit")
         elif v == "mixed":
@@ -668,6 +733,10 @@ def _gpu_limit(cap: Capture, ctx: dict) -> Any:
             c.neutral("gpu_engine", f"the game's 3D engine was {m:.0f}% busy", m, "%", ENGINE_BUSY_PCT)
     elif not e.measured("system"):
         c.lack("gpu_engine", W_STEADY, e.need("system"))
+    shared = _contention(e)
+    if shared is not None:
+        c.neutral("gpu_engine", f"other programs kept the same GPU {shared:.0f}% busy as well (median of 1 s "
+                                "windows), so the game shares it", shared, "%", OTHER_GPU_PCT)
     util = e.gpu(G.UTIL_PCT) if e.measured("gpu") else []
     if util:
         m = st.median(util)
@@ -676,8 +745,8 @@ def _gpu_limit(cap: Capture, ctx: dict) -> Any:
                       m, "%", NV_UTIL_PCT)
         throttle = e.gpu(G.THROTTLE_PCT)
         if throttle and st.mean(throttle) >= NV_THROTTLE_PCT:
-            c.neutral("gpu_telemetry", f"the GPU was also held down by heat or power {st.mean(throttle):.0f}% of the "
-                                       "time (see GPU throttling)")
+            c.neutral("gpu_telemetry", f"the GPU was also held down by heat or its power brake "
+                                       f"{st.mean(throttle):.0f}% of the time (see GPU throttling)")
     fps = e.avg_fps
     fixes = [_advice("Lower the render resolution, or use an upscaler (DLSS, FSR or XeSS)"),
              _advice("Turn down the heaviest graphics settings", "Ray tracing, shadows and volumetric effects first."),
@@ -694,7 +763,7 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
     b, v = e.bound, e.verdict
     if v in ("cpu_main", "cpu_all", "mixed", "unknown") and _fps_reaches_display(e):
         return Cleared("cpu_limit", _sentence(f"at {e.avg_fps:.0f} FPS the game already reaches the "
-                                              f"{e.refresh:.0f} Hz display"))
+                                              f"{e.refresh:.0f} Hz display"), firm=True)
     r, busiest = _fin(b.get("r")), _fin(b.get("busiest_thread"))
     if v in ("cpu_main", "cpu_all") and r is not None:
         c.support("frame_timing", W_STEADY, f"the GPU was busy only {100 * r:.0f}% of each frame "
@@ -714,7 +783,7 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
                       100 * busiest, "%", 100 * fa.THREAD_BOUND)
         elif v == "cpu_all":
             c.support("cpu_threads", W_STEADY, "the game kept every CPU core busy")
-        else:
+        else:          # in LC 3.2's grey zone (0.6 to 0.85) this still never clears the cause: _holds_open
             c.against("cpu_threads", W_STEADY, f"the game's busiest thread ran only {100 * busiest:.0f}% of a CPU",
                       100 * busiest, "%", 100 * fa.THREAD_BOUND)
     else:
@@ -734,12 +803,90 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
                              "CPU decides the frame rate.", fixes)
 
 
+def _gpu_contention(cap: Capture, ctx: dict) -> Any:
+    """A7 (LC 4.6 steady signature, LC 10 row 4.6): other programs keep the game adapter's engine busy. CUDA
+    compute counts as 3D (WT verify log), so an ML job on the game's GPU shows here. No gate: whichever side
+    limits the game, a shared GPU is worth knowing."""
+    c = _Case(cap, ctx, "gpu_contention")
+    e = c.env
+    vals = e.steady(S.GPU_OTHER_PCT)
+    if not vals:
+        c.lack("gpu_engine", W_STEADY, "other programs' use of the game's GPU was not measured"
+               + ("" if e.target.get("adapter_luid") else ": which GPU the game rendered on is unknown"))
+        return c.conclude()
+    m = st.median(vals)
+    if m < OTHER_GPU_PCT:
+        c.against("gpu_engine", W_STEADY, f"other programs used the game's GPU only {m:.0f}% of the time (median of "
+                                          f"1 s windows; under {OTHER_GPU_PCT:.0f}%)", m, "%", OTHER_GPU_PCT)
+        return c.conclude()
+    c.support("gpu_engine", W_STEADY, f"other programs kept the game's GPU {m:.0f}% busy (median of 1 s windows; "
+                                      f"{OTHER_GPU_PCT:.0f}% or more)", m, "%", OTHER_GPU_PCT)
+    starved = _starved(e)
+    if starved:
+        c.support("frame_timing", W_STEADY, starved)
+    top = _top_gpu_user(e)
+    name = None
+    if top is not None:
+        name, pid, pct = top
+        c.neutral("background", f"the busiest other GPU user in the process table was {name} (process {pid}, its "
+                                f"busiest engine {pct:.0f}% busy, median); that figure covers any GPU, so it may be "
+                                "on another one", pct, "%", OTHER_GPU_PCT)
+    else:
+        c.neutral("background", "which program it was is not in the process table (it lists the 8 busiest by CPU)")
+    fixes = [_advice(f"Pause or close {name} while you play" if name else "Find and pause the GPU-heavy program",
+                     "Training, rendering, mining or video encoding on the same GPU takes time the game needs; "
+                     "lag-doctor never closes programs itself."),
+             _advice("Or let that work run on another GPU, if this PC has one")]
+    return c.conclude(f"Another program kept the game's GPU {m:.0f}% busy" + (f": {name}" if name else ""),
+                      "Other programs used the same GPU as the game, so the game's frames had to wait for it.", fixes)
+
+
+def _starved(e: _Env) -> str | None:
+    """The game looks starved of its GPU (PM 3.2: other processes' work shows as lower GPU busy): under 90 % of
+    the refresh, its own GPU work short of each frame (r <= R_CPU) and no CPU thread saturated."""
+    fps, hz, r = e.avg_fps, e.refresh, _fin(e.bound.get("r"))
+    busiest = _fin(e.bound.get("busiest_thread"))
+    if not e.frames_measured or fps is None or not hz or r is None:
+        return None
+    if fps >= LIMIT_FPS_FRAC * hz or r > fa.R_CPU or (busiest is not None and busiest >= fa.THREAD_BOUND):
+        return None
+    return (f"and the game ran at {fps:.0f} FPS on a {hz:.0f} Hz screen with its own GPU work only {100 * r:.0f}% of "
+            "each frame and no CPU thread saturated: it waited for the GPU")
+
+
+def _top_gpu_user(e: _Env) -> tuple[str, int, float] | None:
+    """(name, pid, median %) of the other process with the most GPU in the others table, a tick it was not listed
+    on counting as 0. Never the game's own processes or lag-doctor's (A10)."""
+    game = attribute.game_pids(e.cap)
+    tool_pids, tool_names = attribute.tool_processes(e.cap)
+    ticks = 0
+    seen: dict[tuple[int, str], list[float]] = {}
+    for row in e.cap.others if isinstance(e.cap.others, list) else []:
+        if not (isinstance(row, (list, tuple)) and len(row) == 2 and fa._bounded(row[0]) is not None
+                and isinstance(row[1], (list, tuple))):
+            continue
+        ticks += 1
+        for p in row[1]:
+            if not (isinstance(p, (list, tuple)) and len(p) >= 5 and attribute._is_pid(p[0]) and isinstance(p[1], str)):
+                continue
+            if p[0] in game or p[0] in tool_pids or p[1].lower() in tool_names:
+                continue
+            gpu = fa._bounded(p[4])
+            seen.setdefault((p[0], p[1]), []).append(gpu if gpu is not None and gpu > 0 else 0.0)
+    best = None
+    for (pid, name), vals in seen.items():
+        m = st.median(vals + [0.0] * (ticks - len(vals)))
+        if m > 0 and (best is None or m > best[2]):
+            best = (_text(name, 80) or f"process {pid}", pid, m)
+    return best
+
+
 def _others_steady(e: _Env) -> float | None:
     """Median CPU of the listed non-game processes per tick (100 = one logical CPU)."""
     sums = []
     for row in e.cap.others if isinstance(e.cap.others, list) else []:
         if isinstance(row, (list, tuple)) and len(row) == 2 and isinstance(row[1], (list, tuple)):
-            sums.append(math.fsum(float(x) for x in (_num(p[2]) for p in row[1]
+            sums.append(math.fsum(float(x) for x in (fa._bounded(p[2]) for p in row[1]
                                                      if isinstance(p, (list, tuple)) and len(p) >= 3)
                                   if x is not None and x >= 0))
     return st.median(sums) if sums else None
@@ -748,21 +895,22 @@ def _others_steady(e: _Env) -> float | None:
 def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
     c = _Case(cap, ctx, "gpu_throttle")
     e = c.env
-    thr = e.gpu(G.THROTTLE_PCT)
+    thr = e.gpu(G.THROTTLE_PCT)            # heat and the HW power brake only: the power cap has its own column
+    limited = _power_cap_item(c)
     if thr:
         share = st.mean(thr)
-        reasons = {r.strip().lower() for x in e.gpu_text(G.REASONS) for r in x.split(",") if r.strip()}
-        power_only = bool(reasons) and all("power" in r and "brake" not in r for r in reasons)
-        if share >= NV_THROTTLE_PCT and power_only:
-            c.neutral("gpu_telemetry", f"the GPU sat at its power limit {share:.0f}% of the time, which is normal "
-                                       "for a GPU-bound laptop (LC 4.1)", share, "%", NV_THROTTLE_PCT)
-        elif share >= NV_THROTTLE_PCT:
-            c.support("gpu_telemetry", W_DIRECT, f"the NVIDIA GPU was held down by heat or power {share:.0f}% of the "
-                                                 f"time ({NV_THROTTLE_PCT:.0f}% or more)", share, "%", NV_THROTTLE_PCT)
+        if share >= NV_THROTTLE_PCT:
+            c.support("gpu_telemetry", W_DIRECT, f"the NVIDIA GPU was held down by heat or its power brake "
+                                                 f"{share:.0f}% of the time ({NV_THROTTLE_PCT:.0f}% or more)",
+                      share, "%", NV_THROTTLE_PCT)
+        elif limited:        # held down by a lowered power cap instead: no heat is no evidence against that
+            c.neutral("gpu_telemetry", f"heat and its power brake held it down only {share:.0f}% of the time",
+                      share, "%", NV_THROTTLE_PCT)
         else:
-            c.against("gpu_telemetry", W_STEADY, f"the GPU was held down by heat or power only {share:.0f}% of the "
-                                                 f"time (under {NV_THROTTLE_PCT:.0f}%)", share, "%", NV_THROTTLE_PCT)
-    else:
+            c.against("gpu_telemetry", W_STEADY, f"the GPU was held down by heat or its power brake only "
+                                                 f"{share:.0f}% of the time (under {NV_THROTTLE_PCT:.0f}%)",
+                      share, "%", NV_THROTTLE_PCT)
+    elif not limited:
         c.lack("gpu_telemetry", W_DIRECT, "NVML reported no throttle readings")
     temps = e.gpu(G.TEMP_C)
     target = _fin(_dict(e.inv.get("nvidia")).get("temp_target_c"))
@@ -779,6 +927,32 @@ def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
     return c.conclude("The GPU slows down from heat or power limits",
                       "The NVIDIA driver held the GPU's clock down for much of the capture, which lowers the frame "
                       "rate while the GPU is the limit.", fixes)
+
+
+def _power_cap_item(c: _Case) -> bool:
+    """The software power cap (nv_power_cap_pct). While GPU-bound it is the design limit, not throttling, so it
+    is context (LC 4.1, 4.2); it counts only as LC 4.2's power-limit variant, the enforced limit held below the
+    GPU's default (battery, a quiet mode). The default comes from the inventory's nvidia "power_default_w".
+    True when that variant holds."""
+    e = c.env
+    cap = e.gpu(G.POWER_CAP_PCT)
+    if not cap:
+        return False
+    share = st.mean(cap)
+    limits = [w for w in e.gpu(G.POWER_LIMIT_W) if w > 0]
+    limit = st.median(limits) if limits else None
+    default = _fin(_dict(e.inv.get("nvidia")).get("power_default_w"))
+    if share >= NV_THROTTLE_PCT and limit is not None and default and limit < default:
+        c.support("gpu_telemetry", W_STEADY, f"the GPU sat at its power cap {share:.0f}% of the time with the cap at "
+                                             f"{limit:.0f} W, below its {default:.0f} W default (on battery or in a "
+                                             "quiet mode, LC 4.2)", share, "%", NV_THROTTLE_PCT)
+        return True
+    if share > 0:
+        c.neutral("gpu_telemetry", f"the GPU sat at its software power cap {share:.0f}% of the time: the design limit "
+                                   "of a GPU-bound laptop, not throttling (LC 4.1)"
+                  + ("" if default else "; whether the cap was below the GPU's default was not recorded"),
+                  share, "%", NV_THROTTLE_PCT)
+    return False
 
 
 def _quiet_power_hint(c: _Case) -> None:
@@ -932,7 +1106,7 @@ def _power_problems(e: _Env) -> list[str]:
     p = e.power
     out = []
     if p.get("on_battery") is True:
-        pct = _num(p.get("battery_pct"))
+        pct = fa._bounded(p.get("battery_pct"))
         out.append("the laptop ran on battery" + (f" ({pct:.0f}%)" if pct is not None else ""))
     if p.get("saver") is True:
         out.append("battery saver is on")
@@ -992,10 +1166,10 @@ def _power_plan(cap: Capture, ctx: dict) -> Any:
         if share >= CPU_LIMIT_SHARE:
             c.support("cpu_limits", W_STEADY, f"and the CPU was held below full speed in {100 * share:.0f}% of samples",
                       100 * share, "%", 100 * CPU_LIMIT_SHARE)
-    thr = e.gpu(G.THROTTLE_PCT)
+    thr = e.gpu(G.THROTTLE_PCT)          # heat or the power brake; never the power cap, the GPU's design limit
     if thr and st.mean(thr) >= NV_THROTTLE_PCT:
-        c.support("gpu_telemetry", W_STEADY, f"and the GPU was held down {st.mean(thr):.0f}% of the time",
-                  st.mean(thr), "%", NV_THROTTLE_PCT)
+        c.support("gpu_telemetry", W_STEADY, f"and the GPU was held down by heat or its power brake "
+                                             f"{st.mean(thr):.0f}% of the time", st.mean(thr), "%", NV_THROTTLE_PCT)
     fixes: list[FixSuggestion] = []
     name = _text(p.get("scheme_name"), 80)
     quiet = name is not None and any(w in name.lower() for w in QUIET_PLAN_WORDS)
@@ -1058,6 +1232,9 @@ def _vsync_judder(cap: Capture, ctx: dict) -> Any:
     e = c.env
     if e.verdict == "capped":
         return None                        # a cap that does not divide the refresh: the frame_cap rule's case
+    dropped = _dropped_judder(e)           # A11: frames past the refresh never shown; needs no bound verdict
+    if dropped is not None:
+        return _dropped_frames_finding(c, dropped, cap_fps=None)
     q = _fin(e.bound.get("quantised_pct"))
     hz = e.refresh
     if q is None or not hz:
@@ -1095,6 +1272,68 @@ def _vsync_judder(cap: Capture, ctx: dict) -> Any:
                       "twice as long as others, which looks jerky.", fixes, ids)
 
 
+@dataclass
+class _Dropped:
+    """A11: the game presents faster than a fixed refresh, so frames are never shown and motion jumps; only
+    the animation error sees it (every shown frame holds one refresh)."""
+
+    events: list[LagEvent]       # the pacing events only the animation-error test flagged
+    share: float                 # of the capture they cover, 0..1
+    present_fps: float
+    dropped_pct: float
+    anim_ms: float               # their worst animation-error p95
+
+
+def _dropped_judder(e: _Env, cap_fps: float | None = None) -> _Dropped | None:
+    """One predicate for vsync_judder and frame_cap: anim-only pacing events on whole refresh periods (their own
+    quantised_pct, LC 3.3) over UNEVEN_SHARE of the capture or more, DROPPED_PCT of frames never shown, and the game
+    presenting faster than a fixed refresh (VRR not seen) (A11, LC 2.4). It needs no bound verdict: a capture too
+    short for one (LC 2.6) still shows this."""
+    hz, dropped = e.refresh, _fin(e.stats.get("dropped_pct"))
+    if not hz or e.duration is None or e.bound.get("vrr") is True or dropped is None or dropped < DROPPED_PCT:
+        return None
+    fps = cap_fps or _present_fps(e)
+    if fps is None or fps <= hz + REFRESH_SLACK_HZ:
+        return None
+    evs = [ev for ev in e.events if ev.kind == "pacing" and _dict(ev.detail).get("criterion") == "anim"
+           and (_fin(_dict(ev.detail).get("quantised_pct")) or 0.0) >= QUANTISED_PCT]
+    share = min(1.0, _union_s((ev.t_start, ev.t_end) for ev in evs) / e.duration)
+    if not evs or share < UNEVEN_SHARE:
+        return None
+    return _Dropped(evs, share, fps, dropped, max(float(ev.severity) for ev in evs))
+
+
+def _present_fps(e: _Env) -> float | None:
+    """How fast the game presents: 1000 / the median MsBetweenPresents of its own frames, else the bound's FT."""
+    fm, ft = e.fr.get(F.FRAME_MS) or [], _fin(e.bound.get("ft_ms"))
+    ms = [float(x) for i, x in enumerate(fm) if fa._pos(x) and fa._is_app(e.fr, i)]
+    if ms:
+        return 1000.0 / st.median(ms)
+    return 1000.0 / ft if ft and ft > 0 else None
+
+
+def _dropped_frames_finding(c: _Case, dj: _Dropped, cap_fps: float | None) -> Any:
+    """The finding for dropped-frame judder: vsync_judder's when the game runs uncapped, frame_cap's under a cap
+    set above the refresh."""
+    hz = c.env.refresh
+    how = f"is capped at {cap_fps:.0f} FPS" if cap_fps is not None else f"presented about {dj.present_fps:.0f} FPS"
+    c.support("frame_timing", W_STEADY, f"the game {how}, above the {hz:.0f} Hz refresh: {dj.dropped_pct:.0f}% of its "
+                                        f"frames were never shown, and motion jumped (animation error up to "
+                                        f"{dj.anim_ms:.1f} ms, p95) over {100 * dj.share:.0f}% of the capture",
+              dj.dropped_pct, "%", DROPPED_PCT)
+    fixes = [_advice(f"Cap the frame rate at {hz:.0f} FPS (the refresh rate)",
+                     "In the game, the GPU driver or RTSS; then every frame made is a frame shown."),
+             _advice("Or turn on VSync", "The game then waits for each refresh instead of making frames that are "
+                                         "never shown."),
+             _advice("Or turn on VRR (G-SYNC or FreeSync) if the screen supports it")]
+    title = (f"A frame-rate cap above the refresh rate drops frames: {cap_fps:.0f} FPS on a {hz:.0f} Hz screen"
+             if cap_fps is not None else
+             f"Frames are dropped: the game runs faster than the {hz:.0f} Hz screen")
+    return c.conclude(title, "The game makes more frames than the screen can show, so some are never shown and "
+                             "motion jumps unevenly although every shown frame is on time.", fixes,
+                      [ev.id for ev in dj.events])
+
+
 def _uneven_present_events(e: _Env) -> list[LagEvent]:
     """Pacing events where the game's own presents swing, not just the display (frames.py's detail)."""
     out = []
@@ -1112,7 +1351,7 @@ def _uneven_share(e: _Env) -> tuple[list[LagEvent], float | None]:
     evs = _uneven_present_events(e)
     if e.duration is None:
         return evs, None
-    return evs, _union_s((ev.t_start, ev.t_end) for ev in evs) / e.duration
+    return evs, min(1.0, _union_s((ev.t_start, ev.t_end) for ev in evs) / e.duration)    # A11: never past 100 %
 
 
 def _uneven_presents(e: _Env) -> bool:
@@ -1130,10 +1369,10 @@ def _uneven_pacing(cap: Capture, ctx: dict) -> Any:
     if share >= UNEVEN_SHARE:
         swing = max(_fin(ev.detail.get("present_swing_pct")) or 0.0 for ev in uneven)
         sev = st.median([float(ev.severity) for ev in uneven])
-        w = W_DIRECT if share >= UNEVEN_DIRECT_SHARE else W_STEADY
-        c.support("frame_timing", w, f"the game's own frame times swung by {ev_mod.PACING_SWING_MS:.0f} ms or more on "
-                                     f"up to {swing:.0f}% of frames (median swing {sev:.1f} ms), over "
-                                     f"{100 * share:.0f}% of the capture ({100 * UNEVEN_SHARE:.0f}% or more)",
+        # A1: one frame-time pattern is a steady metric past its threshold, never a direct readout (LC 5.1)
+        c.support("frame_timing", W_STEADY, f"the game's own frame times swung by {ev_mod.PACING_SWING_MS:.0f} ms or "
+                                            f"more on up to {swing:.0f}% of frames (median swing {sev:.1f} ms), over "
+                                            f"{100 * share:.0f}% of the capture ({100 * UNEVEN_SHARE:.0f}% or more)",
                   100 * share, "%", 100 * UNEVEN_SHARE)
     else:
         judder = [ev for ev in e.events if ev.kind == "pacing" and ev not in uneven]
@@ -1164,9 +1403,21 @@ def _frame_cap(cap: Capture, ctx: dict) -> Any:
     if fps is None:
         c.lack("frame_timing", W_STEADY, "the cap's rate was not measured")
         return c.conclude()
+    shared = _contention(e)
+    if shared is not None:     # A7: a GPU other programs keep busy can pace the game as evenly as a cap does
+        return Unchecked("frame_cap", f"the game ran at a steady {fps:.0f} FPS, but other programs kept its GPU "
+                                      f"{shared:.0f}% busy, so that may be them rather than a frame-rate cap")
     if not hz:
         return Unchecked("frame_cap", f"the game is capped at {fps:.0f} FPS, but the display's refresh rate is "
                                       "unknown, so the cap cannot be compared with it")
+    if fps > hz + REFRESH_SLACK_HZ:
+        # A11: a cap above a fixed refresh is no sensible cap: the screen never shows the frames beyond it
+        dropped = _dropped_judder(e, cap_fps=fps)
+        if dropped is not None:
+            return _dropped_frames_finding(c, dropped, cap_fps=fps)
+        c.neutral("frame_timing", f"capped at {fps:.0f} FPS, above the {hz:.0f} Hz refresh: the screen shows at most "
+                                  f"{hz:.0f} of those frames a second", fps, "FPS", hz)
+        return c.conclude()
     if fps >= CAP_FRAC * hz:
         c.against("frame_timing", W_STEADY, f"capped at {fps:.0f} FPS, within {100 * (1 - CAP_FRAC):.0f}% of the "
                                             f"{hz:.0f} Hz refresh: a sensible cap", fps, "FPS", CAP_FRAC * hz)
@@ -1228,22 +1479,34 @@ def _game_dvr(cap: Capture, ctx: dict) -> Any:
     if dvr is None and background is None:
         c.lack("static", W_DIRECT, "the Game Bar capture settings were not read")
         return c.conclude()
+    others = _advice("Also check NVIDIA Instant Replay or other recorders", "They cost the same kind of GPU time.")
     if background is True:
         c.support("static", W_STEADY, "background recording (\"record what happened\") is on, so Windows keeps "
                                       "encoding the screen while you play")
-    elif dvr is True:
-        c.support("static", W_STATIC, "Game Bar's game capture (Game DVR) is on; whether it records in the background "
-                                      "is unknown")
-    else:
-        c.against("static", W_DIRECT, "Game Bar capture and background recording are off")
+        # CC-6: the automatic change only where background recording is known to be on (a measured non-game
+        # VideoEncode use would do too, but no collector records it yet)
+        fixes = [FixSuggestion(title="Turn off Game Bar capture and background recording",
+                               detail="Changes two of your own Windows settings; the registry meaning is community-"
+                                      "documented (WT 8). Restart the game afterwards.",
+                               fix_id="game_dvr_off", needs_restart="game"), others]
+        return c.conclude("Background recording is on", "Recording the screen in the background uses GPU time the "
+                                                         "game could have.", fixes)
+    if background is False:
+        c.against("static", W_DIRECT, "background recording is off"
+                  + (" (Game Bar capture itself is on, which costs nothing until you record)" if dvr is True else ""))
         return c.conclude()
-    fixes = [FixSuggestion(title="Turn off Game Bar capture and background recording",
-                           detail="Changes two of your own Windows settings; the registry meaning is community-"
-                                  "documented (WT 8). Restart the game afterwards.",
-                           fix_id="game_dvr_off", needs_restart="game"),
-             _advice("Also check NVIDIA Instant Replay or other recorders", "They cost the same kind of GPU time.")]
-    return c.conclude("Background recording is on", "Recording the screen in the background uses GPU time the game "
-                                                     "could have.", fixes)
+    if dvr is not True:
+        c.against("static", W_DIRECT, "Game Bar capture is off")
+        return c.conclude()
+    # CC-6: Windows' default state. The capture switch is on and the background setting was not there to read,
+    # whose meaning is unverified (WT 8, LC 4.15), so this is advice to check, never an automatic change.
+    c.support("static", W_STATIC, "Game Bar capture is on; whether it records in the background is unknown")
+    fixes = [_advice("Check whether Windows records gameplay in the background",
+                     "In the Xbox Game Bar's capture settings, turn background recording off if you do not use it."),
+             others]
+    return c.conclude("Game Bar capture is on; whether it records in the background is unknown",
+                      "If Windows records gameplay in the background, that costs GPU time the game could have. "
+                      "The setting could not be read, so check it.", fixes)
 
 
 def _game_mode_off(cap: Capture, ctx: dict) -> Any:
@@ -1272,9 +1535,15 @@ def _not_focused(cap: Capture, ctx: dict) -> Any:
         return c.conclude()
     share = sum(1 for v in vals if v == 0.0) / len(vals)
     linked = _dict(e.causes.get("not_focused")).get("label") == "supports"
-    if share >= UNFOCUSED_SHARE:
+    if share >= UNFOCUSED_SHARE and e.verdict in GATES["cpu"]:
         c.support("foreground", W_STEADY, f"the game was not the active window for {100 * share:.0f}% of the capture "
                                           f"({100 * UNFOCUSED_SHARE:.0f}% or more)", 100 * share, "%", 100 * UNFOCUSED_SHARE)
+    elif share >= UNFOCUSED_SHARE:
+        # A9 (LC 5.1): less CPU time for a window behind others costs frames only on the CPU side; the
+        # event-linked item below still counts on any side
+        c.neutral("foreground", f"the game was not the active window for {100 * share:.0f}% of the capture, but the "
+                                f"frame rate is limited by {labels.BOUND.get(e.verdict, e.verdict)}, so less CPU time "
+                                "is not what holds it back", 100 * share, "%", 100 * UNFOCUSED_SHARE)
     elif not linked:     # mostly in front is no evidence against stutters that all came while it was behind
         c.against("foreground", W_STEADY, f"the game was the active window {100 * (1 - share):.0f}% of the time",
                   100 * share, "%", 100 * UNFOCUSED_SHARE)
@@ -1326,20 +1595,82 @@ def _first_cause_ids(e: _Env, causes: Iterable[str]) -> list[int]:
     return [ev.id for ev in e.attributed if ev.causes and ev.causes[0] in want]
 
 
-def _name_cpu(e: _Env, name: str, spans: list[tuple[float, float]]) -> tuple[float | None, float | None]:
-    """(mean CPU % of every process named `name` over the spans, median over the other ticks): 100 = one CPU."""
+def _name_cpu(e: _Env, name: str, spans: list[tuple[float, float]],
+              pids: set[int] | None = None) -> tuple[float | None, float | None]:
+    """(mean CPU % of the processes named `name` over the spans, median over the other ticks): 100 = one CPU.
+    With `pids`, only those processes count, so a steady job of the same name never props up the figure (A5)."""
     during, normal = [], []
     starts = [a for a, _ in spans]
     for row in e.cap.others if isinstance(e.cap.others, list) else []:
-        if not (isinstance(row, (list, tuple)) and len(row) == 2 and _num(row[0]) is not None
+        if not (isinstance(row, (list, tuple)) and len(row) == 2 and fa._bounded(row[0]) is not None
                 and isinstance(row[1], (list, tuple))):
             continue
         t = float(row[0])
-        total = math.fsum(float(x) for x in (_num(p[2]) for p in row[1] if isinstance(p, (list, tuple)) and len(p) >= 3
-                                             and p[1] == name) if x is not None and x >= 0)
+        total = math.fsum(float(x) for x in (fa._bounded(p[2]) for p in row[1] if isinstance(p, (list, tuple))
+                                             and len(p) >= 3 and p[1] == name and (pids is None or p[0] in pids))
+                          if x is not None and x >= 0)
         i = bisect.bisect_right(starts, t) - 1
         (during if i >= 0 and t <= spans[i][1] else normal).append(total)
     return (st.mean(during) if during else None), (st.median(normal) if normal else None)
+
+
+@dataclass
+class _Named:
+    """A program the background_hogs finding names: the processes of one image name that rose (A5), the game's own
+    child processes apart from other programs (A10)."""
+
+    name: str                    # the image name exactly as the process table listed it
+    role: str                    # "background", or "game_helper": a child process of the game
+    events: list[LagEvent]
+    pids: list[int]              # the biggest rise across the events first
+    rise: dict[int, float]       # pid -> its median rise over the events it rose in
+    col: str                     # what rose: "cpu", "io" or "gpu"
+
+
+def _image_name(v: Any) -> str | None:
+    """A process image name from the capture, exactly as listed, when it is one a fix may name: printable,
+    1 to 260 characters, no path (fixes/priority.py checks it against the live process)."""
+    if not isinstance(v, str) or not 0 < len(v) <= 260 or not v.isprintable() or v.strip() != v or "\\" in v:
+        return None
+    return v
+
+
+def _same_image(a: str, b: str | None) -> bool:
+    return b is not None and a.casefold() == b.casefold()          # Windows image names ignore case
+
+
+def _named_programs(e: _Env, blamed: list[LagEvent]) -> list[_Named]:
+    """The programs the background_* events blamed, most events first; within each, its processes ordered by how
+    much they rose (attribute.py's process_rises), never by PID number (A5)."""
+    groups: dict[tuple[str, str], list[LagEvent]] = {}
+    for ev in blamed:
+        d = _dict(ev.detail)
+        name = _image_name(d.get("process"))
+        if name:
+            role = "game_helper" if d.get("process_role") == "game_helper" else "background"
+            groups.setdefault((name, role), []).append(ev)
+    out = []
+    for (name, role), evs in groups.items():
+        col = max(attribute.BLAME_COLUMNS.values(), key=lambda c: sum(
+            1 for ev in evs if attribute.BLAME_COLUMNS.get(ev.causes[0]) == c))
+        total: dict[int, float] = {}
+        each: dict[int, list[float]] = {}
+        for ev in evs:
+            d = _dict(ev.detail)
+            rises = [(p[0], _fin(p[1])) for p in d.get("process_rises") or []
+                     if isinstance(p, (list, tuple)) and len(p) == 2 and attribute._is_pid(p[0])]
+            if not rises:             # an older capture: its pids are listed biggest rise first, without numbers
+                rises = [(p, None) for p in d.get("process_pids") or [] if attribute._is_pid(p)]
+            same = attribute.BLAME_COLUMNS.get(ev.causes[0]) == col
+            for pid, rise in rises:
+                total.setdefault(pid, 0.0)
+                if rise is not None and same:
+                    total[pid] += rise
+                    each.setdefault(pid, []).append(rise)
+        pids = sorted(total, key=lambda p: -total[p])        # stable: ties keep the order they were listed in
+        out.append(_Named(name, role, evs, pids, {p: st.median(v) for p, v in each.items()}, col))
+    out.sort(key=lambda n: -len(n.events))
+    return out
 
 
 def _background_hogs(cap: Capture, ctx: dict) -> Any:
@@ -1364,81 +1695,120 @@ def _background_hogs(cap: Capture, ctx: dict) -> Any:
                       ("background_gpu", "another program's GPU use rising")):
         linked = _event_link(c, k, "background", phrase, contradict=not some_support) or linked
     blamed = [ev for ev in e.attributed if ev.causes and ev.causes[0] in kinds]
-    names: dict[str, list[LagEvent]] = {}
-    for ev in blamed:
-        name = _text(ev.detail.get("process"), 80) if isinstance(ev.detail, dict) else None
-        if name:
-            names.setdefault(name, []).append(ev)
     named = []
-    for name, evs in sorted(names.items(), key=lambda kv: -len(kv[1])):
-        spans = sorted((ev.t_start - attribute.WINDOW_BEFORE_S, ev.t_end + attribute.WINDOW_AFTER_S) for ev in evs)
+    for n in _named_programs(e, blamed):
+        spans = sorted((ev.t_start - attribute.WINDOW_BEFORE_S, ev.t_end + attribute.WINDOW_AFTER_S) for ev in n.events)
         merged: list[tuple[float, float]] = []
         for a, b in spans:
             if merged and a <= merged[-1][1]:
                 merged[-1] = (merged[-1][0], max(merged[-1][1], b))
             else:
                 merged.append((a, b))
-        during, normal = _name_cpu(e, name, merged)
-        pids = sorted({p for ev in evs for p in ev.detail.get("process_pids") or [] if isinstance(p, int)})
-        many = f" ({len(pids)} processes)" if len(pids) > 1 else ""
+        during, normal = _name_cpu(e, n.name, merged, set(n.pids) if n.pids else None)
+        many = f" ({len(n.pids)} processes)" if len(n.pids) > 1 else ""
+        shown = _text(n.name, 80) or "a program"
+        who = shown if n.role == "background" else f"a helper process of the game, {shown}"
         if during is not None and during >= HOG_MIN_CPU_PCT:
-            named.append((name, pids))
-            c.neutral("background", f"{name}{many} used {during:,.0f}% of a CPU during {len(evs)} of "
+            named.append(n)
+            c.neutral("background", f"{who}{many} used {during:,.0f}% of a CPU during {len(n.events)} of "
                                     f"{len(e.attributed)} stutters and FPS drops, against {normal or 0:,.0f}% "
                                     "normally (100% = one logical CPU)", during, "%", HOG_MIN_CPU_PCT)
-        elif during is None:
-            named.append((name, pids))
-            c.neutral("background", f"{name}{many} rose the most during {len(evs)} of {len(e.attributed)} stutters "
-                                    "and FPS drops (its disk or GPU use)")
+        elif during is None or n.col != "cpu":
+            named.append(n)
+            c.neutral("background", f"{who}{many} rose the most during {len(n.events)} of {len(e.attributed)} "
+                                    "stutters and FPS drops (its disk or GPU use)")
     if not linked and named:
         c.support("background", W_STATIC, f"{len(blamed)} of {len(e.attributed)} stutters and FPS drops were best "
                                           "explained by another program, too few to be sure")
     if _dict(e.causes.get("background_cpu")).get("label") == "supports":
         _cpu_side_item(c, [ev.id for ev in blamed if ev.causes[0] == "background_cpu"])
     fixes = _hog_fixes(e, named)
-    who = ", ".join(n for n, _ in named[:3]) or "other programs"
+    others = [_text(n.name, 80) for n in named if n.role == "background"][:3]
+    helpers = [_text(n.name, 80) for n in named if n.role == "game_helper"][:3]
+    if helpers and not others:     # A10: the game's own child processes are no background programs
+        return c.conclude(f"The game's own helper processes got busy when it lagged: {', '.join(helpers)}",
+                          "Processes the game itself started worked hard exactly when it stuttered or dropped frames, "
+                          "taking CPU time its main thread needed.", fixes, [ev.id for ev in blamed])
+    who = ", ".join(others) or "other programs"
+    if helpers:
+        who += f"; and the game's own {', '.join(helpers)}"
     return c.conclude(f"Background programs got busy when the game lagged: {who}",
                       "Other programs' work rose exactly when the game stuttered or dropped frames, taking time the "
                       "game needed.", fixes, [ev.id for ev in blamed])
 
 
-def _hog_fixes(e: _Env, named: list[tuple[str, list[int]]]) -> list[FixSuggestion]:
-    game = {p for p in e.target.get("pids") or [] if isinstance(p, int)}
-    if isinstance(e.target.get("pid"), int):
-        game.add(e.target["pid"])
-    create = _create_times(e)
+RISE_TEXT = {"cpu": lambda r: f"{r:.0f}% of a CPU", "io": lambda r: f"{r / 1e6:.1f} MB/s",
+             "gpu": lambda r: f"{r:.0f}% of a GPU engine"}
+
+
+def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
+    game = attribute.game_pids(e.cap)
+    game_name = _image_name(e.target.get("name"))
+    offer = _offerable(e)
     fixes: list[FixSuggestion] = []
-    for name, pids in named[:2]:
-        for pid in pids:
-            ct = create.get(pid)
+    for n in named[:2]:
+        # SEC-2, A10: never the game or its children (the PID check below), nor a process with the game's own
+        # image name (a sibling of a multi-process game is no child of the chosen process); the fix needs the PIDs
+        if not game or _same_image(n.name, game_name):
+            continue
+        for pid in n.pids:
+            ct = offer.get((pid, n.name))
             if pid in game or ct is None or not 0 < pid <= 0xFFFFFFFF:     # DESIGN: a valid, non-game PID
                 continue
-            fixes.append(FixSuggestion(title=f"Lower the priority of {name} (process {pid}) for this session",
+            rise = n.rise.get(pid)
+            up = f", up {RISE_TEXT[n.col](rise)} when the game lagged" if rise is not None else ""
+            fixes.append(FixSuggestion(title=f"Lower the priority of {_text(n.name, 80)} (process {pid}{up}) for this "
+                                             "session",
                                        detail="Below-normal priority until it exits; `lagdoctor undo` puts it back. "
                                               "lag-doctor refuses services, protected processes and the game.",
                                        fix_id="background_priority",
-                                       # exclude: the fix itself refuses these too (the game and its children)
+                                       # the fix refuses these too: the game and its children, any process with the
+                                       # game's name, and a live process whose image name is not `name`
                                        params={"pid": pid, "create_time": ct, "class": "below_normal",
-                                               "exclude": sorted(game)[:4096]}))
+                                               "exclude": sorted(game)[:4096], "name": n.name,
+                                               "game_name": game_name}))
             break
-    for name, pids in named[:3]:
-        shown = ", ".join(str(p) for p in pids[:4]) + (" ..." if len(pids) > 4 else "")
-        fixes.append(_advice(f"Pause or close {name} while you play" + (f" (process {shown})" if shown else ""),
-                             "Check it is not something you need first; lag-doctor never closes programs itself."))
+    for n in named[:3]:
+        shown = ", ".join(str(p) for p in n.pids[:4]) + (" ..." if len(n.pids) > 4 else "")
+        procs = f" (process {shown})" if shown else ""
+        name = _text(n.name, 80)
+        if n.role == "game_helper":
+            fixes.append(_advice(f"{name}{procs} is the game's own helper process",
+                                 "The game started it, so lag-doctor does not suggest closing it. Its work (often "
+                                 "compiling shaders or loading) usually settles; if it keeps happening, check the "
+                                 "game's own settings and forums."))
+        elif _same_image(n.name, game_name):
+            fixes.append(_advice(f"Check what {name}{procs} is before closing anything",
+                                 "It has the game's own name, so it may be part of the game (a renderer or a launcher "
+                                 "process); lag-doctor never closes programs itself."))
+        else:
+            fixes.append(_advice(f"Pause or close {name} while you play{procs}",
+                                 "Check it is not something you need first; lag-doctor never closes programs itself."))
     fixes.append(_advice("Pause downloads and updates while playing", "Steam, Epic, the browser, Windows Update."))
     return fixes
 
 
-def _create_times(e: _Env) -> dict[int, int]:
-    """pid -> creation time, from the others table's sixth field (older captures may lack it)."""
-    out: dict[int, int] = {}
+def _offerable(e: _Env) -> dict[tuple[int, str], int]:
+    """(pid, image name) -> creation time, for the processes a priority fix may name (SEC-2). From the others
+    table's sixth field (older captures lack it), and only from the rows where that PID was listed under that
+    name; none when that (pid, name) was listed with two creation times, or the PID was listed under another
+    name later in the capture (a reused PID)."""
+    times: dict[tuple[int, str], set[int]] = {}
+    last: dict[int, tuple[float, str]] = {}
     for row in e.cap.others if isinstance(e.cap.others, list) else []:
-        if isinstance(row, (list, tuple)) and len(row) == 2 and isinstance(row[1], (list, tuple)):
-            for p in row[1]:
-                if (isinstance(p, (list, tuple)) and len(p) >= 6 and isinstance(p[0], int) and isinstance(p[5], int)
-                        and not isinstance(p[5], bool) and p[5] > 0):
-                    out[p[0]] = p[5]
-    return out
+        t = fa._bounded(row[0]) if isinstance(row, (list, tuple)) and len(row) == 2 else None
+        if t is None or not isinstance(row[1], (list, tuple)):
+            continue
+        for p in row[1]:
+            if not (isinstance(p, (list, tuple)) and len(p) >= 2 and attribute._is_pid(p[0])
+                    and isinstance(p[1], str)):
+                continue
+            if p[0] not in last or t >= last[p[0]][0]:
+                last[p[0]] = (t, p[1])
+            ct = p[5] if len(p) >= 6 else None
+            if isinstance(ct, int) and not isinstance(ct, bool) and 0 < ct < 2 ** 63:
+                times.setdefault((p[0], p[1]), set()).add(ct)
+    return {key: next(iter(cts)) for key, cts in times.items() if len(cts) == 1 and last[key[0]][1] == key[1]}
 
 
 def _hdd_streaming(cap: Capture, ctx: dict) -> Any:
@@ -1572,7 +1942,9 @@ def _cpu_side_item(c: _Case, ids: list[int]) -> None:
     if not ids:
         return
     want = set(ids)
-    cpu = sum(1 for ev in c.env.attributed if ev.id in want and _dict(ev.detail).get("side") == "cpu")
+    # A3: a side the overall verdict stood in for (its frames had no GPU timing) is no frame-timing evidence
+    cpu = sum(1 for ev in c.env.attributed if ev.id in want and _dict(ev.detail).get("side") == "cpu"
+              and _dict(ev.detail).get("side_source") != "verdict")
     if cpu / len(want) >= SIDE_SHARE:
         c.support("frame_timing", W_STEADY, f"the GPU sat idle through most of the slow frame in {cpu} of "
                                             f"{len(want)} of them, so the CPU side was slow",
@@ -1678,10 +2050,11 @@ def _wifi_roaming(cap: Capture, ctx: dict) -> Any:
     if done is not None:
         return done
     t = fa._col(cap.network, N.T)
-    aps = [(float(ti), b) for ti, b in ((_num(ti), _text(x, 40)) for ti, x in zip(t, fa._col(cap.network, N.WIFI_BSSID)))
+    aps = [(float(ti), b) for ti, b in ((fa._bounded(ti), _text(x, 40))
+                                        for ti, x in zip(t, fa._col(cap.network, N.WIFI_BSSID)))
            if ti is not None and b is not None]
     bssid = [b for _, b in aps]
-    chans = [(_num(ti), _num(ch)) for ti, ch in zip(t, fa._col(cap.network, N.WIFI_CHANNEL))]
+    chans = [(fa._bounded(ti), attribute.read(N.WIFI_CHANNEL, ch)) for ti, ch in zip(t, fa._col(cap.network, N.WIFI_CHANNEL))]
     chans = [(float(a), int(b)) for a, b in chans if a is not None and b is not None]
     roams = _changes(bssid)
     hops = _changes([ch for _, ch in chans])
@@ -1733,7 +2106,7 @@ def _wifi_scan_spikes(cap: Capture, ctx: dict) -> Any:
     if not isinstance(scans_raw, list):
         c.lack("network_path", W_DIRECT, "Wi-Fi scan notifications were not recorded")
         return c.conclude()
-    scans = sorted(float(x) for x in scans_raw if _num(x) is not None)
+    scans = sorted(float(x) for x in scans_raw if fa._bounded(x) is not None)
     if not scans:
         dur = f"{e.duration:.0f} s " if e.duration else ""
         return Unchecked("wifi_scan_spikes", f"no Wi-Fi background scan happened during the {dur}capture (they come "
@@ -1774,12 +2147,13 @@ def _bufferbloat(cap: Capture, ctx: dict) -> Any:
     c = _Case(cap, ctx, "bufferbloat")
     e = c.env
     t = fa._col(cap.network, N.T)
-    cols = [fa._col(cap.network, n) for n in (N.NIC_RX_BPS, N.NIC_TX_BPS, N.INET_RTT_MS, N.GW_RTT_MS)]
+    names = (N.NIC_RX_BPS, N.NIC_TX_BPS, N.INET_RTT_MS, N.GW_RTT_MS)
+    cols = [fa._col(cap.network, n) for n in names]
     rows = []
     for i, ti in enumerate(t):
-        if _num(ti) is None:
+        if fa._bounded(ti) is None:
             continue
-        rx, tx, inet, gw = (_fin(fa._at(col, i)) for col in cols)
+        rx, tx, inet, gw = (attribute.read(n, fa._at(col, i)) for n, col in zip(names, cols))
         rows.append((rx, tx, inet if inet is not None and inet > 0 else None, gw if gw is not None and gw > 0 else None))
     rx_peak = max((r[0] for r in rows if r[0] is not None), default=None)
     tx_peak = max((r[1] for r in rows if r[1] is not None), default=None)
@@ -1855,17 +2229,31 @@ def _server_lag(cap: Capture, ctx: dict) -> Any:
     c = _Case(cap, ctx, "server_lag")
     e = c.env
     server = e.net_values(N.SERVER_RTT_MS)
-    if not e.measured("net_flows") and not server:
+    flows_ok = e.measured("net_flows")
+    if not flows_ok and not server:
         return Unchecked("server_lag", "needs the game's own network traffic (ETW rights) or a game server that "
                                        f"answers pings: {e.why('net_flows')}")
+    flow = e.flows().get("server")
+    flow = flow if isinstance(flow, dict) else None
+    if flows_ok and flow is None and not server:
+        # CC-1: the tracker follows UDP only, so a TCP-only or offline game never has a server flow to judge
+        return Unchecked("server_lag", "no game-server UDP traffic was seen: a TCP-only or offline game?")
     inet = e.net_values(N.INET_RTT_MS)
     inet_med = st.median(inet) if inet else None
     inet_spikes = [ev for ev in e.events if ev.kind == "net_spike" and _dict(ev.detail).get("target") == "internet"]
-    gaps = [ev for ev in e.events if ev.kind == "net_gap" and _dict(ev.detail).get("kind") != "local"]
+    inet_lost = [ev for ev in e.events if ev.kind == "net_loss" and _dict(ev.detail).get("target") == "internet"]
+    gaps = [ev for ev in e.events if ev.kind == "net_gap" and _dict(ev.detail).get("kind") in SERVER_GAP_KINDS]
     local = [ev for ev in e.events if ev.kind == "net_gap" and _dict(ev.detail).get("kind") == "local"]
+    # CC-1: "unknown" (late packets hid whether our own sending paused too) is never read as local, nor as the server
+    unsure = [ev for ev in e.events if ev.kind == "net_gap" and _dict(ev.detail).get("kind") not in
+              SERVER_GAP_KINDS + ("local", "open")]
+    lost = [ev for ev in e.events if ev.kind == "net_gap" and _dict(ev.detail).get("kind") == "open"]
     flat = [g for g in gaps if not any(s.t_start <= g.t_end and g.t_start <= s.t_end for s in inet_spikes)]
-    ids = [g.id for g in flat]
-    if e.measured("net_flows"):
+    gone = [g for g in lost if not any(s.t_start <= g.t_end and g.t_start <= s.t_end for s in inet_lost)]
+    ids = [g.id for g in flat + gone]
+    if flows_ok and flow is None:
+        c.neutral("network_path", "no game-server UDP traffic was seen in the game's own traffic (a TCP-only game?)")
+    elif flows_ok:
         if len(flat) >= SERVER_GAPS_MIN:
             c.support("network_path", W_STEADY, f"the game server went quiet {len(flat)} times (longest "
                                                 f"{max(g.severity for g in flat):.0f} ms) while the internet answered "
@@ -1874,9 +2262,19 @@ def _server_lag(cap: Capture, ctx: dict) -> Any:
             c.support("network_path", W_STATIC, f"the game server went quiet {len(flat)} time"
                                                 f"{'s' if len(flat) != 1 else ''} (longest "
                                                 f"{max(g.severity for g in flat):.0f} ms)", len(flat), "", SERVER_GAPS_MIN)
-        else:
-            c.against("network_path", W_STEADY, f"the game server's packets kept arriving (no gap of "
-                                                f"{ev_mod.GAP_MIN_MS:.0f} ms or more)", 0, "", SERVER_GAPS_MIN)
+        if gone:       # CC-1: an "open" gap is the server falling silent for good while the game kept sending to it
+            c.support("network_path", W_STEADY, f"the game server stopped answering for good at {gone[0].t_start:.0f} s "
+                                                "while the game kept sending to it and the internet answered: the "
+                                                "connection to the server was lost")
+        elif lost:
+            c.neutral("network_path", f"the game server stopped answering for good at {lost[0].t_start:.0f} s, but "
+                                      "pings to the internet were lost too: the PC's own connection dropped")
+        if unsure:
+            c.neutral("network_path", f"{len(unsure)} gap{'s' if len(unsure) != 1 else ''} in the server's packets "
+                                      "could not be told apart: late packets hid whether the game or the network "
+                                      "paused")
+        if not (gaps or lost or unsure):
+            _server_kept_arriving(c, flow)
         if local:
             c.neutral("network_path", f"{len(local)} gap{'s' if len(local) != 1 else ''} came from the game itself "
                                       "pausing its own sending, not the network")
@@ -1899,6 +2297,29 @@ def _server_lag(cap: Capture, ctx: dict) -> Any:
              _advice("Check the game's server status page")]
     return c.conclude("The game server or its route lags", "Your own connection answered normally while the game "
                                                            "server's packets were late or missing.", fixes, ids)
+
+
+def _server_kept_arriving(c: _Case, flow: dict) -> None:
+    """CC-1: "the server's packets kept arriving" only over the span they were seen: from the flow's first to
+    its last packet, never past the moment the ETW consumer stopped by itself, and only when that is most of the
+    capture."""
+    e = c.env
+    first, last = fa._bounded(flow.get("first_rx_t")), fa._bounded(flow.get("last_rx_t"))
+    stopped = fa._bounded(_dict(e.flows().get("health")).get("consumer_stopped_t"))
+    if first is None or last is None or e.duration is None:
+        c.neutral("network_path", "when the game server's packets arrived was not recorded, so no gap can be ruled out")
+        return
+    end = min(last, stopped) if stopped is not None else last
+    share = max(0.0, min(1.0, (end - first) / e.duration))
+    until = ", when the ETW consumer stopped" if stopped is not None and stopped <= last else ""
+    if share >= SERVER_COVER:
+        c.against("network_path", W_STEADY, f"the game server's packets kept arriving from {first:.0f} s to "
+                                            f"{end:.0f} s{until} ({100 * share:.0f}% of the capture; no gap of "
+                                            f"{ev_mod.GAP_MIN_MS:.0f} ms or more)", 100 * share, "%", 100 * SERVER_COVER)
+    else:
+        c.neutral("network_path", f"the game server's packets were seen only from {first:.0f} s to {end:.0f} s{until} "
+                                  f"({100 * share:.0f}% of the capture), so gaps outside that were not measured",
+                  100 * share, "%", 100 * SERVER_COVER)
 
 
 def _packet_loss(cap: Capture, ctx: dict) -> Any:
@@ -1960,15 +2381,13 @@ def _bandwidth_hog(cap: Capture, ctx: dict) -> Any:
     c = _Case(cap, ctx, "bandwidth_hog")
     e = c.env
     flows = e.flows()
-    downloads = flows.get("downloads")
-    talkers = flows.get("talkers")
-    if not isinstance(downloads, list) and not isinstance(talkers, list):
-        c.lack("background", W_STEADY, "downloads and per-program traffic were not recorded")
-        return c.conclude()
+    downloads = flows.get("downloads")          # None: no download log was read (DESIGN network)
+    talkers = flows.get("talkers")              # None: the ETW session never ran
     dl = []
     for d in downloads if isinstance(downloads, list) else []:
-        if isinstance(d, dict) and _fin(d.get("mbps")) and _fin(d.get("mbps")) > 0 and _num(d.get("t")) is not None:
-            dl.append((float(d["t"]), _text(d.get("source"), 40) or "a download", float(d["mbps"])))
+        mbps, t = (fa._bounded(d.get("mbps")), fa._bounded(d.get("t"))) if isinstance(d, dict) else (None, None)
+        if mbps is not None and mbps > 0 and t is not None:
+            dl.append((float(t), _text(d.get("source"), 40) or "a download", float(mbps)))
     if dl:
         _, src, rate = max(dl, key=lambda x: x[2])
         c.support("background", W_STEADY, f"{src} was downloading at up to {rate:.0f} Mbit/s during the capture")
@@ -1992,15 +2411,48 @@ def _bandwidth_hog(cap: Capture, ctx: dict) -> Any:
         c.support("background", W_STEADY, f"{name} moved {moved / 1e6:,.0f} MB ({8 * moved / e.duration / 1e6:.0f} "
                                           "Mbit/s on average)")
     if not dl and not heavy:
-        c.against("background", W_STEADY, "no download or upload was seen during the capture"
-                  + ("" if isinstance(talkers, list) else " (Steam and Windows Update only: per-program traffic "
-                                                           "needs ETW rights)"))
+        # Only a source that sees every program's traffic can rule a hog out; a download log sees one launcher
+        clear = _all_traffic_quiet(e, talkers)
+        if isinstance(clear, Unchecked):
+            return clear
+        c.against("background", W_STEADY, clear)
     fixes = [_advice("Pause the download while you play", "Steam: Settings > Downloads > \"Allow downloads during "
                                                           "gameplay\" off."),
              _advice("Limit Windows Update's background bandwidth", "Settings > Windows Update > Advanced options > "
                                                                     "Delivery Optimization.")]
     return c.conclude("A download is using your bandwidth", "Another program's download or upload filled the "
                                                             "connection while you played.", fixes)
+
+
+def _all_traffic_quiet(e: _Env, talkers: Any) -> str | Unchecked:
+    """unmeasured-downloads-cleared: what rules a bandwidth hog out, saying which source saw it: the ETW per-program
+    traffic, when its session ran for the whole capture, else the network adapter's own byte counters (every
+    program together) under TALKER_MIN_BPS. Unchecked when neither measured it."""
+    flows = e.flows()
+    src = flows.get("download_sources")       # the download logs the network collector read
+    logs = [s.capitalize() for s in (_text(x, 20) for x in src) if s] if isinstance(src, list) else []
+    seen = f"; {' and '.join(logs)}'s download log showed no download" if logs else ""
+    stopped = fa._bounded(_dict(flows.get("health")).get("consumer_stopped_t"))
+    if isinstance(talkers, list) and e.measured("net_flows") and stopped is None:
+        return (f"no other program moved {TALKER_MIN_BPS / 1e6:.0f} MB/s or more on average (each program's traffic, "
+                f"from ETW){seen}")
+    t = fa._col(e.cap.network, N.T)
+    rx, tx = fa._col(e.cap.network, N.NIC_RX_BPS), fa._col(e.cap.network, N.NIC_TX_BPS)
+    nic = [a + b for a, b in ((attribute.read(N.NIC_RX_BPS, fa._at(rx, i)), attribute.read(N.NIC_TX_BPS, fa._at(tx, i)))
+                              for i, ti in enumerate(t) if fa._bounded(ti) is not None)
+           if a is not None and b is not None and a >= 0 and b >= 0]
+    if len(nic) >= NIC_MIN_ROWS and st.mean(nic) < TALKER_MIN_BPS:
+        return (f"the network adapter moved only {st.mean(nic) / 1e6:.2f} MB/s on average, every program together "
+                f"(under {TALKER_MIN_BPS / 1e6:.0f} MB/s){seen}")
+    why = ("each program's traffic was not measured (" + (f"the ETW consumer stopped at {stopped:.0f} s"
+                                                           if stopped is not None and isinstance(talkers, list)
+                                                           else e.why("net_flows")) + ")")
+    if len(nic) >= NIC_MIN_ROWS:
+        why += (f", and the network adapter moved {st.mean(nic) / 1e6:.1f} MB/s on average, so something used the "
+                "connection")
+    else:
+        why += ", and the network adapter's byte counters were not read"
+    return Unchecked("bandwidth_hog", why + seen)
 
 
 # ----------------------------------------------------------------------------- the rule list ---
@@ -2010,6 +2462,7 @@ RULES: list[Rule] = [
     Rule("hybrid_copy", "static", (), "gpu", _hybrid_copy, "fps"),
     Rule("gpu_limit", "frame_timing", ("frames|system",), "gpu", _gpu_limit, "fps", alt=("gpu_engine",)),
     Rule("cpu_limit", "cpu_threads", ("frames", "system"), "cpu", _cpu_limit, "fps"),
+    Rule("gpu_contention", "gpu_engine", ("system",), None, _gpu_contention, "fps"),
     Rule("gpu_throttle", "gpu_telemetry", ("gpu",), "gpu", _gpu_throttle, "fps"),
     Rule("cpu_throttle", "cpu_limits", ("system",), "cpu", _cpu_throttle, "fps"),
     Rule("vram_overflow", "gpu_engine", ("system",), "gpu", _vram_overflow, "stutter"),

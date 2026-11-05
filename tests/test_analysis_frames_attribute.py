@@ -6,7 +6,7 @@ import pytest
 from lagdoctor.analysis import attribute as at
 from lagdoctor.analysis import events as ev
 from lagdoctor.analysis import frames as fa
-from lagdoctor.model import F, G, S, Capture, SeriesBuilder
+from lagdoctor.model import F, G, S, Capture, SeriesBuilder, SourceStatus
 
 TIMES = (4.0, 8.0, 12.0, 16.0, 20.0, 24.0)
 BASE = {S.GAME_TOP_THREAD_PCT: 25.0, S.GAME_CPU_PCT: 30.0, S.CPU_TOTAL_PCT: 10.0, S.GAME_IO_READ_BPS: 0.0,
@@ -207,6 +207,121 @@ def test_background_cpu_names_the_program():
     assert any("hog.exe (6 processes)" in w and "%" in w for w in e.detail["why"])
 
 
+def with_create_times(rows):
+    return [list(p) + [134000000000000000 + p[0]] for p in rows]
+
+
+def busy_python(cap):
+    """lag_cap's others with create times; at each stutter python.exe 20000 rises from nothing to 60 % of a CPU
+    while python.exe 7777 (a steady training job, lower PID) wobbles from 100 % to 101 %."""
+    quiet = with_create_times(OTHERS)
+    hot = with_create_times([[7777, "python.exe", 101.0, 0.0, 100.0], [20000, "python.exe", 60.0, 0.0, 0.0]]
+                            + OTHERS[1:])
+    cap.others = [[t, hot if rows is not OTHERS else quiet] for t, rows in cap.others]
+    return cap
+
+
+def test_the_process_named_is_the_one_that_rose_never_a_steady_one_of_the_same_name():
+    # A5: a +1 % wobble of the training job used to count as a rise, and the fix then went to the lowest PID
+    cap = busy_python(lag_cap(during={S.CPU_TOTAL_PCT: 40.0}, others_during=OTHERS + []))
+    events, _ = analyse(cap)
+    assert firsts(events) == ["background_cpu"] * 6
+    assert all(e.detail["process"] == "python.exe" and e.detail["process_pids"] == [20000] for e in events)
+    assert all(e.detail["process_rises"] == [[20000, 60.0]] and e.detail["process_role"] == "background"
+               for e in events)
+    d = diagnosed(busy_python(lag_cap(during={S.CPU_TOTAL_PCT: 40.0}, others_during=OTHERS + [])))
+    hog = next(f for f in d.findings if f.cause == "background_hogs")
+    fix = next(fx for fx in hog.fixes if fx.fix_id)
+    assert fix.params["pid"] == 20000 and fix.params["name"] == "python.exe"
+    assert "up 60% of a CPU" in fix.title
+    assert not any("7777" in fx.title for fx in hog.fixes)
+    assert any("against 0% normally" in e.text for e in hog.evidence)        # the riser's own normal, not the job's
+
+
+@pytest.mark.parametrize("cpu, pids", [(25.0, [9001, 9000]), (24.9, [9001])])
+def test_a_process_is_named_only_past_a_quarter_of_a_cpu(cpu, pids):
+    # A5: the floor each process must rise by to be listed (attribute.BLAME_CPU_RISE_PCT), biggest rise first
+    hog = OTHERS + [[9000, "hog.exe", cpu, 0.0, 0.0], [9001, "hog.exe", 100.0, 0.0, 0.0]]
+    events, _ = analyse(lag_cap(during={S.CPU_TOTAL_PCT: 40.0}, others_during=hog))
+    assert firsts(events) == ["background_cpu"] * 6
+    assert all(e.detail["process"] == "hog.exe" and e.detail["process_pids"] == pids for e in events)
+
+
+def test_a_small_wobble_names_no_program():
+    # A5: the machine was busy (another cause's part saw it), but no listed program rose a quarter of a CPU
+    wobble = [[p[0], p[1], p[2] + 5.0, p[3], p[4]] for p in OTHERS]
+    events, _ = analyse(lag_cap(during={S.CPU_TOTAL_PCT: 40.0}, others_during=wobble))
+    assert firsts(events) == ["background_cpu"] * 6
+    assert all("process" not in e.detail for e in events)
+
+
+def test_a_program_whose_processes_each_rose_a_little_is_named_without_a_process_to_lower():
+    # eight svc.exe processes rose 10 % each: the program rose, no one process of it by a quarter of a CPU
+    small = OTHERS + [[8000 + i, "svc.exe", 10.0, 0.0, 0.0] for i in range(8)]
+    events, _ = analyse(lag_cap(during={S.CPU_TOTAL_PCT: 40.0}, others_during=small))
+    assert all(e.detail["process"] == "svc.exe" and e.detail["process_pids"] == [] for e in events)
+
+
+def test_the_games_own_child_process_is_named_as_the_games_helper():
+    # A10: the game's child (target "pids") still competes with it (DESIGN), but it is no background program
+    helper = OTHERS + [[8888, "ShaderCompileWorker.exe", 300.0, 0.0, 0.0]]
+    cap = lag_cap(during={S.CPU_TOTAL_PCT: 40.0}, others_during=helper)
+    cap.target["pids"] = [1, 8888]
+    events, _ = analyse(cap)
+    assert firsts(events) == ["background_cpu"] * 6
+    assert all(e.detail["process"] == "ShaderCompileWorker.exe" and e.detail["process_role"] == "game_helper"
+               for e in events)
+    assert any(w.startswith("a helper process of the game rose the most") for w in events[0].detail["why"])
+    cap = lag_cap(during={S.CPU_TOTAL_PCT: 40.0}, others_during=helper)
+    cap.target["pids"] = [1, 8888]
+    hog = next(f for f in diagnosed(cap).findings if f.cause == "background_hogs")
+    assert not any(fx.title.startswith("Pause or close") for fx in hog.fixes)
+    assert not any(fx.fix_id for fx in hog.fixes)
+
+
+PRESENTMON = r"C:\Users\x\AppData\Local\lag-doctor\presentmon\2.6.0\PresentMon-2.6.0-x64.exe"
+
+
+@pytest.mark.parametrize("entry, mark", [
+    ([5555, "python.exe", 300.0, 0.0, 0.0], {"tool_pids": [5555]}),           # lag-doctor's own capture process
+    ([6000, "PresentMon-2.6.0-x64.exe", 300.0, 0.0, 0.0], {"presentmon": {"exe": PRESENTMON}})])   # its child
+def test_lag_doctors_own_processes_are_never_named(entry, mark):
+    # A10: what the session records as lag-doctor's own (target "tool_pids") and the PresentMon exe it ran
+    cap = lag_cap(during={S.CPU_TOTAL_PCT: 40.0}, others_during=OTHERS + [entry])
+    cap.target.update(mark)
+    events, _ = analyse(cap)
+    assert firsts(events) == ["background_cpu"] * 6                    # the machine still was busy
+    assert all("process" not in e.detail for e in events)
+    control = analyse(lag_cap(during={S.CPU_TOTAL_PCT: 40.0}, others_during=OTHERS + [entry]))[0]
+    assert {e.detail.get("process") for e in control} == {entry[1]}     # unmarked, the same process is named
+
+
+def test_absurd_values_from_a_corrupt_capture_are_missing_never_evidence():
+    # A15: 1e308 in byte, count and percent columns once overflowed math.fsum and took diagnose() down
+    huge = 1e308
+    bad = dict(BASE, **{S.GAME_IO_READ_BPS: huge, S.HARD_FAULTS_PS: huge, S.GPU_OTHER_PCT: huge, S.RAM_AVAIL_MB: huge,
+                        S.GAME_SHARED_MB: huge, S.VRAM_USED_MB: huge, S.CPU_TOTAL_PCT: huge})
+    rows = SeriesBuilder(G.ALL)
+    for s in range(1, 30):
+        rows.add(t=float(s), nv_throttle_pct=huge, nv_temp_c=huge)
+    cap = lag_cap(during=bad, others_during=OTHERS + [[9000, "hog.exe", huge, huge, huge]], gpu_rows=rows.build())
+    events, summary = analyse(cap)
+    assert len(events) == 6
+    for e in events:
+        for sig in e.detail["signals"].values():
+            assert sig["value"] is None or abs(sig["value"]) <= at.MAX_COUNT, (e.detail["why"], sig)
+    d = diagnosed(lag_cap(during=bad, others_during=OTHERS + [[9000, "hog.exe", huge, huge, huge]],
+                          gpu_rows=rows.build()))
+    assert not [w for w in d.unchecked.values() if w.startswith("the check failed")]
+
+
+@pytest.mark.parametrize("column, ok, short", [(S.GAME_IO_READ_BPS, 1e15, 1.0001e15), (S.GPU_OTHER_PCT, 1e7, 1.0001e7)])
+def test_the_bounds_on_sampled_values(column, ok, short):
+    # A15: sizes, rates and counts up to MAX_COUNT (1e15) are values; times, ms and % stop at frames' 1e7
+    assert at.read(column, ok) == ok and at.read(column, short) is None
+    assert at.read(column, -ok) == -ok and at.read(column, float("nan")) is None
+
+
 def test_background_cpu_from_many_small_processes():
     # 40 % of 16 CPUs is busy, but the top-8 table only shows eight services at 10 % each: the machine-wide
     # reading (total CPU minus the game) is what sees it
@@ -272,11 +387,60 @@ def test_the_side_comes_from_the_slowest_presented_frame_not_the_displayed_one()
     assert firsts(events) == ["game_stall"] * 6
 
 
-def test_a_stall_has_no_side():
-    # rows are missing for 160 ms: no presented frame holds that time, so neither side can be named
-    events, _ = analyse(lag_cap(stall=True))
+def diagnosed(cap):
+    """The whole diagnosis of a lag_cap capture, with its frame and system sources marked as measured."""
+    from lagdoctor.analysis.diagnose import diagnose
+    cap.sources = {"frames": SourceStatus("ok"), "system": SourceStatus("ok")}
+    return diagnose(cap)
+
+
+def idle_gpu_lines(d):
+    return [e.text for f in d.findings for e in f.evidence if "GPU sat idle" in e.text]
+
+
+@pytest.mark.parametrize("label, kw, verdict", [
+    ("capped", {}, None),
+    ("GPU-bound", {"gpu_ms": 9.6}, "gpu"),                                   # r = 0.96 on the steady frames
+    ("CPU-bound", {"base": dict(BASE, **{S.GAME_TOP_THREAD_PCT: 95.0})}, "cpu_main")])
+def test_a_stall_has_no_side(label, kw, verdict):
+    # A3: rows are missing for 160 ms, so no presented frame holds that time and neither side can be named; the
+    # overall verdict says nothing about this moment. It once gave GPU-bound games gpu_spike ("the GPU's own work
+    # took long") and CPU-bound ones "the GPU sat idle through most of the slow frame".
+    cap = lag_cap(stall=True, **kw)
+    events, _ = analyse(cap)
     assert len(events) == 6 and all(e.detail["stall"] for e in events)
-    assert {e.detail["side"] for e in events} == {None}
+    assert {e.detail["side"] for e in events} == {None} and {e.detail["side_source"] for e in events} == {None}
+    assert "gpu_spike" not in firsts(events)
+    if verdict:
+        assert fa.bound(cap, fa.main_chain(cap), events)["verdict"] == verdict, label    # the fixture's own premise
+    assert not idle_gpu_lines(diagnosed(lag_cap(stall=True, **kw)))
+
+
+def test_a_stall_with_the_thread_idle_says_the_gpus_share_is_unknown():
+    events, _ = analyse(lag_cap(stall=True, gpu_ms=9.6))
+    assert firsts(events) == ["game_stall"] * 6
+    line = events[0].detail["why"][-1]
+    assert "the GPU's share of it is unknown" in line and "the GPU was idle" not in line
+
+
+def without_gpu_timing_on_the_stutters(cap):
+    """The stutter frames (160 ms) carry no GPU busy; the steady frames keep theirs."""
+    fr = cap.frames
+    fr[F.GPU_BUSY_MS] = [None if ms == 160.0 else g for ms, g in zip(fr[F.FRAME_MS], fr[F.GPU_BUSY_MS])]
+    return cap
+
+
+def test_the_verdict_stands_in_only_for_a_slow_frame_without_gpu_timing_and_says_so():
+    # A3: the slow frame is there but has no GPU timing, so the CPU-bound verdict gives its side, marked as such;
+    # the rules never count it as the frame-timing evidence "the GPU sat idle"
+    base = dict(BASE, **{S.GAME_TOP_THREAD_PCT: 95.0})
+    events, _ = analyse(without_gpu_timing_on_the_stutters(lag_cap(base=base)))
+    assert {e.detail["side"] for e in events} == {"cpu"} and {e.detail["side_source"] for e in events} == {"verdict"}
+    assert all("no GPU timing" in e.detail["why"][0] for e in events)
+    assert not idle_gpu_lines(diagnosed(without_gpu_timing_on_the_stutters(lag_cap(base=base))))
+    assert idle_gpu_lines(diagnosed(lag_cap(base=base)))           # control: with GPU timing the split counts
+    capped, _ = analyse(without_gpu_timing_on_the_stutters(lag_cap()))
+    assert {e.detail["side"] for e in capped} == {None}            # a cap's verdict names no side
 
 
 def test_page_faults_without_low_ram_are_not_paging():

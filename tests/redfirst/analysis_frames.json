@@ -1476,8 +1476,8 @@
  {
   "name": "one pid only",
   "file": "lagdoctor/analysis/attribute.py",
-  "old": "    return [pid for _, pid in rises[:8]], name,",
-  "new": "    return [pid for _, pid in rises[:1]], name,",
+  "old": "    return _Blame(name, role, rises[:BLAME_MAX_PIDS],",
+  "new": "    return _Blame(name, role, rises[:1],",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_background_cpu_names_the_program",
    "tests/test_analysis_frames_synth.py::test_the_hog_events_name_the_hogs"
@@ -1508,6 +1508,154 @@
   "new": "        return math.fsum(self.v[lo:hi]) / max(1, hi - lo)",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_others_are_stored_only_where_a_process_was_listed"
+  ]
+ },
+ {
+  "name": "a stall takes the verdict's side",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        fallback = VERDICT_SIDE.get(verdict or \"\") if rows else None",
+  "new": "        fallback = VERDICT_SIDE.get(verdict or \"\")",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_stall_has_no_side"
+  ]
+ },
+ {
+  "name": "the verdict's side passed off as the frames'",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        return fallback, f\"its frames had no GPU timing; the game is {verdict}-bound overall\", \"verdict\"",
+  "new": "        return fallback, f\"its frames had no GPU timing; the game is {verdict}-bound overall\", \"frames\"",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_verdict_stands_in_only_for_a_slow_frame_without_gpu_timing_and_says_so"
+  ]
+ },
+ {
+  "name": "the GPU called idle without its timing",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    gpu = \" and the GPU was idle\" if side == \"cpu\" and source == \"frames\" else \"; the GPU's share of it is unknown\"",
+  "new": "    gpu = \" and the GPU was idle\"",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_stall_with_the_thread_idle_says_the_gpus_share_is_unknown"
+  ]
+ },
+ {
+  "name": "any wobble names a program",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if x - normal >= floor and (best is None or x - normal > best[0]):",
+  "new": "            if x - normal > 0 and (best is None or x - normal > best[0]):",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_small_wobble_names_no_program"
+  ]
+ },
+ {
+  "name": "any wobble lists a process",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if rise is not None and rise >= floor:",
+  "new": "        if rise is not None and rise > 0:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_process_is_named_only_past_a_quarter_of_a_cpu",
+   "tests/test_analysis_frames_attribute.py::test_the_process_named_is_the_one_that_rose_never_a_steady_one_of_the_same_name"
+  ]
+ },
+ {
+  "name": "process floor 25.1 % of a CPU",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "BLAME_CPU_RISE_PCT = 25.0 ",
+  "new": "BLAME_CPU_RISE_PCT = 25.1 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_process_is_named_only_past_a_quarter_of_a_cpu"
+  ]
+ },
+ {
+  "name": "a process's rise diluted by unlisted ticks",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        top = series[col].listed_max(a, b)",
+  "new": "        top = series[col].peak(a, b, +1)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_process_is_named_only_past_a_quarter_of_a_cpu",
+   "tests/test_analysis_frames_synth.py::test_the_hog_events_name_the_hogs"
+  ]
+ },
+ {
+  "name": "processes listed by PID",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    rises.sort(key=lambda r: (-r[1], r[0]))",
+  "new": "    rises.sort(key=lambda r: r[0])",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_process_is_named_only_past_a_quarter_of_a_cpu"
+  ]
+ },
+ {
+  "name": "process rises not recorded",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        ev.detail[\"process_rises\"] = [[pid, round(rise, 2)] for pid, rise in blame.rises]",
+  "new": "        ev.detail[\"process_rises\"] = []",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_process_named_is_the_one_that_rose_never_a_steady_one_of_the_same_name"
+  ]
+ },
+ {
+  "name": "the game's children grouped with background programs",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "                   else \"game_helper\" if key[0] in game else \"background\") for key in seen}",
+  "new": "                   else \"background\") for key in seen}",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_games_own_child_process_is_named_as_the_games_helper"
+  ]
+ },
+ {
+  "name": "lag-doctor's own processes named",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    roles = {key: (\"tool\" if key[0] in tool_pids or key[1].lower() in tool_names",
+  "new": "    roles = {key: (\"tool\" if False",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lag_doctors_own_processes_are_never_named"
+  ]
+ },
+ {
+  "name": "PresentMon not known by its exe",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        names.add(ntpath.basename(exe.strip()).lower())",
+  "new": "        pass",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lag_doctors_own_processes_are_never_named",
+   "tests/test_analysis_rules.py::test_gpu_contention_never_names_the_game_or_lag_doctor"
+  ]
+ },
+ {
+  "name": "tool pids not read",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    pids = frozenset(p for p in tool if _is_pid(p)) if isinstance(tool, list) else frozenset()",
+  "new": "    pids = frozenset()",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lag_doctors_own_processes_are_never_named"
+  ]
+ },
+ {
+  "name": "sampled values unbounded",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    return float(n) if n is not None and abs(n) <= MAX_COUNT else None",
+  "new": "    return float(n) if n is not None else None",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_absurd_values_from_a_corrupt_capture_are_missing_never_evidence",
+   "tests/test_analysis_frames_attribute.py::test_the_bounds_on_sampled_values"
+  ]
+ },
+ {
+  "name": "MAX_COUNT 1e16",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "MAX_COUNT = 1e15 ",
+  "new": "MAX_COUNT = 1e16 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_bounds_on_sampled_values"
+  ]
+ },
+ {
+  "name": "others table read unbounded",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            cpu, io, gpu = fa._bounded(e[2]), read(\"io_bps\", e[3]), fa._bounded(e[4])",
+  "new": "            cpu, io, gpu = (_num(x) for x in e[2:5])",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_absurd_values_from_a_corrupt_capture_are_missing_never_evidence"
   ]
  }
 ]

@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from lagdoctor.analysis import rules
-from lagdoctor.model import Finding, LagEvent
+from lagdoctor.model import Finding, LagEvent, SourceStatus
 from tests import synth
 from tests.test_analysis_rules import is_finding, make, run
 
@@ -135,19 +135,72 @@ def test_isp_latency_with_a_slow_router_starts_at_home():
     assert is_finding(run("isp_latency", net(inet_rtt_ms=80.0, gw_rtt_ms=9.9)), "medium")
 
 
-FLOWS = {"server": {"ip": "203.0.113.7", "port": 27015, "proto": "udp"}, "gaps": [], "layout": "verified"}
+# The server flow as the collector reports it, its packets seen from 0.5 s to 29.5 s of the 30 s capture (CC-1)
+FLOWS = {"server": {"ip": "203.0.113.7", "port": 27015, "proto": "udp", "first_rx_t": 0.5, "last_rx_t": 29.5},
+         "gaps": [], "layout": "verified"}
+ETW = ("frames", "system", "network", "net_flows")
+
+
+def flows(**server):
+    return dict(FLOWS, server=dict(FLOWS["server"], **server))
 
 
 @pytest.mark.parametrize("n, conf", [(3, "medium"), (2, "low")])
 def test_server_lag_needs_three_gaps_while_the_internet_answers(n, conf):
-    cap = net(inet_rtt_ms=7.0, flows=dict(FLOWS), ok=("frames", "system", "network", "net_flows"))
+    cap = net(inet_rtt_ms=7.0, flows=dict(FLOWS), ok=ETW)
     assert is_finding(run("server_lag", cap, events=[gap(i, 5.0 * i, 300.0) for i in range(1, n + 1)]), conf)
 
 
 def test_server_lag_ignores_gaps_where_the_game_itself_paused():
-    cap = net(inet_rtt_ms=7.0, flows=dict(FLOWS), ok=("frames", "system", "network", "net_flows"))
+    cap = net(inet_rtt_ms=7.0, flows=dict(FLOWS), ok=ETW)
     res = run("server_lag", cap, events=[gap(i, 5.0 * i, 300.0, "local") for i in range(1, 5)])
-    assert isinstance(res, rules.Cleared) and "kept arriving" in res.text
+    assert isinstance(res, rules.Cleared) and "kept arriving from 0 s to 30 s (97% of the capture" in res.text
+
+
+def test_server_lag_without_a_server_flow_is_unchecked_never_fine():
+    # CC-1: a TCP-only or offline game has no UDP server flow, so "its packets kept arriving" was never measured
+    for no_server in ({"gaps": [], "layout": "verified"}, dict(FLOWS, server=None)):
+        res = run("server_lag", net(inet_rtt_ms=7.0, flows=no_server, ok=ETW))
+        assert isinstance(res, rules.Unchecked) and res.text.startswith("no game-server UDP traffic was seen"), res
+
+
+@pytest.mark.parametrize("last, kind", [(15.5, rules.Cleared), (15.2, type(None))])     # half of 30 s from 0.5 s
+def test_the_server_kept_arriving_only_where_its_packets_cover_most_of_the_capture(last, kind):
+    res = run("server_lag", net(inet_rtt_ms=7.0, flows=flows(last_rx_t=last), ok=ETW))
+    assert isinstance(res, kind)
+
+
+def test_the_server_kept_arriving_never_past_the_moment_the_etw_consumer_stopped():
+    # CC-1: a partial net_flows whose consumer stopped by itself saw nothing after that time
+    stopped = dict(FLOWS, health={"consumer_stopped_t": 9.0})
+    assert run("server_lag", net(inet_rtt_ms=7.0, flows=stopped, ok=ETW)) is None
+    late = dict(FLOWS, health={"consumer_stopped_t": 29.0})
+    res = run("server_lag", net(inet_rtt_ms=7.0, flows=late, ok=ETW))
+    assert isinstance(res, rules.Cleared) and "to 29 s, when the ETW consumer stopped" in res.text
+
+
+def test_a_server_that_fell_silent_for_good_is_a_lost_connection():
+    # CC-1: an "open" gap: the server's packets stopped while the game kept sending, and the internet answered
+    res = run("server_lag", net(inet_rtt_ms=7.0, flows=flows(last_rx_t=12.0), ok=ETW),
+              events=[gap(1, 12.0, 18000.0, "open")])
+    assert is_finding(res, "medium") and res.event_ids == [1]
+    assert any("stopped answering for good at 12 s" in e.text and "connection to the server was lost" in e.text
+               for e in res.evidence)
+    lost = LagEvent(2, "net_loss", 11.5, 29.5, 100.0, {"target": "internet"})       # the PC's own link went too
+    res = run("server_lag", net(inet_rtt_ms=7.0, flows=flows(last_rx_t=12.0), ok=ETW),
+              events=[gap(1, 12.0, 18000.0, "open"), lost])
+    assert res is None
+
+
+def test_gaps_of_unknown_kind_are_never_read_as_local_nor_as_packets_kept_arriving():
+    # CC-1: "unknown": late packets hid whether our own sending paused too, so neither side can be told
+    unknown = [gap(i, 5.0 * i, 300.0, "unknown") for i in range(1, 4)]
+    assert run("server_lag", net(inet_rtt_ms=7.0, flows=dict(FLOWS), ok=ETW), events=unknown) is None
+    # with the server's pings slow too there is a finding, whose evidence shows how the gaps were read
+    res = run("server_lag", net(inet_rtt_ms=7.0, server_rtt_ms=150.0, flows=dict(FLOWS), ok=ETW), events=unknown)
+    texts = [e.text for e in res.evidence]
+    assert any(t.startswith("3 gaps in the server's packets could not be told apart") for t in texts), texts
+    assert not any("from the game itself" in t or "kept arriving" in t for t in texts), texts
 
 
 def test_server_lag_from_server_pings_and_unchecked_without_either_source():
@@ -192,10 +245,54 @@ def test_bandwidth_hog_from_a_logged_download_and_from_per_program_traffic():
 
 @pytest.mark.parametrize("moved, kind", [(30e6, Finding), (29.9e6, rules.Cleared)])     # 1 MB/s over 30 s
 def test_bandwidth_hog_a_program_moving_1_mb_a_second(moved, kind):
+    # the clearing side needs the ETW session to have run: the talkers are then a measurement of every program
     flows = {"downloads": [], "talkers": [{"pid": 9999, "name": "chrome.exe", "rx_bytes": moved, "tx_bytes": 0}]}
-    assert isinstance(run("bandwidth_hog", net(inet_rtt_ms=7.0, flows=flows)), kind)
+    res = run("bandwidth_hog", net(inet_rtt_ms=7.0, flows=flows, ok=ETW))
+    assert isinstance(res, kind)
+    if kind is rules.Cleared:
+        assert "each program's traffic, from ETW" in res.text
 
 
 def test_bandwidth_hog_without_any_traffic_source_is_unchecked():
-    assert isinstance(run("bandwidth_hog", net(inet_rtt_ms=7.0, flows={})), rules.Unchecked)
-    assert isinstance(run("bandwidth_hog", net(inet_rtt_ms=7.0, flows={"downloads": []})), rules.Cleared)
+    # unmeasured-downloads-cleared: this test used to expect "checked and fine" from an empty download list,
+    # which is what the collector also wrote when it never read a download log
+    for nothing in ({}, {"downloads": []}, {"downloads": None, "download_sources": []}):
+        res = run("bandwidth_hog", net(inet_rtt_ms=7.0, flows=nothing))
+        assert isinstance(res, rules.Unchecked) and "not measured" in res.text, nothing
+
+
+def test_a_download_log_alone_never_rules_a_bandwidth_hog_out():
+    # it sees one launcher's downloads, not every program's traffic; and nothing reads Windows Update
+    res = run("bandwidth_hog", net(inet_rtt_ms=7.0, flows={"downloads": [], "download_sources": ["steam"]}))
+    assert isinstance(res, rules.Unchecked) and "Steam's download log showed no download" in res.text
+    assert "Windows Update" not in res.text
+
+
+def test_an_etw_session_that_never_ran_rules_nothing_out():
+    # an older capture of a refused session: talkers [] with the source unavailable
+    unavailable = {"net_flows": SourceStatus("unavailable", "needs admin rights or Performance Log Users "
+                                                            "(StartTraceW: access denied)")}
+    cap = net(inet_rtt_ms=7.0, flows={"downloads": [], "talkers": [], "gaps": []})
+    cap.sources.update(unavailable)
+    res = run("bandwidth_hog", cap)
+    assert isinstance(res, rules.Unchecked) and "access denied" in res.text
+    stopped = net(inet_rtt_ms=7.0, flows={"talkers": [], "health": {"consumer_stopped_t": 4.0}}, ok=ETW)
+    res = run("bandwidth_hog", stopped)                    # the consumer stopped early: its talkers cover 4 s
+    assert isinstance(res, rules.Unchecked) and "the ETW consumer stopped at 4 s" in res.text
+
+
+@pytest.mark.parametrize("seconds, kind", [(5.0, rules.Cleared), (4.5, rules.Unchecked)])     # 10 and 9 rounds
+def test_the_adapters_counters_need_ten_probe_rounds_to_rule_a_hog_out(seconds, kind):
+    res = run("bandwidth_hog", net(seconds, inet_rtt_ms=7.0, nic_rx_bps=2e4, nic_tx_bps=1e4, flows={}))
+    assert isinstance(res, kind)
+
+
+@pytest.mark.parametrize("rx, kind", [(0.49e6, rules.Cleared), (0.5e6, rules.Unchecked)])   # with tx 0.5 MB/s
+def test_the_network_adapters_own_counters_under_1_mb_a_second_rule_a_hog_out(rx, kind):
+    # every program's traffic together passes the adapter; under the talker floor no program moved that much
+    res = run("bandwidth_hog", net(inet_rtt_ms=7.0, nic_rx_bps=rx, nic_tx_bps=0.5e6, flows={}))
+    assert isinstance(res, kind)
+    if kind is rules.Cleared:
+        assert res.text.startswith("The network adapter moved only 0.99 MB/s on average, every program together")
+    else:
+        assert "moved 1.0 MB/s on average, so something used the connection" in res.text

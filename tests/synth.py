@@ -87,6 +87,8 @@ class Knobs:
     unfocused: Sequence[tuple[float, float]] = ()           # spans when another window was in front
     decoy_chain: bool = False     # add a few rows of a second, mostly-dropped swap chain (PM 8.3)
     hags: bool | None = False     # HAGS on the game's (Intel) adapter: off on this laptop (PM V10)
+    gpu_other_pct: float | None = None   # other programs on the game's adapter; None: the 1-3 % seen on the Intel GPU
+                                         # (the training job's GPU is the NVIDIA one). 80: that job on the game's GPU
 
 
 @dataclass
@@ -357,6 +359,8 @@ def _system(game: _Game, k: Knobs, rng: random.Random) -> tuple[dict[str, list],
             busy_gpu += _overlap(s - 1.0, s, f.gpu_start, f.gpu_ready)
         game_gpu = min(100.0, 100.0 * busy_gpu / 1.0)      # trailing 1 s average (DESIGN, system)
         gpu_other = rng.uniform(1.0, 3.0)
+        if k.gpu_other_pct is not None:                    # the default draws above are unchanged by the knob
+            gpu_other = k.gpu_other_pct * rng.uniform(0.97, 1.03)
         focused = 0 if any(a <= s <= bb for a, bb in k.unfocused) else 1
         system_pct = rng.uniform(15.0, 35.0)
         row.update(cpu_total_pct=min(100.0, (game_cpu + others_cpu + system_pct) / LOGICAL_CPUS),
@@ -422,8 +426,10 @@ def _network(k: Knobs, rng: random.Random) -> tuple[dict[str, list], dict[str, A
           "lost": {"gateway": [], "internet": lost_t}, "wifi_scans": [],
           "route": {"if_index": 8, "description": "Intel(R) Wi-Fi 6 AX201 160MHz", "vpn": False}, "downloads": []}
     if k.server_gaps:
+        # first_rx_t / last_rx_t: the flow's first and last packet on the capture clock (CC-1, DESIGN net_flows)
         nf.update(server={"ip": "203.0.113.7", "port": 27015, "proto": "udp", "rx_packets": 12000,
-                          "tx_packets": 6000, "rx_bytes": 2_400_000, "tx_bytes": 600_000, "tick_ms": 15.6},
+                          "tx_packets": 6000, "rx_bytes": 2_400_000, "tx_bytes": 600_000, "tick_ms": 15.6,
+                          "first_rx_t": k.start_s, "last_rx_t": k.duration_s - k.tail_s},
                   gaps=[[t, ms, kind] for t, ms, kind in k.server_gaps], layout="unverified")
     return b.build(), nf
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import bisect
 import math
+import ntpath
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
@@ -66,6 +67,14 @@ DISK_BUSY_PCT = 90.0         # LC 4.8 (PAL, S30): disk idle < 10 %
 DISK_READ_MS = 15.0          # LC 4.8 (PAL, S30): Avg. Disk sec/Read > 15 ms
 UNFOCUSED_SHARE = 0.5        # [inferred] the game was not in front for at least half of that second
 STALL_COVER = ev_mod.STALL_COVER   # a frame holding less than half of the lost time did not cause it
+# ---- naming the program that rose (A5) -------------------------------------------------------------
+BLAME_CPU_RISE_PCT = 25.0    # [inferred, DESIGN background_hogs' 25 % of one CPU] a process is named only when it
+                             # rose this much; a steady job's 1 % wobble never is. Disk: OTHERS_DISK_BPS, GPU:
+                             # OTHERS_GPU_PCT (LC 4.6), the same floors the causes use for one process
+BLAME_MAX_PIDS = 8           # the others table lists the top 8 per tick (DESIGN, system)
+# ---- value checks (A15) ----------------------------------------------------------------------------
+MAX_COUNT = 1e15             # [inferred] a size, rate or count past 1e15 (a petabyte, or one a second) is corrupt;
+                             # times, ms and % are bounded by frames.MAX_ABS_VALUE
 
 CPU_SIDE = ("game_cpu_spike", "asset_streaming", "memory_paging", "background_cpu", "cpu_throttle")
 GPU_SIDE = ("gpu_throttle", "vram_overflow")
@@ -78,7 +87,48 @@ CAUSE_ORDER = ("not_focused", "memory_paging", "asset_streaming", "vram_overflow
                "gpu_spike", "game_stall")
 CAPPED_AT_POSSIBLE = ("driver_dpc",)      # DESIGN: PDH cannot name the driver
 ATTRIBUTED_KINDS = ("stutter", "fps_drop")
+BLAME_COLUMNS = {"background_cpu": "cpu", "background_disk": "io", "background_gpu": "gpu"}
+VERDICT_SIDE = {"gpu": "gpu", "cpu_main": "cpu", "cpu_all": "cpu", "waiting": "cpu"}
 _num = fa._num
+
+
+def read(column: str, v: Any) -> float | None:
+    """One value of an S/G/N column (A15): times, ms and % through frames' bounded reader, any other column
+    (bytes, MB, counts, degrees) up to MAX_COUNT. A corrupt 1e308 is missing, never infinite evidence."""
+    n = fa._num_col(column, v)
+    return float(n) if n is not None and abs(n) <= MAX_COUNT else None
+
+
+def _is_pid(v: Any) -> bool:
+    return isinstance(v, int) and not isinstance(v, bool) and 0 < v <= 0xFFFFFFFF
+
+
+def game_pids(cap: Capture) -> set[int]:
+    """The game's own processes: the target and the child processes the sampler saw (target "pids")."""
+    target = cap.target if isinstance(cap.target, dict) else {}
+    pids = target.get("pids")
+    out = {p for p in pids if _is_pid(p)} if isinstance(pids, list) else set()
+    if _is_pid(target.get("pid")):
+        out.add(target["pid"])
+    return out
+
+
+def tool_processes(cap: Capture) -> tuple[frozenset[int], frozenset[str]]:
+    """lag-doctor's own processes, never a background program to blame (A10): (the PIDs the session recorded
+    as its own in target "tool_pids", the lower-case image names of the children it ran: PresentMon by the exe
+    it recorded, nvidia-smi when the gpu source says it ran)."""
+    target = cap.target if isinstance(cap.target, dict) else {}
+    tool = target.get("tool_pids")
+    pids = frozenset(p for p in tool if _is_pid(p)) if isinstance(tool, list) else frozenset()
+    names = set()
+    pm = target.get("presentmon")
+    exe = pm.get("exe") if isinstance(pm, dict) else None
+    if isinstance(exe, str) and exe.strip():
+        names.add(ntpath.basename(exe.strip()).lower())
+    gpu = cap.sources.get("gpu") if isinstance(cap.sources, dict) else None
+    if getattr(gpu, "tool", None) == "nvidia-smi":
+        names.add("nvidia-smi.exe")
+    return pids, frozenset(n for n in names if n)
 
 
 # ------------------------------------------------------------------- sampled signals ---
@@ -133,17 +183,24 @@ class _Sparse(_Series):
         lo, hi = bisect.bisect_left(self.t, a - self.pad), bisect.bisect_right(self.t, b + self.pad)
         return math.fsum(self.v[lo:hi]) / n
 
+    def listed_max(self, a: float, b: float) -> float | None:
+        """The highest reading on a tick it was listed in [a, b]; None when it was never listed there. With
+        more busy processes than table rows, a process drops in and out of the top 8, so a mean that counts
+        those ticks as 0 would hide how hard it worked (A5)."""
+        lo, hi = bisect.bisect_left(self.t, a - self.pad), bisect.bisect_right(self.t, b + self.pad)
+        return max(self.v[lo:hi]) if hi > lo else None
+
 
 def _system(cap: Capture, column: str, f: Callable[[float], float] | None = None) -> _Series:
     t, v = fa._col(cap.system, S.T), fa._col(cap.system, column)
     ts, vs = [], []
     for i, ti in enumerate(t):
-        ti = _num(ti)
+        ti = fa._bounded(ti)
         if ti is None:
             continue
-        x = _num(fa._at(v, i))
+        x = read(column, fa._at(v, i))
         ts.append(float(ti))
-        vs.append(None if x is None else (f(float(x)) if f else float(x)))
+        vs.append(None if x is None else (f(x) if f else x))
     return _Series(ts, vs)
 
 
@@ -151,29 +208,30 @@ def _gpu(cap: Capture, column: str) -> _Series:
     t, v = fa._col(cap.gpu, G.T), fa._col(cap.gpu, column)
     ts, vs = [], []
     for i, ti in enumerate(t):
-        ti = _num(ti)
+        ti = fa._bounded(ti)
         if ti is not None:
-            x = _num(fa._at(v, i))
             ts.append(float(ti))
-            vs.append(None if x is None else float(x))
+            vs.append(read(column, fa._at(v, i)))
     return _Series(ts, vs)
 
 
 @dataclass
 class _Others:
-    """The `others` table: top non-game processes per tick ([pid, name, cpu_pct, io_bps, gpu_pct])."""
+    """The `others` table: top non-game processes per tick ([pid, name, cpu_pct, io_bps, gpu_pct, ...])."""
 
     total: _Series        # sum of the listed processes' CPU
     top: _Series          # the busiest one's CPU
     io_top: _Series       # the biggest I/O user's bytes/s
-    per: dict[tuple[int, str], dict[str, _Series]]     # (pid, name) -> {"cpu", "io", "gpu"}; 0 when not listed
-    by_name: dict[str, dict[str, _Series]]             # the same, summed over every process of one exe name
+    per: dict[tuple[int, str], dict[str, _Sparse]]     # (pid, name) -> {"cpu", "io", "gpu"}; 0 when not listed
+    by_name: dict[str, dict[str, _Sparse]]             # summed over every background process of one exe name
+    helpers: dict[str, dict[str, _Sparse]]             # the same over the game's own child processes (A10)
+    roles: dict[tuple[int, str], str]                  # (pid, name) -> "background" | "game_helper" | "tool"
 
 
 def _others(cap: Capture) -> _Others:
     rows = []
     for row in cap.others if isinstance(cap.others, list) else []:
-        if isinstance(row, (list, tuple)) and len(row) == 2 and _num(row[0]) is not None \
+        if isinstance(row, (list, tuple)) and len(row) == 2 and fa._bounded(row[0]) is not None \
                 and isinstance(row[1], (list, tuple)):
             rows.append((float(row[0]), row[1]))
     rows.sort(key=lambda r: r[0])
@@ -188,7 +246,7 @@ def _others(cap: Capture) -> _Others:
             pid, name = e[0], e[1]
             if not isinstance(pid, int) or isinstance(pid, bool) or not isinstance(name, str):
                 continue
-            cpu, io, gpu = (_num(x) for x in e[2:5])
+            cpu, io, gpu = fa._bounded(e[2]), read("io_bps", e[3]), fa._bounded(e[4])    # %, bytes/s, %
             cols = seen.setdefault((pid, name), {"cpu": {}, "io": {}, "gpu": {}})
             for key, x in (("cpu", cpu), ("io", io), ("gpu", gpu)):
                 cols[key][k] = float(x) if x is not None and x >= 0 else 0.0
@@ -200,9 +258,18 @@ def _others(cap: Capture) -> _Others:
         top.append(max(cpus) if cpus else None)
         io_top.append(max(ios) if ios else None)
     total_s = _Series(t, total)
-    sums: dict[str, dict[str, dict[int, float]]] = {}
-    for (_pid, name), cols in seen.items():
-        acc = sums.setdefault(name, {"cpu": {}, "io": {}, "gpu": {}})
+
+    # Who each process is: lag-doctor's own (never named), the game's own child (named as such), or another
+    # program. The cause series above keep the game's children: they still compete with the game (DESIGN).
+    game = game_pids(cap)
+    tool_pids, tool_names = tool_processes(cap)
+    roles = {key: ("tool" if key[0] in tool_pids or key[1].lower() in tool_names
+                   else "game_helper" if key[0] in game else "background") for key in seen}
+    sums: dict[str, dict[str, dict[str, dict[int, float]]]] = {"background": {}, "game_helper": {}}
+    for key, cols in seen.items():
+        if roles[key] == "tool":
+            continue
+        acc = sums[roles[key]].setdefault(key[1], {"cpu": {}, "io": {}, "gpu": {}})
         for c, vals in cols.items():
             for k, x in vals.items():
                 acc[c][k] = acc[c].get(k, 0.0) + x
@@ -212,8 +279,10 @@ def _others(cap: Capture) -> _Others:
         return _Sparse(t, total_s.pad, [t[k] for k in ks], [vals[k] for k in ks])
 
     per = {key: {c: sparse(vals) for c, vals in cols.items()} for key, cols in seen.items()}
-    by_name = {name: {c: sparse(vals) for c, vals in cols.items()} for name, cols in sums.items()}
-    return _Others(total_s, _Series(t, top), _Series(t, io_top), per, by_name)
+    grouped = {role: {name: {c: sparse(vals) for c, vals in cols.items()} for name, cols in names.items()}
+               for role, names in sums.items()}
+    return _Others(total_s, _Series(t, top), _Series(t, io_top), per, grouped["background"], grouped["game_helper"],
+                   roles)
 
 
 # --------------------------------------------------------------------------- checks ---
@@ -298,13 +367,13 @@ def _causes(cap: Capture, others: _Others) -> list[_Cause]:
     shared, vram = _system(cap, S.GAME_SHARED_MB), _system(cap, S.VRAM_USED_MB)
     unfocused = _system(cap, S.GAME_FOCUSED, lambda x: 1.0 if x == 0 else 0.0)
 
-    ram_gb = _num(inv.get("ram_gb"))
+    ram_gb = read("ram_gb", inv.get("ram_gb"))
     ram_floor = RAM_LOW_FRAC * ram_gb * 1024.0 if ram_gb is not None and ram_gb > 0 else RAM_LOW_MB
     vram_mb = None
     luid = (cap.target or {}).get("adapter_luid") if isinstance(cap.target, dict) else None
     for a in inv.get("adapters") or []:
-        if isinstance(a, dict) and luid and a.get("luid") == luid and _num(a.get("vram_mb")):
-            vram_mb = float(a["vram_mb"])
+        if isinstance(a, dict) and luid and a.get("luid") == luid and read("vram_mb", a.get("vram_mb")):
+            vram_mb = read("vram_mb", a["vram_mb"])
 
     def ram_low(a: float, b: float) -> bool | None:
         lo, hi = bisect.bisect_left(ram.t, a), bisect.bisect_right(ram.t, b)
@@ -360,8 +429,8 @@ def _causes(cap: Capture, others: _Others) -> list[_Cause]:
                   lambda v: f"{100 * v:.0f}%")],
                why_missing="no CPU frequency or limit counters"),
         _Cause("gpu_throttle", [_Part(throttle, +1, lambda m: NV_THROTTLE_PCT,
-                                      "the NVIDIA GPU was held down by heat or power {v} of the time (normally {n})",
-                                      _pct)],
+                                      "the NVIDIA GPU was held down by heat or its power brake {v} of the time "
+                                      "(normally {n})", _pct)],
                why_missing="no NVIDIA throttle readings"),
         _Cause("vram_overflow", [_Part(shared, +1, lambda m: SHARED_RISE_MB_PER_S * BASE_WINDOW_S,
                                        "the game's spill into shared memory rose to {v} (normally {n}) with VRAM full",
@@ -392,8 +461,10 @@ def _frame_ratio(fr: dict[str, list], rows: list[int], margin: float) -> float |
     return st.median(rs) if rs else None
 
 
-def _side(fr: dict[str, list], ev: LagEvent, verdict: str | None, margin: float) -> tuple[str | None, str]:
-    """('gpu' | 'cpu' | 'mixed' | None, a why-line) for the slow side of an event (LC 3.1 thresholds)."""
+def _side(fr: dict[str, list], ev: LagEvent, verdict: str | None,
+          margin: float) -> tuple[str | None, str, str | None]:
+    """(the slow side of an event: 'gpu' | 'cpu' | 'mixed' | None, a why-line, where the side came from:
+    'frames' | 'verdict' | None). LC 3.1 thresholds on the event's own frames."""
     t = fr.get(F.T) or []
     fm = fr.get(F.FRAME_MS) or []
     rows: list[int] = []
@@ -413,15 +484,23 @@ def _side(fr: dict[str, list], ev: LagEvent, verdict: str | None, margin: float)
         rows = [i for i in range(lo, hi) if fa._is_app(fr, i)]
     r = _frame_ratio(fr, rows, margin)
     if r is None:
-        fallback = {"gpu": "gpu", "cpu_main": "cpu", "cpu_all": "cpu", "waiting": "cpu"}.get(verdict or "")
-        return fallback, ("no frame held the lost time, or it had no GPU timing" +
-                          (f"; the game is {verdict}-bound overall" if fallback else ""))
+        # A3: only slow frames that are there but carry no GPU timing let the overall verdict stand in, and the
+        # side says so (rules never count it as frame-timing evidence). With no such frame the verdict says
+        # nothing about this moment.
+        fallback = VERDICT_SIDE.get(verdict or "") if rows else None
+        if fallback is None:
+            why = ("its frames had no GPU timing" if rows else
+                   "no presented frame held the lost time (a stall, or the screen stopped updating)"
+                   if ev.kind == "stutter" else "none of the game's own frames fell in it")
+            return None, f"{why}, so which side was slow is unknown", None
+        return fallback, f"its frames had no GPU timing; the game is {verdict}-bound overall", "verdict"
     what = f"its slowest frame ({float(fm[rows[0]]):.0f} ms)" if ev.kind == "stutter" else "its frames"
     if r >= fa.R_GPU:
-        return "gpu", f"the GPU was busy for {100 * r:.0f}% of {what}, so the GPU side was slow"
+        return "gpu", f"the GPU was busy for {100 * r:.0f}% of {what}, so the GPU side was slow", "frames"
     if r <= fa.R_CPU:
-        return "cpu", f"the GPU was busy for only {100 * r:.0f}% of {what}, so the CPU side was slow (or waited)"
-    return "mixed", f"the GPU was busy for {100 * r:.0f}% of {what}: either side could be slow"
+        return ("cpu", f"the GPU was busy for only {100 * r:.0f}% of {what}, so the CPU side was slow (or waited)",
+                "frames")
+    return "mixed", f"the GPU was busy for {100 * r:.0f}% of {what}: either side could be slow", "frames"
 
 
 def _allowed(side: str | None) -> set[str]:
@@ -515,11 +594,11 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
     thread_base = _baseline(thread, windows)
 
     # 1 + 2: per-event activity
-    acts: list[tuple[LagEvent, str | None, str, dict[str, _Hit], set[str]]] = []
+    acts: list[tuple[LagEvent, tuple[str | None, str, str | None], dict[str, _Hit], set[str]]] = []
     for ev in targets:
-        side, side_line = _side(fr, ev, verdict, margin) if not half else (None, "a moment you marked")
+        side = _side(fr, ev, verdict, margin) if not half else (None, "a moment you marked", None)
         a, b = ev.t_start - WINDOW_BEFORE_S, ev.t_end + WINDOW_AFTER_S
-        allowed = _allowed(side)
+        allowed = _allowed(side[0])
         hits: dict[str, _Hit] = {}
         measured: set[str] = set()
         for c in causes:
@@ -528,14 +607,14 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
                 measured.add(c.name)
             if hit is not None and c.name in allowed:
                 hits[c.name] = hit
-        acts.append((ev, side, side_line, hits, measured))
+        acts.append((ev, side, hits, measured))
 
     # 3: lift test
     n = len(targets)
     summary: dict[str, dict] = {}
     weight: dict[str, float] = {}
     for c in causes:
-        a_cnt = sum(1 for _, _, _, hits, _ in acts if c.name in hits)
+        a_cnt = sum(1 for _, _, hits, _ in acts if c.name in hits)
         active_b = [bool(_evaluate(c, bases[c.name], wa, wb)[0]) for wa, wb in windows]
         b = sum(active_b) / len(active_b) if active_b and any(v is not None for v in bases[c.name].values()) else None
         lift = (a_cnt / n) / max(b, LIFT_B_FLOOR) if b is not None else None
@@ -556,7 +635,7 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
     first_time: dict[str, float] = {}
     residual_counts = {"gpu_spike": 0, "game_stall": 0, "game_cpu_spike": 0}
     blame_cache: dict = {}
-    for ev, side, side_line, hits, measured in acts:
+    for ev, (side, side_line, side_source), hits, measured in acts:
         ranked = sorted(hits.values(), key=lambda h: (-weight[h.cause] * min(h.z, Z_CAP) / Z_MIN,
                                                       CAUSE_ORDER.index(h.cause)))
         why = [side_line] + [h.text for h in ranked]
@@ -566,20 +645,24 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
         if not names and half:
             why.append("nothing measured moved at this moment")
         elif not names:
-            res, line = _residual(side, thread, thread_base, ev, measured)
+            res, line = _residual(side, side_source, thread, thread_base, ev, measured)
             if res:
                 names = [res]
                 residual_counts[res] += 1
             why.append(line)
         for h in ranked:
-            proc = _blame_process(h.cause, others, windows, ev, blame_cache)
-            if proc:
-                ev.detail["process"], ev.detail["process_pids"] = proc[1], proc[0]
-                why.append(f"the program that rose the most: {proc[2]}")
+            blame = _blame_process(h.cause, others, windows, ev, blame_cache)
+            if blame:
+                ev.detail["process"] = blame.name
+                ev.detail["process_role"] = blame.role
+                ev.detail["process_pids"] = [pid for pid, _ in blame.rises]
+                ev.detail["process_rises"] = [[pid, round(rise, 2)] for pid, rise in blame.rises]
+                why.append(blame.line)
                 break
         ev.causes = names
         ev.detail["why"] = why
         ev.detail["side"] = side
+        ev.detail["side_source"] = side_source
         ev.detail["signals"] = signals
         if names:
             first_counts[names[0]] = first_counts.get(names[0], 0) + 1
@@ -613,10 +696,11 @@ def _label(a: int, n: int, lift: float | None, measured: bool) -> str:
     return "neutral"
 
 
-def _residual(side: str | None, thread: _Series, base: _Baseline | None, ev: LagEvent,
+def _residual(side: str | None, source: str | None, thread: _Series, base: _Baseline | None, ev: LagEvent,
               measured: set[str]) -> tuple[str | None, str]:
     """When no signal moved: the GPU's own work (GPU side), the game's own work (its thread was busy) or
-    the game waiting on itself (thread idle, GPU idle). Never a guess when the system was not measured."""
+    the game waiting on itself (thread idle). Never a guess when the system was not measured, and the GPU is
+    called idle only when the event's own frames showed it (A3)."""
     if side == "gpu" or side == "mixed":
         return "gpu_spike", "nothing else moved: the GPU's own work took long"
     if "game_cpu_spike" not in measured or base is None:
@@ -627,17 +711,31 @@ def _residual(side: str | None, thread: _Series, base: _Baseline | None, ev: Lag
         return "game_cpu_spike", (f"nothing else moved, and the game's busiest thread was saturated "
                                   f"({level:.0f}% of a CPU): the game's own work")
     shown = f"{level:.0f}%" if level is not None else "unknown"
+    gpu = " and the GPU was idle" if side == "cpu" and source == "frames" else "; the GPU's share of it is unknown"
     return "game_stall", (f"nothing else moved: the busiest game thread was not busy ({shown} of a CPU, "
-                          f"normally {base.med:.0f}%) and the GPU was idle, so the game waited on itself")
+                          f"normally {base.med:.0f}%){gpu}, so the game waited on itself")
+
+
+@dataclass
+class _Blame:
+    """The program that rose most at one event (A5, A10)."""
+
+    name: str
+    role: str                         # "background", or "game_helper": a child process of the game
+    rises: list[tuple[int, float]]    # (pid, rise) of its processes that rose past the floor, biggest first
+    line: str                         # the why-line, with numbers
 
 
 def _blame_process(cause: str, others: _Others, windows: list[tuple[float, float]], ev: LagEvent,
-                   cache: dict) -> tuple[list[int], str, str] | None:
-    """The program (every process of one exe name together) whose CPU / I/O / GPU rose most during the
-    event, for the background_* causes: (pids that rose, name, a why-line with numbers)."""
-    col = {"background_cpu": "cpu", "background_disk": "io", "background_gpu": "gpu"}.get(cause)
+                   cache: dict) -> _Blame | None:
+    """For the background_* causes, the program (its processes of one exe name together) whose CPU / I/O / GPU
+    rose most during the event, and the processes that rose. A rise under the cause's own floor names nobody
+    (A5), lag-doctor's own processes are never named, and the game's own child processes are named as such,
+    apart from other programs of the same name (A10)."""
+    col = BLAME_COLUMNS.get(cause)
     if col is None:
         return None
+    floor = {"cpu": BLAME_CPU_RISE_PCT, "io": OTHERS_DISK_BPS, "gpu": OTHERS_GPU_PCT}[col]
 
     def normal_of(key: Any, series: _Series) -> float:
         if key not in cache:
@@ -647,22 +745,30 @@ def _blame_process(cause: str, others: _Others, windows: list[tuple[float, float
 
     a, b = ev.t_start - WINDOW_BEFORE_S, ev.t_end + WINDOW_AFTER_S
     best = None
-    for name, series in others.by_name.items():
-        x = series[col].peak(a, b, +1)
-        normal = normal_of(("name", name, col), series[col])
-        if x is not None and x > normal and (best is None or x - normal > best[0]):
-            best = (x - normal, name, x, normal)
+    for role, groups in (("background", others.by_name), ("game_helper", others.helpers)):
+        for name, series in groups.items():
+            x = series[col].peak(a, b, +1)
+            if x is None:
+                continue
+            normal = normal_of(("name", role, name, col), series[col])
+            if x - normal >= floor and (best is None or x - normal > best[0]):
+                best = (x - normal, role, name, x, normal)
     if best is None:
         return None
-    _, name, x, normal = best
+    _, role, name, x, normal = best
     rises = []
-    for (pid, pname), series in others.per.items():
-        if pname == name:
-            rise = (series[col].peak(a, b, +1) or 0.0) - normal_of(("pid", pid, pname, col), series[col])
-            if rise > 0:
-                rises.append((rise, pid))
-    rises.sort(reverse=True)
+    for key, series in others.per.items():
+        if key[1] != name or others.roles.get(key) != role:
+            continue
+        top = series[col].listed_max(a, b)
+        rise = top - normal_of(("pid",) + key + (col,), series[col]) if top is not None else None
+        if rise is not None and rise >= floor:
+            rises.append((key[0], rise))
+    rises.sort(key=lambda r: (-r[1], r[0]))
     fmt = _mbps if col == "io" else _pct
     unit = "" if col == "io" else (" of a CPU" if col == "cpu" else " of a GPU engine")
     many = f" ({len(rises)} processes)" if len(rises) > 1 else ""
-    return [pid for _, pid in rises[:8]], name, f"{name}{many} reached {fmt(x)}{unit}, against {fmt(normal)} normally"
+    where = " (its busiest engine on any adapter)" if col == "gpu" else ""
+    who = "the program that rose the most" if role == "background" else "a helper process of the game rose the most"
+    return _Blame(name, role, rises[:BLAME_MAX_PIDS],
+                  f"{who}: {name}{many} reached {fmt(x)}{unit}{where}, against {fmt(normal)} normally")
