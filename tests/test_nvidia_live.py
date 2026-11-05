@@ -58,7 +58,8 @@ def wmi_processes(where: str) -> list[tuple[int, str, int]]:
 
 def test_nvml_lists_this_gpu_as_nvidia_smi_does(nv, smi):
     devices = nv.devices()
-    rows = smi_query(smi, ["index", "name", "pci.bus_id", "memory.total", "clocks.max.graphics"])
+    rows = smi_query(smi, ["index", "name", "pci.bus_id", "memory.total", "clocks.max.graphics",
+                           "power.default_limit", "enforced.power.limit"])
     assert len(devices) == len(rows) >= 1
     for d, r in zip(devices, rows):
         assert d["index"] == int(r["index"])
@@ -66,6 +67,11 @@ def test_nvml_lists_this_gpu_as_nvidia_smi_does(nv, smi):
         assert d["pci_bus_id"] == r["pci.bus_id"]
         assert d["mem_total_mb"] == float(r["memory.total"])
         assert d["clock_max_mhz"] == int(r["clocks.max.graphics"])
+        # NVML gives milliwatts, nvidia-smi rounds to 0.01 W. The default is what LC 4.2 compares with: this
+        # laptop's enforced limit read 55 W and ~88 W on one day, the default 80 W.
+        print(f"\nGPU {d['index']}: default power limit {d['power_default_w']} W (nvidia-smi "
+              f"{r['power.default_limit']} W), enforced now {r['enforced.power.limit']} W")
+        assert d["power_default_w"] == pytest.approx(float(r["power.default_limit"]), abs=0.006)
     q = subprocess.run([smi, "-q", "-d", "TEMPERATURE", "-i", "0"], capture_output=True, text=True, timeout=30,
                        check=True).stdout
     m = re.search(r"GPU Target Temperature\s*:\s*(\d+) C", q)
@@ -204,5 +210,7 @@ def test_fallback_streams_real_nvidia_smi_and_leaves_no_child(nv, smi, monkeypat
     assert all(0 <= v <= 100 for v in cols[G.UTIL_PCT]) and all(10 <= v <= 110 for v in cols[G.TEMP_C])
     assert all(v is None or 0.0 <= v <= 100.0 for v in cols[G.THROTTLE_PCT])
     d = nv.devices()[0]
-    assert s.result()["device"] == {"name": d["name"], "clock_max_mhz": d["clock_max_mhz"],
-                                    "mem_total_mb": d["mem_total_mb"], "temp_target_c": None}
+    dev = s.result()["device"]
+    assert dev == {"name": d["name"], "clock_max_mhz": d["clock_max_mhz"], "mem_total_mb": d["mem_total_mb"],
+                   "temp_target_c": None, "power_default_w": dev["power_default_w"]}
+    assert dev["power_default_w"] == pytest.approx(d["power_default_w"], abs=0.006)   # smi's 0.01 W against NVML's mW

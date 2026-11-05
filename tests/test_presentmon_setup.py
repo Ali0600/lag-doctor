@@ -5,6 +5,7 @@ fake opener. Verification uses WinVerifyTrust with cached revocation data only.
 """
 from __future__ import annotations
 
+import _winapi
 import ctypes
 import hashlib
 import os
@@ -18,9 +19,39 @@ import pytest
 
 from lagdoctor import setup
 
+# A different, harmless program to put under PresentMon's name (it prints the computer's name).
+DECOY = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "hostname.exe"
+
 
 def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def junction(target: Path, link: Path) -> None:
+    """A folder junction at `link` (no admin needed). Remove it with os.rmdir(link): the target stays."""
+    _winapi.CreateJunction(str(target), str(link))
+
+
+def genuine_and_decoy(presentmon_exe: Path, root: Path) -> tuple[Path, Path, Path]:
+    """root/genuine holds a copy of PresentMon, root/decoy a different exe under the same name, and the junction
+    root/link points at genuine. Returns (link, genuine, decoy)."""
+    genuine, decoy, link = root / "genuine", root / "decoy", root / "link"
+    genuine.mkdir()
+    decoy.mkdir()
+    shutil.copyfile(presentmon_exe, genuine / presentmon_exe.name)
+    shutil.copyfile(DECOY, decoy / presentmon_exe.name)
+    junction(genuine, link)
+    return link, genuine, decoy
+
+
+def remove_junction(link: Path) -> None:
+    if os.path.lexists(link):
+        os.rmdir(link)               # the junction only, never its target's files
+
+
+def run_help(exe: Path) -> bytes:
+    """Run `exe --help` with exe as the program, as capture/presentmon.spawn launches; its stderr."""
+    return subprocess.run(["PresentMon", "--help"], executable=str(exe), capture_output=True, timeout=30).stderr
 
 
 @pytest.fixture
@@ -178,14 +209,79 @@ def test_pinned_locks_the_file_against_writers_until_the_block_ends(presentmon_e
     shutil.copyfile(presentmon_exe, copy)
     shutil.copyfile(presentmon_exe, other)
     with setup.pinned(copy) as p:
-        assert p == copy
+        # the path to launch is the checked handle's own (it used to be `copy` as given; SEC-9)
+        assert str(p).startswith("\\\\?\\") and os.path.samefile(p, copy)
+        assert os.path.normcase(str(p)[4:]) == os.path.normcase(os.path.realpath(copy))
         with pytest.raises(PermissionError):
             open(copy, "r+b").close()
         with pytest.raises(PermissionError):
             os.replace(other, copy)
-        r = subprocess.run([str(copy), "--help"], capture_output=True, timeout=30)     # prints help, exits 1
-        assert r.stderr.startswith(b"PresentMon 2.6.0")                               # still runnable
+        with pytest.raises(PermissionError):
+            os.rename(tmp_path, tmp_path.with_name(tmp_path.name + "-moved"))      # nor can its folder move
+        assert run_help(p).startswith(b"PresentMon 2.6.0")                           # runnable by that path
     open(copy, "r+b").close()
+
+
+def test_a_junction_repointed_after_the_check_cannot_change_what_the_pinned_path_runs(presentmon_exe, tmp_path):
+    # SEC-9: the check went through a junction; whatever it points at afterwards, the yielded path is the file
+    # that was checked.
+    link, genuine, decoy = genuine_and_decoy(presentmon_exe, tmp_path)
+    name = presentmon_exe.name
+    try:
+        with setup.pinned(link / name) as launch:
+            remove_junction(link)
+            junction(decoy, link)                                  # re-pointed while the pin is held
+            assert sha256(link / name) == sha256(DECOY) != setup.SHA256        # by the given path: the decoy
+            assert sha256(launch) == setup.SHA256                               # by the yielded path: PresentMon
+            assert os.path.samefile(launch, genuine / name) and "link" not in Path(launch).parts
+            assert run_help(launch).startswith(b"PresentMon 2.6.0")             # what runs is what was checked
+    finally:
+        remove_junction(link)
+
+
+def test_the_launch_path_keeps_its_prefix_so_windows_cannot_renormalise_it(presentmon_exe, tmp_path):
+    # Without \\?\ Windows drops a folder's trailing dot, so "...\x.\PresentMon.exe" would run "...\x\...".
+    name = presentmon_exe.name
+    dotted = "\\\\?\\" + str(tmp_path / "x.")
+    plain = tmp_path / "x"
+    os.mkdir(dotted)
+    plain.mkdir()
+    try:
+        shutil.copyfile(presentmon_exe, dotted + "\\" + name)
+        shutil.copyfile(DECOY, plain / name)
+        with setup.pinned(Path(dotted + "\\" + name)) as launch:
+            assert str(launch).endswith("\\x.\\" + name)
+            assert sha256(launch) == setup.SHA256
+            assert run_help(launch).startswith(b"PresentMon 2.6.0")
+    finally:
+        if os.path.exists(dotted + "\\" + name):
+            os.remove(dotted + "\\" + name)
+        os.rmdir(dotted)                                   # a plain path could not name this folder
+
+
+def test_a_launch_path_longer_than_the_first_buffer_is_read_whole(presentmon_exe, tmp_path):
+    deep = "\\\\?\\" + str(tmp_path) + "".join(f"\\{c * 120}" for c in "abcde")    # over 600 characters
+    os.makedirs(deep)
+    try:
+        exe = deep + "\\" + presentmon_exe.name
+        shutil.copyfile(presentmon_exe, exe)
+        with setup.pinned(Path(exe)) as launch:
+            assert len(str(launch)) > 600 and str(launch).endswith("e" * 120 + "\\" + presentmon_exe.name)
+            assert os.path.samefile(launch, exe) and sha256(launch) == setup.SHA256
+    finally:
+        shutil.rmtree("\\\\?\\" + str(tmp_path / ("a" * 120)))
+
+
+def test_no_launch_path_when_the_checked_files_own_path_cannot_be_read(presentmon_exe, monkeypatch):
+    def unreadable(f):
+        raise OSError(6, "The handle is invalid")
+
+    monkeypatch.setattr(setup, "_final_path", unreadable)
+    ran = []
+    with pytest.raises(setup.VerifyError, match="own path could not be read"):
+        with setup.pinned(presentmon_exe):
+            ran.append(1)                                          # never reached: nothing to launch by
+    assert ran == []
 
 
 def test_an_error_inside_the_pinned_block_passes_through_unchanged(presentmon_exe):

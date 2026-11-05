@@ -304,7 +304,9 @@ class NetworkSampler(Collector):
     `net`, the machine (SystemNet; tests pass a fake).
 
     result()["downloads"] is None when no download log was read at all (not measured, never "none
-    seen"); "download_sources" names the logs that were read.
+    seen"); "download_sources" names the logs that were read. Likewise result()["wifi_scans"] is None
+    unless Wi-Fi scan notifications were registered (the status says why), and [] only when they were
+    and no scan came.
     """
 
     name = "network"
@@ -380,7 +382,8 @@ class NetworkSampler(Collector):
                 "probes": {t: {"sent": self._sent[t], "lost": self._lost[t], "from_t": self._from_t[t]}
                            for t in TARGETS},
                 "lost": {t: list(self._lost_t[t]) for t in TARGETS},
-                "wifi_scans": list(self._scans.copy()),
+                # never registered: not watched, which must not read as "no scan happened"
+                "wifi_scans": list(self._scans.copy()) if self._scan_registered else None,
                 "route": dict(self._route),
                 "interface": dict(self._interface),
                 "downloads": [dict(d) for d in self._downloads] if self._sources else None,
@@ -599,21 +602,22 @@ class NetworkSampler(Collector):
             except Exception as exc:  # noqa: BLE001
                 self._wlan, why = None, str(exc)
             if self._wlan is None:
-                self._problems["wifi"] = f"Wi-Fi signal not measured: {why}"
+                self._problems["wifi"] = f"Wi-Fi signal and scans not measured: {why}"
                 return
         if self._wlan is None:
             return
         try:
             found = self._wlan.interfaces()
         except Exception as exc:  # noqa: BLE001
-            self._problems["wifi"] = f"Wi-Fi signal not measured: {exc}"
+            self._problems["wifi"] = f"Wi-Fi signal and scans not measured: {exc}"
             return
         match = [i for i in found if i["guid"] == nic_row["guid"]]
         if not match:
             connected = [i for i in found if i["connected"]]
             match = connected if len(connected) == 1 else []
         if not match:
-            self._problems["wifi"] = "Wi-Fi signal not measured: the adapter in use is unknown to the WLAN service"
+            self._problems["wifi"] = ("Wi-Fi signal and scans not measured: the adapter in use is unknown to the "
+                                      "WLAN service")
             return
         self._wifi_guid = match[0]["guid"]
         self._problems.pop("wifi", None)
@@ -621,8 +625,9 @@ class NetworkSampler(Collector):
             try:
                 self._wlan.on_scan_complete(self._on_scan)
                 self._scan_registered = True
+                self._problems.pop("scans", None)
             except Exception as exc:  # noqa: BLE001
-                self._problems["scans"] = f"Wi-Fi scan notifications not received: {exc}"
+                self._problems["scans"] = f"Wi-Fi scans not recorded: their notifications could not be registered ({exc})"
 
     def _on_scan(self, t_clock: float, guid: str) -> None:
         # Runs on a WLAN service thread (NE 3.5): an append and nothing else, no locks.
@@ -729,5 +734,10 @@ class NetworkSampler(Collector):
                                f"({self._last_error.get(target, '?')})")
             if self._skipped[target]:
                 reasons.append(f"{self._skipped[target]} pings to the {target} not sent: earlier ones still waiting")
-        detail = "; ".join(reasons + list(self._notes.values()))
+        notes = list(self._notes.values())
+        if not self._scan_registered and "wifi" not in self._problems and "scans" not in self._problems:
+            # wifi_scans is None then; on a Wi-Fi link a failure above already says why
+            notes.append("Wi-Fi scans not watched: " + ("the network adapter in use is not known" if self._nic is None
+                                                        else "the link in use is not Wi-Fi"))
+        detail = "; ".join(reasons + notes)
         self.set_status("partial" if reasons else "ok", detail, tool="IcmpSendEcho2, GetIfEntry2, Native Wifi")

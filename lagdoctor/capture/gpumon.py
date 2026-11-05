@@ -57,7 +57,9 @@ COUNTERS = tuple(nvml.THROTTLE_FIELDS)          # every cumulative counter read,
 # LC 4.2: heat and the HW power brake hold the clocks down. (hw_slowdown has no counter; nv_reasons shows it.)
 THROTTLE_REASONS = ("sw_thermal_slowdown", "hw_thermal_slowdown", "hw_power_brake_slowdown")
 POWER_CAP_REASONS = ("sw_power_cap",)           # LC 4.1: the normal limit of a GPU-bound laptop
-DEVICE_KEYS = ("name", "clock_max_mhz", "mem_total_mb", "temp_target_c")
+# power_default_w: the board's default power limit. LC 4.2's power-limit variant is an enforced limit below it
+# (battery, a quiet mode); this laptop's enforced limit read both 55 W and ~88 W on one day, the default 80 W.
+DEVICE_KEYS = ("name", "clock_max_mhz", "mem_total_mb", "temp_target_c", "power_default_w")
 # Values the driver samples; nv_clock_max_mhz is left out because it comes from the device listing.
 _SAMPLED = tuple(c for c in G.ALL if c not in (G.T, G.CLOCK_MAX_MHZ))
 
@@ -65,8 +67,8 @@ _SAMPLED = tuple(c for c in G.ALL if c not in (G.T, G.CLOCK_MAX_MHZ))
 # name stays in the name instead of shifting the other columns.
 SMI_FIELDS = (
     "timestamp", "index", "pci.bus_id", "utilization.gpu", "memory.used", "memory.reserved", "memory.total",
-    "temperature.gpu", "power.draw", "enforced.power.limit", "clocks.current.graphics", "clocks.max.graphics",
-    "pstate", "clocks_event_reasons.active",
+    "temperature.gpu", "power.draw", "enforced.power.limit", "power.default_limit", "clocks.current.graphics",
+    "clocks.max.graphics", "pstate", "clocks_event_reasons.active",
     "clocks_event_reasons_counters.sw_thermal_slowdown", "clocks_event_reasons_counters.hw_thermal_slowdown",
     "clocks_event_reasons_counters.hw_power_brake_slowdown", "clocks_event_reasons_counters.sw_power_cap",
     "name",
@@ -247,8 +249,9 @@ def _time(v: str) -> _dt.datetime | None:
 
 def parse_smi_row(line: str, columns: Sequence[str]) -> dict | None:
     """One data row (asked for with --format=csv,nounits) as a sample dict like Nvml.sample(), plus
-    index, pci_bus_id, name, mem_total_mb, clock_max_mhz and when (nvidia-smi's own timestamp).
-    None if the line is not a data row."""
+    index, pci_bus_id, name, mem_total_mb, clock_max_mhz, power_default_w and when (nvidia-smi's own
+    timestamp). Columns are read by name, so one the header lacks reads None. None if the line is not a
+    data row."""
     parts = [p.strip() for p in line.split(",", len(columns) - 1)]
     if len(parts) != len(columns):
         return None
@@ -277,6 +280,7 @@ def parse_smi_row(line: str, columns: Sequence[str]) -> dict | None:
         "temp_c": _int(raw.get("temperature.gpu", "")),
         "power_w": _float(raw.get("power.draw", "")),
         "power_limit_w": _float(raw.get("enforced.power.limit", "")),
+        "power_default_w": _float(raw.get("power.default_limit", "")),
         "clock_mhz": _int(raw.get("clocks.current.graphics", "")),
         "clock_max_mhz": _int(raw.get("clocks.max.graphics", "")),
         "pstate": int(m[1]) if m and int(m[1]) <= nvml.PSTATE_MAX else None,

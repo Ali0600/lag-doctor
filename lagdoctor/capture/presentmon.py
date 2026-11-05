@@ -338,14 +338,19 @@ def has_console() -> bool:
 
 
 def spawn(argv: list[str], console: bool) -> subprocess.Popen:
-    """Start PresentMon in its own process group so CTRL_BREAK reaches it alone (PM 7.4 step 1).
+    r"""Start PresentMon in its own process group so CTRL_BREAK reaches it alone (PM 7.4 step 1).
 
     Without a console of our own the child would open a window, so it gets CREATE_NO_WINDOW; it then
     sits in a console of its own that CTRL_BREAK cannot reach, and is stopped through its session.
+
+    argv[0] goes to CreateProcess as the program itself (lpApplicationName), which opens a \\?\ path exactly
+    as given, so the checked file runs (setup.pinned). Left to the command line, the program's path is
+    normalised again: through a folder named "x." it ran the program in folder "x", \\?\ or not (measured
+    2026-11-05). Every PresentMon launch goes through here.
     """
     flags = subprocess.CREATE_NEW_PROCESS_GROUP | (0 if console else subprocess.CREATE_NO_WINDOW)
-    return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                            creationflags=flags)
+    return subprocess.Popen(argv, executable=argv[0], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, creationflags=flags)
 
 
 def _discard(stream) -> None:
@@ -438,8 +443,9 @@ class PresentMonSource(Collector):
     def __init__(self, pid: int | None, exe: Path | str | None = None, etl_file: Path | str | None = None, *,
                  is_alive: Callable[[], bool] | None = None) -> None:
         super().__init__()
-        # Absolute paths: the exe that runs must be the file that was verified (a relative name would go
-        # through CreateProcess's search order), and an ETL path must never read as an option.
+        # Absolute paths, fixed when given: the exe checked and run is the file the caller named, wherever the
+        # process stands later (what runs is then that checked file's own path, setup.pinned), and an ETL path
+        # must never read as an option.
         self.etl_file = Path(os.path.abspath(etl_file)) if etl_file is not None else None
         self.pid = check_pid(pid) if self.etl_file is None or pid is not None else None
         self.exe = Path(os.path.abspath(exe)) if exe is not None else None
@@ -507,19 +513,21 @@ class PresentMonSource(Collector):
     # ---- one PresentMon run ------------------------------------------------------------
     @contextlib.contextmanager
     def _exe_guard(self) -> Iterator[list[str]]:
-        """The command prefix for PresentMon: the pinned exe, locked against writers while it starts."""
+        """The command prefix for PresentMon: the pinned exe, locked against writers while it starts, named by
+        the final path of the very handle that was checked (setup.pinned), so a junction in `path` re-pointed
+        after the check cannot change what runs."""
         path = self.exe if self.exe is not None else setup.installed_exe()
         stack = contextlib.ExitStack()
         try:
-            stack.enter_context(setup.pinned(path))
+            launch = stack.enter_context(setup.pinned(path))
         except setup.NotInstalled:
             raise _Unavailable(f"PresentMon {VERSION} is not installed ({path}); run `lagdoctor setup`") from None
         except setup.SetupError as exc:
             raise _Unavailable(f"PresentMon was not run because it failed its integrity check: {exc}. "
                                "Run `lagdoctor setup` to replace it") from None
         with stack:
-            self._exe_used = str(path)
-            yield [str(path)]
+            self._exe_used = str(launch)
+            yield [str(launch)]
 
     def _capture_once(self) -> str:
         args = replay_args(self.etl_file) if self.etl_file is not None else live_args(self.pid)
@@ -703,15 +711,21 @@ class PresentMonSource(Collector):
             self._stop_lock.release()
 
     def _terminate_session(self, timeout: float) -> int | None:
-        """A second PresentMon stops the session by name: 0 stopped, 7 none (PM 7.4 step 3)."""
+        """A second PresentMon stops the session by name: 0 stopped, 7 none (PM 7.4 step 3). Started through
+        spawn(), like the capture, so it too runs the checked file."""
         try:
             with self._exe_guard() as prefix:
-                r = subprocess.run(prefix + terminate_args(), stdin=subprocess.DEVNULL, capture_output=True,
-                                   timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW)
+                proc = spawn(prefix + terminate_args(), console=False)
+                try:
+                    proc.communicate(timeout=timeout)       # drains both pipes
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.communicate()
+                    raise
         except (OSError, subprocess.SubprocessError, _Unavailable) as exc:
             self._note(f"PresentMon could not be run to stop its trace session: {exc}")
             return None
-        return r.returncode
+        return proc.returncode
 
     def _note(self, text: str) -> None:
         with self._lock:

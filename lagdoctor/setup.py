@@ -8,13 +8,15 @@ record for v2.6.0 lists the same size and digest):
 - the signing certificate's common name is "Intel Corporation" (an offline PC with no cached revocation
   data may pass without a revocation answer once the pin matched; an explicit revocation always refuses).
 
-`pinned()` checks the bytes through a handle that refuses writers and deletes, and keeps that handle
-open while the caller launches the exe, so the checked file cannot be rewritten in place between the check
-and the run. What it does not cover: the launch goes by path, so code running as the user could re-point a
-folder junction in that path after the check; and the elevated capture child runs this checkout's own,
-user-writable Python code anyway. The pin guarantees the download is the genuine release; it is not a
-barrier against code already running as the user (UAC is not a security boundary for that; DESIGN.md,
-Privileges and elevation).
+`pinned()` checks the bytes through a handle that refuses writers and deletes, keeps that handle open while
+the caller launches the exe, and yields the handle's own final path (GetFinalPathNameByHandleW: every
+junction and symbolic link in the given path resolved). While that handle is open, Windows refuses to
+rewrite, rename or delete the file and to rename the folders above it (measured here on 2026-11-05: a rename
+of the file's folder and of its parent both failed with error 5), so a launch with the yielded path as the
+program runs the checked bytes even if a junction in the given path is re-pointed after the check. What it
+does not cover: the elevated capture child runs this checkout's own, user-writable Python code anyway. The
+pin guarantees the download is the genuine release; it is not a barrier against code already running as the
+user (UAC is not a security boundary for that; DESIGN.md, Privileges and elevation).
 """
 from __future__ import annotations
 
@@ -60,6 +62,8 @@ def installed_exe() -> Path:
 
 GENERIC_READ, FILE_SHARE_READ, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL = 0x80000000, 0x1, 3, 0x80
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+FILE_NAME_NORMALIZED, VOLUME_NAME_DOS = 0x0, 0x0          # GetFinalPathNameByHandleW flags (fileapi.h)
+MAX_NT_PATH = 32_768                                       # the longest path Windows has, in characters
 
 # WinTrust.h / SoftPub.h / wincrypt.h (Windows SDK 10.0.19041.0)
 WTD_UI_NONE = 2
@@ -136,6 +140,8 @@ _kernel32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWO
 _kernel32.CreateFileW.restype = wintypes.HANDLE
 _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 _kernel32.CloseHandle.restype = wintypes.BOOL
+_kernel32.GetFinalPathNameByHandleW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+_kernel32.GetFinalPathNameByHandleW.restype = wintypes.DWORD
 _wintrust.WinVerifyTrust.argtypes = [wintypes.HWND, ctypes.POINTER(GUID), ctypes.c_void_p]
 _wintrust.WinVerifyTrust.restype = wintypes.LONG
 _wintrust.WTHelperProvDataFromStateData.argtypes = [wintypes.HANDLE]
@@ -166,6 +172,26 @@ def _open_deny_write(path: Path) -> BinaryIO:
         _kernel32.CloseHandle(h)
         raise
     return os.fdopen(fd, "rb")                          # closing it closes the handle
+
+
+def _final_path(f: BinaryIO) -> Path:
+    r"""The path of the open file itself, junctions and symbolic links resolved: "\\?\C:\...".
+
+    The \\?\ prefix stays: without it Windows normalises the path again, and a plain path through a folder
+    named "x." opened, or ran, the file in folder "x" instead (checked here on 2026-11-05). Launch it as
+    CreateProcess's program (lpApplicationName), which takes a \\?\ path exactly, spaces included; the
+    command line normalises it even with the prefix (capture/presentmon.spawn does this)."""
+    handle = msvcrt.get_osfhandle(f.fileno())
+    size = 512
+    while size <= MAX_NT_PATH:
+        buf = ctypes.create_unicode_buffer(size)
+        n = _kernel32.GetFinalPathNameByHandleW(handle, buf, size, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS)
+        if n == 0:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if n < size:                  # done: n is the length without the terminating null
+            return Path(buf.value)
+        size = n + 1                  # too small: n is the size needed (with the null); +1 so a retry always grows
+    raise OSError(f"the checked file's path is longer than {MAX_NT_PATH} characters")
 
 
 def _sha256(f: BinaryIO, limit: int) -> str:
@@ -242,14 +268,21 @@ def _pinned_file(path: Path, sha256: str, size: int | None) -> Iterator[BinaryIO
 
 @contextmanager
 def pinned(path: Path, sha256: str = SHA256, size: int | None = SIZE) -> Iterator[Path]:
-    """Check the file's bytes against the pin and keep it locked against writers until the block ends.
+    """Check the file's bytes against the pin, keep it locked against writers until the block ends, and
+    yield the path to launch: the checked handle's own final path, never `path` (a junction in `path` can be
+    re-pointed after the check; the folders of the final path cannot be renamed while the handle is open).
 
-    Launch the exe inside the block; once the process exists Windows itself refuses writes to it.
-    Errors raised by the caller's block pass through unchanged.
+    Launch the exe inside the block, with the yielded path as the program (Popen's executable=, see
+    _final_path); once the process exists Windows itself refuses writes to it. Errors raised by the caller's
+    block pass through unchanged.
     """
     path = Path(path)
-    with _pinned_file(path, sha256, size):
-        yield path
+    with _pinned_file(path, sha256, size) as f:
+        try:
+            launch = _final_path(f)
+        except OSError as exc:        # no launch path that is surely the checked file: nothing is run
+            raise VerifyError(f"{path} was checked, but the checked file's own path could not be read: {exc}") from exc
+        yield launch
 
 
 def verify(path: Path, *, sha256: str = SHA256, size: int | None = SIZE, signer: str = SIGNER) -> dict:
