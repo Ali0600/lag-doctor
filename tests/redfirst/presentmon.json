@@ -1,0 +1,742 @@
+[
+ {
+  "name": "PID 0 (every process) accepted",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "or not 0 < pid <= MAX_PID:",
+  "new": "or not 0 <= pid <= MAX_PID:",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_pid_that_presentmon_would_read_as_every_process_is_refused"
+  ]
+ },
+ {
+  "name": "a bool passes as a PID",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "if isinstance(pid, bool) or not isinstance(pid, int)",
+  "new": "if not isinstance(pid, int)",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_pid_that_presentmon_would_read_as_every_process_is_refused"
+  ]
+ },
+ {
+  "name": "pipe text decoded as cp1252",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "self.encoding = \"latin-1\"",
+  "new": "self.encoding = \"cp1252\"",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_pipe_text_is_latin1_not_the_ansi_code_page"
+  ]
+ },
+ {
+  "name": "UTF-16 BOM not recognised",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "if data.startswith(b\"\\xff\\xfe\"):",
+  "new": "if data.startswith(b\"\\xff\\xfe\\x00\\x00\\x00\"):",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_bom_files_decode_to_the_same_rows_in_any_chunking"
+  ]
+ },
+ {
+  "name": "UTF-8 BOM left on the first line",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "self.encoding, data = \"utf-8\", data[3:]",
+  "new": "self.encoding, data = \"utf-8\", data",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_utf8_bom_is_not_left_on_the_header"
+  ]
+ },
+ {
+  "name": "CR not stripped",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "            if line.endswith(\"\\r\"):\n                line = line[:-1]\n",
+  "new": "",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_crlf_is_stripped_from_the_last_field"
+  ]
+ },
+ {
+  "name": "overlong complete line kept",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "            if len(line) > MAX_LINE_CHARS:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_the_line_limit_keeps_a_line_at_the_limit_and_drops_one_past_it"
+  ]
+ },
+ {
+  "name": "pending buffer unbounded",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "if len(self._pending) > MAX_LINE_CHARS + 1:",
+  "new": "if False:",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_the_splitter_never_buffers_more_than_one_line_limit"
+  ]
+ },
+ {
+  "name": "cut-off last line parsed",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        if self._pending or self._skipping:    # no newline at the end: the writer was cut off\n            self.dropped += 1",
+  "new": "        if self._pending and not self._skipping:\n            lines.append(self._pending)",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_last_line_cut_off_without_its_newline_is_counted_not_parsed"
+  ]
+ },
+ {
+  "name": "only the first header is used",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        if line.startswith(HEADER_PREFIX):\n            self.columns = line.split(\",\")",
+  "new": "        if line.startswith(HEADER_PREFIX) and not self.columns:\n            self.columns = line.split(\",\")",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_every_header_line_rebuilds_the_column_map"
+  ]
+ },
+ {
+  "name": "missing required columns ignored",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "self.missing = [c for c in REQUIRED if c not in self.columns]",
+  "new": "self.missing = []",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_header_without_the_columns_lag_doctor_needs_makes_its_rows_unusable"
+  ]
+ },
+ {
+  "name": "comma names not rejoined",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        if extra > 0:\n            # Only Application",
+  "new": "        if False:\n            # Only Application",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_comma_in_the_application_name_is_rejoined"
+  ]
+ },
+ {
+  "name": "PID pattern accepts a sign",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "_PID = re.compile(r\"[0-9]{1,10}\")",
+  "new": "_PID = re.compile(r\"-?[0-9]{1,10}\")",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_value_that_cannot_be_right_makes_the_row_malformed"
+  ]
+ },
+ {
+  "name": "PID upper bound dropped",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "if not _PID.fullmatch(value) or int(value) > MAX_PID:",
+  "new": "if not _PID.fullmatch(value):",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_value_that_cannot_be_right_makes_the_row_malformed"
+  ]
+ },
+ {
+  "name": "address without 0x accepted",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "_ADDRESS = re.compile(r\"0x[0-9A-Fa-f]{1,16}\")",
+  "new": "_ADDRESS = re.compile(r\"(?:0x)?[0-9A-Fa-f]{1,16}\")",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_value_that_cannot_be_right_makes_the_row_malformed"
+  ]
+ },
+ {
+  "name": "integers accept underscores",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "_INT = re.compile(r\"-?[0-9]{1,20}\")",
+  "new": "_INT = re.compile(r\"-?[0-9_]{1,20}\")",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_value_that_cannot_be_right_makes_the_row_malformed"
+  ]
+ },
+ {
+  "name": "floats accept leading spaces",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "_FLOAT = re.compile(r\"-?[0-9]+",
+  "new": "_FLOAT = re.compile(r\"\\s*-?[0-9]+",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_value_that_cannot_be_right_makes_the_row_malformed"
+  ]
+ },
+ {
+  "name": "junk kept as text in a column lag-doctor reads",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "    if column in STRICT_FLOATS:\n        raise ValueError",
+  "new": "    if False:\n        raise ValueError",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_value_that_cannot_be_right_makes_the_row_malformed"
+  ]
+ },
+ {
+  "name": "NA not read as missing",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "    if value == \"NA\":\n        return None",
+  "new": "    if value == \"NAN!\":\n        return None",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_dropped_frame_is_displayed_0_with_no_display_times"
+  ]
+ },
+ {
+  "name": "printf nan refuses the frame",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "    if _PRINTF_NAN.fullmatch(value):\n        return None",
+  "new": "    if _PRINTF_NAN.fullmatch(value):\n        raise ValueError(value)",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_printf_nan_is_a_missing_value_not_a_lost_frame"
+  ]
+ },
+ {
+  "name": "a required NA is kept",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "if any(row[c] is None for c in REQUIRED):",
+  "new": "if False:",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_value_that_cannot_be_right_makes_the_row_malformed"
+  ]
+ },
+ {
+  "name": "zero CPU time kept as a measurement",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "(zero_is_missing and v == 0.0)",
+  "new": "(zero_is_missing and v < 0.0)",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_zero_cpu_time_means_missing_but_the_smallest_real_value_is_kept"
+  ]
+ },
+ {
+  "name": "generated frames keep CPU timing",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "(app_only and not app)",
+  "new": "(app_only and app is None)",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_generated_frame_has_no_cpu_timing_and_no_gpu_busy_of_its_own"
+  ]
+ },
+ {
+  "name": "no FrameType column means generated",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "app = frame_type is None or frame_type == \"Application\"",
+  "new": "app = frame_type == \"Application\"",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_without_a_frame_type_column_every_frame_counts_as_the_apps_own"
+  ]
+ },
+ {
+  "name": "dropped frames counted as displayed",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "F.DISPLAYED: (0 if until is None else 1) if",
+  "new": "F.DISPLAYED: 1 if",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_dropped_frame_is_displayed_0_with_no_display_times"
+  ]
+ },
+ {
+  "name": "display latency without CPU busy",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "F.DISPLAY_LATENCY_MS: cpu_busy + until if",
+  "new": "F.DISPLAY_LATENCY_MS: until if",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_displayed_frame_maps_to_every_f_column"
+  ]
+ },
+ {
+  "name": "t not on the capture clock",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "F.T: clock.qpc_to_seconds(row[\"TimeInQPC\"]) - origin,",
+  "new": "F.T: clock.qpc_to_seconds(row[\"TimeInQPC\"]),",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_a_displayed_frame_maps_to_every_f_column"
+  ]
+ },
+ {
+  "name": "main chain by frames, not displayed",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "return max(chains, key=lambda k: (chains[k][\"displayed\"], chains[k][\"frames\"]))",
+  "new": "return max(chains, key=lambda k: (chains[k][\"frames\"], chains[k][\"displayed\"]))",
+  "tests": [
+   "tests/test_presentmon_parser.py::test_the_main_chain_is_the_one_with_the_most_displayed_frames"
+  ]
+ },
+ {
+  "name": "access denied not recognised",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "    if \"access denied\" in low:\n        return \"unavailable\"",
+  "new": "    if \"access denied!\" in low:\n        return \"unavailable\"",
+  "tests": [
+   "tests/test_presentmon_source.py::test_access_denied_means_no_rights"
+  ]
+ },
+ {
+  "name": "a leftover session checked before rights",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "    if \"access denied\" in low:\n",
+  "new": "    if \"access denied\" in low and \"already running\" not in low:\n",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_leftover_session_we_may_not_stop_is_a_rights_problem"
+  ]
+ },
+ {
+  "name": "a leftover session is not retried",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "if outcome == \"retry\" and not retried and not self.stopping:",
+  "new": "if outcome == \"retry!\" and not retried and not self.stopping:",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_session_left_running_is_replaced_once_and_the_capture_goes_on"
+  ]
+ },
+ {
+  "name": "our own stop read as a start failure",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "stopped_by_us = proc is self._handled and self._stop_path != \"exited\"",
+  "new": "stopped_by_us = False",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_capture_stopped_before_any_output_is_not_called_a_start_failure"
+  ]
+ },
+ {
+  "name": "a crash leaves its session running",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "            self._terminate_session(self.SESSION_CMD_TIMEOUT_S)\n        return \"ran\"",
+  "new": "        return \"ran\"",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_crash_is_reported_and_its_session_stopped_by_name"
+  ]
+ },
+ {
+  "name": "rows of other processes kept",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        if self.pid is not None and pid != self.pid:\n            return",
+  "new": "        if False:\n            return",
+  "tests": [
+   "tests/test_presentmon_source.py::test_rows_stream_in_and_ctrl_break_drains_the_rest"
+  ]
+ },
+ {
+  "name": "unfiltered replay keys collide",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "key = address if self.pid is not None else f\"{pid}:{address}\"",
+  "new": "key = address",
+  "tests": [
+   "tests/test_presentmon_source.py::test_an_unfiltered_replay_keys_chains_by_process"
+  ]
+ },
+ {
+  "name": "killed first",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "    if proc.poll() is not None:\n        return \"exited\"\n    if console:",
+  "new": "    if proc.poll() is not None:\n        return \"exited\"\n    proc.kill()\n    if console:",
+  "tests": [
+   "tests/test_presentmon_source.py::test_ctrl_break_stops_it_cleanly_and_nothing_else_is_tried"
+  ]
+ },
+ {
+  "name": "CTRL_BREAK tried without a console",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "    if console:\n        try:\n            proc.send_signal(signal.CTRL_BREAK_EVENT)",
+  "new": "    if True:\n        try:\n            proc.send_signal(signal.CTRL_BREAK_EVENT)",
+  "tests": [
+   "tests/test_presentmon_source.py::test_without_a_console_it_goes_straight_to_the_session_stop"
+  ]
+ },
+ {
+  "name": "a CTRL_BREAK that cannot be sent escapes",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        except OSError:                        # no console after all",
+  "new": "        except ZeroDivisionError:                        # no console after all",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_ctrl_break_that_cannot_be_sent_falls_back_to_the_session_stop"
+  ]
+ },
+ {
+  "name": "session not stopped before the kill",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "    if terminate_session is not None:\n        terminate_session(session_cmd_timeout)\n        if _exited_within(proc, session_stop_wait):",
+  "new": "    if False:\n        terminate_session(session_cmd_timeout)\n        if _exited_within(proc, session_stop_wait):",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_child_deaf_to_ctrl_break_is_stopped_through_its_session_not_killed"
+  ]
+ },
+ {
+  "name": "session left behind after a kill",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        terminate_session(session_cmd_timeout)  # the kill left the session running: remove it",
+  "new": "        pass  # the kill left the session running: remove it",
+  "tests": [
+   "tests/test_presentmon_source.py::test_only_a_child_that_ignores_both_is_killed_and_its_session_is_cleaned_up"
+  ]
+ },
+ {
+  "name": "CTRL_BREAK wait is not DESIGN's 10 s",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "    CTRL_BREAK_WAIT_S = 10.0       # DESIGN",
+  "new": "    CTRL_BREAK_WAIT_S = 30.0       # DESIGN",
+  "tests": [
+   "tests/test_presentmon_source.py::test_the_stop_budget_fits_the_collector_contract"
+  ]
+ },
+ {
+  "name": "reading stops at stop()",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        for row in parse(chunks, self._parser):\n            try:",
+  "new": "        for row in parse(chunks, self._parser):\n            if self.stopping:\n                break\n            try:",
+  "tests": [
+   "tests/test_presentmon_source.py::test_rows_stream_in_and_ctrl_break_drains_the_rest"
+  ]
+ },
+ {
+  "name": "no drain after a reader failure",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "            threading.Thread(target=_discard, args=(proc.stdout,), daemon=True).start()\n",
+  "new": "",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_reader_failure_still_drains_the_pipe_while_presentmon_is_stopped"
+  ]
+ },
+ {
+  "name": "status settled before the stop finished",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "            if self._stop_lock.acquire(timeout=30.0):   # let a stop in progress (kill + clean-up) finish\n                self._stop_lock.release()\n",
+  "new": "",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_capture_that_had_to_be_killed_is_partial_and_cleaned_up"
+  ]
+ },
+ {
+  "name": "game exit not acted on",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "            if not alive:\n                self._note(\"the game exited",
+  "new": "            if False:\n                self._note(\"the game exited",
+  "tests": [
+   "tests/test_presentmon_source.py::test_the_game_exiting_stops_the_capture_without_the_session_asking"
+  ]
+ },
+ {
+  "name": "a broken check reads as a dead game",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "            except Exception:  # noqa: BLE001 - a broken check must not end the capture\n                continue",
+  "new": "            except Exception:  # noqa: BLE001 - a broken check must not end the capture\n                alive = False",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_broken_liveness_check_does_not_end_the_capture"
+  ]
+ },
+ {
+  "name": "a broken check kills the watcher",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "            except Exception:  # noqa: BLE001 - a broken check must not end the capture",
+  "new": "            except ZeroDivisionError:",
+  "tests": [
+   "tests/test_presentmon_source.py::test_the_game_is_still_watched_after_the_check_failed"
+  ]
+ },
+ {
+  "name": "default check never sees the game go",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "is_alive = self._is_alive or (lambda: self.pid in psutil.pids())",
+  "new": "is_alive = self._is_alive or (lambda: True)",
+  "tests": [
+   "tests/test_presentmon_source.py::test_the_default_liveness_check_uses_the_pid_list_only"
+  ]
+ },
+ {
+  "name": "exe launched by a relative name",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "self.exe = Path(os.path.abspath(exe)) if exe is not None else None",
+  "new": "self.exe = Path(exe) if exe is not None else None",
+  "tests": [
+   "tests/test_presentmon_source.py::test_the_exe_is_launched_by_the_absolute_path_that_was_verified"
+  ]
+ },
+ {
+  "name": "an ETL path may read as an option",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "self.etl_file = Path(os.path.abspath(etl_file)) if etl_file is not None else None",
+  "new": "self.etl_file = Path(etl_file) if etl_file is not None else None",
+  "tests": [
+   "tests/test_presentmon_source.py::test_an_etl_path_can_never_read_as_an_option"
+  ]
+ },
+ {
+  "name": "exe run without its integrity check",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "            stack.enter_context(setup.pinned(path))",
+  "new": "            stack.enter_context(contextlib.nullcontext(path))",
+  "tests": [
+   "tests/test_presentmon_source.py::test_an_exe_that_fails_its_check_is_never_run"
+  ]
+ },
+ {
+  "name": "a kill reads as a clean stop",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        if path == \"kill\":\n            problems.append(",
+  "new": "        if path == \"kill!\":\n            problems.append(",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_capture_that_had_to_be_killed_is_partial_and_cleaned_up"
+  ]
+ },
+ {
+  "name": "malformed rows not reported",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        if self._parser.malformed:\n            problems.append(",
+  "new": "        if False:\n            problems.append(",
+  "tests": [
+   "tests/test_presentmon_source.py::test_malformed_rows_make_the_capture_partial"
+  ]
+ },
+ {
+  "name": "lost events not reported",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "problems += [ln.strip() for ln in stderr if re.search(r\"were lost|overflowed present events\", ln)]",
+  "new": "problems += []",
+  "tests": [
+   "tests/test_presentmon_source.py::test_lost_events_make_the_capture_partial"
+  ]
+ },
+ {
+  "name": "a header lacking columns not reported",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        if self._parser.missing:\n            problems.append(",
+  "new": "        if False:\n            problems.append(",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_later_header_without_needed_columns_keeps_the_earlier_frames"
+  ]
+ },
+ {
+  "name": "size not checked",
+  "file": "lagdoctor/setup.py",
+  "old": "        if size is not None and actual_size != size:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_a_copy_of_the_wrong_size_is_refused_before_hashing"
+  ]
+ },
+ {
+  "name": "hash not checked",
+  "file": "lagdoctor/setup.py",
+  "old": "        if digest != sha256.lower():",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_a_tampered_copy_is_refused_by_its_hash_first",
+   "tests/test_presentmon_setup.py::test_a_download_that_fails_verification_is_deleted_not_kept"
+  ]
+ },
+ {
+  "name": "read not bounded",
+  "file": "lagdoctor/setup.py",
+  "old": "        if total > limit:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_without_an_expected_size_the_read_is_still_bounded"
+  ]
+ },
+ {
+  "name": "signature result ignored",
+  "file": "lagdoctor/setup.py",
+  "old": "    if rc != 0:\n        why = TRUST_PROBLEMS",
+  "new": "    if False:\n        why = TRUST_PROBLEMS",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_authenticode_refuses_a_changed_file_even_when_the_hash_is_its_own",
+   "tests/test_presentmon_setup.py::test_an_unsigned_copy_is_refused"
+  ]
+ },
+ {
+  "name": "signer not checked",
+  "file": "lagdoctor/setup.py",
+  "old": "    if name != signer:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_a_valid_signature_from_another_publisher_is_refused"
+  ]
+ },
+ {
+  "name": "revocation fetched from the network",
+  "file": "lagdoctor/setup.py",
+  "old": "    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT",
+  "new": "    data.dwProvFlags = WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_revocation_is_checked_from_the_cache_only_and_the_state_is_closed"
+  ]
+ },
+ {
+  "name": "revocation not checked",
+  "file": "lagdoctor/setup.py",
+  "old": "    data.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN",
+  "new": "    data.fdwRevocationChecks = 0",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_revocation_is_checked_from_the_cache_only_and_the_state_is_closed"
+  ]
+ },
+ {
+  "name": "WinVerifyTrust state never closed",
+  "file": "lagdoctor/setup.py",
+  "old": "        data.dwStateAction = WTD_STATEACTION_CLOSE      # frees the state WinVerifyTrust kept\n        _WinVerifyTrust(no_window, ctypes.byref(action), ctypes.byref(data))",
+  "new": "        pass",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_revocation_is_checked_from_the_cache_only_and_the_state_is_closed"
+  ]
+ },
+ {
+  "name": "checked file left open to writers",
+  "file": "lagdoctor/setup.py",
+  "old": "GENERIC_READ, FILE_SHARE_READ, None, OPEN_EXISTING,",
+  "new": "GENERIC_READ, FILE_SHARE_READ | 0x2 | 0x4, None, OPEN_EXISTING,",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_pinned_locks_the_file_against_writers_until_the_block_ends"
+  ]
+ },
+ {
+  "name": "unverified download installed",
+  "file": "lagdoctor/setup.py",
+  "old": "        verify(part)\n        os.replace(part, path)",
+  "new": "        os.replace(part, path)",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_a_download_that_fails_verification_is_deleted_not_kept"
+  ]
+ },
+ {
+  "name": "failed download kept as .part",
+  "file": "lagdoctor/setup.py",
+  "old": "        part.unlink(missing_ok=True)",
+  "new": "        pass",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_a_download_that_fails_verification_is_deleted_not_kept"
+  ]
+ },
+ {
+  "name": "download without permission",
+  "file": "lagdoctor/setup.py",
+  "old": "    if not allow_download:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_without_permission_nothing_is_downloaded"
+  ]
+ },
+ {
+  "name": "oversized body accepted",
+  "file": "lagdoctor/setup.py",
+  "old": "            if total > max_bytes:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_fetch_refuses_a_body_larger_than_expected"
+  ]
+ },
+ {
+  "name": "Content-Length not checked",
+  "file": "lagdoctor/setup.py",
+  "old": "        if length and length.isdigit() and int(length) > max_bytes:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_fetch_refuses_a_body_larger_than_expected"
+  ]
+ },
+ {
+  "name": "plain HTTP fetched",
+  "file": "lagdoctor/setup.py",
+  "old": "    if not url.lower().startswith(\"https://\"):\n        raise SetupError(f\"refusing a non-HTTPS download",
+  "new": "    if False:\n        raise SetupError(f\"refusing a non-HTTPS download",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_fetch_refuses_plain_http_and_redirects_away_from_https"
+  ]
+ },
+ {
+  "name": "redirect to HTTP followed",
+  "file": "lagdoctor/setup.py",
+  "old": "        if not newurl.lower().startswith(\"https://\"):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_fetch_refuses_plain_http_and_redirects_away_from_https"
+  ]
+ },
+ {
+  "name": "user name not quoted for PowerShell",
+  "file": "lagdoctor/setup.py",
+  "old": "quoted = \"'\" + who.replace(\"'\", \"''\") + \"'\"",
+  "new": "quoted = \"'\" + who + \"'\"",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_the_howto_quotes_the_name_for_powershell"
+  ]
+ },
+ {
+  "name": "declined prompt is not a PermissionError",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "        if err == ERROR_CANCELLED:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_declining_the_prompt_raises_permission_error"
+  ]
+ },
+ {
+  "name": "a relative program elevated",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    if not os.path.isabs(argv[0]) or not os.path.isabs(cwd):",
+  "new": "    if not os.path.isabs(cwd):",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_a_relative_name_is_refused_even_when_it_exists_here"
+  ]
+ },
+ {
+  "name": "a relative folder elevated",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    if not os.path.isabs(argv[0]) or not os.path.isabs(cwd):",
+  "new": "    if not os.path.isabs(argv[0]):",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_a_relative_name_is_refused_even_when_it_exists_here"
+  ]
+ },
+ {
+  "name": "a missing program reaches ShellExecuteExW",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    if not os.path.isfile(argv[0]) or not os.path.isdir(cwd):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_an_ambiguous_launch_is_refused_before_any_prompt"
+  ]
+ },
+ {
+  "name": "exit code lost",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "        return code.value",
+  "new": "        return 0",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_relaunch_waits_for_the_child_and_returns_its_exit_code"
+  ]
+ },
+ {
+  "name": "wait returns before the child ends",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "            if r == WAIT_OBJECT_0:\n                break",
+  "new": "            if True:\n                break",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_relaunch_waits_for_the_child_and_returns_its_exit_code"
+  ]
+ },
+ {
+  "name": "process handle leaked",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "        _kernel32.CloseHandle(info.hProcess)",
+  "new": "        pass",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_relaunch_waits_for_the_child_and_returns_its_exit_code"
+  ]
+ },
+ {
+  "name": "Performance Log Users ignored",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    return _is_member(ADMINISTRATORS_SID) or _is_member(PERFORMANCE_LOG_USERS_SID)",
+  "new": "    return _is_member(ADMINISTRATORS_SID)",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_can_trace_is_administrators_or_performance_log_users"
+  ]
+ },
+ {
+  "name": "group check uses the wrong SID",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    return _is_member(PERFORMANCE_LOG_USERS_SID)\n",
+  "new": "    return _is_member(ADMINISTRATORS_SID)\n",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_can_trace_is_administrators_or_performance_log_users"
+  ]
+ },
+ {
+  "name": "elevation read backwards",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    return bool(info.TokenIsElevated)",
+  "new": "    return not bool(info.TokenIsElevated)",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_is_elevated_matches_the_tokens_integrity_level"
+  ]
+ }
+]
