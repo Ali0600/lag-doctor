@@ -216,11 +216,14 @@ def test_checked_and_fine_and_could_not_check_are_both_shown():
     d.cleared = {"gpu_throttle": "the GPU held 2100 MHz with no throttle reason for the whole capture"}
     d.unchecked = {"driver_dpc": "interrupt counters were not readable"}
     page = html_report.render(d, make_capture())
-    assert "<h2>Checked and fine</h2>" in page and "held 2100 MHz" in page
-    assert "Causes that could not be checked" in page and "interrupt counters were not readable" in page
+    assert "<h2>Checked and fine</h2>" in page
+    assert "<strong>GPU heat and power limits</strong>: the GPU held 2100 MHz" in page
+    assert "Causes that could not be checked" in page
+    assert "<strong>driver delays (DPC and interrupts)</strong>: interrupt counters were not readable" in page
     text = console.render(d, make_capture())
-    assert "Checked and fine: the GPU slowing down (heat or power)" in text
-    assert "Could not check: a driver holding up the CPU (interrupt counters were not readable)" in text
+    # Topics, not problem labels: "checked and fine: the GPU slowing down" would say the opposite.
+    assert "Checked and fine: GPU heat and power limits" in text
+    assert "- driver delays (DPC and interrupts): interrupt counters were not readable" in text
 
 
 def test_nothing_cleared_means_no_checked_and_fine_section():
@@ -250,6 +253,51 @@ def test_the_frame_chart_uses_only_the_main_swap_chain():
     assert "the worst took 900 ms" not in html_report.render(d, cap)
     d.stats.pop("main_chain")                        # without a main chain every frame is charted
     assert "the worst took 900 ms" in html_report.render(d, cap)
+
+
+def test_causes_blocked_by_the_same_missing_source_are_listed_together():
+    from lagdoctor.report import labels
+    groups = labels.group_unchecked({
+        "game_stall": "needs frame timing (PresentMon), which was not measured: no admin rights; press the lag key",
+        "gpu_limit": "needs frame timing (PresentMon), which was not measured: no admin rights",
+        "wifi_weak": "needs the ping and Wi-Fi monitor, which was not measured: off"})
+    assert groups == [("needs frame timing (PresentMon), which was not measured: no admin rights",
+                       ["GPU load", "the game waiting on itself"]),
+                      ("needs the ping and Wi-Fi monitor, which was not measured: off", ["Wi-Fi signal"])]
+
+
+def test_every_cause_has_a_problem_label_and_a_neutral_topic():
+    import re
+    from pathlib import Path
+    from lagdoctor.analysis import rules
+    from lagdoctor.report import labels
+    src = (Path(__file__).resolve().parents[1] / "lagdoctor" / "analysis" / "attribute.py").read_text(encoding="utf-8")
+    produced = {r.cause for r in rules.RULES} | set(re.findall(r'_Cause\("([a-z_]+)"', src)) | {"game_stall", "gpu_spike"}
+    assert len(produced) > 30                       # the scan found the real lists, not nothing
+    assert produced <= set(labels.CAUSES), sorted(produced - set(labels.CAUSES))
+    assert set(labels.TOPICS) == set(labels.CAUSES), sorted(set(labels.TOPICS) ^ set(labels.CAUSES))
+
+
+def test_the_settings_check_up_reads_as_a_check_up():
+    cap = make_capture(with_frames=False)
+    d = make_diagnosis(headline="Frame timing was not measured (not recorded in this capture), so ...")
+    d.unchecked = {f"c{i}": "needs frame timing (PresentMon), which was not measured: not recorded" for i in range(30)}
+    text = console.render(d, cap, checkup=True)
+    assert text.startswith("lag-doctor settings check-up (no game recorded")
+    assert "VERDICT" not in text and "Frame timing was not measured" not in text and "fps |" not in text
+    assert "Settings that can cost performance" in text
+    assert "Not checked without a recording (30 more causes" in text and "lagdoctor watch" in text
+    assert "Could not check:" not in text and "Not measured, so not ruled out" not in text
+
+
+def test_lost_pings_come_from_the_collectors_record_not_from_every_gap():
+    cap = make_capture()
+    n_none = sum(1 for v in cap.network[N.INET_RTT_MS] if v is None)
+    assert n_none >= 2
+    cap.net_flows = {"lost": {"internet": [1.75]}}          # only one of those gaps was a probe that got no reply
+    net = html_report.render(make_diagnosis(), cap)
+    net = net[net.index("<h2>Network</h2>"):net.index("<h2>Worst moments</h2>")]
+    assert net.count('<circle class="dot bad"') == 1
 
 
 def test_console_shows_at_most_three_findings():

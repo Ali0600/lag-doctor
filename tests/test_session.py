@@ -226,6 +226,47 @@ def test_status_line_literal_points():
     assert status_line(0, {}, None).startswith("0:00 | fps - | main thread - | GPU - | ping -")
 
 
+INTEL, NVIDIA = "0x00000000_0x00010c49", "0x00000000_0x00010f83"
+HYBRID = {"adapters": [{"luid": INTEL, "vendor": "intel", "integrated": True},
+                       {"luid": NVIDIA, "vendor": "nvidia", "integrated": False}]}
+
+
+def names_of(target, inventory, **opts):
+    from lagdoctor.capture.session import default_collectors
+    return [c.name for c in default_collectors(target, inventory, SessionOptions(**opts))]
+
+
+def test_default_collectors_follow_the_options_and_the_games_adapter():
+    import os
+    game = {"pid": os.getpid(), "create_time": 1, "name": "python.exe"}
+    assert names_of(dict(game, adapter_luid=NVIDIA), HYBRID) == ["system", "frames", "gpu", "network", "net_flows"]
+    assert names_of(dict(game, adapter_luid=None), HYBRID) == ["system", "frames", "gpu", "network", "net_flows"]
+    # A game on the Intel GPU: never poll (and maybe wake) the NVIDIA one.
+    assert names_of(dict(game, adapter_luid=INTEL), HYBRID) == ["system", "frames", "network", "net_flows"]
+    assert names_of(dict(game, adapter_luid=None), {"adapters": []}) == ["system", "frames", "network", "net_flows"]
+    assert names_of(dict(game, adapter_luid=NVIDIA), HYBRID, network=False, frames=False) == ["system", "gpu"]
+
+
+def test_one_unanswerable_liveness_check_does_not_end_the_capture(monkeypatch):
+    from lagdoctor.capture import session as sess
+    from lagdoctor.capture import target as target_mod
+
+    def broken(pid, created):
+        raise OSError("NtQuerySystemInformation failed")
+    monkeypatch.setattr(target_mod, "is_alive", broken)
+    assert sess._default_alive({"pid": 5, "create_time": 1})() is True
+    monkeypatch.setattr(target_mod, "is_alive", lambda pid, created: False)
+    assert sess._default_alive({"pid": 5, "create_time": 1})() is False
+
+
+def test_inventory_sections_that_failed_are_noted():
+    s = Session(TARGET, SessionOptions(duration_s=0.05, hotkey=None), collectors=full_set(),
+                inventory={"errors": {"displays": "QueryDisplayConfig failed"}}, alive=lambda: True,
+                printer=lambda line: None)
+    cap = s.run()
+    assert "System details: displays could not be read (QueryDisplayConfig failed)." in cap.notes
+
+
 def test_session_dir_never_reuses_a_folder(tmp_path):
     from datetime import datetime
     when = datetime(2026, 11, 4, 18, 0, 0)

@@ -833,11 +833,13 @@ def test_background_hogs_cleared_when_every_mechanism_contradicts_and_unchecked_
 def test_background_hogs_offers_the_priority_fix_only_with_a_creation_time_and_never_for_the_game():
     causes = {"background_cpu": lift("supports", a=5, n=5)}
     res = run("background_hogs", hogs(hog_others(300.0)), events=hog_events(), causes=causes)
-    assert not any(f.fix_id for f in res.fixes)                    # DESIGN's others rows carry no creation time
+    assert not any(f.fix_id for f in res.fixes)                    # an old capture's rows carry no creation time
     res = run("background_hogs", hogs(hog_others(300.0, create=True)), events=hog_events(), causes=causes)
     fix = next(f for f in res.fixes if f.fix_id)
     assert fix.fix_id == "background_priority"
-    assert fix.params == {"pid": 20000, "create_time": 134000000000020000, "class": "below_normal"}
+    assert fix.params["exclude"] and 20000 not in fix.params["exclude"]      # the game's pids, for the fix to refuse
+    assert {k: v for k, v in fix.params.items() if k != "exclude"} == {
+        "pid": 20000, "create_time": 134000000000020000, "class": "below_normal"}
     game = hogs(hog_others(300.0, create=True), target={"pids": [4242, 20000, 20004]})
     assert not any(f.fix_id for f in run("background_hogs", game, events=hog_events(), causes=causes).fixes)
 

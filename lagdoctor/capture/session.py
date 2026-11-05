@@ -65,6 +65,8 @@ class Session:
         stop = stop or threading.Event()
         if self.inventory is None:
             self.inventory = _collect_inventory(self.target)
+        for section, why in sorted((self.inventory.get("errors") or {}).items()):
+            self.notes.append(f"System details: {section} could not be read ({why}).")
         if self.collectors is None:
             self.collectors = default_collectors(self.target, self.inventory, self.opts)
         if self.alive is None:
@@ -253,21 +255,26 @@ def status_line(elapsed: float, live: dict[str, dict[str, Any]], hotkey: str | N
 
 def default_collectors(target: dict[str, Any], inventory: dict[str, Any], opts: SessionOptions) -> list[Collector]:
     """The collectors a real capture runs, per docs/DESIGN.md."""
+    from lagdoctor.capture import target as target_mod
     from lagdoctor.capture.sysmon import SystemSampler
 
     out: list[Collector] = [SystemSampler(target)]
     if opts.frames:
         from lagdoctor.capture.presentmon import PresentMonSource
-        out.append(PresentMonSource(target["pid"], exe=opts.presentmon_exe))
+        # PresentMon's own --terminate_on_proc_exit cannot fire if anti-cheat strips its handle, so it is
+        # also told when the game ends, by the same handle-free check the session uses.
+        out.append(PresentMonSource(target["pid"], exe=opts.presentmon_exe, is_alive=_default_alive(target)))
     adapter = _game_adapter(target, inventory)
     if _has_nvidia(inventory) and (adapter is None or adapter.get("vendor") == "nvidia"):
         from lagdoctor.capture.gpumon import NvidiaSampler
-        out.append(NvidiaSampler(adapter))
+        out.append(NvidiaSampler(adapter))           # None = adapter unknown yet: watch the NVIDIA GPU anyway
     if opts.network:
         from lagdoctor.capture.netflows import FlowTracker
         from lagdoctor.capture.netmon import NetworkSampler
+        pid, created = target["pid"], target.get("create_time")
         out.append(NetworkSampler(server_ip=opts.server_ip))
-        out.append(FlowTracker(set(target.get("pids") or [target["pid"]])))
+        # Polled once a second, so child processes the game starts later join its traffic.
+        out.append(FlowTracker(lambda: target_mod.game_pids(pid, created)))
     return out
 
 
@@ -292,9 +299,17 @@ def _collect_inventory(target: dict[str, Any]) -> dict[str, Any]:
 
 
 def _default_alive(target: dict[str, Any]) -> Callable[[], bool]:
+    """Is the game still running? When Windows cannot answer one second, assume yes and ask again
+    the next: ending (and possibly losing) a long capture over one failed snapshot would be worse."""
     from lagdoctor.capture.target import is_alive
     pid, created = target["pid"], target.get("create_time")
-    return lambda: is_alive(pid, created)
+
+    def alive() -> bool:
+        try:
+            return is_alive(pid, created)
+        except OSError:
+            return True
+    return alive
 
 
 def session_dir(base: Path, target: dict[str, Any], when: datetime | None = None) -> Path:

@@ -354,20 +354,22 @@ class ProcessRates:
             d_io = (p.read_bytes + p.write_bytes) - ((old.read_bytes + old.write_bytes) if old else 0)
             if d_cpu < 0 or d_io < 0:
                 continue
-            others.append((p.pid, p.name, 100.0 * d_cpu / dt_100ns, d_io / dt_s))
+            others.append((p.pid, p.name, 100.0 * d_cpu / dt_100ns, d_io / dt_s, p.create_time))
         return cols, others
 
 
 def top_others(rates: list[tuple], gpu_window: list[GpuSample | None], n: int = TOP_OTHERS) -> list[list]:
-    """The others row: the top `n` by CPU among processes that did anything, as [pid, name, cpu, io, gpu]."""
+    """The others row: the top `n` by CPU among processes that did anything,
+    as [pid, name, cpu, io, gpu, create_time]. The create time (raw FILETIME ticks) lets a fix on that
+    process prove later that the PID was not reused."""
     rows = []
-    for pid, name, cpu, io in rates:
+    for pid, name, cpu, io, created in rates:
         gpu = pid_gpu_pct(gpu_window, pid)
         if cpu > 0 or io > 0 or (gpu or 0) > 0:
-            rows.append((cpu, io, gpu or 0.0, pid, name, gpu))
+            rows.append((cpu, io, gpu or 0.0, pid, name, gpu, created))
     best = heapq.nlargest(n, rows, key=lambda r: (r[0], r[1], r[2], -r[3]))
-    return [[pid, name, round(cpu, 2), round(io, 1), None if gpu is None else round(gpu, 2)]
-            for cpu, io, _g, pid, name, gpu in best]
+    return [[pid, name, round(cpu, 2), round(io, 1), None if gpu is None else round(gpu, 2), created]
+            for cpu, io, _g, pid, name, gpu, created in best]
 
 
 # ---------------------------------------------------------------- the collector ---

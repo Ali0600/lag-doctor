@@ -121,6 +121,32 @@ def test_start_up_settles_an_interrupted_change_and_ended_session_changes(fake_f
     assert Journal().get(ended.id).state == "undone"
 
 
+def test_a_fix_that_refuses_at_plan_time_is_reported_and_changes_nothing(fake_fix, monkeypatch, capsys):
+    from lagdoctor.fixes.priority import Refused
+
+    def refuse(self, params):
+        raise Refused("that process is a Windows service, so lag-doctor leaves it alone")
+    monkeypatch.setattr(FakeFix, "plan", refuse)
+    write_last_diagnosis([{"title": "Turn it up", "fix_id": "test_cli_fake", "params": {"name": "a"}}])
+    assert cli.main(["fix", "test_cli_fake", "--yes"]) == 1
+    assert "Not changed: that process is a Windows service" in capsys.readouterr().out
+    assert STORE == {} and Journal().entries() == []
+
+
+def test_a_plans_notes_are_shown_before_asking(fake_fix, monkeypatch, capsys):
+    real_plan = FakeFix.plan
+
+    def with_note(self, params):
+        p = real_plan(self, params)
+        p.notes.append("this value's meaning is community-sourced")
+        return p
+    monkeypatch.setattr(FakeFix, "plan", with_note)
+    monkeypatch.setattr("builtins.input", lambda prompt: "n")
+    write_last_diagnosis([{"title": "Turn it up", "fix_id": "test_cli_fake", "params": {"name": "a"}}])
+    cli.main(["fix", "test_cli_fake"])
+    assert "note:   this value's meaning is community-sourced" in capsys.readouterr().out
+
+
 def test_fix_offers_are_deduplicated():
     diag = {"findings": [{"fixes": [{"fix_id": "a", "title": "A", "params": {"x": 1}}, {"fix_id": None}]},
                          {"fixes": [{"fix_id": "a", "title": "A again", "params": {"x": 1}},

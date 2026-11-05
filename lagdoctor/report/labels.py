@@ -65,6 +65,50 @@ CAUSES = {
     "vpn_route": "traffic going through a VPN",
 }
 
+# The neutral name of what each cause is about, for lists that are not problems: "checked and fine"
+# and "could not check". CAUSES reads as a problem ("Game Mode off"), which in "checked and fine"
+# would say the opposite of what was found.
+TOPICS = {
+    "game_cpu_spike": "the game's own CPU work",
+    "asset_streaming": "loading from disk",
+    "memory_paging": "paging to disk",
+    "background_cpu": "other programs' CPU use",
+    "background_disk": "other programs' disk use",
+    "background_gpu": "other programs' GPU use",
+    "driver_dpc": "driver delays (DPC and interrupts)",
+    "cpu_throttle": "CPU heat and power limits",
+    "gpu_throttle": "GPU heat and power limits",
+    "vram_overflow": "video memory",
+    "gpu_spike": "moments of heavy GPU work",
+    "game_stall": "the game waiting on itself",
+    "wrong_gpu": "which GPU the game runs on",
+    "hybrid_copy": "copies between GPUs",
+    "gpu_limit": "GPU load",
+    "cpu_limit": "CPU load",
+    "ram_pressure": "RAM",
+    "power_plan": "power plan",
+    "refresh_rate": "screen refresh rate",
+    "vsync_judder": "VSync judder",
+    "uneven_pacing": "frame pacing",
+    "windowed_composition": "windowed-mode presentation",
+    "game_dvr": "background recording",
+    "game_mode_off": "Game Mode",
+    "background_hogs": "background programs",
+    "hdd_streaming": "the game's drive",
+    "wifi_weak": "Wi-Fi signal",
+    "wifi_roaming": "Wi-Fi access point changes",
+    "wifi_scan_spikes": "Wi-Fi background scans",
+    "bufferbloat": "the connection under load (bufferbloat)",
+    "isp_latency": "internet provider latency",
+    "server_lag": "the game server and its route",
+    "packet_loss": "packet loss",
+    "bandwidth_hog": "downloads competing for bandwidth",
+    "not_focused": "whether the game had focus",
+    "frame_cap": "frame-rate cap",
+    "shader_compile": "shader compilation",
+    "vpn_route": "VPN routing",
+}
+
 # What limited the frame rate (analysis/frames.bound verdicts): a short form for a stat tile,
 # and a phrase for sentences.
 BOUND_SHORT = {
@@ -101,3 +145,20 @@ def severity_text(kind: str, severity: float) -> str:
 
 def cause_text(cause: str) -> str:
     return CAUSES.get(cause, cause.replace("_", " "))
+
+
+def topic_text(cause: str) -> str:
+    return TOPICS.get(cause, cause.replace("_", " "))
+
+
+def group_unchecked(unchecked: dict[str, str]) -> list[tuple[str, list[str]]]:
+    """(reason, [topic, ...]) with causes that share a reason listed together, biggest group first.
+
+    A reason's hint after the first ';' (e.g. "press the lag key ...") is dropped, so causes blocked by the
+    same missing source land in one group instead of one line each.
+    """
+    groups: dict[str, list[str]] = {}
+    for cause, why in unchecked.items():
+        key = (why or "not checked").split(";", 1)[0].strip()
+        groups.setdefault(key, []).append(topic_text(cause))
+    return sorted(((r, sorted(t)) for r, t in groups.items()), key=lambda g: (-len(g[1]), g[0]))

@@ -206,11 +206,11 @@ def _watch_elevated(args: argparse.Namespace, target: dict[str, Any]) -> int | N
 
 
 def _presentmon_exe() -> tuple[Path | None, str]:
+    from lagdoctor import setup as pm_setup
     try:
-        from lagdoctor import setup as pm_setup
         return pm_setup.ensure_presentmon(allow_download=False), ""
-    except Exception as exc:  # noqa: BLE001 - not set up yet: record without frames and say why
-        return None, f"PresentMon is not set up ({exc}); run `lagdoctor setup`"
+    except pm_setup.SetupError as exc:          # missing or failed verification: record without frames, say why
+        return None, f"frame timing was skipped: {exc}"
 
 
 # ---------------------------------------------------------------- analyze --
@@ -238,13 +238,15 @@ def cmd_analyze(args: argparse.Namespace) -> int:
 
 def cmd_check(args: argparse.Namespace) -> int:
     from lagdoctor.analysis.diagnose import diagnose
-    from lagdoctor.capture import inventory
+    from lagdoctor.capture.session import _collect_inventory
     from lagdoctor.model import Capture
     from lagdoctor.report import console
-    inv = inventory.collect(None)
+    inv = _collect_inventory(None)           # with running process names, so OEM tools can be recognised
     cap = Capture(started_at=datetime.now().astimezone().isoformat(timespec="seconds"), clock_origin=0.0,
                   duration_s=0.0, target={"name": "settings check-up"}, sources={}, inventory=inv)
-    print(console.render(diagnose(cap), cap, width=_width()))
+    print(console.render(diagnose(cap), cap, width=_width(), checkup=True))
+    for section, why in sorted((inv.get("errors") or {}).items()):
+        say(f"(Could not read {section}: {why})")
     return 0
 
 
@@ -253,6 +255,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 def cmd_fix(args: argparse.Namespace) -> int:
     from lagdoctor.fixes import catalog
     from lagdoctor.fixes.journal import Journal
+    from lagdoctor.fixes.priority import Refused
     last = load_last_diagnosis()
     if last is None:
         say("No report yet: run `lagdoctor watch` first.")
@@ -263,6 +266,9 @@ def cmd_fix(args: argparse.Namespace) -> int:
             say("The last report suggested no automatic fixes.")
         for fix_id, title, _ in offers:
             say(f"  {fix_id:28} {title}")
+            about = getattr(_fix_class(fix_id), "description", "")
+            if about:
+                say(f"  {'':28} {about}")
         if offers and not args.ids:
             say("Apply one with: lagdoctor fix ID")
         return 0
@@ -279,10 +285,17 @@ def cmd_fix(args: argparse.Namespace) -> int:
             continue
         for _, title, params in matching:
             fix = catalog.get(fix_id)
-            plan = fix.plan(params)
             say(f"{title}")
+            try:
+                plan = fix.plan(params)
+            except (Refused, OSError, ValueError, LookupError, RuntimeError) as exc:   # e.g. a protected process
+                say(f"  Not changed: {exc}")
+                status = 1
+                continue
             say(f"  where:  {plan.target}")
             say(f"  change: {plan.summary}")
+            for note in plan.notes:
+                say(f"  note:   {note}")
             if plan.needs_restart:
                 say(f"  takes effect after restarting the {plan.needs_restart}")
             if plan.noop:
@@ -298,6 +311,12 @@ def cmd_fix(args: argparse.Namespace) -> int:
             elif not res.ok:
                 status = 1
     return status
+
+
+def _fix_class(fix_id: str):
+    from lagdoctor.fixes import catalog
+    catalog.ids()                                 # loads the built-in fix modules
+    return catalog._REGISTRY.get(fix_id)
 
 
 def fix_offers(diagnosis: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
@@ -371,20 +390,28 @@ def cmd_setup(args: argparse.Namespace) -> int:
     from lagdoctor.winapi import elevation
     try:
         exe = pm_setup.ensure_presentmon(allow_download=False)
-    except Exception:  # noqa: BLE001 - missing (or failing verification): offer the download
+    except pm_setup.SetupError as exc:           # missing, or failing verification: offer the download
+        say(str(exc))
         if not (args.download or _ask("Download Intel PresentMon 2.6.0 (980,320 bytes, MIT licence, Intel-signed) "
                                       "from github.com/GameTechDev/PresentMon? [y/N] ", default=False)):
             say("Not downloaded. Frame timing stays unavailable until PresentMon is set up.")
             return 1
-        exe = pm_setup.ensure_presentmon(allow_download=True)
-    say(f"PresentMon: ready and verified at {exe}")
+        try:
+            exe = pm_setup.ensure_presentmon(allow_download=True)
+        except (pm_setup.SetupError, OSError) as exc:
+            say(f"The download did not work, and nothing was kept: {exc}")
+            return 1
+    info = pm_setup.verify(exe)
+    say(f"PresentMon: ready and verified at {exe} (SHA-256 pinned, signed by {info['signer']})")
+    if info.get("note"):
+        say(f"  note: {info['note']}")
     if elevation.can_trace():
         say("Frame timing: ready (this account may start ETW traces).")
     else:
         say("Frame timing needs admin rights. Two ways:")
         say("  1. Let `lagdoctor watch` ask for one UAC prompt each time (nothing to set up).")
         say("  2. Join the Performance Log Users group once, then sign out and in. No prompts after that:")
-        for line in str(getattr(pm_setup, "PERFORMANCE_LOG_USERS_HOWTO", "")).strip().splitlines():
+        for line in pm_setup.performance_log_users_howto().rstrip().splitlines():
             say("     " + line)
     return 0
 

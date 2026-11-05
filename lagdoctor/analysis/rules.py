@@ -1417,7 +1417,9 @@ def _hog_fixes(e: _Env, named: list[tuple[str, list[int]]]) -> list[FixSuggestio
                                        detail="Below-normal priority until it exits; `lagdoctor undo` puts it back. "
                                               "lag-doctor refuses services, protected processes and the game.",
                                        fix_id="background_priority",
-                                       params={"pid": pid, "create_time": ct, "class": "below_normal"}))
+                                       # exclude: the fix itself refuses these too (the game and its children)
+                                       params={"pid": pid, "create_time": ct, "class": "below_normal",
+                                               "exclude": sorted(game)[:4096]}))
             break
     for name, pids in named[:3]:
         shown = ", ".join(str(p) for p in pids[:4]) + (" ..." if len(pids) > 4 else "")
@@ -1428,7 +1430,7 @@ def _hog_fixes(e: _Env, named: list[tuple[str, list[int]]]) -> list[FixSuggestio
 
 
 def _create_times(e: _Env) -> dict[int, int]:
-    """pid -> creation time, when the others table carries it as an optional sixth field (not in DESIGN yet)."""
+    """pid -> creation time, from the others table's sixth field (older captures may lack it)."""
     out: dict[int, int] = {}
     for row in e.cap.others if isinstance(e.cap.others, list) else []:
         if isinstance(row, (list, tuple)) and len(row) == 2 and isinstance(row[1], (list, tuple)):

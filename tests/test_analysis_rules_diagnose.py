@@ -185,7 +185,8 @@ def test_the_planted_gpu_evidence_is_strong_enough_to_report_without_the_gate():
 # DESIGN.md "Fixes": each fix id and its exact params; the only cause that may offer each.
 FIX_PARAMS = {"power_plan": {"scheme": str}, "refresh_rate": {"device": str, "hz": int},
               "gpu_preference": {"exe": str, "preference": int}, "game_dvr_off": {}, "game_mode_on": {},
-              "windowed_optimizations_on": {}, "background_priority": {"pid": int, "create_time": int, "class": str}}
+              "windowed_optimizations_on": {},
+              "background_priority": {"pid": int, "create_time": int, "class": str, "exclude": list}}
 FIX_OF_CAUSE = {"power_plan": "power_plan", "refresh_rate": "refresh_rate", "wrong_gpu": "gpu_preference",
                 "game_dvr": "game_dvr_off", "game_mode_off": "game_mode_on",
                 "windowed_composition": "windowed_optimizations_on", "background_hogs": "background_priority"}
@@ -225,6 +226,7 @@ def test_every_fix_offered_matches_designs_fix_table_exactly():
     assert offered["gpu_preference"] == {"exe": r"C:\Python313\python.exe", "preference": 2}
     assert offered["background_priority"]["class"] == "below_normal"
     assert offered["background_priority"]["pid"] != synth.GAME_PID
+    assert synth.GAME_PID in offered["background_priority"]["exclude"]
 
 
 @pytest.mark.parametrize("mode", synth.MODES)

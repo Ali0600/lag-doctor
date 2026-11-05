@@ -215,15 +215,15 @@ def test_a_gone_or_replaced_game_has_no_game_columns():
 
 
 def test_top_others_keeps_the_8_busiest_that_did_anything():
-    rates = [(pid, f"p{pid}.exe", float(pid), 0.0) for pid in range(1, 13)]
+    rates = [(pid, f"p{pid}.exe", float(pid), 0.0, 1000 + pid) for pid in range(1, 13)]
     rows = sysmon.top_others(rates, [])
     assert [r[0] for r in rows] == [12, 11, 10, 9, 8, 7, 6, 5]
-    assert rows[0] == [12, "p12.exe", 12.0, 0.0, None]
+    assert rows[0] == [12, "p12.exe", 12.0, 0.0, None, 1012]          # the create time rides along
     gpu = [GpuSample({}, {}, {}, {31: 5.0})]
-    rows = sysmon.top_others([(30, "idle.exe", 0.0, 0.0), (31, "enc.exe", 0.0, 0.0), (32, "io.exe", 0.0, 9e5),
-                              (33, "busy.exe", 50.0, 0.0)], gpu)
+    rows = sysmon.top_others([(30, "idle.exe", 0.0, 0.0, 7), (31, "enc.exe", 0.0, 0.0, 8),
+                              (32, "io.exe", 0.0, 9e5, 9), (33, "busy.exe", 50.0, 0.0, 10)], gpu)
     assert [r[0] for r in rows] == [33, 32, 31]
-    assert rows[2] == [31, "enc.exe", 0.0, 0.0, 5.0]
+    assert rows[2] == [31, "enc.exe", 0.0, 0.0, 5.0, 8]
 
 
 def test_cost_stats_median_from_the_histogram():

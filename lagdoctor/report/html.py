@@ -204,8 +204,16 @@ def _network_chart(cap: Capture) -> str:
         if any(v is not None for v in net.get(col) or []):
             ch.line(t, net[col], cls, label, agg="max")
     inet = net.get(N.INET_RTT_MS) or []
-    if any(v is not None for v in inet):
-        ch.dots([(x, top) for x, v in zip(t, inet) if v is None], "bad", "lost ping (internet)")
+    listed = (cap.net_flows.get("lost") or {}).get("internet") if isinstance(cap.net_flows, dict) else None
+    if isinstance(listed, list):
+        # The network collector's own record: a probe that got no reply. A None RTT can also mean
+        # "not sent this round" (no target yet, no free worker), which is not a loss.
+        lost = [(x, top) for x in listed if isinstance(x, (int, float)) and not isinstance(x, bool)]
+    elif any(v is not None for v in inet):
+        lost = [(x, top) for x, v in zip(t, inet) if v is None]     # an older capture without the record
+    else:
+        lost = []
+    ch.dots(lost, "bad", "lost ping (internet)")
     return ch.svg() + _legend(ch)
 
 
@@ -301,8 +309,8 @@ def _pc(cap: Capture) -> str:
 def _cleared(d: Diagnosis) -> str:
     if not d.cleared:
         return ""
-    items = "".join(f"<li><strong>{e(labels.cause_text(c))}</strong>: {e(why)}</li>"
-                    for c, why in sorted(d.cleared.items()))
+    items = "".join(f"<li><strong>{e(labels.topic_text(c))}</strong>: {e(why)}</li>"
+                    for c, why in sorted(d.cleared.items(), key=lambda kv: labels.topic_text(kv[0])))
     return ("<h2>Checked and fine</h2><p class=\"muted\">These were measured and ruled out:</p>"
             f"<ul>{items}</ul>")
 
@@ -315,8 +323,8 @@ def _not_measured(d: Diagnosis, cap: Capture) -> str:
     for what, why in sorted(d.measured.items()):
         if why != "ok" and what not in cap.sources:
             items.append(f"<li><strong>{e(what)}</strong>: {e(why)}</li>")
-    unchecked = "".join(f"<li><strong>{e(labels.cause_text(c))}</strong>: {e(why)}</li>"
-                        for c, why in sorted(d.unchecked.items()))
+    unchecked = "".join(f"<li><strong>{e(', '.join(topics))}</strong>: {e(why)}</li>"
+                        for why, topics in labels.group_unchecked(d.unchecked))
     if not items and not unchecked:
         return ""
     out = "<h2>Not measured</h2>"
