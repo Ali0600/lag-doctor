@@ -10,6 +10,7 @@ import datetime as dt
 import io
 import math
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -388,21 +389,41 @@ def _ns(**kw):
             **kw}
 
 
+# LC 4.1/4.2: the SW power cap is the design limit of a GPU-bound laptop, not throttling, so it never adds to
+# nv_throttle_pct (it used to: 0.3 s thermal + 0.2 s power cap read as 50 %); it has its own share.
 @pytest.mark.parametrize("cur, dt_s, expected", [
     (_ns(sw_thermal_slowdown=500_000_000), 1.0, 50.0),
-    (_ns(sw_thermal_slowdown=300_000_000, sw_power_cap=200_000_000), 1.0, 50.0),
+    (_ns(sw_thermal_slowdown=300_000_000, sw_power_cap=200_000_000), 1.0, 30.0),
     (_ns(hw_thermal_slowdown=250_000_000, hw_power_brake_slowdown=250_000_000), 2.0, 25.0),
     (_ns(sw_thermal_slowdown=995_000_000), 1.0, 99.5),               # just under the clamp
     (_ns(sw_thermal_slowdown=1_005_000_000), 1.0, 100.0),            # just over it
-    (_ns(sw_thermal_slowdown=1_000_000_000, sw_power_cap=1_000_000_000), 1.0, 100.0),   # overlapping reasons
+    (_ns(sw_thermal_slowdown=600_000_000, hw_thermal_slowdown=600_000_000), 1.0, 100.0),   # overlapping reasons
+    (_ns(sw_power_cap=1_000_000_000), 1.0, 0.0),                     # at the power cap all along: no throttling
     (_ns(), 1.0, 0.0),
 ])
 def test_throttle_share_literal_points(cur, dt_s, expected):
     assert throttle_pct(_ns(), cur, dt_s) == pytest.approx(expected)
 
 
+@pytest.mark.parametrize("cur, dt_s, expected", [
+    (_ns(sw_power_cap=1_000_000_000), 1.0, 100.0),
+    (_ns(sw_power_cap=300_000_000, sw_thermal_slowdown=700_000_000), 1.0, 30.0),   # heat is not the power cap
+    (_ns(sw_power_cap=500_000_000), 2.0, 25.0),
+    (_ns(sw_power_cap=1_005_000_000), 1.0, 100.0),
+    (_ns(sw_thermal_slowdown=10**9), 1.0, 0.0),
+])
+def test_power_cap_share_literal_points(cur, dt_s, expected):
+    assert gpumon.power_cap_pct(_ns(), cur, dt_s) == pytest.approx(expected)
+
+
+def test_power_cap_share_is_none_when_it_cannot_be_known():
+    assert gpumon.power_cap_pct(_ns(sw_power_cap=10), _ns(sw_power_cap=5), 1.0) is None           # went backwards
+    assert gpumon.power_cap_pct({"sw_power_cap": None}, {"sw_power_cap": 5}, 1.0) is None
+    assert gpumon.power_cap_pct(_ns(), _ns(sw_power_cap=5), 0.0) is None
+
+
 def test_throttle_share_rejects_a_counter_that_went_backwards():
-    assert throttle_pct(_ns(sw_thermal_slowdown=10), _ns(sw_thermal_slowdown=5, sw_power_cap=10**9), 1.0) is None
+    assert throttle_pct(_ns(sw_thermal_slowdown=10), _ns(sw_thermal_slowdown=5, hw_thermal_slowdown=10**9), 1.0) is None
 
 
 @pytest.mark.parametrize("dt_s", [0, 0.0, -1.0, math.nan, math.inf, None, "1.0"])
@@ -411,8 +432,8 @@ def test_throttle_share_rejects_bad_intervals(dt_s):
 
 
 def test_throttle_share_uses_only_counters_present_in_both_readings():
-    prev = {"sw_thermal_slowdown": 0, "sw_power_cap": None}
-    cur = {"sw_thermal_slowdown": 400_000_000, "sw_power_cap": 900_000_000}
+    prev = {"sw_thermal_slowdown": 0, "hw_thermal_slowdown": None}
+    cur = {"sw_thermal_slowdown": 400_000_000, "hw_thermal_slowdown": 900_000_000}
     assert throttle_pct(prev, cur, 1.0) == pytest.approx(40.0)
     assert throttle_pct(None, cur, 1.0) is None
     assert throttle_pct({"sw_thermal_slowdown": None}, {"sw_thermal_slowdown": 5}, 1.0) is None
@@ -458,7 +479,10 @@ def test_the_real_capture_gives_a_per_reason_share_that_matches_by_hand():
     only = {"sw_thermal_slowdown": a["throttle_ns"]["sw_thermal_slowdown"]}
     later = {"sw_thermal_slowdown": b["throttle_ns"]["sw_thermal_slowdown"]}
     assert throttle_pct(only, later, dt_s) == pytest.approx(100 * 999_720 / 1_007_000, abs=1e-6)
-    assert throttle_pct(a["throttle_ns"], b["throttle_ns"], dt_s) == 100.0   # thermal + power cap, clamped
+    # Both counters ran the whole second (mask 0x24): heat alone is the throttling, the power cap its own share.
+    # (Summed, the two used to read as a clamped 100 %.)
+    assert throttle_pct(a["throttle_ns"], b["throttle_ns"], dt_s) == pytest.approx(100 * 999_720 / 1_007_000)
+    assert gpumon.power_cap_pct(a["throttle_ns"], b["throttle_ns"], dt_s) == pytest.approx(100 * 999_720 / 1_007_000)
 
 
 def _with(line: str, **values: str) -> str:
@@ -515,12 +539,14 @@ def test_lines_strip_crlf_and_skip_an_overlong_line_whole():
 class GridNvml:
     """A fake NVML whose values refresh on a fixed grid in real time, as the driver's do every ~500 ms.
 
-    The SW thermal counter grows by `share` of each refresh period, so the true throttle share is `share`."""
+    The `reason` counter (SW thermal unless told) grows by `share` of each refresh period, so the true share
+    of that reason is `share`; the other counters stay at 0."""
 
     def __init__(self, period: float, share: float, devices: list[dict] | None = None, mark_moves: bool = True,
-                 values: dict | None = None) -> None:
+                 values: dict | None = None, reason: str = "sw_thermal_slowdown", mark_delay: float = 0.0) -> None:
         self.t0 = clock.now()
-        self.period, self.share, self.mark_moves = period, share, mark_moves
+        self.period, self.share, self.mark_moves, self.reason = period, share, mark_moves, reason
+        self.mark_delay = mark_delay              # each fingerprint read takes this long (a thread held up)
         self._devices = devices or [{"index": 0, "name": "Fake GPU", "pci_bus_id": "00000000:01:00.0",
                                      "mem_total_mb": 8192.0, "clock_max_mhz": 2100, "temp_target_c": 75}]
         self.values = values
@@ -537,6 +563,8 @@ class GridNvml:
         return "999.99"
 
     def refresh_mark(self, index):
+        if self.mark_delay:
+            time.sleep(self.mark_delay)
         return (self._k() if self.mark_moves else 0,)
 
     def sample(self, index):
@@ -548,8 +576,7 @@ class GridNvml:
             ns = int((clock.now() - self.t0) * self.share * 1e9)
         s = {"util_pct": 90, "mem_used_mb": 4000.0, "temp_c": 80, "power_w": 50.0 + k % 2, "power_limit_w": 88.0,
              "clock_mhz": 780, "pstate": 3, "reasons": 0x20,
-             "throttle_ns": {"sw_thermal_slowdown": ns, "hw_thermal_slowdown": 0, "hw_power_brake_slowdown": 0,
-                             "sw_power_cap": 0}}
+             "throttle_ns": {**dict.fromkeys(gpumon.COUNTERS, 0), self.reason: ns}}
         if self.values is not None:
             s.update(self.values)
         return s
@@ -567,8 +594,8 @@ def run_sampler(monkeypatch, fake, seconds: float, adapter=None) -> NvidiaSample
     return s
 
 
-def shares(s: NvidiaSampler) -> list:
-    return s.result()["columns"][G.THROTTLE_PCT][1:]
+def shares(s: NvidiaSampler, column: str = G.THROTTLE_PCT) -> list:
+    return s.result()["columns"][column][1:]
 
 
 @pytest.mark.parametrize("share", [0.4, 1.0])
@@ -590,11 +617,34 @@ def test_rows_stay_exact_at_a_faster_rate(monkeypatch):
     assert len(got) >= 4 and all(v is not None and abs(v - 40) <= 3 for v in got), got
 
 
-def test_an_unaligned_row_reports_no_share_rather_than_a_wrong_one(monkeypatch):
+def test_a_gpu_at_its_power_cap_is_not_throttling_and_gets_its_own_share(monkeypatch):
+    # LC 4.1/4.2: the power cap held the clocks the whole time; heat and the power brake never did.
+    monkeypatch.setattr(gpumon, "PERIOD_S", 0.5)
+    monkeypatch.setattr(gpumon, "REFRESH_WAIT_S", 0.3)
+    s = run_sampler(monkeypatch, GridNvml(period=0.22, share=1.0, reason="sw_power_cap"), 2.2)
+    throttle, cap = shares(s), shares(s, G.POWER_CAP_PCT)
+    assert len(throttle) >= 2 and all(v == 0.0 for v in throttle), throttle
+    assert all(v is not None and abs(v - 100) <= 3 for v in cap), cap
+    assert s.result()["columns"][G.POWER_CAP_PCT][0] is None          # no interval before the first row
+    assert s.status().state == "ok", s.status()
+
+
+def test_heat_throttling_reads_as_throttling_and_not_as_the_power_cap(monkeypatch):
+    monkeypatch.setattr(gpumon, "PERIOD_S", 0.5)
+    monkeypatch.setattr(gpumon, "REFRESH_WAIT_S", 0.3)
+    s = run_sampler(monkeypatch, GridNvml(period=0.22, share=0.6), 2.2)
+    throttle, cap = shares(s), shares(s, G.POWER_CAP_PCT)
+    assert len(cap) >= 2 and all(v == 0.0 for v in cap), cap
+    assert all(v is not None and abs(v - 60) <= 3 for v in throttle), throttle
+
+
+@pytest.mark.parametrize("reason", ["sw_thermal_slowdown", "sw_power_cap"])
+def test_an_unaligned_row_reports_no_share_rather_than_a_wrong_one(monkeypatch, reason):
+    column = {"sw_thermal_slowdown": G.THROTTLE_PCT, "sw_power_cap": G.POWER_CAP_PCT}[reason]
     monkeypatch.setattr(gpumon, "PERIOD_S", 0.5)
     monkeypatch.setattr(gpumon, "REFRESH_WAIT_S", 0.2)
-    s = run_sampler(monkeypatch, GridNvml(period=0.22, share=0.5, mark_moves=False), 2.0)
-    got = shares(s)
+    s = run_sampler(monkeypatch, GridNvml(period=0.22, share=0.5, mark_moves=False, reason=reason), 2.0)
+    got = shares(s, column)
     assert len(got) >= 2 and all(v is None for v in got), got
 
 
@@ -602,8 +652,28 @@ def test_an_unaligned_row_with_no_throttle_still_reads_zero(monkeypatch):
     monkeypatch.setattr(gpumon, "PERIOD_S", 0.5)
     monkeypatch.setattr(gpumon, "REFRESH_WAIT_S", 0.2)
     s = run_sampler(monkeypatch, GridNvml(period=0.22, share=0.0, mark_moves=False), 2.0)
-    got = shares(s)
+    got, cap = shares(s), shares(s, G.POWER_CAP_PCT)
     assert len(got) >= 2 and all(v == 0.0 for v in got), got
+    assert all(v == 0.0 for v in cap), cap
+
+
+@pytest.mark.parametrize("mark_moves", [True, False])
+def test_each_row_records_whether_it_was_read_just_after_a_refresh(monkeypatch, mark_moves):
+    monkeypatch.setattr(gpumon, "PERIOD_S", 0.5)
+    monkeypatch.setattr(gpumon, "REFRESH_WAIT_S", 0.3)               # longer than the 0.22 s grid: never misses one
+    s = run_sampler(monkeypatch, GridNvml(period=0.22, share=0.5, mark_moves=mark_moves), 1.6)
+    assert len(s.row_aligned) == len(s.series) >= 2
+    assert set(s.row_aligned) == {mark_moves}
+
+
+def test_a_refresh_seen_late_is_not_aligned_and_gives_no_share(monkeypatch):
+    # Each look at the fingerprint takes 40 ms (the thread held up under load): the refresh it finds may be up to
+    # ~50 ms old, past ALIGN_SLACK_S, so the row's time does not match its counters and no share is claimed.
+    monkeypatch.setattr(gpumon, "PERIOD_S", 0.5)
+    monkeypatch.setattr(gpumon, "REFRESH_WAIT_S", 0.35)
+    s = run_sampler(monkeypatch, GridNvml(period=0.22, share=0.5, mark_delay=0.04), 2.2)
+    assert len(s.row_aligned) >= 3 and set(s.row_aligned) == {False}, s.row_aligned
+    assert all(v is None for v in shares(s)), shares(s)
 
 
 def _no_smi():
@@ -679,7 +749,7 @@ def test_samples_with_no_values_make_the_source_failed(monkeypatch):
     monkeypatch.setattr(gpumon, "REFRESH_WAIT_S", 0.2)
     empty = {k: None for k in ("util_pct", "mem_used_mb", "temp_c", "power_w", "power_limit_w", "clock_mhz",
                                "pstate", "reasons")}
-    empty["throttle_ns"] = dict.fromkeys(gpumon.THROTTLE_REASONS)
+    empty["throttle_ns"] = dict.fromkeys(gpumon.COUNTERS)
     s = run_sampler(monkeypatch, GridNvml(period=0.22, share=0.0, values=empty), 1.3)
     st = s.status()
     assert st.state == "failed" and "gave no values" in st.detail, st
@@ -736,21 +806,64 @@ def _cleanup(s: NvidiaSampler) -> None:
 
 
 def test_fallback_streams_rows_and_says_which_source_ran(monkeypatch, no_nvml):
-    s = start_fallback(monkeypatch, "--share", "0.5")
+    s = start_fallback(monkeypatch, "--share", "0.5", "--cap-share", "0.3")
     try:
         assert wait_rows(s, 4, 10), s.status()
+        assert s._job is not None and s._job.holds(s._child)          # dies with us, however we die (LC-2)
     finally:
         _cleanup(s)
     st = s.status()
     assert st.state == "ok" and st.tool == "nvidia-smi", st
     assert "nvidia-smi streaming" in st.detail and "test: NVML switched off" in st.detail
+    assert "not tied to lag-doctor's lifetime" not in st.detail
     cols = s.result()["columns"]
     assert cols[G.UTIL_PCT][0] == 63 and cols[G.MEM_USED_MB][0] == 4282.0 and cols[G.PSTATE][0] == 3
     assert cols[G.REASONS][0] == "sw_power_cap,sw_thermal_slowdown"
     got = cols[G.THROTTLE_PCT][1:]
-    assert got and all(v is not None and abs(v - 50) <= 3 for v in got), got
+    assert got and all(v is not None and abs(v - 50) <= 3 for v in got), got      # heat only, not + 30 power cap
+    cap = cols[G.POWER_CAP_PCT][1:]
+    assert all(v is not None and abs(v - 30) <= 3 for v in cap), cap
+    assert cols[G.POWER_CAP_PCT][0] is None and set(s.row_aligned) == {None}     # smi rows are never aligned
     assert s.result()["device"] == {"name": "NVIDIA GeForce RTX 3070 Laptop GPU", "clock_max_mhz": 2100,
                                     "mem_total_mb": 8192.0, "temp_target_c": None}
+
+
+def test_a_child_that_cannot_join_the_job_still_streams_and_says_so(monkeypatch, no_nvml):
+    class NoJob:
+        def __init__(self):
+            raise OSError(5, "Access is denied")
+
+    monkeypatch.setattr(gpumon, "KillOnCloseJob", NoJob)
+    s = start_fallback(monkeypatch, "--rows", "3")
+    try:
+        assert wait_rows(s, 2, 10), s.status()
+    finally:
+        _cleanup(s)
+    st = s.status()
+    assert st.state == "ok" and "not tied to lag-doctor's lifetime" in st.detail and "Access is denied" in st.detail
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BASE_PY = getattr(sys, "_base_executable", sys.executable)
+
+
+def test_a_hard_kill_of_lag_doctor_takes_its_nvidia_smi_child_with_it(tmp_path):
+    # LC-2: closing the console window, Ctrl+Break or a crash ends lag-doctor with no finally and no atexit.
+    # The real nvidia-smi then polls the GPU into a dead pipe for good; the stand-in beats a file instead.
+    beat, out = tmp_path / "beat", tmp_path / "out.txt"
+    try:
+        with open(tmp_path / "helper.log", "wb") as log:
+            helper = subprocess.run([BASE_PY, "-I", str(FIXTURES / "smi_orphan.py"), str(ROOT), str(beat), str(out)],
+                                    stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, timeout=30)
+        pid, rows = (int(x) for x in out.read_text().split())
+        assert helper.returncode == 9 and pid > 0 and rows >= 2, (helper.returncode, out.read_text(),
+                                                                   (tmp_path / "helper.log").read_text())
+        time.sleep(0.5)                                            # let a beat in flight land
+        size = beat.stat().st_size
+        time.sleep(1.5)                                            # it beats every 0.25 s while it lives
+        assert beat.stat().st_size == size, "the nvidia-smi stand-in outlived the process that started it"
+    finally:
+        (tmp_path / "beat.stop").write_text("x")                  # a survivor exits at its next beat
 
 
 def test_fallback_stop_ends_the_child_and_drains_its_pipes(monkeypatch, no_nvml):

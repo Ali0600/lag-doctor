@@ -52,8 +52,30 @@ def stretched(hz, dur, at, interval):
     return sorted(ev, key=lambda e: e[0])
 
 
-def run(events, game=(GAME,), local=LOCALS):
-    return nf.analyze(events, game, local)
+def run(events, game=(GAME,), local=LOCALS, end=None):
+    return nf.analyze(events, game, local, end)
+
+
+def feed(events, lag, end=None):
+    """Hand events to a FlowTable the way ETW does: each one `lag(t, pkt)` seconds after its timestamp,
+    with the table's clock advanced to the arrival first. Returns the finished table."""
+    arrivals = sorted((t + lag(t, pkt), i, t, pkt) for i, (t, pkt) in enumerate(events))
+    table = FlowTable({GAME}, LOCALS)
+    for arrival, _, t, pkt in arrivals:
+        table.advance(arrival)
+        table.add(t, pkt)
+    table.finish(end)
+    return table
+
+
+def held(lo, hi, late_at=None, late_by=None, rx=True, tx=True):
+    """A lag: 0.5 s for every packet, except the chosen directions with lo <= t < hi, which arrive at
+    `late_at` (all at once) or `late_by` seconds after their timestamp, as after a consumer stall."""
+    def lag(t, pkt):
+        if lo <= t < hi and (rx if pkt.kind == "recv" else tx):
+            return late_at - t if late_at is not None else late_by
+        return 0.5
+    return lag
 
 
 # ---------------------------------------------------------------- decoding (NE 4.3) ---
@@ -348,6 +370,103 @@ def test_the_reorder_buffer_holds_two_seconds(delay, late):
     table.finish()
     assert table.counts["late"] == late
     assert table.result()["server"]["rx_packets"] == 1280                   # a late packet still counts as traffic
+
+
+# ---------------------------------------------------------------- packets later than the reorder window ---
+# A steady 64 Hz flow with packets 0.5 s late, except a 0.5 s stretch [10.0, 10.5) held back by a consumer
+# stall. The rx silence they leave, from 9.984375 to 10.5, never happened: no gap may come of it.
+
+@pytest.mark.parametrize("rx, tx", [(True, True), (True, False)])        # held together ("local"), rx alone ("loss")
+def test_a_stall_that_delivers_packets_after_their_gap_was_recorded_leaves_no_gap(rx, tx):
+    table = feed(stream(hz=64, dur=20.0), held(10.0, 10.5, late_by=2.6, rx=rx, tx=tx))
+    assert table.counts["late"] == 32 * (rx + tx)                            # rx 10.0 ... 10.484375 (+ tx 5 ms later)
+    assert table.result()["gaps"] == []
+    assert table.counts["gaps_late"] == 1
+
+
+def test_late_packets_that_land_while_their_gap_is_pending_leave_no_gap():
+    # The gap is created when 10.5 is final (arrival 12.5) and settles at 10.5656 (arrival 12.5656): 12.52 is between.
+    table = feed(stream(hz=64, dur=20.0), held(10.0, 10.5, late_at=12.52))
+    assert table.counts["late"] == 64 and table.result()["gaps"] == [] and table.counts["gaps_late"] == 1
+
+
+def test_late_packets_that_land_before_their_gap_closes_leave_no_gap():
+    # At 12.3 only t <= 10.3 is final: those are late, the rest of the stretch is on time, and the gap they
+    # leave (9.984375 to 10.3125) is refused when 10.3125 is finalised, since a late receive lies inside it.
+    table = feed(stream(hz=64, dur=20.0), held(10.0, 10.5, late_at=12.3))
+    assert table.counts["late"] == 2 * 20 - 1                                # rx 10.0 ... 10.296875, tx up to 10.286
+    assert table.result()["gaps"] == [] and table.counts["gaps_late"] == 1
+
+
+# The rx gap [10.0, 10.3125] is created when 10.3125 is final (arrival 12.3125) and settles at 10.378125 (12.378).
+# Sends held back until after it settled, while it was pending, or before it was created (then only those at
+# or before 10.2 are late: 13 of the 19).
+@pytest.mark.parametrize("held_back, late", [({"late_by": 2.6}, 19), ({"late_at": 12.35}, 19), ({"late_at": 12.2}, 13)])
+def test_a_real_gap_whose_missing_sends_were_only_late_is_unknown_not_local(held_back, late):
+    # The server really went quiet (no rx in the open interval), but our own sends there came late: without
+    # them the gap reads as our tx pausing too ("local"), which is not known.
+    on_time = run(stream(rx_gap=(10.0, 10.3), tx_gap=(10.0, 10.3)))
+    assert on_time["gaps"] == [[10.0, 312.5, "local"]]                       # the control: sends really missing
+    table = feed(stream(rx_gap=(10.0, 10.3)), held(10.0, 10.3, rx=False, **held_back))
+    assert table.result()["gaps"] == [[10.0, 312.5, "unknown"]]
+    assert table.counts["late"] == late and table.counts["gaps_late"] == 0
+
+
+def test_a_burst_that_comes_late_still_counts_as_the_burst():
+    # Burst packets 2-19 arrive at 12.33, after the gap opened (10.3 final at 12.3) and before it settles (12.3656).
+    burst = [10.300 + j * 0.0005 for j in range(19)]
+    on_time = feed(stream(rx_gap=(10.0, 10.3), burst=burst), held(0, 0))
+    assert on_time.result()["gaps"] == [[10.0, 300.0, "delay"]]
+    table = feed(stream(rx_gap=(10.0, 10.3), burst=burst), held(10.3001, 10.31, late_at=12.33, tx=False))
+    assert table.counts["late"] == 18
+    assert table.result()["gaps"] == [[10.0, 300.0, "delay"]]
+
+
+# ---------------------------------------------------------------- a server that never comes back ---
+
+def test_a_server_that_goes_quiet_for_good_leaves_an_open_gap_at_the_end():
+    # rx stops after 9.984375 while our own sends go on: the server stopped answering (a lost connection).
+    r = run(stream(rx_gap=(9.99, 20.5)), end=20.0)
+    assert r["gaps"] == [[9.984375, 10015.625, "open"]]
+    assert r["server"]["last_rx_t"] == 9.984375 and r["server"]["first_rx_t"] == 0.0
+    assert run(stream(rx_gap=(9.99, 20.5)))["gaps"] == []                   # no end given (a replay): nothing closed
+
+
+def test_no_open_gap_when_the_game_stopped_sending_too():
+    # Both directions stop together: the game hung up (left the match), the server did not vanish.
+    assert run(stream(rx_gap=(9.99, 20.5), tx_gap=(9.99, 20.5)), end=20.0)["gaps"] == []
+
+
+# Our last send after the server's last packet (9.984375): 10.895625 (0.911 s) and 11.09875 (1.114 s).
+@pytest.mark.parametrize("tx_stop, gaps", [(10.9, 0), (11.1, 1)])
+def test_an_open_gap_needs_our_sends_to_go_on_a_second_after_the_last_packet(tx_stop, gaps):
+    r = run(stream(rx_gap=(9.99, 20.5), tx_gap=(tx_stop, 20.5)), end=20.0)
+    assert len(r["gaps"]) == gaps and all(g[2] == "open" for g in r["gaps"]), r["gaps"]
+
+
+def test_no_open_gap_for_a_silence_shorter_than_a_gap():
+    # The capture ends 15.6 ms after the last packet (our sends go on past it): not a gap by the 65.6 ms rule.
+    assert run(stream(rx_gap=(9.99, 20.5)), end=10.0)["gaps"] == []
+
+
+def test_the_open_gap_starts_at_the_newest_packet_even_a_late_one():
+    # The server's last half second came 2.6 s late, then nothing: it went quiet after 10.484375, not 9.984375.
+    table = feed(stream(rx_gap=(10.49, 20.5)), held(10.0, 10.5, late_by=2.6, tx=False), end=20.0)
+    assert table.result()["gaps"] == [[10.484375, 9515.625, "open"]]
+
+
+def test_an_open_gap_belongs_to_the_most_recent_server_only():
+    # A (port 27015) answers until 14 s, though our sends to it go on; the game moved to B (port 7777), which
+    # takes over as the server and runs to the end. A was the server for longer, but B is the one that counts.
+    a = stream(hz=64, dur=20.0, rx_gap=(13.99, 20.5))
+    b = [e for e in stream(hz=64, dur=20.0, server=VOICE, port=7777) if e[0] >= 12.0]
+    table = FlowTable({GAME}, LOCALS)
+    for t, pkt in sorted(a + b, key=lambda e: e[0]):
+        table.add(t, pkt)
+    table.finish(20.0)
+    seconds = {f.key[3]: f.server_s for f in table._servers.values()}
+    assert seconds[27015] > seconds[7777] > 0 and table._last_server.key[3] == 7777
+    assert table.result()["gaps"] == []
 
 
 # ---------------------------------------------------------------- talkers ---

@@ -119,10 +119,11 @@ class G:
     CLOCK_MAX_MHZ = "nv_clock_max_mhz"
     PSTATE = "nv_pstate"
     REASONS = "nv_reasons"     # comma-separated active clock-event (throttle) reasons, "" = none
-    THROTTLE_PCT = "nv_throttle_pct"  # share of the interval the clock was held down by heat or power (0-100)
+    THROTTLE_PCT = "nv_throttle_pct"  # share of the interval held down by heat or the HW power brake (0-100)
+    POWER_CAP_PCT = "nv_power_cap_pct"  # share at the SW power cap (0-100): the design limit, not throttling
 
     ALL = (T, UTIL_PCT, MEM_USED_MB, TEMP_C, POWER_W, POWER_LIMIT_W, CLOCK_MHZ, CLOCK_MAX_MHZ, PSTATE, REASONS,
-           THROTTLE_PCT)
+           THROTTLE_PCT, POWER_CAP_PCT)
 
 
 class N:

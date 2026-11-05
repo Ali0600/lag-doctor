@@ -496,7 +496,8 @@ def test_a_stop_that_timed_out_keeps_saying_so():
 
 def test_result_keys_are_the_contract():
     res = run_for(sampler(FakeNet()), 0.3)
-    assert set(res) == {"columns", "targets", "probes", "lost", "wifi_scans", "route", "interface", "downloads"}
+    assert set(res) == {"columns", "targets", "probes", "lost", "wifi_scans", "route", "interface", "downloads",
+                        "download_sources"}
     assert set(res["columns"]) == set(N.ALL)
     assert set(res["targets"]) == {"gateway", "internet", "server"}
     assert set(res["probes"]) == set(res["lost"]) == {"gateway", "internet", "server"}
@@ -629,6 +630,72 @@ def test_steam_downloads_are_timed_on_the_capture_clock(tmp_path):
     assert all(d["source"] == "steam" for d in downloads)
     assert 0.0 <= downloads[0]["t"] <= 0.9                          # its own stamp, within a second
     assert 0.3 <= downloads[1]["t"] <= 0.9                          # an implausible stamp falls back to read time
+    assert res["download_sources"] == ["steam"]
+
+
+def _steam_lines(log: Path, rate: str = "42.500"):
+    def write(_s):
+        time.sleep(0.3)
+        now_local = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
+        _append(log, f"[{now_local}] Current download rate: {rate} Mbps\r\n")
+    return write
+
+
+def test_no_download_log_read_means_downloads_not_measured():
+    # No Steam log on this account: "no download seen" would be a claim nothing measured.
+    s = sampler(FakeNet(steam=None), steam_every_s=0.1)
+    res = run_for(s, 0.4)
+    assert res["downloads"] is None and res["download_sources"] == []
+    assert "Steam download log not found" in s.status().detail
+
+
+def test_a_steam_log_that_cannot_be_read_is_not_a_source(tmp_path):
+    s = sampler(FakeNet(steam=tmp_path / "missing" / "content_log.txt"), steam_every_s=0.1)
+    res = run_for(s, 0.4)
+    assert res["downloads"] is None and res["download_sources"] == []
+    assert "could not be read" in s.status().detail
+
+
+def test_a_steam_log_read_with_nothing_new_is_measured_and_empty(tmp_path):
+    log = tmp_path / "content_log.txt"
+    log.write_bytes(b"[2000-01-01 10:00:01] Current download rate: 95.822 Mbps\r\n")   # history only
+    res = run_for(sampler(FakeNet(steam=log), steam_every_s=0.1), 0.4)
+    assert res["downloads"] == [] and res["download_sources"] == ["steam"]
+
+
+@pytest.mark.parametrize("as_type", [str, Path])
+def test_a_steam_log_given_is_used_instead_of_this_accounts_registry(tmp_path, as_type):
+    # An elevated child is handed the user's own Steam log: its HKCU may be the admin's.
+    mine, theirs = tmp_path / "user" / "content_log.txt", tmp_path / "admin" / "content_log.txt"
+    for log in (mine, theirs):
+        log.parent.mkdir()
+        log.write_bytes(b"")
+    net = FakeNet(steam=theirs)
+    asked = []
+    net.steam_log = lambda: asked.append(1) or theirs
+    res = run_for(sampler(net, steam_log=as_type(mine), steam_every_s=0.1), 0.6, during=_steam_lines(mine))
+    assert asked == []
+    assert [d["mbps"] for d in res["downloads"]] == [42.5] and res["download_sources"] == ["steam"]
+
+
+def test_an_empty_steam_log_argument_reads_no_steam_log(tmp_path):
+    log = tmp_path / "content_log.txt"
+    log.write_bytes(b"")
+    net = FakeNet(steam=log)
+    asked = []
+    net.steam_log = lambda: asked.append(1) or log
+    s = sampler(net, steam_log="", steam_every_s=0.1)
+    res = run_for(s, 0.6, during=_steam_lines(log))
+    assert asked == [] and res["downloads"] is None and res["download_sources"] == []
+    assert "none was given" in s.status().detail
+
+
+@pytest.mark.parametrize("bad", [r"\\fileserver\share\content_log.txt", "//server/share/log.txt",
+                                 r"\\?\C:\Steam\logs\content_log.txt", "content_log.txt", "C:/x\x00y", 5,
+                                 "C:/" + "x" * 300])
+def test_a_steam_log_argument_must_be_a_plain_local_file(bad):
+    with pytest.raises(ValueError):
+        NetworkSampler(net=FakeNet(), steam_log=bad)
 
 
 def test_log_time_falls_back_to_the_read_time():

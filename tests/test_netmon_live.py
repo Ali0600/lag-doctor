@@ -44,6 +44,18 @@ def defaults() -> list[dict]:
     return rows
 
 
+def _egress_adapter(dest: str = "1.1.1.1") -> dict | None:
+    """Find-NetRoute + Get-NetAdapter: the adapter Windows sends `dest` through, read without lag-doctor.
+    {ifIndex, InterfaceDescription, HardwareInterface, Virtual}; None when Get-NetAdapter does not list it
+    (WAN miniport tunnels, for one)."""
+    cmd = (f"$i = (Find-NetRoute -RemoteIPAddress {dest} -ErrorAction Stop | Select-Object -First 1).InterfaceIndex; "
+           "Get-NetAdapter -InterfaceIndex $i -IncludeHidden -ErrorAction SilentlyContinue | "
+           "Select-Object ifIndex,InterfaceDescription,HardwareInterface,Virtual | ConvertTo-Json -Compress")
+    out = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-Command", cmd], capture_output=True,
+                         text=True, timeout=90, check=True).stdout.strip()
+    return json.loads(out) if out else None
+
+
 # ---------------------------------------------------------------- icmp ---
 
 def test_loopback_echo_ipv4_and_ipv6():
@@ -222,8 +234,16 @@ def test_a_ten_second_capture_of_this_machine(defaults):
     assert res["probes"]["server"] == {"sent": 0, "lost": 0, "from_t": None}
     assert all(v is None or v >= 0 for v in cols[N.NIC_RX_BPS] + cols[N.NIC_TX_BPS])
     assert sum(v is not None for v in cols[N.NIC_RX_BPS]) >= n - 1      # only the first row has no rate
-    assert res["route"]["vpn"] is False
     if res["interface"]["kind"] == "wifi":
         assert sum(v is not None for v in cols[N.WIFI_SIGNAL_PCT]) == n
         assert res["interface"]["band"] and res["interface"]["channel"]
     assert s.status().state == "ok", s.status()
+    # The route, against Windows' own answer: the same egress adapter, and a physical one is never a VPN. A
+    # virtual one (a VPN tunnel when one is up) has no independent VPN-or-not readout: skipped.
+    egress = _egress_adapter()
+    print(f"egress per Find-NetRoute/Get-NetAdapter: {egress}")
+    if egress is None or not egress["HardwareInterface"]:
+        pytest.skip(f"the internet goes out through {(egress or {}).get('InterfaceDescription')!r}, a virtual "
+                    "adapter (a VPN tunnel?); whether the route is a VPN cannot be checked independently here")
+    assert res["route"]["if_index"] == egress["ifIndex"], (res["route"], egress)
+    assert res["route"]["vpn"] is False

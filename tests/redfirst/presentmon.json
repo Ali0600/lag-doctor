@@ -398,7 +398,7 @@
  {
   "name": "game exit not acted on",
   "file": "lagdoctor/capture/presentmon.py",
-  "old": "            if not alive:\n                self._note(\"the game exited",
+  "old": "            if self._probe_alive() is False:\n                self._note(\"the game exited",
   "new": "            if False:\n                self._note(\"the game exited",
   "tests": [
    "tests/test_presentmon_source.py::test_the_game_exiting_stops_the_capture_without_the_session_asking"
@@ -407,8 +407,8 @@
  {
   "name": "a broken check reads as a dead game",
   "file": "lagdoctor/capture/presentmon.py",
-  "old": "            except Exception:  # noqa: BLE001 - a broken check must not end the capture\n                continue",
-  "new": "            except Exception:  # noqa: BLE001 - a broken check must not end the capture\n                alive = False",
+  "old": "        except Exception:  # noqa: BLE001 - a broken check must not end the capture\n            return None",
+  "new": "        except Exception:  # noqa: BLE001 - a broken check must not end the capture\n            return False",
   "tests": [
    "tests/test_presentmon_source.py::test_a_broken_liveness_check_does_not_end_the_capture"
   ]
@@ -416,8 +416,8 @@
  {
   "name": "a broken check kills the watcher",
   "file": "lagdoctor/capture/presentmon.py",
-  "old": "            except Exception:  # noqa: BLE001 - a broken check must not end the capture",
-  "new": "            except ZeroDivisionError:",
+  "old": "        except Exception:  # noqa: BLE001 - a broken check must not end the capture",
+  "new": "        except ZeroDivisionError:",
   "tests": [
    "tests/test_presentmon_source.py::test_the_game_is_still_watched_after_the_check_failed"
   ]
@@ -544,8 +544,8 @@
  {
   "name": "revocation fetched from the network",
   "file": "lagdoctor/setup.py",
-  "old": "    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT",
-  "new": "    data.dwProvFlags = WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT",
+  "old": "    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | (WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT if revocation else 0)",
+  "new": "    data.dwProvFlags = (WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT if revocation else 0)",
   "tests": [
    "tests/test_presentmon_setup.py::test_revocation_is_checked_from_the_cache_only_and_the_state_is_closed"
   ]
@@ -737,6 +737,43 @@
   "new": "    return not bool(info.TokenIsElevated)",
   "tests": [
    "tests/test_presentmon_elevation.py::test_is_elevated_matches_the_tokens_integrity_level"
+  ]
+ },
+ {
+  "name": "PresentMon ending on its own while the game runs reads ok",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        elif self._alone is not None and path == \"exited\":",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_presentmon_source.py::test_presentmon_stopped_from_outside_while_the_game_runs_is_partial_and_says_when",
+   "tests/test_presentmon_source.py::test_presentmon_ending_by_itself_with_no_working_liveness_check_is_partial"
+  ]
+ },
+ {
+  "name": "no grace for --terminate_on_proc_exit beating our check",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "    EXITED_GRACE_S = 1.5 ",
+  "new": "    EXITED_GRACE_S = 0.0 ",
+  "tests": [
+   "tests/test_presentmon_source.py::test_presentmon_ending_because_the_game_exited_stays_ok"
+  ]
+ },
+ {
+  "name": "a liveness check that failed reads as the game gone",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "            if alive is False:\n                return \"exited\"",
+  "new": "            if not alive:\n                return \"exited\"",
+  "tests": [
+   "tests/test_presentmon_source.py::test_presentmon_ending_by_itself_with_no_working_liveness_check_is_partial"
+  ]
+ },
+ {
+  "name": "a retry's first frames held back by the last run's publish",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        self._last_publish = 0.0       # a new run's first frames show at once",
+  "new": "        pass       # a new run's first frames show at once",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_retried_capture_shows_its_first_frames_at_once"
   ]
  }
 ]

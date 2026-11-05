@@ -576,8 +576,8 @@
  {
   "name": "gap list unbounded",
   "file": "lagdoctor/capture/netflows.py",
-  "old": "            if len(self.gaps) < MAX_GAPS:",
-  "new": "            if True:",
+  "old": "        if len(self.gaps) >= MAX_GAPS:",
+  "new": "        if False:",
   "tests": [
    "tests/test_etw_flows.py::test_gaps_are_capped"
   ]
@@ -630,10 +630,11 @@
  {
   "name": "a dead consumer not reported",
   "file": "lagdoctor/capture/netflows.py",
-  "old": "        if not final and not h.get(\"pump_alive\") and not self.stopping:",
+  "old": "        if self._pump_dead is not None:      # kept at the end too: the flows stop where the consumer did",
   "new": "        if False:",
   "tests": [
-   "tests/test_etw_tracker.py::test_a_consumer_that_dies_or_drops_events_is_reported"
+   "tests/test_etw_tracker.py::test_a_consumer_that_dies_or_drops_events_is_reported",
+   "tests/test_etw_tracker.py::test_a_consumer_that_stops_by_itself_keeps_the_flows_partial_after_stop_and_says_when"
   ]
  },
  {
@@ -688,6 +689,233 @@
   "new": "            out[\"tcp_reply\"] = True",
   "tests": [
    "tests/test_etw_flows.py::test_selftest_traffic_sends_one_udp_and_one_tcp_query_from_the_ports_it_reports"
+  ]
+ },
+ {
+  "name": "a stopped consumer forgotten once stop() is asked",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if self._pump_dead is not None:      # kept at the end too",
+  "new": "        if self._pump_dead is not None and not self.stopping:      # kept at the end too",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_consumer_that_stops_by_itself_keeps_the_flows_partial_after_stop_and_says_when"
+  ]
+ },
+ {
+  "name": "consumer checked only every 30 s",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "PUMP_EVERY_S = 1.0 ",
+  "new": "PUMP_EVERY_S = 30.0 ",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_consumer_that_stops_by_itself_keeps_the_flows_partial_after_stop_and_says_when"
+  ]
+ },
+ {
+  "name": "consumer not checked before our own stop",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            self._check_pump(session, end)            # before our own stop",
+  "new": "            pass            # before our own stop",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_consumer_found_stopped_at_the_end_had_stopped_by_itself"
+  ]
+ },
+ {
+  "name": "a dead consumer never recorded",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        elif h.get(\"pump_alive\") is False and self._pump_dead is None:",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_consumer_that_stops_by_itself_keeps_the_flows_partial_after_stop_and_says_when",
+   "tests/test_etw_tracker.py::test_a_consumer_found_stopped_at_the_end_had_stopped_by_itself"
+  ]
+ },
+ {
+  "name": "a dead consumer's silence read up to the stop",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                end = max(0.0, self._pump_alive_t - self._table.reorder_s)",
+  "new": "                pass",
+  "tests": [
+   "tests/test_etw_tracker.py::test_after_the_consumer_died_an_open_gap_ends_where_it_was_last_seen_running"
+  ]
+ },
+ {
+  "name": "open gap never closed at the end",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if end is not None:\n            self._open_gap(end)",
+  "new": "        if False:\n            self._open_gap(end)",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_server_that_goes_quiet_for_good_leaves_an_open_gap_at_the_end"
+  ]
+ },
+ {
+  "name": "the tracker gives the table no end",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                self._table.finish(end)",
+  "new": "                self._table.finish()",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_server_that_goes_quiet_for_good_ends_in_an_open_gap"
+  ]
+ },
+ {
+  "name": "open gap although the game stopped sending too",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if sent - last < OPEN_TX_S:\n            return",
+  "new": "        if False:\n            return",
+  "tests": [
+   "tests/test_etw_flows.py::test_no_open_gap_when_the_game_stopped_sending_too"
+  ]
+ },
+ {
+  "name": "open gap needs only 0.9 s of our sends",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "OPEN_TX_S = 1.0",
+  "new": "OPEN_TX_S = 0.9",
+  "tests": [
+   "tests/test_etw_flows.py::test_an_open_gap_needs_our_sends_to_go_on_a_second_after_the_last_packet"
+  ]
+ },
+ {
+  "name": "open gap needs 1.2 s of our sends",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "OPEN_TX_S = 1.0",
+  "new": "OPEN_TX_S = 1.2",
+  "tests": [
+   "tests/test_etw_flows.py::test_an_open_gap_needs_our_sends_to_go_on_a_second_after_the_last_packet"
+  ]
+ },
+ {
+  "name": "open gap shorter than a gap",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if end - last <= gap_threshold(flow.rx_tick):\n            return",
+  "new": "        if False:\n            return",
+  "tests": [
+   "tests/test_etw_flows.py::test_no_open_gap_for_a_silence_shorter_than_a_gap"
+  ]
+ },
+ {
+  "name": "open gap starts before a late packet",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        last = max(flow.last_rx, flow.late_rx)",
+  "new": "        last = flow.last_rx",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_open_gap_starts_at_the_newest_packet_even_a_late_one"
+  ]
+ },
+ {
+  "name": "open gap judged on the longest server, not the latest",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        flow = self._last_server\n",
+  "new": "        flow = self.server_flow()\n",
+  "tests": [
+   "tests/test_etw_flows.py::test_an_open_gap_belongs_to_the_most_recent_server_only"
+  ]
+ },
+ {
+  "name": "lists of a session that never started read as measured",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if not self._started:\n            # Nothing was listened to",
+  "new": "        if False:\n            # Nothing was listened to",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_session_that_could_not_start_reports_its_lists_as_not_measured",
+   "tests/test_etw_tracker.py::test_result_and_stop_are_safe_before_start"
+  ]
+ },
+ {
+  "name": "late receive inside a recorded gap kept",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if rx:\n            entry[3] = False",
+  "new": "        if False:\n            entry[3] = False",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_stall_that_delivers_packets_after_their_gap_was_recorded_leaves_no_gap"
+  ]
+ },
+ {
+  "name": "late receive inside a pending gap kept",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                if rx:\n                    g.phantom = True",
+  "new": "                if False:\n                    g.phantom = True",
+  "tests": [
+   "tests/test_etw_flows.py::test_late_packets_that_land_while_their_gap_is_pending_leave_no_gap"
+  ]
+ },
+ {
+  "name": "a phantom gap recorded at settle",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if g.phantom:\n",
+  "new": "            if False:\n",
+  "tests": [
+   "tests/test_etw_flows.py::test_late_packets_that_land_while_their_gap_is_pending_leave_no_gap"
+  ]
+ },
+ {
+  "name": "gap created over a late receive",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                if flow.late_rx > prev:",
+  "new": "                if False:",
+  "tests": [
+   "tests/test_etw_flows.py::test_late_packets_that_land_before_their_gap_closes_leave_no_gap"
+  ]
+ },
+ {
+  "name": "late send leaves a recorded gap local",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        elif rec[2] == \"local\":\n            rec[2] = \"unknown\"",
+  "new": "        elif False:\n            rec[2] = \"unknown\"",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_real_gap_whose_missing_sends_were_only_late_is_unknown_not_local"
+  ]
+ },
+ {
+  "name": "late send inside a pending gap not marked",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                else:\n                    g.unknown = True",
+  "new": "                else:\n                    pass",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_real_gap_whose_missing_sends_were_only_late_is_unknown_not_local"
+  ]
+ },
+ {
+  "name": "late send before the gap closes not marked",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                    g.unknown = flow.late_tx > prev",
+  "new": "                    g.unknown = False",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_real_gap_whose_missing_sends_were_only_late_is_unknown_not_local"
+  ]
+ },
+ {
+  "name": "unknown sends still read as local",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if g.unknown and kind == \"local\":",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_real_gap_whose_missing_sends_were_only_late_is_unknown_not_local"
+  ]
+ },
+ {
+  "name": "late burst packets not counted",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                g.burst += 1                # part of the burst after the gap",
+  "new": "                pass                # part of the burst after the gap",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_burst_that_comes_late_still_counts_as_the_burst"
+  ]
+ },
+ {
+  "name": "late packets not reported in the status",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if late:\n            worst = ",
+  "new": "        if False:\n            worst = ",
+  "tests": [
+   "tests/test_etw_tracker.py::test_game_packets_that_arrive_after_the_reorder_window_make_the_flows_partial"
+  ]
+ },
+ {
+  "name": "delivery lag not measured",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                lag = self.now() - t            # how long ETW took to hand it over",
+  "new": "                lag = 0.0            # how long ETW took to hand it over",
+  "tests": [
+   "tests/test_etw_tracker.py::test_game_packets_that_arrive_after_the_reorder_window_make_the_flows_partial"
   ]
  }
 ]

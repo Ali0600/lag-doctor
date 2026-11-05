@@ -334,6 +334,56 @@ def test_the_game_is_still_watched_after_the_check_failed(state):
     assert len(calls) > 3 and "game exited" in src.status().detail
 
 
+def test_presentmon_stopped_from_outside_while_the_game_runs_is_partial_and_says_when(state):
+    # Another capture's --terminate_existing_session (or --stop_existing_session) stops our 'lagdoctor'
+    # session: PresentMon then exits 0 by itself (PM 5, 7.1) while the game plays on, and frames stop there.
+    src = Fake("breakable", state)
+    src.start(0.0)
+    wait_for(lambda: (src.live().get("frames") or 0) > 0, what="the first frames")
+    other = subprocess.run([BASE_PY, "-I", str(FAKE), "-", str(state), *pm.terminate_args()],
+                           stdin=subprocess.DEVNULL, capture_output=True, timeout=10)
+    assert other.returncode == 0                                       # it found our session and stopped it
+    wait_for(lambda: not src._thread.is_alive(), 15, "the collector to end by itself")
+    st, info = src.status(), src.result()["presentmon"]
+    src.stop()
+    assert info["exit_code"] == 0 and info["stop_path"] == "exited" and info["rows"] == PID_ROWS
+    assert st.state == "partial", st
+    assert "PresentMon stopped on its own at t=" in st.detail and "while the game kept running" in st.detail
+    assert "no frames after t=" in st.detail
+
+
+class EndsWithTheGame(Fake):
+    """The game exits `after` seconds after PresentMon's output ends: its --terminate_on_proc_exit got there first."""
+
+    def __init__(self, mode: str, state: Path, after: float) -> None:
+        self.gone = threading.Event()
+        self.after = after
+        super().__init__(mode, state, is_alive=lambda: not self.gone.is_set())
+
+    def _read_stdout(self, stream) -> None:
+        super()._read_stdout(stream)
+        threading.Timer(self.after, self.gone.set).start()
+
+
+@pytest.mark.parametrize("after", [0.0, 0.6])        # at once, or within the grace our own check gets
+def test_presentmon_ending_because_the_game_exited_stays_ok(state, after):
+    src = EndsWithTheGame("eof", state, after)
+    run_to_end(src)
+    st = src.status()
+    assert src.result()["presentmon"]["rows"] == PID_ROWS
+    assert st.state == "ok" and "game exited" in st.detail, st
+
+
+def test_presentmon_ending_by_itself_with_no_working_liveness_check_is_partial(state):
+    def broken():
+        raise RuntimeError("snapshot failed")
+
+    src = Fake("eof", state, is_alive=broken)
+    run_to_end(src)
+    st = src.status()
+    assert st.state == "partial" and "could not be checked" in st.detail, st
+
+
 def test_the_default_liveness_check_uses_the_pid_list_only(state, monkeypatch):
     seen = []
     monkeypatch.setattr(psutil, "pids", lambda: seen.append(1) or [1, 2, 3])
@@ -363,6 +413,19 @@ def test_a_session_left_running_is_replaced_once_and_the_capture_goes_on(state):
     assert len(lines_of(state / "terminate_calls")) == 1
     assert src.status().state == "ok" and "already running" in src.status().detail
     assert src.result()["presentmon"]["rows"] == PID_ROWS
+
+
+def test_a_retried_capture_shows_its_first_frames_at_once(state):
+    # The failed first attempt published its (zero) count as it ended; the retry is a new run, whose first
+    # frame must show at once, not wait out the publish interval (a long one here, so it cannot slip through).
+    src = Fake("busy_once", state)
+    src.PUBLISH_EVERY_S = 60.0
+    src.start(0.0)
+    try:
+        wait_for(lambda: (src.live().get("frames") or 0) > 0, 15, "the retry's first frames on the status line")
+    finally:
+        src.stop()
+    assert len(lines_of(state / "terminate_calls")) >= 1
 
 
 def test_a_crash_is_reported_and_its_session_stopped_by_name(state):

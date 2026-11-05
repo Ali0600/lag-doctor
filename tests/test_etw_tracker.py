@@ -142,7 +142,8 @@ def test_unelevated_the_real_session_is_unavailable_with_the_reason():
         assert time.monotonic() - started < 5.0
     r = tr.result()
     assert set(r) == RESULT_KEYS
-    assert r["server"] is None and r["talkers"] == [] and r["gaps"] == [] and r["server_rx"] == []
+    # Nothing was listened to, so the lists are not measured (None), never "measured, none seen" ([]).
+    assert r["server"] is None and r["talkers"] is None and r["gaps"] is None and r["server_rx"] is None
     assert r["layout"] == "unverified"
     assert r["health"]["pump_alive"] is False and r["health"]["lost"] is None   # not measured, never 0
     assert etw.query_session(name) == 4201
@@ -165,6 +166,28 @@ def test_result_and_stop_are_safe_before_start():
     tr.stop()
     r = tr.result()
     assert set(r) == RESULT_KEYS and r["server"] is None and r["layout"] == "unverified"
+    assert r["talkers"] is None and r["gaps"] is None and r["server_rx"] is None
+
+
+def test_a_session_that_could_not_start_reports_its_lists_as_not_measured():
+    made = []
+    tr = _tracker(made, start_error=OSError(None, "StartTraceW: access denied", None, 5))
+    tr.start(clock.now())
+    try:
+        assert _wait(lambda: tr.status().state != "off")
+    finally:
+        tr.stop()
+    assert tr.status().state == "unavailable"
+    r = tr.result()
+    assert r["talkers"] is None and r["gaps"] is None and r["server_rx"] is None and r["server"] is None
+    good = _tracker([])                                      # the control: a session that ran and saw nothing
+    good.start(clock.now())
+    try:
+        assert _wait(lambda: good.status().state == "ok")
+    finally:
+        good.stop()
+    r = good.result()
+    assert r["talkers"] == [] and r["gaps"] == [] and r["server_rx"] == []
 
 
 # ---------------------------------------------------------------- the pipeline ---
@@ -322,6 +345,116 @@ def test_a_consumer_that_dies_or_drops_events_is_reported(monkeypatch):
     finally:
         tr.stop()
     assert "dropped 5 events" in tr.status().detail                  # still said after stop
+
+
+class DyingSession(FakeSession):
+    """A consumer whose ProcessTrace returns by itself `after` seconds in (its session stopped from outside)."""
+
+    after = 0.8
+
+    def start(self):
+        super().start()
+        self.started_at = time.monotonic()
+
+    def health(self):
+        h = super().health()
+        if h["pump_alive"] and time.monotonic() - self.started_at >= self.after:
+            h.update(pump_alive=False, process_trace_rc=0)
+        return h
+
+
+def test_a_consumer_that_stops_by_itself_keeps_the_flows_partial_after_stop_and_says_when():
+    made = []
+    tr = FlowTracker((GAME,), selftest=False, local_addrs=lambda: LOCALS,
+                     session_factory=lambda n, p, cb: made.append(DyingSession(n, p, cb)) or made[-1])
+    tr.start(clock.now())
+    try:
+        assert _wait(lambda: made and made[0].started)
+        time.sleep(2.5)
+    finally:
+        tr.stop()
+    st = tr.status()
+    assert st.state == "partial" and "ETW consumer stopped by itself" in st.detail, st
+    assert "ProcessTrace returned 0" in st.detail
+    died = tr.result()["health"]["consumer_stopped_t"]
+    assert died is not None and 0.8 <= died <= 2.3, died               # found within a check (1 s) of dying
+
+
+def test_a_consumer_found_stopped_at_the_end_had_stopped_by_itself(monkeypatch):
+    # It dies after the last periodic check: the look taken just before our own stop is what sees it.
+    monkeypatch.setattr(nf, "PUMP_EVERY_S", 5.0)
+    monkeypatch.setattr(DyingSession, "after", 0.3)
+    made = []
+    tr = FlowTracker((GAME,), selftest=False, local_addrs=lambda: LOCALS,
+                     session_factory=lambda n, p, cb: made.append(DyingSession(n, p, cb)) or made[-1])
+    tr.start(clock.now())
+    try:
+        assert _wait(lambda: made and made[0].started)
+        time.sleep(0.8)
+    finally:
+        tr.stop()
+    st = tr.status()
+    assert st.state == "partial" and "ETW consumer stopped by itself" in st.detail, st
+
+
+def test_after_the_consumer_died_an_open_gap_ends_where_it_was_last_seen_running():
+    # The server went quiet at 10 s while the game kept sending; then the consumer itself stopped. What came
+    # after that was never seen, so the server's silence is only known up to the consumer's last sign of life.
+    made = []
+    origin = clock.now() - 21.0
+    stream = [e for e in _game_stream(origin, burst=0) if not (e.id == 43 and e.timestamp >= _ticks(origin, 9.99))]
+    tr = FlowTracker((GAME,), selftest=False, local_addrs=lambda: LOCALS,
+                     session_factory=lambda n, p, cb: made.append(DyingSession(n, p, cb, preload=stream)) or made[-1])
+    tr.start(origin)
+    try:
+        assert _wait(lambda: made and made[0].started)
+        time.sleep(2.5)
+    finally:
+        tr.stop()
+    r = tr.result()
+    died = r["health"]["consumer_stopped_t"]
+    assert died is not None, r["health"]
+    (start, ms, kind), = r["gaps"]
+    assert kind == "open" and start == pytest.approx(9.984375, abs=1e-6)
+    assert start + ms / 1000.0 < died - 1.0                         # last seen running, less the reorder window
+
+
+def test_game_packets_that_arrive_after_the_reorder_window_make_the_flows_partial():
+    made = []
+    tr = _tracker(made)
+    tr.start(clock.now())
+    try:
+        assert _wait(lambda: made and made[0].started)
+        _feed_live(made[0], tr, 3.0)
+        old = tr.now() - 3.0                                         # a stalled buffer: 3 s old, past the 2 s window
+        made[0].feed([_event(tr.origin, old + k / 64, 43, _v4(GAME, 1200, LOCAL, SERVER, 50000, 27015))
+                      for k in range(10)])
+        time.sleep(0.4)
+    finally:
+        tr.stop()
+    r = tr.result()
+    assert r["health"]["late"] == 10
+    assert r["health"]["delivery_lag_max_s"] >= 3.0
+    st = tr.status()
+    assert st.state == "partial" and "10 game packets arrived more than 2 s late" in st.detail, st
+
+
+def test_a_server_that_goes_quiet_for_good_ends_in_an_open_gap():
+    # The server's packets stop at 10 s and never come back, while the game keeps sending to it.
+    made = []
+    origin = clock.now() - 21.0
+    stream = [e for e in _game_stream(origin, burst=0) if not (e.id == 43 and e.timestamp >= _ticks(origin, 9.99))]
+    tr = _tracker(made, preload=stream)
+    tr.start(origin)
+    try:
+        assert _wait(lambda: "gaps" in tr.live()), tr.live()        # the first tick took in the backlog
+    finally:
+        tr.stop()
+    assert tr.result()["server"]["ip"] == SERVER                    # it was the server, until it went quiet
+    gaps = tr.result()["gaps"]
+    assert len(gaps) == 1, gaps
+    assert gaps[0][0] == pytest.approx(9.984375, abs=1e-6) and gaps[0][2] == "open", gaps
+    assert gaps[0][1] >= 11_000.0                                   # to when the capture stopped, after t = 21 s
 
 
 # ---------------------------------------------------------------- the self-test glue ---
