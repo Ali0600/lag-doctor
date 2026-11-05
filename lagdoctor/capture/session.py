@@ -37,7 +37,7 @@ STILL_STOPPING_MESSAGE = ("Still stopping and saving the capture; Ctrl+C will no
 CAPTURE_LOCK_NAME = "Local\\lag-doctor-capture"
 
 # Which result() keys go where (docs/DESIGN.md, "What each collector's result() returns").
-NETWORK_FLOW_KEYS = ("targets", "probes", "lost", "wifi_scans", "route", "downloads")
+NETWORK_FLOW_KEYS = ("targets", "probes", "lost", "wifi_scans", "route", "downloads", "download_sources")
 FLOW_KEYS = ("server", "talkers", "gaps", "server_rx", "layout", "health")
 
 
@@ -49,6 +49,7 @@ class SessionOptions:
     hotkey: str | None = "ctrl+alt+l"
     presentmon_exe: Path | None = None
     frames: bool = True                    # False when the user chose to run without ETW rights
+    steam_log: str | Path | None = None    # None: look it up in this account's HKCU; "": none; a path: that file
 
 
 def request_stop(stop: threading.Event, reason: str) -> None:
@@ -402,7 +403,7 @@ def default_collectors(target: dict[str, Any], inventory: dict[str, Any], opts: 
         from lagdoctor.capture.netflows import FlowTracker
         from lagdoctor.capture.netmon import NetworkSampler
         pid, created = target["pid"], target.get("create_time")
-        out.append(NetworkSampler(server_ip=opts.server_ip))
+        out.append(NetworkSampler(server_ip=opts.server_ip, steam_log=opts.steam_log))
         # Polled once a second, so child processes the game starts later join its traffic.
         out.append(FlowTracker(lambda: target_mod.game_pids(pid, created)))
     return out

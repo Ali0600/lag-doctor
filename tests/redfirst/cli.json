@@ -29,11 +29,6 @@
    "old": "            if e.state == \"pending\":",
    "new": "            if False:",
    "tests": ["tests/test_cli.py::test_start_up_settles_an_interrupted_change_and_ended_session_changes"]},
-  {"name": "session-only changes outlive their process in the journal",
-   "file": "lagdoctor/cli.py",
-   "old": "                if is_gone(fix._safe_read(e.params)):",
-   "new": "                if False:",
-   "tests": ["tests/test_cli.py::test_start_up_settles_an_interrupted_change_and_ended_session_changes"]},
   {"name": "any text accepted as the server address",
    "file": "lagdoctor/cli.py",
    "old": "        return str(ipaddress.ip_address(text.strip()))",
@@ -318,5 +313,9 @@
    "file": "lagdoctor/cli.py",
    "old": "    clean = _CONTROL_CHARS.sub(\"?\", str(text).encode(\"ascii\", \"replace\").decode(\"ascii\"))",
    "new": "    clean = str(text).encode(\"ascii\", \"replace\").decode(\"ascii\")",
-   "tests": ["tests/test_cli.py::test_say_shows_control_characters_as_question_marks"]}
+   "tests": ["tests/test_cli.py::test_say_shows_control_characters_as_question_marks"]},
+  {"name": "the parent hands the child no Steam log", "file": "lagdoctor/cli.py", "old": "                             parent_sid=_own_sid(), steam_log=_own_steam_log())", "new": "                             parent_sid=_own_sid())", "tests": ["tests/test_cli.py::test_the_parent_hands_the_child_its_presentmon_inventory_and_sid"]},
+  {"name": "the child ignores the Steam log it was handed", "file": "lagdoctor/cli.py", "old": "                               steam_log=getattr(args, \"steam_log\", None))", "new": "                               steam_log=None)", "tests": ["tests/test_cli.py::test_the_elevated_child_uses_the_steam_log_it_was_handed"]},
+  {"name": "the child takes any Steam log path", "file": "lagdoctor/cli.py", "old": "            netmon.given_steam_log(steam)\n        except ValueError:", "new": "            pass\n        except ValueError:", "tests": ["tests/test_cli.py::test_the_elevated_child_refuses_a_steam_log_that_is_not_a_local_file"]},
+  {"name": "a change in place but unconfirmed is called unchanged", "file": "lagdoctor/cli.py", "old": "                elif res.state == \"applied\":                # in place but not confirmed (e.g. after a restart)", "new": "                elif False:", "tests": ["tests/test_cli.py::test_a_change_in_place_but_not_confirmed_is_not_called_unchanged"]}
 ]

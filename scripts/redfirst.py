@@ -193,12 +193,12 @@ def _bad_tests(tests: object) -> str | None:
 
 def _run(tests: list[str], copy: Path, watch: Path, work: Path) -> Run:
     report = work / f"{uuid.uuid4().hex}.json"
-    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", REDFIRST_PROBE_REAL=str(ROOT),
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8", REDFIRST_PROBE_REAL=str(ROOT),
                REDFIRST_PROBE_SKIP=os.pathsep.join(sorted({sys.prefix, sys.exec_prefix, sys.base_prefix})),
                REDFIRST_PROBE_WATCH=str(watch), REDFIRST_PROBE_OUT=str(report))
     proc = subprocess.run([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-p", PROBE,
                            "-q", "-rf", *tests], cwd=copy, env=env, capture_output=True, text=True,
-                          errors="replace", timeout=600)
+                          encoding="utf-8", errors="replace", timeout=600)
     out = proc.stdout + proc.stderr
     failed = re.findall(r"^FAILED (\S+)", out, flags=re.M)
     summary = next((ln for ln in reversed(out.splitlines()) if re.search(r"\d+ (passed|failed|error)", ln)), "")

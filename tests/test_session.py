@@ -252,6 +252,19 @@ def test_default_collectors_follow_the_options_and_the_games_adapter():
     assert names_of(dict(game, adapter_luid=NVIDIA), HYBRID, network=False, frames=False) == ["system", "gpu"]
 
 
+def test_the_steam_log_and_its_sources_reach_the_capture():
+    import os
+    from lagdoctor.capture.session import default_collectors
+    game = {"pid": os.getpid(), "create_time": 1, "name": "python.exe", "adapter_luid": None}
+    net = next(c for c in default_collectors(game, {"adapters": []}, SessionOptions(steam_log=""))
+               if c.name == "network")
+    assert net._steam_arg == ""                       # "" = none: never this account's HKCU
+    cols = full_set()
+    cols[3]._result = dict(cols[3]._result, downloads=None, download_sources=[])
+    _, cap = run_session(cols)
+    assert cap.net_flows["downloads"] is None and cap.net_flows["download_sources"] == []
+
+
 def test_one_unanswerable_liveness_check_does_not_end_the_capture(monkeypatch):
     from lagdoctor.capture import session as sess
     from lagdoctor.capture import target as target_mod

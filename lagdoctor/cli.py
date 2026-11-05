@@ -83,6 +83,7 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--presentmon-exe", type=Path, help=argparse.SUPPRESS)
     w.add_argument("--inventory-file", type=Path, help=argparse.SUPPRESS)
     w.add_argument("--parent-sid", type=_sid, help=argparse.SUPPRESS)
+    w.add_argument("--steam-log", help=argparse.SUPPRESS)        # the user's own Steam log, or "" for none
     w.set_defaults(func=cmd_watch)
 
     a = sub.add_parser("analyze", help="re-run the analysis on a saved capture")
@@ -255,7 +256,8 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     from lagdoctor.model import SourceStatus
     hotkey = None if (args.hotkey or "").lower() in ("", "none", "off") else args.hotkey
     opts = sess.SessionOptions(duration_s=args.duration, network=not args.no_network, server_ip=args.server,
-                               hotkey=hotkey, presentmon_exe=exe, frames=frames)
+                               hotkey=hotkey, presentmon_exe=exe, frames=frames,
+                               steam_log=getattr(args, "steam_log", None))
     if args.out_file:
         cap_path = Path(args.out_file).resolve()
         out_dir = cap_path.parent
@@ -368,14 +370,14 @@ def elevation_choice(elevate: bool, no_elevate: bool, interactive: bool, ask: Ca
 
 def elevated_argv(args: argparse.Namespace, target: dict[str, Any], cap_path: Path, *,
                   presentmon_exe: Path | None = None, inventory_file: Path | None = None,
-                  parent_sid: str | None = None) -> list[str]:
+                  parent_sid: str | None = None, steam_log: Path | str | None = None) -> list[str]:
     """The command the elevated child runs: the capture only, for this exact process, into this exact file.
 
     -E -s: the elevated Python ignores PYTHON* variables and the user's own site-packages (-I would also drop
     the project folder from sys.path, which `-m lagdoctor` needs). Paths must be absolute: the child runs in
     another folder, and perhaps as another account with another profile.
     """
-    for p in (cap_path, presentmon_exe, inventory_file):
+    for p in (cap_path, presentmon_exe, inventory_file, steam_log or None):
         if p is not None and not Path(p).is_absolute():
             raise ValueError(f"the elevated recording needs absolute paths, not {str(p)!r}")
     argv = [sys.executable, "-E", "-s", "-m", "lagdoctor", "watch",
@@ -394,6 +396,8 @@ def elevated_argv(args: argparse.Namespace, target: dict[str, Any], cap_path: Pa
         argv += ["--inventory-file", str(inventory_file)]
     if parent_sid:
         argv += ["--parent-sid", parent_sid]
+    if steam_log is not None:
+        argv += ["--steam-log", str(steam_log)]       # "" tells the child there is none (do not look in its HKCU)
     return argv
 
 
@@ -415,7 +419,7 @@ def _watch_elevated(args: argparse.Namespace, target: dict[str, Any], exe: Path 
         # account, whose HKCU and profile are not the user's.
         _write_json(handover, sess._collect_inventory(target))
         argv = elevated_argv(args, target, cap_path, presentmon_exe=exe, inventory_file=handover,
-                             parent_sid=_own_sid())
+                             parent_sid=_own_sid(), steam_log=_own_steam_log())
         say("Opening the recording in a new window (approve the UAC prompt). Come back here when it ends.")
         try:
             child = elevation.launch_elevated(argv, cwd=str(PROJECT_ROOT))
@@ -499,6 +503,17 @@ def _own_sid() -> str | None:
         return None
 
 
+def _own_steam_log() -> str:
+    """This account's Steam download log, read here so an elevated child (perhaps another account) uses it;
+    "" when there is none, so the child does not look in its own HKCU instead."""
+    from lagdoctor.capture import netmon
+    try:
+        found = netmon.find_steam_log()
+    except OSError:
+        found = None
+    return str(found.resolve()) if found is not None else ""
+
+
 def _child_args_problem(args: argparse.Namespace) -> str | None:
     if args.pid is None:
         return "no --pid"
@@ -508,6 +523,15 @@ def _child_args_problem(args: argparse.Namespace) -> str | None:
         value = getattr(args, flag)
         if (flag == "out_file" and value is None) or (value is not None and not Path(value).is_absolute()):
             return f"--{flag.replace('_', '-')} must be an absolute path"
+    steam = getattr(args, "steam_log", None)
+    if steam not in (None, ""):
+        from lagdoctor.capture import netmon
+        try:
+            netmon.given_steam_log(steam)
+        except ValueError:
+            return "--steam-log must be a local file path or empty"
+        if not Path(steam).is_absolute():
+            return "--steam-log must be an absolute path or empty"
     return None
 
 
@@ -708,16 +732,22 @@ def cmd_fix(args: argparse.Namespace) -> int:
                     say("  Skipped.")
                     continue
                 res = fix.apply(plan, journal)
-                say(f"  {'Done' if res.ok else 'Not changed'}: {res.message}")
-                if res.ok and res.state == "applied":
+                if res.ok:
+                    say(f"  Done: {res.message}")
+                elif res.state == "applied":                # in place but not confirmed (e.g. after a restart)
+                    say(f"  Applied, not yet confirmed: {res.message}")
+                else:
+                    say(f"  Not changed: {res.message}")
+                if res.state == "applied" and res.entry_id:
                     say(f"  Undo it any time with: lagdoctor undo {res.entry_id}")
-                elif not res.ok:
+                if not res.ok:
                     status = 1
     except JournalCorrupt as exc:
         parked = getattr(exc, "parked", None)
+        plain = exc.plain() if hasattr(exc, "plain") else ""
         say("Fixes are paused: the fix journal, where lag-doctor records how to undo each change, could not be "
             "read, so no further change was made" + (f". Its contents were copied to {parked}" if parked else "")
-            + f". The journal is {paths.journal_path()}.")
+            + f". The journal is {paths.journal_path()}." + (f" {plain}" if plain else ""))
         return 1
     return status
 

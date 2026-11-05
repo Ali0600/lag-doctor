@@ -528,7 +528,10 @@ def test_a_relative_out_folder_reaches_the_elevated_child_as_an_absolute_path(fa
     assert not (project / "rel").exists()
 
 
-def test_the_parent_hands_the_child_its_presentmon_inventory_and_sid(fake_elevation, tmp_path):
+def test_the_parent_hands_the_child_its_presentmon_inventory_and_sid(fake_elevation, monkeypatch, tmp_path):
+    from lagdoctor.capture import netmon
+    users_log = tmp_path / "Steam" / "logs" / "content_log.txt"
+    monkeypatch.setattr(netmon, "find_steam_log", lambda: users_log)      # read in the user's own HKCU
     seen = {}
 
     def effect(argv, cwd):
@@ -545,6 +548,7 @@ def test_the_parent_hands_the_child_its_presentmon_inventory_and_sid(fake_elevat
     assert seen["inventory"] == {"adapters": [], "who": "the user"}         # read here, in the user's account
     assert argv[argv.index("--parent-sid") + 1] == elevation.token_user_sid()
     assert argv[argv.index("--create-time") + 1] == str(GAME["create_time"])
+    assert argv[argv.index("--steam-log") + 1] == str(users_log.resolve())
     assert seen["lock_free"] is True                       # the parent let go of it before the prompt
 
 
@@ -633,6 +637,48 @@ def test_the_elevated_child_refuses_to_record_another_process(fake_world, tmp_pa
     assert cli.main(argv) == cli.EXIT_TARGET_CHANGED
     assert fake_world["sessions"] == [] and not (tmp_path / "s" / cli.CAPTURE_NAME).exists()
     assert "exited while the UAC prompt was up" in capsys.readouterr().out
+
+
+def test_the_parent_hands_the_child_its_own_steam_log(tmp_path):
+    args = cli.build_parser().parse_args(["watch", "--pid", "4242", "--hotkey", "none"])
+    game = {"pid": 4242, "create_time": 1, "name": "x.exe"}
+    log = tmp_path / "Steam" / "logs" / "content_log.txt"
+    argv = cli.elevated_argv(args, game, tmp_path / "c.gz", steam_log=log)
+    assert argv[argv.index("--steam-log") + 1] == str(log)
+    # "" = this account has none: the child must not go looking in its own (perhaps another account's) HKCU.
+    argv = cli.elevated_argv(args, game, tmp_path / "c.gz", steam_log="")
+    assert argv[argv.index("--steam-log") + 1] == ""
+    assert cli.build_parser().parse_args(argv[5:]).steam_log == ""
+    with pytest.raises(ValueError):
+        cli.elevated_argv(args, game, tmp_path / "c.gz", steam_log=Path("rel") / "content_log.txt")
+
+
+def test_the_elevated_child_uses_the_steam_log_it_was_handed(fake_world, tmp_path):
+    log = tmp_path / "Steam" / "logs" / "content_log.txt"
+    assert cli.main(child_argv(tmp_path, "--steam-log", str(log))) == 0
+    assert fake_world["sessions"][0]["opts"].steam_log == str(log)
+    fake_world["sessions"].clear()
+    assert cli.main(child_argv(tmp_path, "--steam-log", "")) == 0
+    assert fake_world["sessions"][0]["opts"].steam_log == ""
+
+
+def test_the_elevated_child_refuses_a_steam_log_that_is_not_a_local_file(fake_world, tmp_path):
+    for bad in ("rel\\content_log.txt", r"\\server\share\content_log.txt"):
+        assert cli.main(child_argv(tmp_path, "--steam-log", bad)) == cli.EXIT_BAD_ARGS
+    assert fake_world["sessions"] == []
+
+
+def test_a_change_in_place_but_not_confirmed_is_not_called_unchanged(fake_fix, monkeypatch, capsys):
+    from lagdoctor.fixes.base import FixResult
+
+    def stored_for_restart(self, plan, journal):
+        return FixResult(False, "Windows stored 144 Hz for after a restart (lagdoctor undo e1)", "e1", "applied")
+    monkeypatch.setattr(FakeFix, "apply", stored_for_restart)
+    write_last_diagnosis([{"title": "Turn it up", "fix_id": "test_cli_fake", "params": {"name": "a"}}])
+    assert cli.main(["fix", "test_cli_fake", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert "Applied, not yet confirmed: Windows stored 144 Hz" in out and "Not changed" not in out
+    assert "Undo it any time with: lagdoctor undo e1" in out
 
 
 def test_the_elevated_child_needs_its_identity_and_absolute_paths(fake_world, tmp_path):

@@ -143,5 +143,7 @@
    "file": "lagdoctor/capture/session.py",
    "old": "    if not isinstance(target.get(\"name\"), str):",
    "new": "    if False:",
-   "tests": ["tests/test_session.py::test_session_dir_names_a_folder_for_any_target_name"]}
+   "tests": ["tests/test_session.py::test_session_dir_names_a_folder_for_any_target_name"]},
+  {"name": "the Steam log choice never reaches the network sampler", "file": "lagdoctor/capture/session.py", "old": "        out.append(NetworkSampler(server_ip=opts.server_ip, steam_log=opts.steam_log))", "new": "        out.append(NetworkSampler(server_ip=opts.server_ip))", "tests": ["tests/test_session.py::test_the_steam_log_and_its_sources_reach_the_capture"]},
+  {"name": "which download logs were read is dropped", "file": "lagdoctor/capture/session.py", "old": "\"downloads\", \"download_sources\")", "new": "\"downloads\")", "tests": ["tests/test_session.py::test_the_steam_log_and_its_sources_reach_the_capture"]}
 ]
