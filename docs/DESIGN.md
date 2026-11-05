@@ -410,7 +410,8 @@ hitch_rate_bound                           float | None    3/n when zero hitches
 dropped_pct                                float           % of frames never displayed
 bound, bound_r, gpu_busy_pct               str, float, float   verdict; r; 100 x median GPU busy / median frame time
 refresh_hz, present_mode, runtime          float, str, str     the game's display; most common mode and runtime
-swap_chains                                int
+swap_chains, main_chain                    int, str        chains seen; the address the analysis used (the
+                                                           HTML frame chart draws only that chain)
 ping_gw_ms, ping_inet_ms, ping_server_ms   float           medians
 jitter_ms, loss_pct                        float           internet anchor: mean consecutive difference; lost / sent
 ```
@@ -533,6 +534,14 @@ lagdoctor undo [ID | --all]          restore from the journal
 lagdoctor setup                      fetch + verify PresentMon, explain how to get ETW rights
 ```
 
+- Each `watch` writes `capture.ldcap.json.gz`, `diagnosis.json` and `report.html` into a new folder under
+  `paths.sessions_dir()` and remembers it in `last-session.txt`; `fix` reads that diagnosis.
+- The elevated child is `watch --pid PID --capture-only --out-file FILE` (hidden flags): it records into the
+  file the parent chose and exits; it never analyses, fixes or touches the journal.
+- `fix` applies only fixes the last report suggested, with the params it suggested, after showing the plan;
+  it refuses to run elevated. Every command except `setup` first settles journal entries a crash left
+  `pending`, and marks session-only changes whose process has ended as undone.
+
 ## Testing
 
 - **Unit**: pure functions on literal sample points; parsers against fixture text taken from real tool output
@@ -546,4 +555,6 @@ lagdoctor setup                      fetch + verify PresentMon, explain how to g
 - **No handles**: `tests/test_no_handles.py` fails if `psutil.Process`, `process_iter` or `pid_exists` is
   used outside the allow-list, and if `OpenProcess` appears outside `winapi/process.py`.
 - **End to end**: `scripts/e2e.py` runs each LagLab mode with a real capture and judges the diagnosis against
-  LagLab's ground-truth log (`scripts/e2e_truth.py`). It needs ETW rights, so it runs on demand.
+  LagLab's ground-truth log (`scripts/e2e_truth.py`). It needs ETW rights, so it runs on demand: without them
+  it relaunches itself once through a UAC prompt and prints the verdicts back in the original window. The
+  `smooth` run also exercises the real ping and Kernel-Network ETW paths.
