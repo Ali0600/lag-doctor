@@ -1,0 +1,514 @@
+"""Frame analysis: pick the game's main swap chain, summarise its frame times, say what limits them.
+
+Pure functions over a Capture (docs/DESIGN.md, "Analysis"). Every threshold is a module constant that
+names the research note section it comes from: LC = docs/research/lag-causes.md, PM = presentmon.md.
+LC tags these thresholds [inferred]: they are defaults to tune against LagLab, never silently.
+
+A capture can come from disk (`lagdoctor analyze FILE`), so every value read here is checked: a value
+that is not a finite number (or, for text columns, a string) counts as missing.
+"""
+from __future__ import annotations
+
+import bisect
+import heapq
+import math
+from collections import Counter
+from typing import Any, Iterable, Sequence
+
+from lagdoctor.analysis import stats as st
+from lagdoctor.model import F, S, Capture, LagEvent
+
+# ---- frame-time statistics (LC 2.4, 2.5, 2.6) ----------------------------------------------------
+MIN_FRAMES_1PCT = 1_000      # LC 2.6: a P99 or 1%-low figure needs at least 1,000 frames
+MIN_FRAMES_01PCT = 10_000    # LC 2.6: a 0.1%-low figure needs at least 10,000 frames
+RULE_OF_THREE_N = 30         # LC 2.6 (S45): 0 hitches in n > 30 frames -> rate <= 3/n at 95 %
+HITCH_MS = 50.0              # LC 2.4 (S19): a hitch is D >= 50 ms ...
+HITCH_X_BASELINE = 2.0       # LC 2.4: ... and D >= 2 x the trailing median M
+SEVERE_MS = 150.0            # LC 2.4 (S19): severe hitch
+FREEZE_MS = 500.0            # LC 2.4: freeze
+BEYOND_MS = 50.0             # LC 2.4: time beyond 50 ms = sum of (D - 50) over D > 50
+BASELINE_K = 10.0            # LC 2.4 (CapFrameX, S11): M over N = clamp(round(10 * sqrt(median_ms)), 20, 120)
+BASELINE_MIN_FRAMES = 20     # LC 2.4: lower clamp of N
+BASELINE_MAX_FRAMES = 120    # LC 2.4: upper clamp of N
+
+# ---- bound classifier (LC 3.1-3.4) ---------------------------------------------------------------
+R_GPU = 0.90                 # LC 3.1: r = GPU busy / frame time >= 0.90 -> GPU-bound ...
+GPU_GAP_MS = 1.0             # LC 3.1: ... or FT - G <= 1.0 ms
+R_CPU = 0.75                 # LC 3.1: r <= 0.75 -> the CPU or something else; between -> "mixed"
+HAGS_MARGIN_MS = 0.5         # LC 1.1 + 3.1 (S7): GPU busy reads ~0.5 ms high with HAGS on
+THREAD_BOUND = 0.85          # LC 3.2: busiest thread >= 0.85 of a logical CPU -> main-thread bound
+ALL_CORES_BOUND = 0.85       # LC 3.2: game CPU >= 0.85 x logical CPUs -> all-core bound
+THREAD_WINDOW_S = 1.0        # LC 0.5, 3.2 (WT 3.5): judge thread load over windows of >= 1 s
+TICK_PAD_S = 0.25            # one 4 Hz sampler tick (DESIGN, system): ticks this near an event are not steady
+VSYNC_BAND_MS = 0.25         # LC 3.3: a displayed interval is "on" k*P within +-max(0.25 ms, 4 % of P)
+VSYNC_BAND_FRAC = 0.04       # LC 3.3
+VSYNC_SHARE = 0.90           # LC 3.3: >= 90 % of displayed intervals on k*P -> quantised
+CAP_COV = 0.03               # LC 3.3: frame cap = MsBetweenPresents CoV < 3 % ...
+CAP_WINDOW_S = 5.0           # LC 3.3: ... over 5 s ...
+CAP_REFRESH_FRAC = 0.03      # LC 3.3: ... at a value C not within 3 % of k*P
+CAP_WINDOW_MIN_FRAMES = 20   # [inferred] a 5 s window with fewer frames (< 4 FPS) says nothing about a cap
+BOUND_MIN_S = 10.0           # LC 2.6: a bound verdict needs >= 10 s ...
+BOUND_MIN_FRAMES = 300       # LC 2.6: ... and >= 300 app frames of steady state
+ENGINE_GPU_PCT = 95.0        # LC 3.4: frames not measured -> 3D engine >= 95 % = "GPU-limited (probable)"
+CONF_MARGIN = 0.05           # [inferred] a ratio this close to a threshold makes the verdict "medium"
+MAD_TO_SD = 1.4826           # MAD x 1.4826 estimates the standard deviation of normal data
+IQR_TO_SD = 1.349            # the interquartile range of normal data is 1.349 standard deviations
+
+FRAME_EVENT_KINDS = ("stutter", "fps_drop")   # what "steady" excludes (DESIGN, bound)
+
+FRAME_STAT_KEYS = ("frames", "duration_s", "avg_fps", "low1_fps", "low01_fps", "p1_fps", "median_frame_ms",
+                   "p99_frame_ms", "worst_frame_ms", "hitches", "severe_hitches", "freezes", "time_beyond_50_ms",
+                   "hitch_rate_bound", "dropped_pct", "present_mode", "runtime", "frames_source")
+
+_TEXT_COLS = frozenset({F.PRESENT_MODE, F.RUNTIME, F.SWAP_CHAIN, F.FRAME_TYPE})
+
+
+# ---------------------------------------------------------------- value checks ---
+
+def _num(v: Any) -> float | int | None:
+    """A finite number, else None. Bools count as 1/0; strings, NaN and infinities are missing."""
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, int):
+        return v
+    if isinstance(v, float) and math.isfinite(v):
+        return v
+    return None
+
+
+def _pos(v: Any) -> bool:
+    n = _num(v)
+    return n is not None and n > 0
+
+
+def _at(col: Sequence | None, i: int) -> Any:
+    return col[i] if col is not None and 0 <= i < len(col) else None
+
+
+def _clean(name: str, v: Any) -> Any:
+    if name in _TEXT_COLS:
+        return v if isinstance(v, str) else None
+    return _num(v)
+
+
+def _chain_key(v: Any) -> str | None:
+    if isinstance(v, str):
+        return v
+    if isinstance(v, int) and not isinstance(v, bool) and v >= 0:
+        return f"0x{v:X}"      # PresentMon's own spelling (PM 2.1)
+    return None
+
+
+def _col(table: Any, name: str) -> list:
+    if not isinstance(table, dict):
+        return []
+    col = table.get(name)
+    return col if isinstance(col, list) else []
+
+
+def _ceil_div(n: int, d: int) -> int:
+    return -(-n // d)
+
+
+# ------------------------------------------------------------------ main chain ---
+
+def main_chain(cap: Capture) -> dict[str, list]:
+    """F columns of the swap chain with the most displayed frames (PM 8.3, parser rule 6).
+
+    A game can have a few-row `0x0`/`Other` key next to its real chain, so rows are never the measure.
+    Ties go to the chain with more rows, then to the one seen first. Rows are returned in time order
+    with every value checked (junk becomes None).
+    """
+    t = _col(cap.frames, F.T)
+    chains = _col(cap.frames, F.SWAP_CHAIN)
+    shown_col = _col(cap.frames, F.DISPLAYED)
+    rows: dict[str | None, list[int]] = {}
+    shown: dict[str | None, int] = {}
+    for i, ti in enumerate(t):
+        if _num(ti) is None:
+            continue
+        key = _chain_key(_at(chains, i))
+        rows.setdefault(key, []).append(i)
+        if _num(_at(shown_col, i)) == 1:
+            shown[key] = shown.get(key, 0) + 1
+    if not rows:
+        return {c: [] for c in F.ALL}
+    best = max(rows, key=lambda k: (shown.get(k, 0), len(rows[k])))   # max() keeps the first of equals
+    pick = sorted(rows[best], key=lambda i: t[i])
+    out: dict[str, list] = {}
+    for name in F.ALL:
+        col = _col(cap.frames, name)
+        out[name] = [_clean(name, _at(col, i)) for i in pick]
+    return out
+
+
+def display_series(fr: dict[str, list]) -> tuple[list[int], list[float], list[float], str]:
+    """(row indexes, times, frame times D, source) of the series stutters are judged on (LC 2.1, 2.4).
+
+    D = MsBetweenDisplayChange over displayed frames ("display"); when display tracking is missing
+    altogether, MsBetweenPresents over every frame ("present").
+    """
+    t = fr.get(F.T) or []
+    disp = fr.get(F.DISPLAY_MS) or []
+    shown = fr.get(F.DISPLAYED) or []
+    rows = [i for i in range(len(t)) if _num(t[i]) is not None and _pos(_at(disp, i)) and _at(shown, i) != 0]
+    if rows:
+        return rows, [float(t[i]) for i in rows], [float(disp[i]) for i in rows], "display"
+    fm = fr.get(F.FRAME_MS) or []
+    rows = [i for i in range(len(t)) if _num(t[i]) is not None and _pos(_at(fm, i))]
+    return rows, [float(t[i]) for i in rows], [float(fm[i]) for i in rows], "present"
+
+
+def baseline_frames(median_ms: float) -> int:
+    """N, the number of earlier frames the stutter baseline M is the median of (LC 2.4)."""
+    n = round(BASELINE_K * math.sqrt(max(0.0, median_ms)))
+    return int(min(BASELINE_MAX_FRAMES, max(BASELINE_MIN_FRAMES, n)))
+
+
+def _is_app(fr: dict[str, list], i: int) -> bool:
+    ft = _at(fr.get(F.FRAME_TYPE), i)
+    return ft is None or ft == "Application"      # PM 2.1: generated frames name their generator
+
+
+# ------------------------------------------------------------------- statistics ---
+
+def _low_fps(d: list[float], per: int) -> float:
+    """FPS of the mean of exactly ceil(n / per) slowest frames (LC 2.4, 2.5: never 'all frames >= the
+    quantile', which sweeps in every tie). per=100 is the 1% low, per=1000 the 0.1% low."""
+    k = _ceil_div(len(d), per)
+    return 1000.0 / st.mean(heapq.nlargest(k, d))
+
+
+def frame_stats(fr: dict[str, list], duration_s: float) -> dict[str, Any]:
+    """The frame keys of Diagnosis.stats (DESIGN). Missing or None = not measured.
+
+    hitches / severe_hitches / freezes count frames, and the classes nest: a frame is a hitch when
+    D >= 50 ms and D >= 2 M (LC 2.4); a hitch of >= 150 ms is also severe, one of >= 500 ms also a freeze.
+    """
+    out: dict[str, Any] = dict.fromkeys(FRAME_STAT_KEYS)
+    rows, _t, d, source = display_series(fr)
+    n = len(d)
+    out["frames"] = n
+    dur = _num(duration_s)
+    out["duration_s"] = float(dur) if dur is not None and dur >= 0 else None
+
+    shown = [_num(v) for v in fr.get(F.DISPLAYED) or []]
+    known = [v for v in shown if v in (0, 1)]
+    if known:
+        out["dropped_pct"] = 100.0 * sum(1 for v in known if v == 0) / len(known)
+    for key, col in (("present_mode", F.PRESENT_MODE), ("runtime", F.RUNTIME)):
+        vals = Counter(v for v in fr.get(col) or [] if isinstance(v, str))
+        out[key] = vals.most_common(1)[0][0] if vals else None
+    if n == 0:
+        return out
+
+    out["frames_source"] = source
+    med = st.median(d)
+    out["avg_fps"] = st.avg_fps(d)
+    out["median_frame_ms"] = med
+    out["worst_frame_ms"] = max(d)
+    if n >= MIN_FRAMES_1PCT:
+        p99 = st.percentile(d, 99.0)
+        out["p99_frame_ms"] = p99
+        out["p1_fps"] = 1000.0 / p99            # a percentile: labelled separately from the 1% low
+        out["low1_fps"] = _low_fps(d, 100)
+    if n >= MIN_FRAMES_01PCT:
+        out["low01_fps"] = _low_fps(d, 1000)
+
+    m = st.trailing_median(d, baseline_frames(med))
+    hitches = severe = freezes = 0
+    for di, mi in zip(d, m):
+        if mi is None or di < HITCH_MS or di < HITCH_X_BASELINE * mi:
+            continue
+        hitches += 1
+        severe += di >= SEVERE_MS
+        freezes += di >= FREEZE_MS
+    out["hitches"], out["severe_hitches"], out["freezes"] = hitches, severe, freezes
+    out["time_beyond_50_ms"] = math.fsum(di - BEYOND_MS for di in d if di > BEYOND_MS)
+    if hitches == 0 and n > RULE_OF_THREE_N:
+        out["hitch_rate_bound"] = 3.0 / n
+    return out
+
+
+# --------------------------------------------------------------- capture facts ---
+
+def game_display(cap: Capture) -> dict | None:
+    """The display the game is on: by the target's monitor device, else the primary, else the only one."""
+    inv = cap.inventory if isinstance(cap.inventory, dict) else {}
+    displays = [x for x in inv.get("displays") or [] if isinstance(x, dict)]
+    target = cap.target if isinstance(cap.target, dict) else {}
+    game = inv.get("game") if isinstance(inv.get("game"), dict) else {}
+    want = target.get("monitor_device") or game.get("monitor_device")
+    if want:
+        for x in displays:
+            if x.get("device") == want:
+                return x
+    for x in displays:
+        if x.get("primary") is True:
+            return x
+    return displays[0] if len(displays) == 1 else None
+
+
+def refresh_hz(cap: Capture) -> float | None:
+    """The game display's refresh rate from QueryDisplayConfig's rational (LC 3.3), e.g. 144.003."""
+    disp = game_display(cap)
+    hz = _num(disp.get("hz")) if disp else None
+    return float(hz) if hz is not None and 1.0 <= hz <= 1000.0 else None
+
+
+def hags_on(cap: Capture) -> bool | None:
+    """Hardware GPU scheduling for the game's adapter (DESIGN inventory `settings.hags`, else the adapter)."""
+    inv = cap.inventory if isinstance(cap.inventory, dict) else {}
+    settings = inv.get("settings") if isinstance(inv.get("settings"), dict) else {}
+    if isinstance(settings.get("hags"), bool):
+        return settings["hags"]
+    luid = (cap.target or {}).get("adapter_luid") if isinstance(cap.target, dict) else None
+    for a in inv.get("adapters") or []:
+        if isinstance(a, dict) and luid and a.get("luid") == luid and isinstance(a.get("hags"), bool):
+            return a["hags"]
+    return None
+
+
+def _logical_cpus(cap: Capture) -> int | None:
+    inv = cap.inventory if isinstance(cap.inventory, dict) else {}
+    cpu = inv.get("cpu") if isinstance(inv.get("cpu"), dict) else {}
+    n = _num(cpu.get("threads"))
+    return int(n) if n is not None and n >= 1 else None
+
+
+# ------------------------------------------------------------------ time spans ---
+
+def _merged_spans(events: Iterable[LagEvent], kinds: Sequence[str], pad: float = 0.0) -> list[tuple[float, float]]:
+    spans = sorted((float(e.t_start) - pad, float(e.t_end) + pad) for e in events
+                   if e.kind in kinds and _num(e.t_start) is not None and _num(e.t_end) is not None)
+    out: list[tuple[float, float]] = []
+    for a, b in spans:
+        if out and a <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out
+
+
+def _in_spans(x: float, spans: list[tuple[float, float]], starts: list[float]) -> bool:
+    i = bisect.bisect_right(starts, x) - 1
+    return i >= 0 and x <= spans[i][1]
+
+
+def _steady_rows(fr: dict[str, list], spans: list[tuple[float, float]]) -> list[int]:
+    starts = [a for a, _ in spans]
+    t = fr.get(F.T) or []
+    return [i for i in range(len(t)) if _num(t[i]) is not None and _is_app(fr, i)
+            and not _in_spans(float(t[i]), spans, starts)]
+
+
+def _window_means(cap: Capture, column: str, spans: list[tuple[float, float]]) -> list[float]:
+    """Means over 1 s windows of a 4 Hz system column, skipping any window that touches an event."""
+    t, v = _col(cap.system, S.T), _col(cap.system, column)
+    starts = [a for a, _ in spans]
+    bins: dict[int, list[float]] = {}
+    tainted: set[int] = set()
+    for ti, vi in zip(t, v):
+        ti, vi = _num(ti), _num(vi)
+        if ti is None:
+            continue
+        b = int(math.floor(ti / THREAD_WINDOW_S))
+        if _in_spans(float(ti), spans, starts):
+            tainted.add(b)
+        elif vi is not None:
+            bins.setdefault(b, []).append(float(vi))
+    return [math.fsum(xs) / len(xs) for b, xs in bins.items() if b not in tainted and len(xs) >= 3]
+
+
+# ----------------------------------------------------------------- the classifier ---
+
+def _quantised_share(d: list[float], period: float) -> float | None:
+    if not d or period <= 0:
+        return None
+    band = max(VSYNC_BAND_MS, VSYNC_BAND_FRAC * period)
+    on = sum(1 for x in d if round(x / period) >= 1 and abs(x - round(x / period) * period) <= band)
+    return on / len(d)
+
+
+def _near_multiple(x: float, period: float, tol: float) -> bool:
+    k = round(x / period)
+    return k >= 1 and abs(x - k * period) <= tol
+
+
+def _on_refresh_multiple(c: float, period: float) -> bool:
+    """LC 3.3: is the cadence C within 3 % of some k * P?"""
+    k = max(1, round(c / period))
+    return abs(c - k * period) <= CAP_REFRESH_FRAC * k * period
+
+
+def _robust_cov(xs: list[float]) -> float:
+    """LC 3.3's coefficient of variation, estimated as (IQR / 1.349) / median.
+
+    A stray late frame (below the stutter threshold, so still "steady") must not hide a frame cap: one
+    19 ms wake-up in 1,200 frames of LagLab's real cap loop pushed a plain stdev / mean past 3 %. The MAD
+    is no good either: on a two-value cadence (pace mode's 4 / 20 ms) with a one-frame majority it is 0.
+    """
+    med = st.median(xs)
+    if med <= 0:
+        return math.inf
+    return (st.percentile(xs, 75.0) - st.percentile(xs, 25.0)) / IQR_TO_SD / med
+
+
+def _cap_cadence(fr: dict[str, list], rows: list[int]) -> tuple[float | None, float | None]:
+    """(median 5 s-window CoV of MsBetweenPresents, median frame ms C) over the given rows (LC 3.3)."""
+    t, fm = fr.get(F.T) or [], fr.get(F.FRAME_MS) or []
+    windows: dict[int, list[float]] = {}
+    every: list[float] = []
+    for i in rows:
+        if _pos(_at(fm, i)):
+            windows.setdefault(int(math.floor(float(t[i]) / CAP_WINDOW_S)), []).append(float(fm[i]))
+            every.append(float(fm[i]))
+    covs = [_robust_cov(xs) for xs in windows.values() if len(xs) >= CAP_WINDOW_MIN_FRAMES]
+    if not covs or not every:
+        return None, None
+    return st.median(covs), st.median(every)
+
+
+def bound(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent]) -> dict[str, Any]:
+    """What limits the frame rate (LC 3.4, in order), judged on steady frames only.
+
+    Frames inside stutter or FPS-drop events, and sampler ticks within one tick of them, are left out.
+    busiest_thread is a fraction of one logical CPU (0.85 = LC 3.2's main-thread limit); r is
+    (median GPU busy - HAGS margin) / median app frame time.
+    """
+    events = list(events)
+    spans = _merged_spans(events, FRAME_EVENT_KINDS)
+    tick_spans = _merged_spans(events, FRAME_EVENT_KINDS, pad=TICK_PAD_S)
+    return _classify(cap, fr, _steady_rows(fr, spans), tick_spans)
+
+
+def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
+              tick_spans: list[tuple[float, float]]) -> dict[str, Any]:
+    hz = refresh_hz(cap)
+    period = 1000.0 / hz if hz else None
+    notes: list[str] = []
+    out: dict[str, Any] = {"verdict": "unknown", "r": None, "ft_ms": None, "gpu_ms": None, "busiest_thread": None,
+                           "cap_fps": None, "refresh_hz": hz, "vsync": None, "vrr": None, "confidence": "low",
+                           "notes": notes, "gpu_busy_pct": None, "quantised_pct": None, "steady_frames": 0,
+                           "steady_s": 0.0}
+
+    means = _window_means(cap, S.GAME_TOP_THREAD_PCT, tick_spans)
+    busiest = st.median(means) / 100.0 if means else None
+    out["busiest_thread"] = busiest
+    nlp = _logical_cpus(cap)
+    proc_means = _window_means(cap, S.GAME_CPU_PCT, tick_spans)
+    proc_share = st.median(proc_means) / 100.0 / nlp if proc_means and nlp else None
+
+    fm = fr.get(F.FRAME_MS) or []
+    frame_ms = [float(fm[i]) for i in rows if _pos(_at(fm, i))]
+    out["steady_frames"] = len(frame_ms)
+    out["steady_s"] = math.fsum(frame_ms) / 1000.0
+    if len(frame_ms) < BOUND_MIN_FRAMES or out["steady_s"] < BOUND_MIN_S:
+        if frame_ms:
+            notes.append(f"only {len(frame_ms)} steady frames over {out['steady_s']:.1f} s; a verdict needs "
+                         f"{BOUND_MIN_FRAMES} frames and {BOUND_MIN_S:.0f} s")
+        elif fr.get(F.T):
+            notes.append("no steady frames: every frame was inside a lag event")
+        else:
+            notes.append("frame timing not measured")
+        engine = _window_means(cap, S.GAME_GPU_PCT, tick_spans)
+        if engine and st.median(engine) >= ENGINE_GPU_PCT:
+            out["verdict"] = "gpu"
+            notes.append(f"probably GPU-limited: the game kept its GPU engine {st.median(engine):.0f}% busy "
+                         f"(>= {ENGINE_GPU_PCT:.0f}%)")
+        return out
+
+    # FT = median MsBetweenAppStart (= MsCPUBusy + MsCPUWait, PM 2.2), else MsBetweenPresents (PM 3.3)
+    cb, cw = fr.get(F.CPU_BUSY_MS) or [], fr.get(F.CPU_WAIT_MS) or []
+    app_ms = []
+    for i in rows:
+        busy, wait = _num(_at(cb, i)), _num(_at(cw, i))
+        if busy is not None and busy > 0:
+            app_ms.append(float(busy) + float(wait if wait is not None and wait > 0 else 0.0))
+        elif _pos(_at(fm, i)):
+            app_ms.append(float(fm[i]))
+    ft = st.median(app_ms)
+    out["ft_ms"] = ft
+
+    gb_col = fr.get(F.GPU_BUSY_MS) or []
+    gpu_busy = [float(gb_col[i]) for i in rows if _pos(_at(gb_col, i))]
+    hags = hags_on(cap)
+    margin = HAGS_MARGIN_MS if hags else 0.0
+    r = None
+    if len(gpu_busy) * 2 >= len(rows):   # GPU busy prints 0 when unknown (PM 2.3): need it on most frames
+        raw = st.median(gpu_busy)
+        out["gpu_busy_pct"] = 100.0 * raw / ft
+        g = max(0.0, raw - margin)
+        out["gpu_ms"] = g
+        r = g / ft
+        out["r"] = r
+        notes.append(f"GPU busy {g:.1f} ms of a {ft:.1f} ms frame (r = {r:.2f}"
+                     + (f", after the {HAGS_MARGIN_MS} ms HAGS margin)" if margin else ")"))
+        if hags is None:
+            notes.append("hardware GPU scheduling unknown: no HAGS margin taken")
+    else:
+        notes.append("no GPU busy timing for most frames")
+
+    row_set = set(rows)
+    d_rows, _, d_vals, source = display_series(fr)
+    d = [x for i, x in zip(d_rows, d_vals) if i in row_set] if source == "display" else []
+    vsync = False
+    if period and d:
+        q = _quantised_share(d, period)
+        out["quantised_pct"] = 100.0 * q
+        band = max(VSYNC_BAND_MS, VSYNC_BAND_FRAC * period)
+        vsync = q >= VSYNC_SHARE and _near_multiple(ft, period, band)
+        out["vsync"] = vsync
+        out["vrr"] = False if q >= VSYNC_SHARE else _vrr_hint(cap, ft, period)
+        notes.append(f"{100 * q:.0f}% of displayed frames on whole refresh periods ({period:.2f} ms at {hz:.0f} Hz)")
+    elif not period:
+        notes.append("refresh rate of the game's display unknown: VSync not checked")
+
+    cov, c = _cap_cadence(fr, rows)
+    regular = cov is not None and c is not None and cov < CAP_COV
+    if regular and period and _on_refresh_multiple(c, period):
+        regular = False       # a cadence on a refresh multiple is VSync's, not a cap's (LC 3.3)
+    if cov is not None:
+        notes.append(f"present cadence varies {100 * cov:.1f}% around {c:.2f} ms ({1000 / c:.0f} FPS)")
+    if busiest is not None:
+        notes.append(f"busiest game thread {100 * busiest:.0f}% of a CPU (median of 1 s windows)")
+    else:
+        notes.append("game thread load not measured")
+
+    def near(x: float | None, edge: float) -> bool:
+        return x is not None and abs(x - edge) < CONF_MARGIN
+
+    verdict, conf = "unknown", "low"
+    if vsync:
+        verdict, conf = "vsync", "high"
+    elif regular and (r is None or r < R_CPU) and (busiest is None or busiest < THREAD_BOUND):
+        verdict = "capped"
+        out["cap_fps"] = 1000.0 / c
+        conf = "high" if r is not None and busiest is not None and not near(busiest, THREAD_BOUND) else "medium"
+    elif r is None:
+        verdict, conf = "unknown", "low"
+    elif r >= R_GPU or ft - (out["gpu_ms"] or 0.0) <= GPU_GAP_MS:
+        verdict, conf = "gpu", ("medium" if near(r, R_GPU) else "high")
+    elif r <= R_CPU and busiest is not None and busiest >= THREAD_BOUND:
+        verdict, conf = "cpu_main", ("medium" if near(r, R_CPU) or near(busiest, THREAD_BOUND) else "high")
+    elif r <= R_CPU and proc_share is not None and proc_share >= ALL_CORES_BOUND:
+        verdict, conf = "cpu_all", ("medium" if near(r, R_CPU) else "high")
+    elif r <= R_CPU and busiest is None:
+        verdict, conf = "unknown", "low"
+        notes.append("CPU or something else (r <= 0.75), but without thread data CPU cannot be told from waiting")
+    elif r <= R_CPU:
+        verdict, conf = "waiting", ("medium" if near(r, R_CPU) or near(busiest, THREAD_BOUND) else "high")
+    else:
+        verdict, conf = "mixed", "medium"
+    out["verdict"], out["confidence"] = verdict, conf
+    return out
+
+
+def _vrr_hint(cap: Capture, ft: float, period: float) -> bool | None:
+    """VRR shows as continuous displayed intervals below the refresh rate (LC 3.3, PM 8.5). No column
+    reports it and tearing looks the same, so this is True only when Windows' own VRR setting is on."""
+    inv = cap.inventory if isinstance(cap.inventory, dict) else {}
+    settings = inv.get("settings") if isinstance(inv.get("settings"), dict) else {}
+    if settings.get("vrr") is True and ft > period:
+        return True
+    return None
