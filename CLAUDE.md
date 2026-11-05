@@ -31,7 +31,9 @@ uv run python -m lagdoctor ...                           # the tool (see README)
   captures come from the `presentmon_exe` and `gold_etl_dir` fixtures (they skip, with the reason, when
   absent).
 - **Red first.** A new guard ships with a mutation in `tests/redfirst/*.json` that turns its test red;
-  `scripts/redfirst.py` must report every mutation `CAUGHT`. Never weaken a test to make it pass.
+  `scripts/redfirst.py` must report every mutation `CAUGHT`. Never weaken a test to make it pass. The runner
+  mutates a temp copy of the tree, never the working tree; so tests must not read the real repo by an
+  absolute path (reported UNISOLATED) or write into their own tree (stops the run).
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
   a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
 - **Column names come from `lagdoctor/model.py`** (`F`, `S`, `G`, `N`); `SeriesBuilder` rejects unknown names.

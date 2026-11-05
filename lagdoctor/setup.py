@@ -5,11 +5,16 @@ record for v2.6.0 lists the same size and digest):
 - its size is 980,320 bytes and its SHA-256 is the pinned digest of the release asset;
 - WinVerifyTrust accepts its Authenticode signature, with revocation checked against cached data only,
   so verifying never touches the network;
-- the signing certificate's common name is "Intel Corporation".
+- the signing certificate's common name is "Intel Corporation" (an offline PC with no cached revocation
+  data may pass without a revocation answer once the pin matched; an explicit revocation always refuses).
 
 `pinned()` checks the bytes through a handle that refuses writers and deletes, and keeps that handle
-open while the caller launches the exe, so the file cannot be swapped between the check and the run.
-That matters because the elevated capture child runs this exe from a user-writable folder.
+open while the caller launches the exe, so the checked file cannot be rewritten in place between the check
+and the run. What it does not cover: the launch goes by path, so code running as the user could re-point a
+folder junction in that path after the check; and the elevated capture child runs this checkout's own,
+user-writable Python code anyway. The pin guarantees the download is the genuine release; it is not a
+barrier against code already running as the user (UAC is not a security boundary for that; DESIGN.md,
+Privileges and elevation).
 """
 from __future__ import annotations
 

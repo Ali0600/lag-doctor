@@ -65,10 +65,25 @@ verification log; trust a note's *Corrected* entries over its body.
   admin token answers False (PM 6.3, verify log).
 - `lagdoctor watch` without ETW rights asks: relaunch the capture elevated (one UAC prompt), or continue
   without frame timing (frames reported *not measured*). `--elevate` / `--no-elevate` answer it up front.
-  The elevated child runs **only the capture** (`watch ... --capture-only --out <absolute path>`) in its own
-  console window, writes the capture file and exits; the unelevated parent waits, loads it, analyses,
-  reports and offers fixes. So fixes and the journal stay in the user's own context (an over-the-shoulder
-  elevation would otherwise write the admin account's HKCU).
+  The elevated child runs **only the capture** in its own console window, writes the capture file and
+  exits; the unelevated parent waits, loads it, analyses, reports and offers fixes. So fixes and the journal
+  stay in the user's own context.
+- The child is `python -E -s -m lagdoctor watch --pid P --capture-only --create-time T --out-file F
+  --presentmon-exe X --inventory-file I --parent-sid S --steam-log L` (hidden flags; every path absolute).
+  An administrator approving the prompt for a standard user runs the child as *that* account, with its own
+  profile and HKCU, so the parent hands over what it read in the user's own context: the PresentMon it
+  verified (the child verifies it again), the inventory (read before the prompt), the user's Steam log
+  (`""` = none) and its SID (the child notes when its token user differs). The child refuses to record a
+  process whose create time differs (the game exited during the prompt), and the parent refuses to analyse a
+  capture of another process.
+- `-E -s` keep the user's PYTHON* variables and user site-packages out of the elevated interpreter. It still
+  runs the checkout's own code, which the user can write: UAC shows the signed Python launcher, not the code
+  it runs, and is not a security boundary for same-user code (see DECISIONS backlog for elevating only
+  admin-writable code).
+- One recording at a time: whichever process records holds the named mutex `Local\lag-doctor-capture`
+  (`session.CaptureLock`); a second `watch` refuses before starting PresentMon or any ETW session. The parent
+  releases the lock just before the UAC launch, the child takes it, and the parent takes it back if the
+  prompt is declined.
 - `lagdoctor setup` explains the alternative: join Performance Log Users once (an admin command the user
   runs, then sign out and in), after which no prompt is needed. The tool never changes group membership.
 
@@ -126,12 +141,14 @@ class ProcInfo:
 class Snapshotter:                                 # one reusable buffer, grown on 0xC0000004
     def snapshot(self, threads_for: Iterable[int] = ()) -> dict[int, ProcInfo]
 def image_path(pid: int) -> str | None            # SystemProcessIdInformation (88) + QueryDosDeviceW
-def self_check() -> None                          # compare our own process with GetProcessTimes /
+def self_check(snapshotter=None) -> None          # compare our own process with GetProcessTimes /
                                                   # GetProcessIoCounters; raise if the layout drifted
+# CreateTime is raw FILETIME ticks (100 ns since 1601 UTC), the number GetProcessTimes returns.
 
 # winapi/windows.py (no process handles) ---------------------------------------------------------------
 def top_windows() -> list[dict]   # visible, uncloaked top-level windows:
-                                  # {hwnd, pid, title, area, minimized, monitor_device}
+                                  # {hwnd, pid, title, cls, area, minimized, monitor_device}
+                                  # (cls lets target.py skip console windows, which name their client's PID)
 def foreground_pid() -> int | None
 def window_monitor(hwnd: int) -> str | None       # "\\.\DISPLAY1" via MonitorFromWindow + GetMonitorInfoW
 
@@ -139,14 +156,18 @@ def window_monitor(hwnd: int) -> str | None       # "\\.\DISPLAY1" via MonitorFr
 def list_adapters() -> list[dict]
 # {luid: "0xHHHHHHHH_0xLLLLLLLL" (lower-case, PDH's order: HighPart then LowPart), name, vendor:
 #  "nvidia"|"amd"|"intel"|"microsoft"|"other", vendor_id, vram_mb, integrated: bool|None (DXCore),
-#  software: bool, hags: bool|None (D3DKMT HwSchEnabled), hybrid: "discrete"|"integrated"|None, pci: str|None}
+#  software: bool, hags: bool|None (D3DKMT HwSchEnabled), hybrid: "discrete"|"integrated"|None,
+#  pci: "BB:DD.F" upper-case hex or None (D3DKMT gives no domain; match NVML by its bus id's tail)}
+# PDH spells LUIDs in upper case: compare through inventory.norm_luid.
 
 # winapi/display.py (WT 6; LC 9) -------------------------------------------------------------------------
 def list_displays() -> list[dict]
 # {device: "\\.\DISPLAY1", name, adapter_luid, internal: bool|None, primary: bool, width, height,
 #  hz: float (QueryDisplayConfig rational, e.g. 144.003), max_hz: int (best at this resolution),
 #  modes_hz: list[int] (offered at this resolution)}
-def current_mode(device: str) -> dict             # {width, height, hz: int} from EnumDisplaySettingsW
+def current_mode(device: str) -> dict             # {width, height, hz: int|None} (None = "hardware default")
+def stored_mode(device: str) -> dict | None       # the profile's mode (ENUM_REGISTRY_SETTINGS)
+def monitor_path(device: str) -> str | None       # the monitor's stable identity (QDC monitorDevicePath)
 def set_refresh(device: str, hz: int, test_only: bool) -> int   # DISP_CHANGE_* code; CDS_TEST or CDS_UPDATEREGISTRY
 
 # winapi/power.py (WT 7) --------------------------------------------------------------------------------
@@ -154,6 +175,7 @@ def active_scheme() -> tuple[str, str]            # (guid, friendly name)
 def list_schemes() -> list[tuple[str, str]]
 def set_active_scheme(guid: str) -> None
 def power_status() -> dict                        # {on_battery: bool|None, battery_pct: int|None, saver: bool|None}
+def battery_present() -> bool | None              # inventory.laptop
 def slider_mode(on_ac: bool) -> str | None        # "best_efficiency"|"balanced"|"best_performance"|None
 def effective_mode(timeout_s: float = 1.0) -> str | None
 # EFFECTIVE_POWER_MODE V2, hard-coded 0..6: "battery_saver","better_battery","balanced",
@@ -166,53 +188,81 @@ def free_gb(path: str) -> float | None
 # winapi/nvml.py (WT 4.4, 4.5) -------------------------------------------------------------------------
 class Nvml:
     @classmethod
-    def open(cls) -> "Nvml | None"                # None when nvml.dll is missing or init fails
+    def open(cls) -> "Nvml | None"                # None when nvml.dll is missing or init fails (why: last_open_error)
     def devices(self) -> list[dict]               # {index, name, pci_bus_id, mem_total_mb, clock_max_mhz, temp_target_c}
     def sample(self, index: int) -> dict          # {util_pct, mem_used_mb, temp_c, power_w, power_limit_w,
                                                   #  clock_mhz, pstate, reasons: int, throttle_ns: {reason: cumulative ns}}
+    def refresh_mark(self, index: int)            # ~10 us fingerprint of the values the driver refreshes together
     def close(self) -> None
+# nvml.dll and nvidia-smi.exe load from GetSystemDirectoryW() by absolute path. Failures raise NvmlError
+# (an OSError) carrying the NVML return code in .code; .winerror is None.
 
 # winapi/icmp.py (NE 1) ---------------------------------------------------------------------------------
 def ping(ip: str, timeout_ms: int = 1000, ttl: int = 128) -> tuple[int, float | None, str | None]
 # (ICMP status, RTT in ms timed with perf_counter around the call, replying address); IPv4 and IPv6;
-# success means status == 0, never just a non-zero return value
+# success means status == 0, never just a non-zero return value; network outcomes come back as the status
+# with RTT None; ValueError for an unspecified, multicast or broadcast target. Pinger reuses handles and
+# buffers per worker; self_check(4|6) proves the reply layout on loopback.
 
 # winapi/iphlp.py (NE 1.5) -----------------------------------------------------------------------------
 def best_route(dest_ip: str) -> dict | None       # {if_index, next_hop, source}; GetBestRoute2
-def if_row(if_index: int) -> dict                 # {in_octets, out_octets, type, description, oper_status, tunnel}
-def default_gateway() -> str | None
+def if_row(if_index: int) -> dict                 # {in_octets, out_octets, type, description, oper_status, tunnel,
+                                                  #  alias, guid, media_type, physical_medium, hardware,
+                                                  #  tx_link_bps, rx_link_bps}
+def default_gateway() -> str | None               # next hop toward 1.1.1.1; a tunnel route falls back to the
+                                                  # physical /0 route
 
 # winapi/wlan.py (NE 3) ---------------------------------------------------------------------------------
 class Wlan:
     @classmethod
-    def open(cls) -> "Wlan | None"
+    def open(cls) -> "Wlan | None"                # why it failed: open_error
     def interfaces(self) -> list[dict]            # {guid, description, connected}
-    def quality(self, guid: str) -> dict | None   # opcode 19: {rssi_dbm, signal_pct, rx_mbps, tx_mbps, freq_mhz, channel, phy}
+    def quality(self, guid: str) -> dict | None   # opcode 19: {rssi_dbm, signal_pct, rx_mbps, tx_mbps, freq_mhz,
+                                                  #  channel, phy (a name such as "802.11ac")}
     def retries(self, guid: str) -> int | None    # driver statistics, cumulative
-    def bssid(self, guid: str) -> str | None      # None when location permission is off (error 5)
-    def on_scan_complete(self, callback) -> None  # ACM notification 7; callback runs on a foreign thread
+    def bssid(self, guid: str) -> str | None      # queried only when location consent already says Allow
+    def on_scan_complete(self, callback) -> None  # ACM notification 7: callback(t, guid), t on the raw shared
+                                                  # clock, called on a foreign thread
     def close(self) -> None
 
 # winapi/etw.py (NE 5) ----------------------------------------------------------------------------------
 def stop_session(name: str) -> int                # ControlTraceW STOP by name; 0 stopped, 4201 none
+def query_session(name: str) -> int
 class RealtimeSession:                            # controller + consumer thread, one named session
     def __init__(self, name, providers: list[tuple[str, int, int]], on_event, private: bool = False)
     def start(self) -> None                       # stops an orphan of the same name first
     def stop(self) -> None
-    def health(self) -> dict                      # {events, lost, callback_errors, pump_alive, process_trace_rc}
+    def health(self) -> dict                      # {events, lost, callback_errors, pump_alive, process_trace_rc, ...}
+# on_event gets EtwEvent(timestamp, provider, id, version, opcode, level, task, keyword, process_id, thread_id,
+# data); timestamps are raw QPC ticks (ClientContext 1 + PROCESS_TRACE_MODE_RAW_TIMESTAMP), on the capture
+# clock. private=True (tests, self-tests) logs to a temp .etl and delivers everything inside stop(): private
+# sessions cannot be real time and are invisible to QUERY/STOP by name. Provider wraps EventRegister/EventWrite.
 
 # winapi/elevation.py (PM 6) ----------------------------------------------------------------------------
 def is_elevated() -> bool
 def in_performance_log_users() -> bool
 def can_trace() -> bool
-def relaunch_elevated(argv: list[str], cwd: str) -> int   # ShellExecuteExW "runas", new console, waits;
-                                                          # raises PermissionError when the user declines (1223)
+def token_user_sid() -> str
+def launch_elevated(argv: list[str], cwd: str) -> ElevatedChild   # ShellExecuteExW "runas", new console;
+                                                                  # PermissionError when declined (1223);
+                                                                  # ValueError for a relative program or folder
+class ElevatedChild:
+    def wait(self, timeout_s: float | None = None) -> int | None  # exit code; a Ctrl+C leaves the child running
+    def close(self) -> None
+def relaunch_elevated(argv: list[str], cwd: str) -> int   # launch + wait + close (scripts/e2e.py)
+def hold_named_mutex(name: str)                   # handle, or None when another process holds it
+def release_named_mutex(handle) -> None
 
 # winapi/process.py (WT 9) ------------------------------------------------------------------------------
-def priority_class(pid: int) -> int               # GetPriorityClass via PROCESS_QUERY_LIMITED_INFORMATION
-def set_priority_class(pid: int, cls: int) -> None  # PROCESS_SET_INFORMATION; verify with priority_class()
-def same_user(pid: int) -> bool                   # token user SID equals ours
-def is_service_or_protected(pid: int) -> bool     # session 0, a service PID, or OpenProcess denied
+# Every call takes an optional create_time; when given, identity is checked WITHOUT a handle (an
+# NtQuerySystemInformation snapshot) before OpenProcess, and again on the handle (ProcessGone otherwise).
+def priority_class(pid: int, *, create_time=None) -> int     # GetPriorityClass via PROCESS_QUERY_LIMITED_INFORMATION
+def set_priority_class(pid: int, cls: int, *, create_time=None) -> None  # read back: PriorityNotApplied if it differs
+def same_user(pid: int, *, create_time=None) -> bool          # token user SID equals ours
+def is_service_or_protected(pid: int, *, create_time=None) -> bool   # a service PID, session 0, or access refused
+def is_running(pid: int, create_time: int) -> bool            # handle-free
+def running_name(pid: int, create_time: int) -> str | None    # handle-free image name
+def creation_time(pid: int) -> int; user_sid(pid) -> str; session_id(pid) -> int; service_pids() -> dict[int, list[str]]
 ```
 
 ## Collector contract
@@ -246,14 +296,16 @@ The session copies these into the `Capture`. Keys not listed here go nowhere, so
 
 | collector (`name`), module, class | `result()` keys → Capture field |
 |---|---|
-| `frames`, capture/presentmon.py, `PresentMonSource(pid, exe=None, etl_file=None)` | `columns` (F, every swap chain of the target) → `frames`; `swap_chains` `{"0x…": {"frames", "displayed", "runtime"}}`, `main_chain` (most displayed frames), `presentmon` `{version, exe, args, exit_code, stop_path, rows, malformed, rejoined, headers, stderr_tail}` → `target["presentmon"]` |
-| `system`, capture/sysmon.py, `SystemSampler(target)` | `columns` (S) → `system`; `others` → `others`; `game_adapter_luid` (adapter whose 3D engine the game used most) → `target["adapter_luid"]`; `game_pids` (game + children seen) → `target["pids"]` |
-| `gpu`, capture/gpumon.py, `NvidiaSampler(adapter)` | `columns` (G) → `gpu`; `device` `{name, clock_max_mhz, mem_total_mb, temp_target_c}` → `inventory["nvidia"]` |
-| `network`, capture/netmon.py, `NetworkSampler(server_ip=None)` | `columns` (N) → `network`; `targets` `{gateway, internet, server}` (IPs or None), `probes` `{target: {"sent", "lost", "from_t"}}`, `lost` `{target: [t, …]}`, `wifi_scans` `[t, …]`, `route` `{if_index, description, vpn: bool}` → `net_flows[…]` under the same keys; `interface` `{name, kind: "wifi"/"ethernet"/"other", band, channel}` → `inventory["network"]`; `downloads` `[{t, source, mbps}]` (Steam log, Delivery Optimization) → `net_flows["downloads"]` |
-| `net_flows`, capture/netflows.py, `FlowTracker(game_pids)` | `server` `{ip, port, proto, rx_packets, tx_packets, rx_bytes, tx_bytes, tick_ms}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8; `gaps` `[[t, ms, kind], …]` (kind: "delay" burst after the gap / "loss" no burst / "local" our own tx paused too); `server_rx` `[[t, pps], …]` at 1 Hz; `layout` "verified"/"unverified"; `health` → `net_flows[…]` |
+| `frames`, capture/presentmon.py, `PresentMonSource(pid, exe=None, etl_file=None, *, is_alive=None)` | `columns` (F, every swap chain of the target) → `frames`; `swap_chains` `{"0x…": {"frames", "displayed", "runtime"}}` (an unfiltered replay keys them `"<pid>:0x…"`), `main_chain` (most displayed frames), `presentmon` `{version, exe, args, exit_code, stop_path, rows, malformed, rejoined, headers, stderr_tail}` → `target["presentmon"]`; `live()` = `{frames, fps, malformed}` |
+| `system`, capture/sysmon.py, `SystemSampler(target)` | `columns` (S) → `system`; `others` → `others`; `game_adapter_luid` (adapter whose 3D engine the game used most) → `target["adapter_luid"]`; `game_pids` (game + children seen) → `target["pids"]`; `cost` `{ticks, median_ms, max_ms, mean_ms}` (also in the status detail) |
+| `gpu`, capture/gpumon.py, `NvidiaSampler(adapter)` | `columns` (G) → `gpu`; `device` `{name, clock_max_mhz, mem_total_mb, temp_target_c}` or None → `inventory["nvidia"]`; `live()` adds `source` ("nvml"/"nvidia-smi") |
+| `network`, capture/netmon.py, `NetworkSampler(server_ip=None, *, steam_log=None)` | `columns` (N) → `network`; `targets` `{gateway, internet, server}` (IPs or None), `probes` `{target: {"sent", "lost", "from_t"}}`, `lost` `{target: [t, …]}`, `wifi_scans` `[t, …]`, `route` `{if_index, description, vpn: bool \| None, toward}` → `net_flows[…]` under the same keys; `interface` `{name, kind: "wifi"/"ethernet"/"other", band, channel}` → `inventory["network"]`; `downloads` `[{t, source, mbps}]` from the Steam log, or None when no download log was read, with `download_sources` (the logs read) → `net_flows[…]` |
+| `net_flows`, capture/netflows.py, `FlowTracker(game_pids or a callable)` | `server` `{ip, port, proto, pid, rx_packets, tx_packets, rx_bytes, tx_bytes, tick_ms, first_rx_t, last_rx_t}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8; `gaps` `[[t, ms, kind], …]` (t = the last packet before the silence; kind: "delay" burst after the gap / "loss" no burst / "local" our own tx paused too / "open" the server went silent for good while we kept sending / "unknown" a late delivery hides which); `server_rx` `[[t, pps], …]` (t = end of each 1 s bin); talkers, gaps and server_rx are None when the session never ran; `layout` "verified"/"unverified"; `health` → `net_flows[…]` |
 
-`others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct], …]]`, top 8 non-game processes by CPU at that
-tick, `cpu_pct` with 100 = one logical CPU, `gpu_pct` their busiest engine on any adapter.
+`others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct, create_time], …]]`: up to 8 non-game processes
+that did something that tick, ranked by CPU, `cpu_pct` with 100 = one logical CPU, `io_bps` read + write
+bytes, `gpu_pct` their busiest engine on any adapter, `create_time` raw FILETIME ticks (so a fix can prove a
+PID was not reused). lag-doctor's own process is included: its load is real.
 
 ### Collector specifics
 
@@ -269,23 +321,30 @@ because `0` or junk means *every process*):
   `MsAnimationError`→`anim_error_ms`, `PresentMode`, `PresentRuntime`, `SyncInterval`, `AllowsTearing`,
   `SwapChainAddress` (as `"0x…"` text), `FrameType`, `HybridPresent`. `displayed` = 0 when `MsUntilDisplayed`
   is NA, else 1. Store `None` for NA, and for the zeros PresentMon writes in place of missing values
-  (`MsCPUBusy`, `MsBetweenAppStart`; `MsGPUBusy` and all CPU columns on frames whose `FrameType` is not
-  `Application`).
+  (`MsCPUBusy`, `MsCPUWait`, `MsBetweenAppStart`; `MsGPUBusy` and all CPU columns on frames whose `FrameType`
+  is not `Application`).
+- Only the pinned 2.6.0 bytes ever run: before every launch (the clean-up helper too) the exe's SHA-256 is
+  checked through a handle that refuses writers, held until the process has started.
 - Stop (PM 7.4): `CTRL_BREAK_EVENT` to the `CREATE_NEW_PROCESS_GROUP` child when we share a console; else, or
   if it has not exited in 10 s, a second PresentMon `--terminate_existing_session --session_name lagdoctor`
   (exit 0 stopped, 7 none); only then `kill()` plus the same cleanup. Never `terminate()` first: it leaks the
   ETW session. Keep draining both pipes until EOF.
 - Start failure: exit code 6 is ambiguous (PM verify log); classify by stderr text ("access denied" →
-  `unavailable` "needs admin rights or Performance Log Users"; "already exists" → retry once after
-  `--terminate_existing_session`).
+  `unavailable` "needs admin rights or Performance Log Users"; "already running" / "error code 183" → retry
+  once after `--terminate_existing_session`). A crash exit (outside 0–7) gets the same session clean-up as a
+  kill.
 - Watch the game ourselves (`target.is_alive`), because `--terminate_on_proc_exit` cannot fire if anti-cheat
-  strips PresentMon's handle (PM 8.1).
+  strips PresentMon's handle (PM 8.1). PresentMon ending by itself with exit 0 while the game still runs
+  (its session was stopped from outside) makes the source `partial`, with the time frames stopped.
 - `etl_file=` runs `--etl_file <path>` instead of `--process_id` (no rights needed): used by tests against
   the gold captures in PresentMon's repo.
 
-**system (WT 11).** One sampler thread at 4 Hz:
-- One `PdhQuery` with exactly the WT 11.1 counter list. Never `% Processor Time`, `% Idle Time`, `\Process(*)`,
-  `\Thread(*)`, `\System\*` or `\Network Interface(*)` (WT 11.3).
+**system (WT 11).** One sampler thread at 4 Hz (the first tick is a baseline, so rows start about 0.25 s in;
+about 16 ms and 5–6 % of one CPU per tick here):
+- One `PdhQuery` with the WT 11.1 counter list plus `\GPU Process Memory(*)\Shared Usage` and
+  `\PhysicalDisk(*)\Current Disk Queue Length`, which S needs. Never `% Processor Time`, `% Idle Time`,
+  `\Process(*)`, `\Thread(*)`, `\System\*` or `\Network Interface(*)` (WT 11.3). Items with CStatus NEW_DATA
+  count as valid.
 - One `Snapshotter.snapshot(threads_for={game pid})` per tick. Per-process and per-thread CPU are the delta
   over the last tick (about 250 ms), stored sharp so a 150 ms hitch shows in the tick that holds it; clamp each
   thread to 100; key by (id, CreateTime). Thread times move in 15.625 ms steps (WT 3.5), so the analysis judges
@@ -302,10 +361,14 @@ because `0` or junk means *every process*):
   it, `create_time` checked so a reused PID never joins.
 
 **gpu (WT 4.4).** NVML via ctypes at 1 Hz, started only when the game's adapter is the NVIDIA GPU or still
-unknown (do not wake a sleeping dGPU, WT 11.5.7). `nv_throttle_pct` = Δ(cumulative throttle ns of the thermal
-and power reasons) / Δt; `nv_reasons` names the active reason bits. Fallback when NVML is unavailable:
-`nvidia-smi --query-gpu=… -lms 1000` streaming (never one-shot calls); `status` says which ran.
-`nvmlDeviceGetDisplayActive` stays out of the loop.
+unknown (do not wake a sleeping dGPU, WT 11.5.7). NVML refreshes its values together every ~500 ms, so each row
+is read just after a refresh (a rate between free-running reads is quantised). `nv_throttle_pct` =
+Δ(cumulative sw_thermal + hw_thermal + hw_power_brake ns) / Δt, and `nv_power_cap_pct` the same for
+sw_power_cap, which during GPU-bound play is the design limit, not throttling (LC 4.1, 4.2); a share over an
+unaligned read is None. `nv_reasons` names the active reason bits; `nv_power_w` at or below 1 W is None.
+Fallback when NVML is unavailable: `nvidia-smi --query-gpu=… -lms 1000` streaming (never one-shot calls), in a
+kill-on-close job so it dies with lag-doctor; `status` says which ran. `nvmlDeviceGetDisplayActive` stays out
+of the loop.
 
 **network (NE 1–3, 8).** One row per 0.5 s probe round: the gateway, the internet anchor (`1.1.1.1`,
 configurable) and the game server (once `net_flows` reports one, or `--server`) are each pinged once per
@@ -314,19 +377,43 @@ next round). RTT `None` = no reply within 1000 ms; `probes`/`lost` count them, `
 target began, so "not probed" never reads as "lost". Wi-Fi quality, retries and channel and the NIC octets
 (`GetIfEntry2`) are read every round; `best_route` every 5 s (a VPN egress is reported); ACM
 `scan_complete` notifications are timestamped into `wifi_scans`. Steam `logs\content_log.txt` is tailed
-for "Current download rate" lines. Location-gated calls are never made; BSSID stays `None` unless the
-OS already allows it.
+for "Current download rate" lines (each placed at its own time stamp); `steam_log=` overrides where that log
+is (the elevated child gets the user's). Delivery Optimization is not read (it would mean a PowerShell spawn
+during play). Location-gated calls are never made: the BSSID column holds per-session labels ("AP 1"), never
+a MAC address, and only when the OS already allows location. `nic_rx_bps`/`nic_tx_bps` are bytes per second.
 
 **net_flows (NE 4, 5).** One real-time session `lag-doctor-net` with Microsoft-Windows-Kernel-Network
 (IPv4 + IPv6 keywords, level 4); orphan stopped by name at every start and in `finally`. Filter by the
 payload PID (a PID scope filter does not work for kernel providers, NE 4.5), compute inter-arrival from
 `EventHeader.TimeStamp` with a 2 s reorder buffer, classify the remote end against the local address set,
-and pick the server flow and gaps per NE 4.6. Until an elevated self-test (one UDP DNS query, one TCP connect)
-proves which field is the remote address, `layout` is "unverified" and the report says so.
+and pick the server flow and gaps per NE 4.6. Until an elevated self-test (one UDP and one TCP DNS query for
+example.com to 1.1.1.1:53, sent once when the real session starts) proves which field is the remote address,
+`layout` is "unverified" and the report says so.
+- Only UDP flows of the game's PIDs are timed; TCP counts toward per-process bytes, retransmits to health.
+- Gap kinds when several apply: local over delay over loss (local = our own send silence covers at least
+  half of the receive gap). A packet delivered later than the reorder window cannot make a phantom gap: a gap
+  whose span holds one is left out (and counted), and the status turns partial. A consumer that died before
+  `stop()` keeps the final status partial, with when (`health.consumer_stopped_t`).
+- At the end, a server whose last packet is older than its gap threshold while our own packets went on for at
+  least 1 s more gets an "open" gap: the connection was lost. If our sending stopped too, the game left the
+  match (no gap).
+
+## The capture file (model.py)
+
+`Capture.save` writes gzip-compressed JSON atomically (temp file + replace; a failed save leaves no temp
+file). `Capture.load` checks the gzip magic, decompresses at most 2 GiB, and raises `CaptureError` (a
+ValueError) with `.kind` = "foreign" (another schema family), "newer" (`lagdoctor.capture/N` above 1),
+"damaged" or "too_large". Unknown keys from a newer build are dropped with a note in `capture.notes`, so an
+older lag-doctor can still read a newer capture of the same format.
 
 ## Inventory keys (capture/inventory.py)
 
-`collect(target: dict | None) -> dict`. `None` means unknown. Rules and the report read exactly these keys.
+`collect(target=None, process_names=None, *, registry=None) -> dict`. `None` means unknown. Rules and the
+report read exactly these keys, plus `errors` `{section: reason}` for each section that could not be read
+(the session copies them into the capture's notes). `process_names` are the running image names from the
+session's snapshot (for `oem.tools`; None without them). `registry` lets tests point every read at the sandbox.
+`settings.game_mode` is True when AutoGameModeEnabled is absent (the Windows default, WT 8);
+`background_recording` is None when HistoricalCaptureEnabled is absent.
 
 ```
 os        {name, build}                                  e.g. {"name": "Windows 11 Home", "build": 26200}
@@ -354,14 +441,19 @@ def find_target(name: str | None = None, pid: int | None = None, auto: bool = Fa
                 sample_s: float = 2.0) -> dict
 # {pid, create_time, name, exe, window_title, monitor_device, adapter_luid, how: "pid"|"name"|"auto",
 #  candidates: [{pid, name, gpu_pct, has_window}]}; raises TargetNotFound with the reason
-def is_alive(pid: int, create_time: int) -> bool        # NtQuerySystemInformation snapshot, no handle
+def is_alive(pid: int, create_time: int) -> bool        # NtQuerySystemInformation snapshot, no handle;
+                                                        # OSError when Windows cannot say (the session then
+                                                        # keeps recording and asks again a second later)
 def game_pids(pid: int, create_time: int) -> set[int]   # the target and its descendants
 ```
-- by `pid`; by exe `name` (case-insensitive; several matches → the one with the most 3D-engine use);
+- by `pid`; by exe `name` (case-insensitive; several matches → the one with the most 3D-engine use); PID 4 and
+  lag-doctor's own process are refused, and name/auto modes skip lag-doctor and its ancestors;
 - `auto`: highest 3D-engine use over a `sample_s` PDH sample among processes that own a visible,
-  uncloaked top-level window and are not on the ignore list (dwm, explorer, browsers, steamwebhelper,
-  Discord, OBS, the tool itself, …). A busy 3D engine alone is not a game: CUDA compute shows as
-  `engtype_3D` (WT verify log). Ties go to the foreground window's process.
+  uncloaked top-level window of non-zero area (console windows do not count: they name their client's PID)
+  and are not on the ignore list (shell, terminals, browsers and web views, launchers, chat, capture and
+  overlay tools, OEM utilities, the tool itself; python.exe stays allowed, LagLab is one). It needs at least
+  2 % mean 3D use, and candidates within 1 point are tied (both inferred). A busy 3D engine alone is not a
+  game: CUDA compute shows as `engtype_3D` (WT verify log). Ties go to the foreground window's process.
 
 ## Analysis
 
@@ -495,18 +587,28 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 | fix id | params | what it changes | readback | needs restart |
 |---|---|---|---|---|
 | `power_plan` | `{"scheme": guid}` | active power scheme (`PowerSetActiveScheme`, allowed for standard users, WT 7.5) | `active_scheme()` | no |
-| `refresh_rate` | `{"device": "\\.\DISPLAY1", "hz": int}` | display refresh at the current resolution: `CDS_TEST` first, then `CDS_UPDATEREGISTRY` | `current_mode()` and `list_displays()` hz | no |
+| `refresh_rate` | `{"device": "\\.\DISPLAY1", "hz": int}` (plan() adds `monitor`, the monitor's stable path) | display refresh at the current resolution: `CDS_TEST` first, then `CDS_UPDATEREGISTRY`; journals `{width, height, hz}` | `current_mode()`, `list_displays()` hz, and the stored mode equal to the screen | no |
 | `gpu_preference` | `{"exe": path, "preference": 2}` | `HKCU\Software\Microsoft\DirectX\UserGpuPreferences\<exe>` field `GpuPreference=N;`, other fields kept | registry, then the game's LUID next run | game |
 | `game_dvr_off` | `{}` | `HKCU\System\GameConfigStore\GameDVR_Enabled` = 0 and `HKCU\…\GameDVR\HistoricalCaptureEnabled` = 0 | registry | game |
 | `game_mode_on` | `{}` | `HKCU\Software\Microsoft\GameBar\AutoGameModeEnabled` = 1 | registry; `effective_mode()` = game_mode while playing | no |
 | `windowed_optimizations_on` | `{}` | `DirectXUserGlobalSettings` field `SwapEffectUpgradeEnable=1;`, other fields kept | registry | game |
-| `background_priority` | `{"pid": int, "create_time": int, "class": "below_normal"}` | priority class of one of the user's own non-game processes, for this session only | `priority_class()` | no |
+| `background_priority` | `{"pid": int, "create_time": int, "class": "below_normal", "exclude": [pids], "name": str, "game_name": str \| None}` | priority class of one of the user's own non-game processes, for this session only | `priority_class()` | no |
 
 - Registry value semantics marked *unverified* in WT 8 are community-sourced; each such fix says so in its
-  description.
-- `background_priority` refuses the game and its children, services, protected processes and other users'
-  processes; undo restores the journaled class if the same (pid, create_time) still runs, else the entry is
-  `gone`.
+  description and plan notes. The string-field fixes journal and restore only their own `key=value;` field.
+  `game_mode_on` writes 1 even when the value is absent (absent reportedly means on, unverified).
+- `background_priority` refuses the game and its children (`exclude`, required and non-empty), a process whose
+  image name is the game's (`game_name`), a live (pid, create_time) whose image name is not `name` (checked
+  without a handle), services, protected processes and other users' processes; `class` is `below_normal` or
+  `idle`. Undo restores the journaled class if the same (pid, create_time) still runs; a session-only change
+  whose process has ended is settled as undone.
+- A change that is not session-only and whose subject is gone at undo (an unplugged display) is left in the
+  journal, `applied`, with "left alone; run undo again when it is connected" (ok False). A refresh rate that
+  Windows stored for after a restart (`DISP_CHANGE_RESTART`) is put back in the profile and confirmed, or the
+  entry stays `applied` so undo can act. `conflict` entries (neither the original nor lag-doctor's value) are
+  listed by `undo` and restored only with `--force`, with a readback.
+- The journal keeps unknown entry keys in `extra` (a newer build's fields survive); an unreadable journal is
+  copied aside once and fixes pause with a plain message.
 - Advice only (never automated): hardware GPU scheduling, Memory Integrity / VBS (information only), the MUX
   / "Ultimate" GPU mode and the OEM fan/power mode (Armoury Crate), drivers, in-game settings, frame caps,
   cooling, Wi-Fi band and placement, pausing downloads, closing apps, the Wi-Fi background-scan setting.
@@ -526,7 +628,7 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 
 ```
 lagdoctor watch [--game NAME | --pid PID | --auto] [--duration S] [--server IP] [--no-network]
-                [--elevate | --no-elevate] [--out DIR] [--hotkey KEY]
+                [--elevate | --no-elevate] [--out DIR] [--hotkey KEY | --hotkey none]
 lagdoctor analyze CAPTURE            re-run the analysis on a saved capture
 lagdoctor check                      settings check-up without a game running
 lagdoctor fix [ID ...] [--list]      apply fixes suggested by the last report (asks first)
@@ -535,12 +637,25 @@ lagdoctor setup                      fetch + verify PresentMon, explain how to g
 ```
 
 - Each `watch` writes `capture.ldcap.json.gz`, `diagnosis.json` and `report.html` into a new folder under
-  `paths.sessions_dir()` and remembers it in `last-session.txt`; `fix` reads that diagnosis.
-- The elevated child is `watch --pid PID --capture-only --out-file FILE` (hidden flags): it records into the
-  file the parent chose and exits; it never analyses, fixes or touches the journal.
-- `fix` applies only fixes the last report suggested, with the params it suggested, after showing the plan;
-  it refuses to run elevated. Every command except `setup` first settles journal entries a crash left
-  `pending`, and marks session-only changes whose process has ended as undone.
+  `paths.sessions_dir()` and remembers it (absolute) in `last-session.txt`; `check` writes its diagnosis into a
+  `<stamp>-check-up` folder and remembers it in `last-checkup.txt`. `fix` offers what the last watch and the
+  last check-up suggested, newest report per fix id, saying where each offer comes from; a remembered folder
+  that is gone is reported, never replaced by another session's.
+- `analyze` writes into a fresh session folder (with `analyzed-capture.txt` naming its source), never beside
+  the capture, and never changes what `fix` uses. A damaged, foreign or newer-format file gets one plain line.
+- The elevated child (see Privileges and elevation) records into the file the parent chose and exits; it never
+  analyses, fixes or touches the journal. `watch` exit codes: 2 bad arguments or game not found, 3 the PID now
+  belongs to another process, 4 another recording is running, 130 stopped waiting.
+- Stopping: the first Ctrl+C stops the recording and saves it ("Stopping and saving the capture..."); later
+  presses during the stop and the save are only counted. Ctrl+Break stops and saves too. Closing the window
+  stops, ends the `lag-doctor-net` session at once, and waits up to 4.5 s for the save (Windows gives a closing
+  console 5 s). Signing out is not covered (a process that loads user32 never gets CTRL_LOGOFF). In the
+  parent window, the first Ctrl+C says the elevated recording goes on in its window and where it will be saved;
+  a second one stops waiting and prints the `analyze` command.
+- `fix` applies only offered fixes, with the offered params, after showing the plan and its notes; it refuses
+  to run elevated. A plan-time refusal is reported, never a traceback. Every command except `setup` first
+  settles journal entries a crash left `pending`, and marks session-only changes whose process has ended as
+  undone (checked without opening the process).
 
 ## Testing
 
@@ -551,7 +666,10 @@ lagdoctor setup                      fetch + verify PresentMon, explain how to g
   (psutil on our own process, typeperf, `powercfg`, `nvidia-smi`, `Get-NetRoute`).
 - **ETW without rights**: a private in-process session (allowed for standard users) proves the consumer
   path (NE 5.6); PresentMon's `--etl_file` replay proves the frames path.
-- **Red first**: every guard is sabotaged once and must turn its test red (`scripts/redfirst.py`).
+- **Red first**: every guard is sabotaged once and must turn its test red (`scripts/redfirst.py`). The runner
+  copies the tree to a temp folder and mutates only the copy, so a killed run can never leave a sabotaged guard
+  in the working tree; a test that reads the real repo by absolute path is reported UNISOLATED, and one that
+  writes into its own tree stops the run.
 - **No handles**: `tests/test_no_handles.py` fails if `psutil.Process`, `process_iter` or `pid_exists` is
   used outside the allow-list, and if `OpenProcess` appears outside `winapi/process.py`.
 - **End to end**: `scripts/e2e.py` runs each LagLab mode with a real capture and judges the diagnosis against
