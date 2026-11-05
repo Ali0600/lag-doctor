@@ -132,6 +132,14 @@ with only `ShellExecuteExW` faked, and it raised.
 **Takeaway**: fake the outermost side effect (the OS call), not the function that validates what you built;
 test a writer through its real reader.
 
+### Inline citations leak from comments into user text
+The code cites its research notes beside each constant ("WT 8", "LC 4.9"), and the habit crossed into strings:
+eleven report and fix texts told players "(WT 8)" or "(NE 7 row 9)", which they cannot look up.
+**Why it came up**: the README's picture of the HTML report showed "community-documented, not
+Microsoft-documented (WT 8)".
+**Takeaway**: keep provenance in comments, and scan string literals on the syntax tree (docstrings excluded);
+a plain text grep would flag every comment too.
+
 ### Python's gzip.open compresses at level 9 unless told otherwise
 `gzip.open(path, "wt")` defaults to compresslevel 9. For a 47 MB JSON capture that was 24 s of a 36 s save;
 streaming the JSON column by column at level 1 saves the same capture in 2.6 s, 12 MB instead of 9 MB.
