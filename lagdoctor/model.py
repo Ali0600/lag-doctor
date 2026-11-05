@@ -16,11 +16,15 @@ import gzip
 import json
 import math
 import os
-from dataclasses import asdict, dataclass, field
+import re
+import zlib
+from dataclasses import MISSING, asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Iterable, Literal
 
 CAPTURE_SCHEMA = "lagdoctor.capture/1"
+CAPTURE_FAMILY, CAPTURE_VERSION = "lagdoctor.capture", 1
+MAX_CAPTURE_JSON_BYTES = 2 << 30          # uncompressed; a file that expands past this is refused, not loaded
 
 
 # ---------------------------------------------------------------- columns ---
@@ -179,6 +183,15 @@ class SeriesBuilder:
 SourceState = Literal["ok", "partial", "unavailable", "failed", "off"]
 
 
+class CaptureError(ValueError):
+    """A file that cannot be loaded as a capture. `kind`: "foreign" (not a lag-doctor capture), "newer" (a
+    format a newer lag-doctor wrote) or "damaged". The message is one plain sentence."""
+
+    def __init__(self, kind: str, message: str) -> None:
+        super().__init__(message)
+        self.kind = kind
+
+
 @dataclass
 class SourceStatus:
     """Whether a data source worked, so the report never mistakes 'not measured' for 'fine'."""
@@ -215,25 +228,111 @@ class Capture:
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "Capture":
-        if data.get("schema") != CAPTURE_SCHEMA:
-            raise ValueError(f"not a lag-doctor capture (schema {data.get('schema')!r})")
-        sources = {k: SourceStatus(**v) for k, v in data.get("sources", {}).items()}
-        fields = {k: v for k, v in data.items() if k != "sources"}
-        return cls(sources=sources, **fields)
+        """The Capture in `data`. Fields a newer build added are left out, with a note in `notes`; anything
+        else that does not fit raises CaptureError saying what it is (another format, a newer one, damaged)."""
+        if not isinstance(data, dict):
+            raise CaptureError("foreign", "not a lag-doctor capture (it holds no capture record)")
+        _check_schema(data.get("schema"))
+        known = {f.name: f for f in fields(cls)}
+        kwargs = {k: v for k, v in data.items() if k in known}
+        extra = [str(k) for k in data if k not in known]
+        missing = [n for n, f in known.items()
+                   if n not in kwargs and f.default is MISSING and f.default_factory is MISSING]
+        if missing:
+            raise CaptureError("damaged", f"the capture is damaged: it has no {', '.join(missing)}")
+        for name, want in _CAPTURE_TYPES.items():
+            if name in kwargs and (not isinstance(kwargs[name], want) or isinstance(kwargs[name], bool)):
+                raise CaptureError("damaged", f"the capture is damaged: its {name} is a "
+                                              f"{type(kwargs[name]).__name__}")
+        status_fields = {f.name for f in fields(SourceStatus)}
+        sources: dict[str, SourceStatus] = {}
+        for src, st in kwargs["sources"].items():
+            if not isinstance(st, dict) or not isinstance(st.get("state"), str):
+                raise CaptureError("damaged", f"the capture is damaged: its source {_shown(src)} has no state")
+            extra += [f"sources.{k}" for k in st if k not in status_fields and f"sources.{k}" not in extra]
+            sources[src] = SourceStatus(**{k: v for k, v in st.items() if k in status_fields})
+        kwargs["sources"] = sources
+        cap = cls(**kwargs)
+        if extra:
+            cap.notes = list(cap.notes) + [_extra_fields_note(sorted(extra), cap.tool_version)]
+        return cap
 
     def save(self, path: Path) -> Path:
         """Write atomically: a crash mid-save never leaves a half-written capture."""
         path = Path(path)
         tmp = path.with_name(path.name + ".tmp")
-        with gzip.open(tmp, "wt", encoding="utf-8") as f:
-            json.dump(self.to_json(), f, separators=(",", ":"))
-        os.replace(tmp, path)
+        try:
+            with gzip.open(tmp, "wt", encoding="utf-8") as f:
+                json.dump(self.to_json(), f, separators=(",", ":"))
+            os.replace(tmp, path)
+        except BaseException:
+            try:
+                tmp.unlink(missing_ok=True)     # no half-written file left behind
+            except OSError:
+                pass
+            raise
         return path
 
     @classmethod
     def load(cls, path: Path) -> "Capture":
-        with gzip.open(Path(path), "rt", encoding="utf-8") as f:
-            return cls.from_json(json.load(f))
+        """Read a capture file. CaptureError (one plain sentence) when the file is not a capture this version
+        can read; OSError when it cannot be opened at all."""
+        with open(Path(path), "rb") as raw:
+            if raw.read(2) != b"\x1f\x8b":
+                raise CaptureError("foreign", "not a lag-doctor capture (it is not a gzip-compressed file)")
+            raw.seek(0)
+            try:
+                with gzip.GzipFile(fileobj=raw, mode="rb") as f:
+                    data = _read_bounded(f, MAX_CAPTURE_JSON_BYTES)
+                obj = json.loads(data)
+            except (OSError, EOFError, zlib.error) as exc:      # BadGzipFile (CRC, length) is an OSError
+                raise CaptureError("damaged", f"the capture is damaged: its compressed data is cut short or "
+                                              f"corrupt ({exc})") from exc
+            except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+                raise CaptureError("damaged", f"the capture is damaged: its contents are not valid JSON "
+                                              f"({type(exc).__name__})") from exc
+        return cls.from_json(obj)
+
+
+# Capture fields and the JSON types they must have (bool is refused where a number is wanted).
+_CAPTURE_TYPES: dict[str, type | tuple[type, ...]] = {
+    "started_at": str, "clock_origin": (int, float), "duration_s": (int, float), "target": dict, "sources": dict,
+    "inventory": dict, "frames": dict, "system": dict, "gpu": dict, "network": dict, "others": list,
+    "net_flows": dict, "marks": list, "notes": list, "schema": str, "tool_version": str}
+
+
+def _shown(value: object, limit: int = 60) -> str:
+    """A value from a file, safe to print: repr() escapes control characters; long ones are cut."""
+    text = repr(value)
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def _check_schema(schema: object) -> None:
+    if schema == CAPTURE_SCHEMA:
+        return
+    family, _, version = schema.partition("/") if isinstance(schema, str) else ("", "", "")
+    if family == CAPTURE_FAMILY and re.fullmatch(r"[0-9]{1,6}", version) and int(version) > CAPTURE_VERSION:
+        raise CaptureError("newer", f"it was made by a newer version of lag-doctor (format {_shown(schema)}); "
+                                    "update lag-doctor to read it")
+    raise CaptureError("foreign", f"not a lag-doctor capture (schema {_shown(schema)})")
+
+
+def _extra_fields_note(names: list[str], tool_version: str) -> str:
+    shown = [re.sub(r"[^A-Za-z0-9_.-]", "?", n)[:40] for n in names[:5]]
+    more = f" and {len(names) - 5} more" if len(names) > 5 else ""
+    who = re.sub(r"[^A-Za-z0-9_.+-]", "?", tool_version)[:20] if isinstance(tool_version, str) else ""
+    return (f"This capture has fields this version of lag-doctor does not know ({', '.join(shown)}{more}); they "
+            f"were left out. It was probably made by a newer version" + (f" ({who})." if who else "."))
+
+
+def _read_bounded(f, limit: int) -> bytearray:
+    out = bytearray()
+    while chunk := f.read(1 << 20):
+        out += chunk
+        if len(out) > limit:
+            raise CaptureError("too_large", f"the capture expands to more than {limit >> 20} MiB, which is more "
+                                            "than lag-doctor reads")
+    return out
 
 
 def _clean_floats(obj: Any) -> Any:

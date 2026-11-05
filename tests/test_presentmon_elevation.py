@@ -10,6 +10,7 @@ import csv
 import io
 import subprocess
 import sys
+import uuid
 
 import pytest
 
@@ -157,6 +158,85 @@ def test_an_ambiguous_launch_is_refused_before_any_prompt(monkeypatch, argv, cwd
     with pytest.raises(ValueError):
         elevation.relaunch_elevated(argv, cwd)
     assert fake.seen == {}
+
+
+def test_launch_returns_at_once_and_wait_gives_the_exit_code(monkeypatch, tmp_path):
+    fake = FakeShellExecute(code=3)
+    monkeypatch.setattr(elevation, "_ShellExecuteExW", fake)
+    closed = []
+    real_close = elevation._kernel32.CloseHandle
+    # Records every close but passes each handle value to Windows once: a second close could hit a reused value.
+    monkeypatch.setattr(elevation._kernel32, "CloseHandle",
+                        lambda h: closed.append(h) or (real_close(h) if closed.count(h) == 1 else True))
+    try:
+        child = elevation.launch_elevated([sys.executable, "-V"], str(tmp_path))
+        assert child.wait(timeout_s=0) is None                     # still running: a timed wait says so
+        assert child.wait() == 3 and child.wait() == 3             # the handle stays usable until closed
+        child.close()
+        child.close()                                              # closing twice closes once
+        assert closed == [fake.handle]
+        with pytest.raises(ValueError):
+            child.wait()
+    finally:
+        fake.reap()
+
+
+def test_a_ctrl_c_while_waiting_leaves_the_child_and_its_handle_alone(monkeypatch, tmp_path):
+    fake = FakeShellExecute(code=5)
+    monkeypatch.setattr(elevation, "_ShellExecuteExW", fake)
+    real_wait = elevation._kernel32.WaitForSingleObject
+    calls = []
+
+    def interrupted_once(handle, ms):
+        calls.append(ms)
+        if len(calls) == 1:
+            raise KeyboardInterrupt                                 # Ctrl+C arrives during one wait slice
+        return real_wait(handle, ms)
+    monkeypatch.setattr(elevation._kernel32, "WaitForSingleObject", interrupted_once)
+    try:
+        child = elevation.launch_elevated([sys.executable, "-V"], str(tmp_path))
+        with pytest.raises(KeyboardInterrupt):
+            child.wait()
+        assert child.wait() == 5                                    # waiting again still works
+        child.close()
+    finally:
+        fake.reap()
+
+
+def test_token_user_sid_matches_whoami():
+    out = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True, timeout=30).stdout
+    rows = [r for r in csv.reader(io.StringIO(out)) if len(r) >= 2]
+    assert rows, f"whoami printed no user: {out!r}"
+    assert elevation.token_user_sid() == rows[0][1] and rows[0][1].startswith("S-1-5-")
+
+
+def test_a_named_mutex_is_held_by_one_handle_at_a_time():
+    name = f"Local\\lagdoctor-test-{uuid.uuid4().hex}"
+    first = elevation.hold_named_mutex(name)
+    try:
+        assert first
+        assert elevation.hold_named_mutex(name) is None             # ERROR_ALREADY_EXISTS: held elsewhere
+    finally:
+        elevation.release_named_mutex(first)
+    again = elevation.hold_named_mutex(name)                       # gone with its last handle
+    assert again
+    elevation.release_named_mutex(again)
+
+
+@pytest.mark.parametrize("err,expect", [(elevation.ERROR_ACCESS_DENIED, None), (6, OSError)])
+def test_a_mutex_this_token_may_not_open_counts_as_held(monkeypatch, err, expect):
+    import ctypes
+
+    def denied(attrs, owner, name):
+        ctypes.set_last_error(err)                                 # e.g. an elevated child's copy
+        return None
+    monkeypatch.setattr(elevation, "_CreateMutexW", denied)
+    if expect is None:
+        assert elevation.hold_named_mutex("Local\\lagdoctor-test-denied") is None
+    else:
+        with pytest.raises(OSError) as info:
+            elevation.hold_named_mutex("Local\\lagdoctor-test-denied")
+        assert info.value.winerror == err
 
 
 @pytest.mark.parametrize("which", ["program", "folder"])
