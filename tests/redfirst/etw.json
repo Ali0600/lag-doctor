@@ -1,0 +1,693 @@
+[
+ {
+  "name": "layout size check never fires",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "        if ctypes.sizeof(cls) != size:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_etw.py::test_the_import_time_layout_check_reports_every_mismatch"
+  ]
+ },
+ {
+  "name": "layout offset check never fires",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "            if got != want:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_etw.py::test_the_import_time_layout_check_reports_every_mismatch"
+  ]
+ },
+ {
+  "name": "record decoder width check never fires",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "        if struct.calcsize(\"<\" + code) != size:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_etw.py::test_the_record_decoder_check_catches_a_wrong_width_and_an_overlap"
+  ]
+ },
+ {
+  "name": "record decoder overlap check never fires",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "        if off < pos:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_etw.py::test_the_record_decoder_check_catches_a_wrong_width_and_an_overlap"
+  ]
+ },
+ {
+  "name": "callback exception escapes into ctypes",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "        except Exception as exc:  # noqa: BLE001 - nothing may escape into ProcessTrace",
+  "new": "        except ZeroDivisionError as exc:",
+  "tests": [
+   "tests/test_etw.py::test_an_exception_in_the_callback_is_counted_and_the_trace_goes_on"
+  ]
+ },
+ {
+  "name": "events of other providers delivered",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "            if provider is None:                             # e.g. the trace header event of a file",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_etw.py::test_private_round_trip_delivers_kernel_network_shaped_events_byte_exact"
+  ]
+ },
+ {
+  "name": "file consumer gets converted timestamps",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "PROCESS_TRACE_MODE_EVENT_RECORD | PROCESS_TRACE_MODE_RAW_TIMESTAMP)",
+  "new": "PROCESS_TRACE_MODE_EVENT_RECORD)",
+  "tests": [
+   "tests/test_etw.py::test_private_round_trip_delivers_kernel_network_shaped_events_byte_exact"
+  ]
+ },
+ {
+  "name": "session clock is system time, not QPC",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "        p.Wnode.ClientContext = CLOCK_QPC",
+  "new": "        p.Wnode.ClientContext = 2",
+  "tests": [
+   "tests/test_etw.py::test_private_round_trip_delivers_kernel_network_shaped_events_byte_exact"
+  ]
+ },
+ {
+  "name": "no orphan cleanup before start",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "            self._orphan_stop_rc = stop_session(self.name)",
+  "new": "            self._orphan_stop_rc = None",
+  "tests": [
+   "tests/test_etw.py::test_start_stops_an_orphan_of_the_same_name_before_starting",
+   "tests/test_etw.py::test_unelevated_real_time_start_is_access_denied_and_leaves_nothing_behind"
+  ]
+ },
+ {
+  "name": "no stop-and-retry after a lost race",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "            if rc == ERROR_ALREADY_EXISTS:                   # lost a race with another starter (NE 5.5)",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_etw.py::test_a_name_clash_stops_by_name_and_retries_once_then_reports_183"
+  ]
+ },
+ {
+  "name": "private session file left behind",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "                os.remove(path)",
+  "new": "                pass",
+  "tests": [
+   "tests/test_etw.py::test_private_session_file_is_deleted_after_stop"
+  ]
+ },
+ {
+  "name": "consumer handle never closed",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "                self._close_rc = int(_advapi32.CloseTrace(self._consumer))",
+  "new": "                self._close_rc = 0",
+  "tests": [
+   "tests/test_etw.py::test_stopping_closes_the_consumer_handle"
+  ]
+ },
+ {
+  "name": "atexit hook never unregistered",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "            atexit.unregister(self._atexit_hook)",
+  "new": "            pass",
+  "tests": [
+   "tests/test_etw.py::test_a_stopped_session_is_no_longer_held_by_its_atexit_hook"
+  ]
+ },
+ {
+  "name": "unread loss reported as 0",
+  "file": "lagdoctor/winapi/etw.py",
+  "old": "            \"lost\": stats[\"events_lost\"] if stats else None,",
+  "new": "            \"lost\": stats[\"events_lost\"] if stats else 0,",
+  "tests": [
+   "tests/test_etw.py::test_unelevated_real_time_start_is_access_denied_and_leaves_nothing_behind",
+   "tests/test_etw.py::test_stop_and_health_are_safe_before_start"
+  ]
+ },
+ {
+  "name": "decode guesses an unproven layout",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    if not layout_ok(event_id, version, len(data)):\n        raise LayoutError",
+  "new": "    if False:\n        raise LayoutError",
+  "tests": [
+   "tests/test_etw_flows.py::test_decode_refuses_a_version_or_length_it_was_not_proven_for"
+  ]
+ },
+ {
+  "name": "layout check ignores the version",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    return version == EXPECTED_VERSION and EXPECTED_LENGTH.get(event_id) == length",
+  "new": "    return EXPECTED_LENGTH.get(event_id) == length",
+  "tests": [
+   "tests/test_etw_flows.py::test_decode_refuses_a_version_or_length_it_was_not_proven_for",
+   "tests/test_etw_tracker.py::test_an_event_with_an_unexpected_layout_is_counted_and_never_decoded"
+  ]
+ },
+ {
+  "name": "collector skips the layout check",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if not layout_ok(ev.id, ev.version, len(data)):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_etw_tracker.py::test_an_event_with_an_unexpected_layout_is_counted_and_never_decoded"
+  ]
+ },
+ {
+  "name": "ports read little-endian",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "_PORTS = struct.Struct(\">HH\")",
+  "new": "_PORTS = struct.Struct(\"<HH\")",
+  "tests": [
+   "tests/test_etw_flows.py::test_decode_ports_are_big_endian"
+  ]
+ },
+ {
+  "name": "IPv4-mapped addresses kept as IPv6",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    if raw[:12] == _V4MAPPED:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_etw_flows.py::test_decode_udp_v6_and_an_ipv4_mapped_address"
+  ]
+ },
+ {
+  "name": "remote end taken from the local field",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        return pkt.daddr, pkt.dport, pkt.saddr, pkt.sport",
+  "new": "        return pkt.saddr, pkt.sport, pkt.daddr, pkt.dport",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_remote_end_is_the_one_that_is_not_ours_in_either_field"
+  ]
+ },
+ {
+  "name": "both-local packets get a remote end",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    if d_local and not s_local:",
+  "new": "    if d_local:",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_remote_end_is_the_one_that_is_not_ours_in_either_field"
+  ]
+ },
+ {
+  "name": "multicast and broadcast can be the server",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    return not (addr.is_multicast or addr.is_unspecified or str(addr) == \"255.255.255.255\")",
+  "new": "    return True",
+  "tests": [
+   "tests/test_etw_flows.py::test_who_can_be_a_game_server",
+   "tests/test_etw_flows.py::test_dns_one_way_tcp_multicast_and_other_processes_are_never_the_server"
+  ]
+ },
+ {
+  "name": "DNS can be the server",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "SKIP_PORTS = frozenset({53})",
+  "new": "SKIP_PORTS = frozenset()",
+  "tests": [
+   "tests/test_etw_flows.py::test_dns_one_way_tcp_multicast_and_other_processes_are_never_the_server"
+  ]
+ },
+ {
+  "name": "payload PID ignored for the header PID",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if probing or (spec[0] == \"udp\" and table.is_game(pid)):",
+  "new": "            if probing or (spec[0] == \"udp\" and table.is_game(ev.process_id)):",
+  "tests": [
+   "tests/test_etw_tracker.py::test_the_payload_pid_decides_which_process_a_packet_belongs_to"
+  ]
+ },
+ {
+  "name": "timestamps off the QPC clock accepted",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if not -1.0 <= t <= self.now() + 5.0:          # not on the QPC clock: never guess a time",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_etw_tracker.py::test_timestamps_off_the_qpc_clock_are_refused"
+  ]
+ },
+ {
+  "name": "gap threshold loses the 3-tick branch",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    return max(GAP_FACTOR * nominal_s, nominal_s + GAP_FLOOR_S)",
+  "new": "    return nominal_s + GAP_FLOOR_S",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_gap_is_an_interval_past_the_threshold_and_not_before",
+   "tests/test_etw_flows.py::test_gap_threshold_takes_the_larger_of_three_ticks_and_tick_plus_50_ms"
+  ]
+ },
+ {
+  "name": "gap threshold loses the +50 ms branch",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    return max(GAP_FACTOR * nominal_s, nominal_s + GAP_FLOOR_S)",
+  "new": "    return GAP_FACTOR * nominal_s",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_gap_is_an_interval_past_the_threshold_and_not_before",
+   "tests/test_etw_flows.py::test_gap_threshold_takes_the_larger_of_three_ticks_and_tick_plus_50_ms"
+  ]
+ },
+ {
+  "name": "gap factor 2.9",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "GAP_FACTOR, GAP_FLOOR_S = 3.0, 0.050",
+  "new": "GAP_FACTOR, GAP_FLOOR_S = 2.9, 0.050",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_gap_is_an_interval_past_the_threshold_and_not_before"
+  ]
+ },
+ {
+  "name": "gap factor 3.1",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "GAP_FACTOR, GAP_FLOOR_S = 3.0, 0.050",
+  "new": "GAP_FACTOR, GAP_FLOOR_S = 3.1, 0.050",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_gap_is_an_interval_past_the_threshold_and_not_before"
+  ]
+ },
+ {
+  "name": "gap floor 49 ms",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "GAP_FACTOR, GAP_FLOOR_S = 3.0, 0.050",
+  "new": "GAP_FACTOR, GAP_FLOOR_S = 3.0, 0.049",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_gap_is_an_interval_past_the_threshold_and_not_before"
+  ]
+ },
+ {
+  "name": "gap floor 51 ms",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "GAP_FACTOR, GAP_FLOOR_S = 3.0, 0.050",
+  "new": "GAP_FACTOR, GAP_FLOOR_S = 3.0, 0.051",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_gap_is_an_interval_past_the_threshold_and_not_before"
+  ]
+ },
+ {
+  "name": "burst of 2 counts",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "BURST_PACKETS, BURST_FRACTION = 3, 0.25",
+  "new": "BURST_PACKETS, BURST_FRACTION = 2, 0.25",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_burst_is_three_packets_within_a_quarter_tick"
+  ]
+ },
+ {
+  "name": "burst needs 4",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "BURST_PACKETS, BURST_FRACTION = 3, 0.25",
+  "new": "BURST_PACKETS, BURST_FRACTION = 4, 0.25",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_burst_is_three_packets_within_a_quarter_tick"
+  ]
+ },
+ {
+  "name": "burst window 0.24 tick",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "BURST_PACKETS, BURST_FRACTION = 3, 0.25",
+  "new": "BURST_PACKETS, BURST_FRACTION = 3, 0.24",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_burst_is_three_packets_within_a_quarter_tick"
+  ]
+ },
+ {
+  "name": "burst window 0.26 tick",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "BURST_PACKETS, BURST_FRACTION = 3, 0.25",
+  "new": "BURST_PACKETS, BURST_FRACTION = 3, 0.26",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_burst_is_three_packets_within_a_quarter_tick"
+  ]
+ },
+ {
+  "name": "burst count compared with >",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    return \"delay\" if burst >= BURST_PACKETS else \"loss\"",
+  "new": "    return \"delay\" if burst > BURST_PACKETS else \"loss\"",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_burst_is_three_packets_within_a_quarter_tick"
+  ]
+ },
+ {
+  "name": "a burst outranks a local stall",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    if local:\n        return \"local\"",
+  "new": "    if local and burst < BURST_PACKETS:\n        return \"local\"",
+  "tests": [
+   "tests/test_etw_flows.py::test_local_wins_over_a_burst"
+  ]
+ },
+ {
+  "name": "local overlap 35 %",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "LOCAL_OVERLAP = 0.5 ",
+  "new": "LOCAL_OVERLAP = 0.35 ",
+  "tests": [
+   "tests/test_etw_flows.py::test_local_needs_the_tx_silence_to_cover_half_the_gap"
+  ]
+ },
+ {
+  "name": "local overlap 70 %",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "LOCAL_OVERLAP = 0.5 ",
+  "new": "LOCAL_OVERLAP = 0.7 ",
+  "tests": [
+   "tests/test_etw_flows.py::test_local_needs_the_tx_silence_to_cover_half_the_gap"
+  ]
+ },
+ {
+  "name": "tx stream that never ran can be paused",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    if not before:\n        return False                       # no tx before the gap: the stream was not running",
+  "new": "    pass",
+  "tests": [
+   "tests/test_etw_flows.py::test_tx_paused_needs_a_running_tx_stream"
+  ]
+ },
+ {
+  "name": "gaps tracked on a flow that lost server status",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if flow is self._server and prev is not None and flow.rx_tick and t - prev > gap_threshold(flow.rx_tick):",
+  "new": "            if prev is not None and flow.rx_tick and t - prev > gap_threshold(flow.rx_tick):",
+  "tests": [
+   "tests/test_etw_flows.py::test_only_the_current_server_gets_gaps_and_the_longest_server_is_reported"
+  ]
+ },
+ {
+  "name": "median of 7 intervals trusted",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "MIN_INTERVALS = 8 ",
+  "new": "MIN_INTERVALS = 7 ",
+  "tests": [
+   "tests/test_etw_flows.py::test_median_interval_needs_eight_intervals_inside_the_window"
+  ]
+ },
+ {
+  "name": "median needs 9 intervals",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "MIN_INTERVALS = 8 ",
+  "new": "MIN_INTERVALS = 9 ",
+  "tests": [
+   "tests/test_etw_flows.py::test_median_interval_needs_eight_intervals_inside_the_window"
+  ]
+ },
+ {
+  "name": "median over all history",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    recent = [t for t in times if until - window_s < t <= until]",
+  "new": "    recent = list(times)",
+  "tests": [
+   "tests/test_etw_flows.py::test_median_interval_needs_eight_intervals_inside_the_window"
+  ]
+ },
+ {
+  "name": "server needs only 9 pps",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "MIN_PPS = 10.0 ",
+  "new": "MIN_PPS = 9.0 ",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_server_needs_ten_packets_a_second_each_way"
+  ]
+ },
+ {
+  "name": "server needs 10.5 pps",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "MIN_PPS = 10.0 ",
+  "new": "MIN_PPS = 10.5 ",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_server_needs_ten_packets_a_second_each_way"
+  ]
+ },
+ {
+  "name": "one-way flow can be the server",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if rx_n < MIN_PPS * span or tx_n < MIN_PPS * span:",
+  "new": "            if rx_n < MIN_PPS * span:",
+  "tests": [
+   "tests/test_etw_flows.py::test_dns_one_way_tcp_multicast_and_other_processes_are_never_the_server",
+   "tests/test_etw_flows.py::test_the_server_needs_ten_packets_a_second_each_way"
+  ]
+ },
+ {
+  "name": "the flow with the fewest rx wins",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if best_key is None or key > best_key:",
+  "new": "            if best_key is None or key < best_key:",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_server_is_the_bidirectional_udp_flow_with_the_most_rx"
+  ]
+ },
+ {
+  "name": "a process that left the game stays the server",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if not flow.serverable or flow.key[0] not in self._game:",
+  "new": "            if not flow.serverable:",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_process_that_leaves_the_game_stops_being_the_server"
+  ]
+ },
+ {
+  "name": "server window 5 s",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "WINDOW_S = 10 ",
+  "new": "WINDOW_S = 5 ",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_server_is_judged_over_the_last_ten_seconds"
+  ]
+ },
+ {
+  "name": "server window 15 s",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "WINDOW_S = 10 ",
+  "new": "WINDOW_S = 15 ",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_server_is_judged_over_the_last_ten_seconds"
+  ]
+ },
+ {
+  "name": "reported server is the shortest-lived",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        return max(self._servers.values(), key=lambda f: (f.server_s, f.rx_packets))",
+  "new": "        return min(self._servers.values(), key=lambda f: (f.server_s, f.rx_packets))",
+  "tests": [
+   "tests/test_etw_flows.py::test_only_the_current_server_gets_gaps_and_the_longest_server_is_reported"
+  ]
+ },
+ {
+  "name": "server_rx rows hold the 10 s sum",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            self.server_rx.append([float(boundary), best.rx_in(sec)])",
+  "new": "            self.server_rx.append([float(boundary), best.window(sec)[0]])",
+  "tests": [
+   "tests/test_etw_flows.py::test_server_rx_is_one_row_per_second_holding_that_seconds_rx_count"
+  ]
+ },
+ {
+  "name": "reorder buffer 1.8 s",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "REORDER_S = 2.0 ",
+  "new": "REORDER_S = 1.8 ",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_reorder_buffer_holds_two_seconds"
+  ]
+ },
+ {
+  "name": "reorder buffer 2.2 s",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "REORDER_S = 2.0 ",
+  "new": "REORDER_S = 2.2 ",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_reorder_buffer_holds_two_seconds"
+  ]
+ },
+ {
+  "name": "late packets put back in the timeline",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if t <= self._final_t:               # older than what is already finalised",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_reorder_buffer_holds_two_seconds"
+  ]
+ },
+ {
+  "name": "talkers ranked smallest first",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    ranked = sorted(per_pid.items(), key=lambda kv: (-(kv[1][0] + kv[1][1]), kv[0]))",
+  "new": "    ranked = sorted(per_pid.items(), key=lambda kv: (kv[1][0] + kv[1][1], kv[0]))",
+  "tests": [
+   "tests/test_etw_flows.py::test_top_talkers_are_the_eight_busiest_processes_by_bytes_with_names"
+  ]
+ },
+ {
+  "name": "top 9 talkers",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "TOP_TALKERS = 8",
+  "new": "TOP_TALKERS = 9",
+  "tests": [
+   "tests/test_etw_flows.py::test_top_talkers_are_the_eight_busiest_processes_by_bytes_with_names"
+  ]
+ },
+ {
+  "name": "talker names never filled",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            self._names[pid] = found.get(pid)",
+  "new": "            self._names[pid] = None",
+  "tests": [
+   "tests/test_etw_tracker.py::test_synthetic_kernel_network_events_give_the_server_its_gap_and_the_talkers"
+  ]
+ },
+ {
+  "name": "flow table unbounded",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            while len(self._flows) > MAX_FLOWS:",
+  "new": "            while False:",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_flow_table_is_capped_and_never_evicts_the_server"
+  ]
+ },
+ {
+  "name": "eviction can drop the server",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                    if old is not self._server and old is not flow:",
+  "new": "                    if old is not flow:",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_flow_table_is_capped_and_never_evicts_the_server"
+  ]
+ },
+ {
+  "name": "talker table unbounded",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if len(self._talkers) >= MAX_TALKERS:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_etw_flows.py::test_talkers_are_capped"
+  ]
+ },
+ {
+  "name": "reorder buffer unbounded",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if len(self._heap) > MAX_PENDING:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_reorder_buffer_is_capped"
+  ]
+ },
+ {
+  "name": "gap list unbounded",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if len(self.gaps) < MAX_GAPS:",
+  "new": "            if True:",
+  "tests": [
+   "tests/test_etw_flows.py::test_gaps_are_capped"
+  ]
+ },
+ {
+  "name": "game PIDs not validated",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    return frozenset(p for p in values if isinstance(p, int) and not isinstance(p, bool) and 0 < p <= 0xFFFFFFFF)",
+  "new": "    return frozenset(values)",
+  "tests": [
+   "tests/test_etw_tracker.py::test_game_pids_are_validated"
+  ]
+ },
+ {
+  "name": "stale address set waits for the 10 s refresh",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                stale = unknown > self._unknown_seen and t - last_local >= PIDS_EVERY_S",
+  "new": "                stale = False",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_stale_local_address_set_is_reread_early"
+  ]
+ },
+ {
+  "name": "access denied reported as failed",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if getattr(exc, \"winerror\", None) == etw.ERROR_ACCESS_DENIED:",
+  "new": "            if getattr(exc, \"winerror\", None) == -1:",
+  "tests": [
+   "tests/test_etw_tracker.py::test_unelevated_the_real_session_is_unavailable_with_the_reason"
+  ]
+ },
+ {
+  "name": "layout mismatch does not degrade the status",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if bad:\n            ids = ",
+  "new": "        if False:\n            ids = ",
+  "tests": [
+   "tests/test_etw_tracker.py::test_an_event_with_an_unexpected_layout_is_counted_and_never_decoded"
+  ]
+ },
+ {
+  "name": "dropped events not reported",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if h.get(\"lost\") or h.get(\"buffers_lost\"):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_consumer_that_dies_or_drops_events_is_reported"
+  ]
+ },
+ {
+  "name": "a dead consumer not reported",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if not final and not h.get(\"pump_alive\") and not self.stopping:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_consumer_that_dies_or_drops_events_is_reported"
+  ]
+ },
+ {
+  "name": "layout verified despite mismatches",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        return \"verified\" if self._selftest.get(\"verified\") and not mismatches else \"unverified\"",
+  "new": "        return \"verified\" if self._selftest.get(\"verified\") else \"unverified\"",
+  "tests": [
+   "tests/test_etw_tracker.py::test_the_selftest_marks_the_layout_verified_only_with_every_event_and_no_mismatch"
+  ]
+ },
+ {
+  "name": "self-test verified with an event missing",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    verified = not missing and not mixed",
+  "new": "    verified = not mixed",
+  "tests": [
+   "tests/test_etw_flows.py::test_selftest_is_unverified_when_an_event_is_missing"
+  ]
+ },
+ {
+  "name": "self-test verified with an event pointing both ways",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    verified = not missing and not mixed",
+  "new": "    verified = not missing",
+  "tests": [
+   "tests/test_etw_flows.py::test_selftest_is_unverified_when_one_event_points_both_ways"
+  ]
+ },
+ {
+  "name": "self-test counts other processes",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if p.pid != pid or key not in seen or local_port is None:",
+  "new": "        if key not in seen or local_port is None:",
+  "tests": [
+   "tests/test_etw_flows.py::test_selftest_ignores_other_processes_and_other_ports"
+  ]
+ },
+ {
+  "name": "self-test trusts any UDP reply",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            out[\"udp_reply\"] = data[:2] == query[:2]",
+  "new": "            out[\"udp_reply\"] = True",
+  "tests": [
+   "tests/test_etw_flows.py::test_selftest_traffic_sends_one_udp_and_one_tcp_query_from_the_ports_it_reports"
+  ]
+ },
+ {
+  "name": "self-test trusts any TCP reply",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            out[\"tcp_reply\"] = len(head) == 4 and head[2:4] == query[:2]",
+  "new": "            out[\"tcp_reply\"] = True",
+  "tests": [
+   "tests/test_etw_flows.py::test_selftest_traffic_sends_one_udp_and_one_tcp_query_from_the_ports_it_reports"
+  ]
+ }
+]
