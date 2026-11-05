@@ -122,3 +122,19 @@ holds frames for two. Any "N x baseline" rule then fires on a one-refresh slip.
 **Why it came up**: the smooth control case got "stutters" from single frames held three refreshes.
 **Takeaway**: on quantised data, compare against the longest regular value the cadence produces, not the
 median alone.
+
+### A fake that replaces the consumer hides the consumer's own checks
+The parent built the elevated child's command with `--steam-log ""` for "no Steam log", and its test checked
+that list. But the elevation fixture replaced `launch_elevated` whole, and the real one refuses empty
+arguments: on every PC without Steam, `watch --elevate` crashed before the UAC prompt.
+**Why it came up**: a verifier drove `cli.main(['watch', '--elevate'])` through the real `launch_elevated`
+with only `ShellExecuteExW` faked, and it raised.
+**Takeaway**: fake the outermost side effect (the OS call), not the function that validates what you built;
+test a writer through its real reader.
+
+### Python's gzip.open compresses at level 9 unless told otherwise
+`gzip.open(path, "wt")` defaults to compresslevel 9. For a 47 MB JSON capture that was 24 s of a 36 s save;
+streaming the JSON column by column at level 1 saves the same capture in 2.6 s, 12 MB instead of 9 MB.
+**Why it came up**: closing the recording window gives a console 5 s to finish, and long captures were lost.
+**Takeaway**: when a save sits on a deadline, measure each level; level 1 is usually most of the size win at a
+tenth of the time.

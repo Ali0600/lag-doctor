@@ -29,8 +29,9 @@ displayed intervals (LC 2.4's baseline) is one refresh (6.94 ms). One late OS wa
 3 refreshes (20.8 ms), which passed "2.5x the median and 8 ms above it" though it is only 6.9 ms longer than
 the cadence's own regular 2-refresh hold.
 - **On a quantised series, measure the excess against the longest regular hold (chosen)**: a stutter needs
-  D >= 2.5 M and D - max(M, E) >= 8 ms, with E = ceil(Mp/P - 0.05) x P from the presented cadence Mp and the
-  refresh period P. A 4-refresh hold and every real hitch still count; a 3-refresh slip does not.
+  D >= 2.5 M and D - max(M, E) >= 8 ms, with E = ceil(Mp/P - slack) x P from the presented cadence Mp and the
+  refresh period P (slack 0.005, see 2026-11-05 below). A 4-refresh hold and every real hitch still count; a
+  3-refresh slip does not.
 - **CapFrameX's mean baseline**: would sit at 8.33 ms; rejected because LC 2.4 chose the median for its
   robustness to the very spikes it measures.
 - **Allow a few stutters in the smooth control**: rejected; it would hide a misleading verdict from users.
@@ -43,7 +44,50 @@ Revisit hook: `analysis/events._stutters`.
   the 5th-percentile FPS is within about 80 % of the target).
 - **0.9 x refresh**: what the first build used, borrowed from LC 4.14's cap rule; rejected, it made a
   GPU-bound 120 FPS game on a 144 Hz panel "low frame rate" for the whole capture.
-Revisit hook: `analysis/diagnose.lag_time`.
+- **Judged on the steady rate (chosen)**, the frame rate outside stutters and FPS drops: an average that
+  includes six 600 ms freezes made a steady 120 FPS game read "Low frame rate". The freezes are named instead.
+- **The target is the refresh rate for every verdict except a cap or a VSync lock (chosen)**, "unknown"
+  included: the frame rate is measured even when the limiting side is not. A regular cadence while other
+  programs share the game's GPU is not the game's own cap, so it counts too. Rejected: counting only
+  hardware-limited verdicts, which hid VSync-halved and "waiting" games.
+Not tuned above 120 Hz: CHI '23 validated the 80 % rule for 60–120 Hz only. Revisit hook:
+`analysis/diagnose.lag_time`, `LOW_FPS_FRAC`.
+
+## 2026-11-05: Dropped frames above a fixed refresh are their own cause
+
+A game presenting faster than a fixed-refresh screen (86 FPS on 60 Hz) drops frames, and its animation
+judders although every displayed interval is one refresh (PresentMon's gold test_case_5).
+- **Its own cause, `dropped_frames`, claiming those pacing events and counting as pacing lag (chosen)**,
+  advising a cap at the refresh rate, VSync or VRR.
+- **Under `vsync_judder`**: rejected; the headline then said "VSync judder" where VSync is not involved.
+- **Counting every cap's display judder as pacing lag**: rejected; LagLab's 120 FPS smooth control on 144 Hz
+  would become "pacing" and fail its judge.
+Revisit hook: `rules._dropped_judder`, `diagnose.lag_time(dropped=...)`.
+
+## 2026-11-05: The quantised-display slack is measured jitter, not 5 %
+
+The first stutter-rule fix rounded the regular cadence's longest hold with a 5 % slack, so caps at 137–143 FPS
+on 144 Hz (141 is the commonly advised cap) still turned one-refresh slips into stutters. Any presented cadence
+slower than the refresh produces regular 2-refresh holds, so the slack only has to absorb the jitter of the
+trailing median present interval: on the refresh-locked LagLab model at 144 Hz with the measured OS wake-ups
+(30 seeds, 125,317 frames) it strayed p99.9 +0.50 % (max +0.65 %) past the refresh.
+- **0.005 (chosen)**: caps 137–143 give no false stutters (0 in 10 seeds each, against 2–8 with 5 %); a game
+  locked at 144 FPS that misses two refreshes still stutters.
+- **No slack**: rejected; a locked game's jitter would then hide its real 3-refresh hitches.
+Residual: caps within that jitter of the refresh (about 143.3–144 FPS on 144 Hz) still turn single 3-refresh
+slips into stutters (8 in 10 seeds at 143.5 in the model); telling them from a locked game would need a longer
+present window than the stutter baseline. Measured on the model at 144 Hz and on gold dwm.exe at 60 Hz only.
+Revisit hook: `analysis/events.CADENCE_SLACK`.
+
+## 2026-11-05: Save captures streamed, at gzip level 1
+
+A 30-minute 144 FPS capture took 36 s to save (`asdict`, a pure-Python dump, gzip level 9), far beyond the
+4.5 s Windows gives a closing console.
+- **Stream the JSON column by column with the C encoder, compressed at level 1 on a worker thread (chosen)**:
+  2.6 s for the same capture, 12 MB instead of 9 MB; `Capture.load` is unchanged.
+- **Keep level 9**: rejected, 24 s of the save was compression alone.
+- **Checkpoint the capture while recording**: deferred (see the compact-storage backlog item); it needs every
+  collector's results to be readable mid-run.
 
 ## 2026-11-04: An NVIDIA power cap is not throttling
 
