@@ -334,17 +334,27 @@ def fix_offers(diagnosis: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]
 
 def cmd_undo(args: argparse.Namespace) -> int:
     from lagdoctor.fixes import catalog
-    from lagdoctor.fixes.journal import Journal
+    from lagdoctor.fixes.journal import Journal, JournalCorrupt
     journal = Journal()
-    entries = journal.undoable()
+    try:
+        entries = journal.outstanding()          # applied changes and conflicts, newest first
+    except JournalCorrupt as exc:
+        say(exc.plain())
+        return 1
     if not entries:
         say("Nothing to undo: lag-doctor has no changes in place.")
         return 0
     if not args.ids and not args.all:
         say("Changes lag-doctor made (newest first):")
         for e in entries:
-            say(f"  {e.id}  {e.fix_id:26} {e.target}  ({e.created_at})")
+            flag = "  CONFLICT" if e.state == "conflict" else ""
+            say(f"  {e.id}  {e.fix_id:26} {e.target}  ({e.created_at}){flag}")
+            if e.state == "conflict" and e.note:
+                say(f"  {'':12}  {e.note}")
         say("Undo one with: lagdoctor undo ID   (or --all)")
+        if any(e.state == "conflict" for e in entries):
+            say("A CONFLICT is a setting that is now neither the original nor lag-doctor's value; "
+                "undo it with --force to put the original back.")
         return 0
     chosen = entries if args.all else [e for e in entries if e.id in args.ids or e.fix_id in args.ids]
     if not chosen:
@@ -352,7 +362,17 @@ def cmd_undo(args: argparse.Namespace) -> int:
         return 2
     status = 0
     for e in chosen:
-        res = catalog.get(e.fix_id).undo(e, journal, force=args.force)
+        try:
+            fix = catalog.get(e.fix_id)
+        except KeyError:                         # journaled by a lag-doctor that knows more fixes
+            say(f"Left alone: {e.target}: this lag-doctor does not know the fix '{e.fix_id}'")
+            status = 1
+            continue
+        try:
+            res = fix.undo(e, journal, force=args.force)
+        except JournalCorrupt as exc:
+            say(exc.plain())
+            return 1
         say(f"{'Restored' if res.ok else 'Left alone'}: {res.message}")
         if not res.ok:
             status = 1
@@ -360,25 +380,30 @@ def cmd_undo(args: argparse.Namespace) -> int:
 
 
 def _settle_journal() -> None:
-    """Settle changes a crash left half-done, and session-only changes whose process has ended."""
+    """Settle changes a crash left half-done, and session-only changes whose subject has ended."""
     try:
         from lagdoctor.fixes import catalog
-        from lagdoctor.fixes.base import is_gone
         from lagdoctor.fixes.journal import Journal, JournalCorrupt
         journal = Journal()
         try:
             entries = journal.entries()
         except JournalCorrupt as exc:
-            say(f"The fix journal could not be read; it was set aside at {exc.parked}. Nothing was lost.")
+            say(f"The fix journal could not be read; it was copied to {exc.parked} and left in place. Fixes and "
+                f"undo are paused until it can be read again (`lagdoctor undo` says more).")
             return
         for e in entries:
-            if e.state == "pending":
-                res = catalog.get(e.fix_id).heal(e, journal)
-                say(f"Settled a change that was interrupted last time: {res.message}")
-            elif e.state == "applied" and e.session_only:
-                fix = catalog.get(e.fix_id)
-                if is_gone(fix._safe_read(e.params)):
-                    journal.set_state(e.id, "undone", "it ended with its process")
+            try:
+                if e.state == "pending":
+                    res = catalog.get(e.fix_id).heal(e, journal)
+                    say(f"Settled a change that was interrupted last time: {res.message}")
+                elif e.state == "applied" and e.session_only:
+                    # Decided without read(): a journaled PID may belong to the game by now, and read() opens it.
+                    if catalog.get(e.fix_id).ended(e.params):
+                        journal.set_state(e.id, "undone", "it ended with its process")
+            except JournalCorrupt:
+                raise
+            except Exception as exc:  # noqa: BLE001 - one bad entry is left as it is, and the rest still settle
+                say(f"(Could not check the change {e.id} ({e.fix_id}) in the fix journal: {exc})")
     except Exception as exc:  # noqa: BLE001 - a journal problem must not block the tool
         say(f"(Could not check the fix journal: {exc})")
 

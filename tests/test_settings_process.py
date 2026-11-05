@@ -87,6 +87,19 @@ def journal(tmp_path):
     return Journal(tmp_path / "journal.json", lock_timeout=2)
 
 
+@pytest.fixture
+def opens(monkeypatch):
+    """Every PID passed to the real OpenProcess from here on (the call still goes to Windows)."""
+    seen: list[int] = []
+    real = process._k32.OpenProcess
+
+    def spy(access, inherit, pid):
+        seen.append(pid)
+        return real(access, inherit, pid)
+    monkeypatch.setattr(process._k32, "OpenProcess", spy)
+    return seen
+
+
 def _wmi(pid: int) -> tuple[int, int]:
     """(create time in FILETIME ticks, base priority) from WMI's Win32_Process."""
     script = (f"$p = Get-CimInstance Win32_Process -Filter 'ProcessId={int(pid)}'; "
@@ -139,19 +152,57 @@ def test_a_realtime_request_that_comes_back_high_is_reported(child):
     assert child.ask("prio") == process.NORMAL
 
 
-def test_a_reused_pid_is_refused_on_the_handle_already_held(child):
+def _reused_pid_calls(pid: int, ctime: int) -> list:
+    return [lambda: process.priority_class(pid, create_time=ctime),
+            lambda: process.set_priority_class(pid, process.IDLE, create_time=ctime),
+            lambda: process.same_user(pid, create_time=ctime),
+            lambda: process.session_id(pid, create_time=ctime),
+            lambda: process.is_service_or_protected(pid, create_time=ctime)]
+
+
+def test_a_reused_pid_is_refused_before_it_is_opened(child, opens):
+    # The journaled PID now names another process (it could be the game): the snapshot tells, no handle.
+    ctime = child.ask("ctime")                     # the child's own answer: nothing of ours opened it
+    before = child.ask("prio")
+    for call in _reused_pid_calls(child.pid, ctime + 1):
+        with pytest.raises(process.ProcessGone):
+            call()
+    assert child.pid not in opens
+    assert child.ask("prio") == before             # nothing was set
+    assert process.priority_class(child.pid, create_time=ctime) == before
+    assert child.pid in opens                      # the spy does see an open: its silence above meant something
+
+
+def test_a_reused_pid_is_refused_on_the_handle_already_held(child, monkeypatch):
+    # The PID can be reused between the snapshot and the open: the handle's own create time still decides.
     ctime = process.creation_time(child.pid)
     before = child.ask("prio")
-    calls = [lambda: process.priority_class(child.pid, create_time=ctime + 1),
-             lambda: process.set_priority_class(child.pid, process.IDLE, create_time=ctime + 1),
-             lambda: process.same_user(child.pid, create_time=ctime + 1),
-             lambda: process.session_id(child.pid, create_time=ctime + 1),
-             lambda: process.is_service_or_protected(child.pid, create_time=ctime + 1)]
-    for call in calls:
+    monkeypatch.setattr(process, "is_running", lambda pid, create_time: True)    # the snapshot said yes
+    for call in _reused_pid_calls(child.pid, ctime + 1):
         with pytest.raises(process.ProcessGone):
             call()
     assert child.ask("prio") == before             # nothing was set
     assert process.priority_class(child.pid, create_time=ctime) == before
+
+
+def test_running_name_is_the_childs_image_name_and_needs_its_create_time(child, opens):
+    ctime = child.ask("ctime")
+    assert process.running_name(child.pid, ctime).casefold() == Path(BASE_PYTHON).name.casefold()
+    assert process.is_running(child.pid, ctime) is True
+    assert process.running_name(child.pid, ctime + 1) is None
+    assert process.is_running(child.pid, ctime - 1) is False
+    assert opens == []
+    for bad in (None, 0, -1, True, 1.5):
+        with pytest.raises(ValueError):
+            process.running_name(child.pid, bad)
+    with pytest.raises(ValueError):
+        process.running_name(0, ctime)
+
+
+def test_running_name_is_none_once_the_child_exited_although_its_handle_is_held(child):
+    ctime = child.ask("ctime")
+    child.exit()
+    assert process.running_name(child.pid, ctime) is None
 
 
 def test_an_exited_process_is_gone_while_a_handle_still_holds_its_pid(child):
@@ -366,13 +417,15 @@ def test_same_user_is_false_for_another_sid(monkeypatch, child):
 # ---------------------------------------- live: background_priority on a child --
 
 def _params(child: Child, **extra) -> dict:
-    return {"pid": child.pid, "create_time": process.creation_time(child.pid), "class": "below_normal", **extra}
+    """As the report suggests it: the child by (pid, create time) and image name; a stand-in game PID."""
+    return {"pid": child.pid, "create_time": child.ask("ctime"), "class": "below_normal",
+            "exclude": [os.getppid()], "name": Path(BASE_PYTHON).name, **extra}
 
 
 def test_background_priority_lowers_a_child_and_undo_restores_it(child, journal):
     process.set_priority_class(child.pid, process.NORMAL)     # a known start, whatever pytest itself runs at
     fix = BackgroundPriorityFix()
-    plan = fix.plan(_params(child, exclude=[os.getppid()]))
+    plan = fix.plan(_params(child))
     assert (plan.before, plan.after, plan.session_only) == ("normal", "below_normal", True)
     res = fix.apply(plan, journal)
     assert res.ok and res.state == "applied", res.message
@@ -401,10 +454,38 @@ def test_background_priority_refuses_the_game_without_opening_it(child, monkeypa
     monkeypatch.setattr(process, "_open", _must_not_open)
     with pytest.raises(Refused, match="game"):
         BackgroundPriorityFix().plan(params)
+    same_name = _params(child, game_name=Path(BASE_PYTHON).name.upper())   # the game's same-named sibling
+    with pytest.raises(Refused, match="game"):
+        BackgroundPriorityFix().plan(same_name)
+
+
+def test_background_priority_never_opens_a_reused_pid(child, journal, opens):
+    # A journal entry outlived its process and the PID went to another one: plan, read and a forced undo all
+    # settle it from the snapshot without a handle (DESIGN Principle 1: that process may be the game).
+    params = _params(child)
+    params["create_time"] += 1
+    fix = BackgroundPriorityFix()
+    assert fix.read(params) == GONE
+    assert fix.plan(params).before == GONE
+    entry = journal.begin("background_priority", "x", params, before="normal", after="below_normal",
+                          session_only=True)
+    journal.set_state(entry.id, "applied")
+    res = fix.undo(journal.get(entry.id), journal, force=True)
+    assert res.ok and journal.get(entry.id).state == "undone"
+    assert child.pid not in opens
+    assert fix.ended(params) is True
+    assert child.pid not in opens
+
+
+def test_background_priority_refuses_a_process_with_another_name_without_opening_it(child, opens):
+    with pytest.raises(Refused, match="not Discord.exe"):
+        BackgroundPriorityFix().plan(_params(child, name="Discord.exe"))
+    assert child.pid not in opens
 
 
 def test_background_priority_refuses_defender(monkeypatch):
     pid = _defender_pid()
     monkeypatch.setattr(process, "_open", _must_not_open)
     with pytest.raises(Refused, match="WinDefend"):
-        BackgroundPriorityFix().plan({"pid": pid, "create_time": 1, "class": "below_normal"})
+        BackgroundPriorityFix().plan({"pid": pid, "create_time": 1, "class": "below_normal",
+                                      "exclude": [os.getppid()], "name": "MsMpEng.exe"})

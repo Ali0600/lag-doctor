@@ -9,19 +9,24 @@ processes may be changed at all is policy, decided in fixes/priority.py, never h
 Identity: Windows reuses a PID once its process is gone, so every function takes an optional
 `create_time`, in FILETIME ticks (100 ns since 1601-01-01 UTC): the number
 SYSTEM_PROCESS_INFORMATION.CreateTime carries (WT 3.1), which is what winapi/ntquery reports.
-When it is given, GetProcessTimes on the handle already held must return it. Every function also
-checks that the process is still running, because a process that exited stays openable while
-anyone holds a handle to it. Either failure raises ProcessGone, so a check and the change it
-guards always act on the same process.
+When it is given, a system snapshot (winapi/ntquery, which opens nothing) must show that PID with
+that create time BEFORE the process is opened: a journaled PID may belong to the game by now, and
+the game is never opened. GetProcessTimes on the handle must then return it again, because the PID
+could be reused between the snapshot and the open. Every function also checks that the process is
+still running, because a process that exited stays openable while anyone holds a handle to it.
+Each failure raises ProcessGone, so a check and the change it guards always act on the same process.
 """
 from __future__ import annotations
 
 import ctypes
 import errno
 import os
+import threading
 from contextlib import contextmanager
 from ctypes import wintypes
 from typing import Iterator
+
+from lagdoctor.winapi import ntquery
 
 # Priority classes (WT 9.1; SDK um\WinBase.h 625-637).
 IDLE = 0x40
@@ -204,13 +209,29 @@ def _confirm(handle: int, pid: int, create_time: int | None) -> None:
             raise _gone(f"process id {pid} now belongs to another process (created {got}, expected {create_time})")
 
 
+_snap_lock = threading.Lock()
+_snapper: list[ntquery.Snapshotter] = []         # one reusable buffer, made on first use
+
+
+def _processes() -> dict[int, ntquery.ProcInfo]:
+    """Every process, from NtQuerySystemInformation: nothing is opened (WT 3.1, 9.4)."""
+    with _snap_lock:
+        if not _snapper:
+            _snapper.append(ntquery.Snapshotter())
+        snap = _snapper[0]
+    return snap.snapshot()
+
+
 @contextmanager
 def _held(pid: int, access: int, create_time: int | None) -> Iterator[int]:
     _check_pid(pid)
     _check_create_time(create_time)
+    # Who holds the PID now is checked without a handle: it may be the game, which is never opened.
+    if create_time is not None and not is_running(pid, create_time):
+        raise _gone(f"process {pid} with that create time is not running (it exited, or the id was reused)")
     handle = _open(pid, access)
     try:
-        _confirm(handle, pid, create_time)
+        _confirm(handle, pid, create_time)       # the PID can still be reused between the snapshot and the open
         yield handle
     finally:
         _k32.CloseHandle(handle)
@@ -224,6 +245,24 @@ def _class_of(handle: int) -> int:
 
 
 # ------------------------------------------------------------------ public --
+
+def running_name(pid: int, create_time: int) -> str | None:
+    """The image name of the process with this PID AND create time ("Discord.exe"), from a system snapshot
+    that opens no process; None when no such process runs (it exited, or the PID now names another one)."""
+    _check_pid(pid)
+    if create_time is None:
+        raise ValueError("running_name needs the process create time")
+    _check_create_time(create_time)
+    p = _processes().get(pid)
+    if p is None or p.create_time != create_time:
+        return None
+    return p.name
+
+
+def is_running(pid: int, create_time: int) -> bool:
+    """True while the process with this PID and create time runs; decided without opening it."""
+    return running_name(pid, create_time) is not None
+
 
 def creation_time(pid: int) -> int:
     """The process's create time in FILETIME ticks (GetProcessTimes), for callers that hold only a PID."""
