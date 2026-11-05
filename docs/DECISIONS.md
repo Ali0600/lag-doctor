@@ -44,6 +44,18 @@ Both offered options stay available at run time, so the user picks per run.
 - **Per-target rates (gateway 2 Hz, anchor 1 Hz) on a 4 Hz table**: what the research proposed; rejected
   because most rows would hold `None` for "not sent this tick".
 
+## 2026-11-04: An offline PC may run the pinned PresentMon without a revocation answer
+
+On a PC with no cached CRL, WinVerifyTrust (cache-only, so no network) can answer "revocation unknown",
+and setup would refuse an exe whose bytes match the pinned SHA-256.
+- **Accept "revocation unknown" only after the pin matched, re-checking the signature without revocation
+  (chosen)**: the pin is the exact official release, which a later revocation cannot change; an explicit
+  `CERT_E_REVOKED` still refuses, and the result carries a note saying the check was offline.
+- **Fail closed on every non-zero answer**: rejected; it would block frame timing on offline PCs while
+  adding no protection the pin does not already give.
+- **Fetch revocation data online**: rejected; setup would contact certificate servers on every run.
+Revisit hook: `setup.REVOCATION_UNKNOWN` and `verify()`.
+
 ## 2026-11-04: No fix that raises the game's priority
 
 - **Lower the priority of the user's own background hogs, session-only (chosen)**.

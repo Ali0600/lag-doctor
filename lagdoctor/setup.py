@@ -77,7 +77,13 @@ TRUST_PROBLEMS = {                          # winerror.h values
     0x800B0101: "its certificate has expired (CERT_E_EXPIRED)",
     0x800B0004: "its signature is not trusted (TRUST_E_SUBJECT_NOT_TRUSTED)",
     0x80092026: "this PC's security settings blocked the check (CRYPT_E_SECURITY_SETTINGS)",
+    0x80092013: "the revocation server could not be reached (CRYPT_E_REVOCATION_OFFLINE)",
+    0x80092012: "no revocation check could be made (CRYPT_E_NO_REVOCATION_CHECK)",
 }
+# "Revoked or not" could not be answered (an offline PC with no cached CRL). Only these three: an
+# explicit CERT_E_REVOKED is never in here. See verify() for why the pin makes this safe to accept.
+REVOCATION_UNKNOWN = frozenset({0x800B010E, 0x80092013, 0x80092012})
+WTD_REVOKE_NONE = 0x0
 
 
 class GUID(ctypes.Structure):
@@ -184,17 +190,20 @@ def _signer_name(state: int) -> str | None:
     return buf.value if n > 1 else None
 
 
-def authenticode(path: Path, handle: int | None = None) -> tuple[int, str | None]:
-    """(WinVerifyTrust result as an unsigned HRESULT, signer common name or None). 0 = trusted."""
+def authenticode(path: Path, handle: int | None = None, revocation: bool = True) -> tuple[int, str | None]:
+    """(WinVerifyTrust result as an unsigned HRESULT, signer common name or None). 0 = trusted.
+
+    revocation=False checks the signature and chain without asking whether the certificate was revoked.
+    """
     file_info = WINTRUST_FILE_INFO(ctypes.sizeof(WINTRUST_FILE_INFO), str(path), handle, None)
     data = WINTRUST_DATA()
     data.cbStruct = ctypes.sizeof(WINTRUST_DATA)
     data.dwUIChoice = WTD_UI_NONE
-    data.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN
+    data.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN if revocation else WTD_REVOKE_NONE
     data.dwUnionChoice = WTD_CHOICE_FILE
     data.pFile = ctypes.pointer(file_info)
     data.dwStateAction = WTD_STATEACTION_VERIFY
-    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT
+    data.dwProvFlags = WTD_CACHE_ONLY_URL_RETRIEVAL | (WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT if revocation else 0)
     action = GUID.from_buffer_copy(WINTRUST_ACTION_GENERIC_VERIFY_V2)
     no_window = wintypes.HWND(INVALID_HANDLE_VALUE)
     rc = _WinVerifyTrust(no_window, ctypes.byref(action), ctypes.byref(data)) & 0xFFFFFFFF
@@ -242,16 +251,24 @@ def verify(path: Path, *, sha256: str = SHA256, size: int | None = SIZE, signer:
     """Raise VerifyError unless the file is the pinned, validly signed Intel PresentMon (NotInstalled if it
     is missing). Never runs it."""
     path = Path(path)
+    note = ""
     with _pinned_file(path, sha256, size) as f:
         f.seek(0)
-        rc, name = authenticode(path, msvcrt.get_osfhandle(f.fileno()))
+        handle = msvcrt.get_osfhandle(f.fileno())
+        rc, name = authenticode(path, handle)
+        if rc in REVOCATION_UNKNOWN:
+            # An offline PC without a cached CRL cannot say whether the certificate was revoked. The bytes
+            # already match the pinned SHA-256 of the official release, which no revocation could change, so
+            # check the signature itself without revocation and say so. An explicit revocation still fails.
+            rc, name = authenticode(path, handle, revocation=False)
+            note = "the certificate's revocation status could not be checked offline; the pinned SHA-256 matched"
         actual_size = os.fstat(f.fileno()).st_size
     if rc != 0:
         why = TRUST_PROBLEMS.get(rc, f"WinVerifyTrust returned 0x{rc:08X}")
         raise VerifyError(f"{path} failed its Authenticode check: {why}")
     if name != signer:
         raise VerifyError(f"{path} is signed by {name or 'an unnamed certificate'!r}, not {signer!r}")
-    return {"path": str(path), "sha256": sha256.lower(), "size": actual_size, "signer": name}
+    return {"path": str(path), "sha256": sha256.lower(), "size": actual_size, "signer": name, "note": note}
 
 
 class _HttpsOnlyRedirects(urllib.request.HTTPRedirectHandler):

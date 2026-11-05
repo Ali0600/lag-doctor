@@ -60,7 +60,7 @@ def test_the_pin_is_the_v2_6_0_release_asset():
 def test_the_real_exe_verifies(presentmon_exe):
     info = setup.verify(presentmon_exe)
     assert info == {"path": str(presentmon_exe), "sha256": sha256(presentmon_exe), "size": 980_320,
-                    "signer": "Intel Corporation"}
+                    "signer": "Intel Corporation", "note": ""}
 
 
 def test_a_tampered_copy_is_refused_by_its_hash_first(tampered):
@@ -117,6 +117,59 @@ def test_revocation_is_checked_from_the_cache_only_and_the_state_is_closed(prese
     assert verify[1] == setup.WTD_REVOKE_WHOLECHAIN
     assert verify[2] & setup.WTD_CACHE_ONLY_URL_RETRIEVAL                     # never fetch a CRL or AIA
     assert verify[3] == setup.WTD_UI_NONE and verify[4] == setup.WTD_CHOICE_FILE
+    calls.clear()
+    setup.authenticode(presentmon_exe, revocation=False)
+    verify, _ = calls
+    assert verify[1] == setup.WTD_REVOKE_NONE
+    assert not verify[2] & setup.WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT
+    assert verify[2] & setup.WTD_CACHE_ONLY_URL_RETRIEVAL
+
+
+def fake_authenticode(results):
+    """An authenticode() stand-in answering per revocation flag, recording the order it was asked in."""
+    calls = []
+
+    def fake(path, handle=None, revocation=True):
+        calls.append(revocation)
+        return results[revocation]
+    return fake, calls
+
+
+def test_unknown_revocation_offline_is_accepted_once_the_pin_matched(presentmon_exe, monkeypatch):
+    fake, calls = fake_authenticode({True: (0x800B010E, None), False: (0, "Intel Corporation")})
+    monkeypatch.setattr(setup, "authenticode", fake)
+    info = setup.verify(presentmon_exe)
+    assert calls == [True, False]
+    assert info["signer"] == "Intel Corporation"
+    assert "revocation status could not be checked offline" in info["note"]
+
+
+def test_an_explicitly_revoked_certificate_is_still_refused(presentmon_exe, monkeypatch):
+    fake, calls = fake_authenticode({True: (0x800B010C, None), False: (0, "Intel Corporation")})
+    monkeypatch.setattr(setup, "authenticode", fake)
+    with pytest.raises(setup.VerifyError, match="CERT_E_REVOKED"):
+        setup.verify(presentmon_exe)
+    assert calls == [True]
+
+
+def test_the_offline_fallback_still_checks_the_signature(presentmon_exe, monkeypatch):
+    fake, calls = fake_authenticode({True: (0x80092013, None), False: (0x80096010, None)})
+    monkeypatch.setattr(setup, "authenticode", fake)
+    with pytest.raises(setup.VerifyError, match="TRUST_E_BAD_DIGEST"):
+        setup.verify(presentmon_exe)
+    assert calls == [True, False]
+
+
+def test_the_offline_fallback_never_runs_before_the_pin(tampered, monkeypatch):
+    fake, calls = fake_authenticode({True: (0x800B010E, None), False: (0, "Intel Corporation")})
+    monkeypatch.setattr(setup, "authenticode", fake)
+    with pytest.raises(setup.VerifyError, match="SHA-256"):
+        setup.verify(tampered)
+    assert calls == []
+
+
+def test_the_real_exe_also_verifies_without_a_revocation_check(presentmon_exe):
+    assert setup.authenticode(presentmon_exe, revocation=False) == (0, "Intel Corporation")
 
 
 def test_pinned_locks_the_file_against_writers_until_the_block_ends(presentmon_exe, tmp_path):

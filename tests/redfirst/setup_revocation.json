@@ -1,0 +1,22 @@
+[
+  {"name": "offline revocation failure refuses a pinned exe",
+   "file": "lagdoctor/setup.py",
+   "old": "        if rc in REVOCATION_UNKNOWN:",
+   "new": "        if False:",
+   "tests": ["tests/test_presentmon_setup.py::test_unknown_revocation_offline_is_accepted_once_the_pin_matched"]},
+  {"name": "an explicit revocation is waved through",
+   "file": "lagdoctor/setup.py",
+   "old": "REVOCATION_UNKNOWN = frozenset({0x800B010E, 0x80092013, 0x80092012})",
+   "new": "REVOCATION_UNKNOWN = frozenset({0x800B010E, 0x80092013, 0x80092012, 0x800B010C})",
+   "tests": ["tests/test_presentmon_setup.py::test_an_explicitly_revoked_certificate_is_still_refused"]},
+  {"name": "the offline fallback skips the signature check",
+   "file": "lagdoctor/setup.py",
+   "old": "            rc, name = authenticode(path, handle, revocation=False)",
+   "new": "            rc, name = 0, signer",
+   "tests": ["tests/test_presentmon_setup.py::test_the_offline_fallback_still_checks_the_signature"]},
+  {"name": "the no-revocation check still asks for revocation",
+   "file": "lagdoctor/setup.py",
+   "old": "    data.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN if revocation else WTD_REVOKE_NONE",
+   "new": "    data.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN",
+   "tests": ["tests/test_presentmon_setup.py::test_revocation_is_checked_from_the_cache_only_and_the_state_is_closed"]}
+]
