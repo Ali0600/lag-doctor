@@ -148,6 +148,10 @@ def test_a_launch_that_returns_no_process_handle_is_an_error(monkeypatch, tmp_pa
     (["python.exe", "-m", "lagdoctor"], "C:\\"),           # a bare name would be searched on PATH, elevated
     ([sys.executable], "relative\\folder"),
     ([sys.executable, "bad\0arg"], "C:\\"),
+    ([sys.executable, "--steam-log", ""], "C:\\"),         # an empty argument: never launched
+    ([sys.executable, "line\nbreak"], "C:\\"),              # a control character: never launched either
+    ([sys.executable, "tab\there"], "C:\\"),
+    ([sys.executable], "C:\\new\nline"),
     ([], "C:\\"),
     (["C:\\no\\such\\program.exe"], "C:\\"),
     ([sys.executable], "C:\\no\\such\\folder"),

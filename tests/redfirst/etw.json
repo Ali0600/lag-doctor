@@ -917,5 +917,43 @@
   "tests": [
    "tests/test_etw_tracker.py::test_game_packets_that_arrive_after_the_reorder_window_make_the_flows_partial"
   ]
+ },
+ {
+  "name": "lag-doctor's own stop by name reads as the consumer stopping by itself",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if self._started_at is not None and _stopped_by_us_since(self._started_at):\n                return",
+  "new": "            if False:\n                return",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_consumer_ended_by_lag_doctors_own_stop_by_name_is_a_stop_it_asked_for",
+   "tests/test_cli.py::test_closing_the_window_is_a_stop_the_flow_tracker_asked_for"
+  ]
+ },
+ {
+  "name": "a stop by name said before the session started excuses its consumer",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        return _external_stop_at is not None and _external_stop_at >= t0",
+  "new": "        return _external_stop_at is not None",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_stop_by_name_announced_before_the_session_started_does_not_excuse_its_consumer"
+  ]
+ },
+ {
+  "name": "the tracker never notes when its session started",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        self._started_at = clock.now()",
+  "new": "        pass",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_consumer_ended_by_lag_doctors_own_stop_by_name_is_a_stop_it_asked_for"
+  ]
+ },
+ {
+  "name": "saying the stop is ours records nothing",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        _external_stop_at = clock.now()",
+  "new": "        pass",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_consumer_ended_by_lag_doctors_own_stop_by_name_is_a_stop_it_asked_for",
+   "tests/test_cli.py::test_closing_the_window_is_a_stop_the_flow_tracker_asked_for"
+  ]
  }
 ]

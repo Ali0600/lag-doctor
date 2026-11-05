@@ -7,6 +7,10 @@ ground-truth log, so the expected answer never comes from lag-doctor itself.
 Frame timing needs ETW rights: without them this script relaunches itself
 once through a UAC prompt, runs there, and prints the verdicts back here.
 Nothing on the PC is changed; only LagLab, PresentMon and the samplers run.
+Each mode records under the one-recording lock (session.CaptureLock), as
+`lagdoctor watch` does: the trace sessions have fixed names, so a run beside a
+watch would end that watch's tracing. A busy lock stops the run before LagLab
+starts.
 """
 from __future__ import annotations
 
@@ -32,6 +36,10 @@ PID_FILE_TIMEOUT_S = 30.0
 NVIDIA_SHIM = {"SHIM_MCCOMPAT": "0x800000001"}   # moves an OpenGL app to the NVIDIA GPU (docs/learnings.md)
 
 
+class Busy(Exception):
+    """Another lag-doctor recording holds the one-recording lock, or Windows could not say."""
+
+
 def parse(argv: list[str] | None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--modes", default=",".join(ORDER), help="comma-separated LagLab modes")
@@ -44,13 +52,16 @@ def parse(argv: list[str] | None) -> argparse.Namespace:
     unknown = [m for m in a.mode_list if m not in EXPECTATIONS]
     if unknown:
         ap.error(f"unknown mode(s) {unknown}; known: {ORDER}")
+    if not a.mode_list:                       # also: an empty --modes would be an empty argument when elevated
+        ap.error(f"no modes given; known: {ORDER}")
     return a
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse(argv)
     from lagdoctor.winapi import elevation
-    out = args.out or (paths.sessions_dir() / f"e2e-{time.strftime('%Y%m%d-%H%M%S')}")
+    # Absolute: the elevated run works in the repo folder, and LAGDOCTOR_HOME may be relative.
+    out = (args.out or (paths.sessions_dir() / f"e2e-{time.strftime('%Y%m%d-%H%M%S')}")).resolve()
     out.mkdir(parents=True, exist_ok=True)
     if not elevation.can_trace():
         if args.child:
@@ -65,11 +76,19 @@ def main(argv: list[str] | None = None) -> int:
         except PermissionError:
             print("The UAC prompt was declined; nothing ran.")
             return 3
+        except (OSError, ValueError) as exc:
+            print(f"The elevated run could not be started ({exc}); nothing ran.")
+            return 3
         return print_summary(out, code)
     results = []
     for m in args.mode_list:
         try:
             results.append(run_mode(m, args, out))
+        except Busy as exc:
+            print(f"\n{exc} The run stops here: {m} and the modes after it did not run.", flush=True)
+            results.append({"mode": m, "ok": False, "error": str(exc)})
+            (out / "e2e-results.json").write_text(json.dumps(results, indent=1), encoding="utf-8")
+            break
         except Exception as exc:  # noqa: BLE001 - one broken mode must not hide the others' results
             import traceback
             results.append({"mode": m, "ok": False, "error": f"{type(exc).__name__}: {exc}",
@@ -80,6 +99,19 @@ def main(argv: list[str] | None = None) -> int:
     return print_summary(out, 0)
 
 
+def take_capture_lock():
+    """The one-recording lock, held; Busy (a plain sentence) when another recording runs or Windows cannot say."""
+    from lagdoctor.capture.session import CaptureLock
+    lock = CaptureLock()
+    try:
+        if lock.acquire():
+            return lock
+    except OSError as exc:
+        raise Busy(f"Could not check whether another lag-doctor recording is running ({exc}).") from None
+    raise Busy("Another lag-doctor recording is running (a `lagdoctor watch`, or its administrator window); "
+               "stop it first.")
+
+
 def run_mode(mode: str, args: argparse.Namespace, out: Path) -> dict:
     from lagdoctor import setup as pm_setup
     from lagdoctor.analysis.diagnose import diagnose
@@ -88,29 +120,33 @@ def run_mode(mode: str, args: argparse.Namespace, out: Path) -> dict:
     from lagdoctor.report import html
 
     print(f"\n=== {mode} ===", flush=True)
-    d = out / mode
-    d.mkdir(exist_ok=True)
-    pid_file, log_file = d / "laglab-pid.json", d / "laglab-log.json"
-    for f in (pid_file, log_file):
-        f.unlink(missing_ok=True)
-    env = dict(os.environ, **(NVIDIA_SHIM if args.nvidia else {}))
-    lab = subprocess.Popen([sys.executable, "-m", "laglab", "--mode", mode, "--duration", repr(args.duration),
-                            "--pid-file", str(pid_file), "--log", str(log_file)], cwd=str(ROOT), env=env)
+    lock = take_capture_lock()                # before LagLab starts: a busy lock leaves nothing running
     try:
-        deadline = time.monotonic() + PID_FILE_TIMEOUT_S
-        while not pid_file.is_file():
-            if lab.poll() is not None or time.monotonic() > deadline:
-                return {"mode": mode, "ok": False, "error": f"LagLab never started (exit {lab.poll()})"}
-            time.sleep(0.1)
-        game_pid = json.loads(pid_file.read_text(encoding="utf-8"))["pid"]
-        target = find_target(pid=game_pid)
-        opts = SessionOptions(duration_s=args.duration + 5.0, network=mode in NETWORK_MODES, hotkey=None,
-                              presentmon_exe=pm_setup.ensure_presentmon(allow_download=False), frames=True)
-        cap = Session(target, opts, printer=lambda line: None).run()      # ends when LagLab exits
-        lab.wait(timeout=30)
+        d = out / mode
+        d.mkdir(exist_ok=True)
+        pid_file, log_file = d / "laglab-pid.json", d / "laglab-log.json"
+        for f in (pid_file, log_file):
+            f.unlink(missing_ok=True)
+        env = dict(os.environ, **(NVIDIA_SHIM if args.nvidia else {}))
+        lab = subprocess.Popen([sys.executable, "-m", "laglab", "--mode", mode, "--duration", repr(args.duration),
+                                "--pid-file", str(pid_file), "--log", str(log_file)], cwd=str(ROOT), env=env)
+        try:
+            deadline = time.monotonic() + PID_FILE_TIMEOUT_S
+            while not pid_file.is_file():
+                if lab.poll() is not None or time.monotonic() > deadline:
+                    return {"mode": mode, "ok": False, "error": f"LagLab never started (exit {lab.poll()})"}
+                time.sleep(0.1)
+            game_pid = json.loads(pid_file.read_text(encoding="utf-8"))["pid"]
+            target = find_target(pid=game_pid)
+            opts = SessionOptions(duration_s=args.duration + 5.0, network=mode in NETWORK_MODES, hotkey=None,
+                                  presentmon_exe=pm_setup.ensure_presentmon(allow_download=False), frames=True)
+            cap = Session(target, opts, printer=lambda line: None).run()      # ends when LagLab exits
+            lab.wait(timeout=30)
+        finally:
+            if lab.poll() is None:
+                lab.kill()
     finally:
-        if lab.poll() is None:
-            lab.kill()
+        lock.release()
     log = json.loads(log_file.read_text(encoding="utf-8"))
     cap_path = cap.save(d / "capture.ldcap.json.gz")
     diag = diagnose(cap)

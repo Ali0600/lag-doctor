@@ -1,11 +1,14 @@
 """The command line: argument checks, the elevation choice, and fix / undo through the journal.
 
 Watch tests run cmd_watch in this process with a fake target and fake collectors, and the elevated child is
-faked too: nothing here raises a UAC prompt. The console-event tests run the real cli.main in a hidden console
-of their own, so the events they send never reach this process's console.
+faked too: nothing here raises a UAC prompt. Some elevated tests keep the real launch_elevated and replace only
+ShellExecuteExW, with a recorder that runs the elevated command's lag-doctor part in this process. The
+console-event tests run the real cli.main in a hidden console of their own, so the events they send never reach
+this process's console.
 """
 from __future__ import annotations
 
+import _winapi
 import copy
 import ctypes
 import gzip
@@ -35,10 +38,12 @@ from lagdoctor.model import Capture
 from lagdoctor.winapi import elevation
 
 ROOT = Path(__file__).resolve().parents[1]
+BASE_PY = getattr(sys, "_base_executable", sys.executable)
 STORE: dict[str, object] = {}
 GAME = {"pid": 4242, "create_time": 133000000000000001, "name": "Game.exe", "exe": r"C:\Games\Game.exe",
         "window_title": "Game", "monitor_device": None, "adapter_luid": None, "how": "pid", "candidates": []}
 WATCH = ["watch", "--pid", "4242", "--duration", "0.2", "--no-network", "--hotkey", "none"]
+FAKE_GAME_S = 10.0             # the faked game exits after this (see fake_world)
 
 
 @pytest.fixture(autouse=True)
@@ -359,8 +364,10 @@ def fake_world(monkeypatch):
             seen["sessions"].append({"target": target, "opts": opts, "inventory": inventory})
             cols = [Quick("system", {"columns": {"t": [0.0, 0.25], "cpu_total_pct": [10.0, 11.0]}}),
                     Quick("frames", {"columns": {"t": [0.1, 0.12, 0.14], "frame_ms": [16.7, 16.6, 16.8]}})]
+            # The fake game ends by itself: a recording a test did not expect (no --duration) ends, never hangs.
+            ends = time.monotonic() + FAKE_GAME_S
             super().__init__(target, opts, collectors=cols, inventory=inventory or {"adapters": []},
-                             alive=lambda: True, printer=lambda line: None)
+                             alive=lambda: time.monotonic() < ends, printer=lambda line: None)
     monkeypatch.setattr(sess, "Session", QuickSession)
     return seen
 
@@ -465,6 +472,56 @@ def test_the_console_handler_stops_on_ctrl_break_and_waits_for_the_save_on_close
     assert time.monotonic() - t0 < 1.0
 
 
+def test_closing_the_window_is_a_stop_the_flow_tracker_asked_for(monkeypatch):
+    """The real console handler beside a real FlowTracker over a fake ETW session whose consumer ends when the
+    session is stopped by name. The handler must say it is ours before it stops it: a consumer check in
+    between would otherwise read 'the ETW consumer stopped by itself' and mark the flows partial."""
+    from lagdoctor import clock
+    from lagdoctor.capture import netflows as nf
+    from lagdoctor.winapi import etw
+    made = []
+
+    class NamedSession:
+        def __init__(self, name, providers, on_event):
+            self.name, self.alive = name, False
+            made.append(self)
+
+        def start(self):
+            self.alive = True
+
+        def stop(self):
+            self.alive = False
+
+        def health(self):
+            return {"events": 0, "lost": 0, "callback_errors": 0, "pump_alive": self.alive,
+                    "process_trace_rc": None if self.alive else 0}
+
+    def stop_by_name(name):
+        for s in made:
+            if s.name == name:
+                s.alive = False
+        time.sleep(0.6)                        # the tracker checks its consumer meanwhile (every 0.25 s here)
+        return 0
+    monkeypatch.setattr(nf, "PUMP_EVERY_S", 0.1)
+    monkeypatch.setattr(etw, "stop_session", stop_by_name)
+    tr = nf.FlowTracker((4242,), selftest=False, local_addrs=lambda: {"127.0.0.1"}, session_factory=NamedSession)
+    tr.start(clock.now())
+    try:
+        deadline = time.monotonic() + 5
+        while not (made and made[0].alive) and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert made and made[0].name == "lag-doctor-net"
+        stop, saved = threading.Event(), threading.Event()
+        saved.set()
+        assert cli._ConsoleControl(stop, saved, network=True)._handle(cli.CTRL_CLOSE_EVENT)
+        assert stop.reason == "window closed" and not made[0].alive
+    finally:
+        tr.stop()
+    st = tr.status()
+    assert "stopped by itself" not in st.detail, st
+    assert tr.result()["health"]["consumer_stopped_t"] is None
+
+
 # ------------------------------------------------------------- the elevated child, faked ---
 
 class FakeChild:
@@ -510,6 +567,114 @@ def fake_elevation(monkeypatch, fake_world, tmp_path):
     monkeypatch.setattr(elevation, "launch_elevated", launch, raising=False)
     monkeypatch.setattr(elevation, "relaunch_elevated", relaunch)
     return state
+
+
+def _split_command_line(program: str, params: str) -> list[str]:
+    """How the child's command line is split (CommandLineToArgvW), program first."""
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    k32 = ctypes.WinDLL("kernel32")
+    k32.LocalFree.argtypes = [ctypes.c_void_p]
+    n = ctypes.c_int()
+    argv = shell32.CommandLineToArgvW(f'"{program}" {params}', ctypes.byref(n))
+    assert argv, f"CommandLineToArgvW failed: {ctypes.get_last_error()}"
+    try:
+        return [argv[i] for i in range(n.value)]
+    finally:
+        k32.LocalFree(ctypes.cast(argv, ctypes.c_void_p))
+
+
+class ShellExecuteRecorder:
+    """Stands in for ShellExecuteExW behind the real launch_elevated: records what would have run elevated, runs
+    that command's lag-doctor part here (cli.main, in the faked world), and hands back the handle of a plain
+    child process that exits with the same code."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.children: list[subprocess.Popen] = []
+
+    def __call__(self, ref) -> bool:
+        info = ref._obj
+        argv = _split_command_line(info.lpFile, info.lpParameters)
+        self.calls.append({"verb": info.lpVerb, "file": info.lpFile, "params": info.lpParameters,
+                           "dir": info.lpDirectory, "argv": argv})
+        assert argv[1:5] == ["-E", "-s", "-m", "lagdoctor"], argv
+        code = cli.main(argv[5:])                       # the elevated child's own parser and checks
+        child = subprocess.Popen([BASE_PY, "-I", "-c", f"import sys; sys.exit({int(code)})"])
+        self.children.append(child)
+        me = _winapi.GetCurrentProcess()
+        info.hProcess = _winapi.DuplicateHandle(me, child._handle, me, 0, False, _winapi.DUPLICATE_SAME_ACCESS)
+        return True
+
+
+@pytest.fixture
+def real_launch(monkeypatch, fake_world, tmp_path):
+    """The parent may trace only by elevating, through the real launch_elevated; only ShellExecuteExW is faked.
+    This PC's own HKCU is not read for a Steam log (a test may give one)."""
+    from lagdoctor import setup as pm_setup
+    from lagdoctor.capture import netmon
+    rec = ShellExecuteRecorder()
+    monkeypatch.setattr(netmon, "find_steam_log", lambda: None)
+    monkeypatch.setattr(elevation, "_ShellExecuteExW", rec)
+    monkeypatch.setattr(elevation, "can_trace", lambda: False)
+    monkeypatch.setattr(cli, "_presentmon_exe", lambda: (tmp_path / "PresentMon-2.6.0-x64.exe", ""))
+    monkeypatch.setattr(pm_setup, "verify", lambda p, **kw: {"signer": "Intel Corporation"})
+    yield rec
+    for c in rec.children:
+        c.wait(10)
+
+
+@pytest.mark.parametrize("steam", ["none", "found"])
+def test_an_elevated_watch_hands_over_the_steam_log_or_none_through_the_real_launch(real_launch, fake_world,
+                                                                                   monkeypatch, tmp_path, steam):
+    # Every PC without Steam crashed here: the parent handed the child ['--steam-log', ''] and launch_elevated
+    # refuses an empty argument (ValueError, uncaught).
+    from lagdoctor.capture import netmon
+    log = tmp_path / "Steam" / "logs" / "content_log.txt"
+    monkeypatch.setattr(netmon, "find_steam_log", lambda: log if steam == "found" else None)
+    assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.2", "--no-network", "--hotkey", "none",
+                     "--out", str(tmp_path / "out")]) == 0
+    (call,) = real_launch.calls
+    assert call["verb"] == "runas" and call["file"] == sys.executable and call["dir"] == str(cli.PROJECT_ROOT)
+    child = call["argv"][5:]
+    assert all(child) and '""' not in call["params"]
+    (session,) = fake_world["sessions"]                  # only the child recorded
+    if steam == "none":
+        assert "--no-steam-log" in child and "--steam-log" not in child
+        assert session["opts"].steam_log == ""          # never the child's own (perhaps another account's) HKCU
+    else:
+        assert child[child.index("--steam-log") + 1] == str(log.resolve()) and "--no-steam-log" not in child
+        assert session["opts"].steam_log == str(log.resolve())
+    # The waiting window hands over its own processes, so the analysis never blames them.
+    me = child[child.index("--parent-procs") + 1].split(",")[0]
+    assert me.split(":")[0] == str(os.getpid()) and session["opts"].tool_procs[0][0] == os.getpid()
+    out_file = Path(child[child.index("--out-file") + 1])
+    assert (out_file.parent / cli.DIAGNOSIS_NAME).is_file()       # recorded by the child, analysed here
+
+
+def test_a_launch_that_refuses_its_command_is_said_plainly_and_records_here(real_launch, fake_world, monkeypatch,
+                                                                            tmp_path, capsys):
+    monkeypatch.setattr(sys, "executable", "")            # Python could not tell its own path
+    assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.2", "--no-network", "--hotkey", "none",
+                     "--out", str(tmp_path / "out")]) == 0
+    out = capsys.readouterr().out
+    assert real_launch.calls == [] and "was not started" in out and "Traceback" not in out
+    assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1      # recorded here instead
+    (session,) = fake_world["sessions"]
+    assert session["opts"].frames is False
+
+
+def test_the_parent_never_hands_the_child_an_odd_sid_or_process_list(tmp_path):
+    args = cli.build_parser().parse_args(["watch", "--pid", "4242"])
+    game, cap = {"pid": 4242, "create_time": 1}, tmp_path / "c.gz"
+    for kw in ({"parent_sid": "S-1-5-21 1001"}, {"parent_sid": "not a sid"}, {"parent_procs": [(0, 5)]},
+               {"parent_procs": [(1, 1)] * (cli.MAX_PARENT_PROCS + 1)}):
+        with pytest.raises(ValueError):
+            cli.elevated_argv(args, game, cap, **kw)
+    argv = cli.elevated_argv(args, game, cap, parent_sid="S-1-5-21-1-2-3-1001", parent_procs=[(77, 5), (78, 6)])
+    child = cli.build_parser().parse_args(argv[5:])
+    assert child.parent_sid == "S-1-5-21-1-2-3-1001" and child.parent_procs == ((77, 5), (78, 6))
 
 
 def test_a_relative_out_folder_reaches_the_elevated_child_as_an_absolute_path(fake_elevation, monkeypatch,
@@ -640,31 +805,52 @@ def test_the_elevated_child_refuses_to_record_another_process(fake_world, tmp_pa
 
 
 def test_the_parent_hands_the_child_its_own_steam_log(tmp_path):
+    # Changed on purpose: "none" was an empty --steam-log argument, which launch_elevated refuses; it is the
+    # --no-steam-log flag now, and no argument is ever empty.
     args = cli.build_parser().parse_args(["watch", "--pid", "4242", "--hotkey", "none"])
     game = {"pid": 4242, "create_time": 1, "name": "x.exe"}
     log = tmp_path / "Steam" / "logs" / "content_log.txt"
     argv = cli.elevated_argv(args, game, tmp_path / "c.gz", steam_log=log)
-    assert argv[argv.index("--steam-log") + 1] == str(log)
+    assert argv[argv.index("--steam-log") + 1] == str(log) and "--no-steam-log" not in argv
     # "" = this account has none: the child must not go looking in its own (perhaps another account's) HKCU.
     argv = cli.elevated_argv(args, game, tmp_path / "c.gz", steam_log="")
-    assert argv[argv.index("--steam-log") + 1] == ""
-    assert cli.build_parser().parse_args(argv[5:]).steam_log == ""
+    assert "--no-steam-log" in argv and "--steam-log" not in argv and all(argv)
+    parsed = cli.build_parser().parse_args(argv[5:])
+    assert parsed.no_steam_log is True and parsed.steam_log is None
+    argv = cli.elevated_argv(args, game, tmp_path / "c.gz")                 # not looked up: neither flag
+    assert "--no-steam-log" not in argv and "--steam-log" not in argv
     with pytest.raises(ValueError):
         cli.elevated_argv(args, game, tmp_path / "c.gz", steam_log=Path("rel") / "content_log.txt")
 
 
+def test_the_parent_hands_over_only_a_steam_log_the_child_accepts(monkeypatch, tmp_path):
+    from lagdoctor.capture import netmon
+    plain = tmp_path / "logs" / "content_log.txt"
+    deep = tmp_path / ("x" * 240) / "logs" / "content_log.txt"            # past what the child takes (260)
+    for found, want in ((None, ""), (plain, str(plain.resolve())), (deep, "")):
+        monkeypatch.setattr(netmon, "find_steam_log", lambda found=found: found)
+        assert cli._own_steam_log() == want
+
+
 def test_the_elevated_child_uses_the_steam_log_it_was_handed(fake_world, tmp_path):
+    # Changed on purpose: "none" is --no-steam-log now (it was --steam-log "").
     log = tmp_path / "Steam" / "logs" / "content_log.txt"
     assert cli.main(child_argv(tmp_path, "--steam-log", str(log))) == 0
     assert fake_world["sessions"][0]["opts"].steam_log == str(log)
     fake_world["sessions"].clear()
-    assert cli.main(child_argv(tmp_path, "--steam-log", "")) == 0
+    assert cli.main(child_argv(tmp_path, "--no-steam-log")) == 0
     assert fake_world["sessions"][0]["opts"].steam_log == ""
+    fake_world["sessions"].clear()
+    assert cli.main(child_argv(tmp_path)) == 0                              # neither: look it up there
+    assert fake_world["sessions"][0]["opts"].steam_log is None
 
 
 def test_the_elevated_child_refuses_a_steam_log_that_is_not_a_local_file(fake_world, tmp_path):
-    for bad in ("rel\\content_log.txt", r"\\server\share\content_log.txt"):
-        assert cli.main(child_argv(tmp_path, "--steam-log", bad)) == cli.EXIT_BAD_ARGS
+    # An empty --steam-log is refused now (--no-steam-log says there is none), and so are both flags at once.
+    log = str(tmp_path / "Steam" / "logs" / "content_log.txt")
+    for bad in (["--steam-log", "rel\\content_log.txt"], ["--steam-log", r"\\server\share\content_log.txt"],
+                ["--steam-log", ""], ["--steam-log", log, "--no-steam-log"]):
+        assert cli.main(child_argv(tmp_path, *bad)) == cli.EXIT_BAD_ARGS
     assert fake_world["sessions"] == []
 
 

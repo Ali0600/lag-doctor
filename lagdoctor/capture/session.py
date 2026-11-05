@@ -11,11 +11,17 @@ Once anything has started, everything is stopped, whatever happens. On the main
 thread Ctrl+C never raises inside the session: the first press stops the
 recording and later ones are only counted (CtrlC), so a second press while the
 collectors stop cannot lose the capture.
+
+lag-doctor's own processes go into target["tool_pids"] (handle-free snapshots,
+once the collectors have started their children and again just before they are
+stopped), so the analysis never blames them for the lag.
 """
 from __future__ import annotations
 
 import contextlib
+import os
 import signal
+import sys
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -39,6 +45,10 @@ CAPTURE_LOCK_NAME = "Local\\lag-doctor-capture"
 # Which result() keys go where (docs/DESIGN.md, "What each collector's result() returns").
 NETWORK_FLOW_KEYS = ("targets", "probes", "lost", "wifi_scans", "route", "downloads", "download_sources")
 FLOW_KEYS = ("server", "talkers", "gaps", "server_rx", "layout", "health")
+# lag-doctor's own processes are first listed at the first status tick this far in, once the collectors have
+# had a status period to start their children (PresentMon, nvidia-smi), and again just before they stop.
+TOOL_SIGHT_S = 0.5
+MAX_TOOL_PIDS = 64                         # bounded: lag-doctor itself starts only a handful
 
 
 @dataclass
@@ -50,6 +60,9 @@ class SessionOptions:
     presentmon_exe: Path | None = None
     frames: bool = True                    # False when the user chose to run without ETW rights
     steam_log: str | Path | None = None    # None: look it up in this account's HKCU; "": none; a path: that file
+    # lag-doctor's processes outside this one, as (pid, create_time): the waiting window of an elevated
+    # recording and its venv launcher. Each counts while that exact process still runs.
+    tool_procs: tuple[tuple[int, int], ...] = ()
 
 
 def request_stop(stop: threading.Event, reason: str) -> None:
@@ -131,14 +144,15 @@ class CaptureLock:
 
 
 class Session:
-    """Run one capture. Tests inject collectors, the inventory and the liveness check."""
+    """Run one capture. Tests inject collectors, the inventory, the liveness check and the process snapshot."""
 
     def __init__(self, target: dict[str, Any], opts: SessionOptions,
                  collectors: list[Collector] | None = None,
                  inventory: dict[str, Any] | None = None,
                  alive: Callable[[], bool] | None = None,
                  hotkey_factory: Callable[..., Any] | None = None,
-                 printer: Callable[[str], None] | None = None) -> None:
+                 printer: Callable[[str], None] | None = None,
+                 processes: Callable[[], dict[int, Any]] | None = None) -> None:
         self.target = dict(target)
         self.opts = opts
         self.inventory = dict(inventory) if inventory is not None else None
@@ -146,12 +160,17 @@ class Session:
         self.alive = alive
         self.hotkey_factory = hotkey_factory
         self.printer = printer or (lambda line: print(line, end="", flush=True))
+        self.processes = processes
         self.marks: list[float] = []
         self.notes: list[str] = []
         self._marks_lock = threading.Lock()
         self.origin = 0.0
         self.stop_reason = ""
         self._printer_broken = False
+        self._tools: dict[int, None] = {}          # lag-doctor's own PIDs seen so far (an ordered set)
+        self._tools_listed = False
+        self._tools_error = ""
+        self._first_sighting_done = False
 
     # ------------------------------------------------------------------ run --
     def run(self, stop: threading.Event | None = None, ctrl_c: CtrlC | None = None) -> Capture:
@@ -187,6 +206,7 @@ class Session:
                 self._print(STOPPING_MESSAGE + "\n")
                 if hotkey is not None:
                     self._stop_hotkey(hotkey)
+                self._sight_tools()                   # before the stop ends PresentMon and nvidia-smi
                 self._stop_all()
             end = clock.now()
             return self._assemble(started_at, end - self.origin)
@@ -224,6 +244,17 @@ class Session:
         except Exception as exc:  # noqa: BLE001 - the collectors must still be stopped
             self.notes.append(f"The lag key could not be released cleanly ({type(exc).__name__}: {exc}).")
 
+    def _sight_tools(self) -> None:
+        """Add the lag-doctor processes running now (one handle-free snapshot) to target["tool_pids"]."""
+        try:
+            procs = self.processes() if self.processes is not None else _snapshot()
+            for pid in tool_pids(procs, self.target, self.opts.tool_procs):
+                if len(self._tools) < MAX_TOOL_PIDS:
+                    self._tools.setdefault(pid)
+            self._tools_listed = True
+        except Exception as exc:  # noqa: BLE001 - the capture goes on; the analysis is told below
+            self._tools_error = self._tools_error or f"{type(exc).__name__}: {exc}"
+
     def _print(self, text: str) -> None:
         """The status line and messages. A console that went away (its window closed) must not end the capture."""
         if self._printer_broken:
@@ -252,6 +283,9 @@ class Session:
                     self.stop_reason = "game exited"
                     self.notes.append(f"The game exited after {elapsed:.0f} s, so the capture ended there.")
                     return
+                if not self._first_sighting_done and elapsed >= TOOL_SIGHT_S:
+                    self._first_sighting_done = True
+                    self._sight_tools()
                 self._route_server()
                 self._print("\r" + status_line(elapsed, {c.name: c.live() for c in self.collectors},
                                                self.opts.hotkey) + " ")
@@ -340,6 +374,11 @@ class Session:
                 net_flows[k] = flowr[k]
         if self.stop_reason:
             target["stop_reason"] = self.stop_reason
+        if self._tools_listed:
+            target["tool_pids"] = sorted(self._tools)
+        elif self._tools_error:
+            self.notes.append(f"lag-doctor could not list its own processes ({self._tools_error}), so the analysis "
+                              "may name them among the other programs.")
 
         with self._marks_lock:
             marks = sorted(m for m in self.marks if 0 <= m <= duration_s + 1.0)
@@ -427,6 +466,75 @@ def _collect_inventory(target: dict[str, Any]) -> dict[str, Any]:
     except Exception:  # noqa: BLE001 - OEM tool names are a nice-to-have
         names = None
     return inventory.collect(target, process_names=names)
+
+
+_snapshot_lock = threading.Lock()
+_snapshotter: Any = None
+
+
+def _snapshot() -> dict[int, Any]:
+    """Every process, from one NtQuerySystemInformation call: no process is opened (CLAUDE.md)."""
+    global _snapshotter
+    from lagdoctor.winapi.ntquery import Snapshotter
+    with _snapshot_lock:
+        if _snapshotter is None:
+            _snapshotter = Snapshotter()
+    return _snapshotter.snapshot()
+
+
+def _same_file(a: str, b: str) -> bool:
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
+
+
+def own_processes(procs: dict[int, Any] | None = None, *, me: int | None = None,
+                  image_path: Callable[[int], str | None] | None = None,
+                  launcher: str | None = None) -> list[tuple[int, int]]:
+    """(pid, create_time) of this process and of the venv launcher that started it, handle-free. A venv's
+    python.exe is a launcher that waits while the base interpreter runs lag-doctor; sys.executable names it.
+    OSError when Windows cannot list the processes."""
+    from lagdoctor.winapi import ntquery
+    procs = _snapshot() if procs is None else procs
+    me = os.getpid() if me is None else me
+    image_path = image_path or ntquery.image_path
+    launcher = sys.executable if launcher is None else launcher
+
+    def image(pid: int) -> str | None:
+        try:
+            return image_path(pid)
+        except OSError:
+            return None                          # unknown: never taken for the launcher
+    p = procs.get(me)
+    if p is None:
+        return []
+    out = [(me, p.create_time)]
+    parent = procs.get(p.ppid)
+    if parent is not None and parent.pid != me and parent.create_time <= p.create_time and launcher:
+        theirs, mine = image(parent.pid), image(me)
+        if theirs and _same_file(theirs, launcher) and not (mine and _same_file(mine, launcher)):
+            out.append((parent.pid, parent.create_time))
+    return out
+
+
+def tool_pids(procs: dict[int, Any], target: dict[str, Any], extra: Iterable[tuple[int, int]] = (), *,
+              me: int | None = None, image_path: Callable[[int], str | None] | None = None,
+              launcher: str | None = None) -> list[int]:
+    """lag-doctor's own processes in one snapshot, ours first: own_processes(), each `extra` (pid, create_time)
+    still running as that process, and the children lag-doctor runs (PresentMon, nvidia-smi), but never the
+    game's own process tree, even when lag-doctor started the game (scripts/e2e.py runs LagLab)."""
+    from lagdoctor.capture.target import descendants
+    own = own_processes(procs, me=me, image_path=image_path, launcher=launcher)
+    if not own:
+        return []
+    out = dict.fromkeys(pid for pid, _ in own)
+    for pid, created in extra:
+        p = procs.get(pid)
+        if p is not None and p.create_time == created:
+            out.setdefault(pid)
+    game, created = target.get("pid"), target.get("create_time")
+    theirs = descendants(procs, game, created) if isinstance(game, int) and isinstance(created, int) else set()
+    for pid in sorted(descendants(procs, own[0][0], own[0][1]) - theirs):
+        out.setdefault(pid)
+    return list(out)
 
 
 def _default_alive(target: dict[str, Any]) -> Callable[[], bool]:
