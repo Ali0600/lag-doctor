@@ -44,6 +44,25 @@ def test_low_fps_avg_uses_at_least_one_frame():
     assert stats.low_fps_avg([10.0, 20.0], 1.0) == pytest.approx(50.0)
 
 
+def test_low_fps_avg_takes_ceil_not_floor_of_the_share():
+    # LC 2.4 / 2.5: exactly ceil(p * n) slowest frames. 1 % of 150 is 1.5: ceil takes 2, floor would take 1
+    frames = [10.0] * 148 + [50.0, 30.0]
+    assert stats.low_fps_avg(frames, 1.0) == pytest.approx(1000.0 / 40.0)    # (50 + 30) / 2 = 40 ms
+    assert stats.low_fps_avg(frames, 1.0) != pytest.approx(1000.0 / 50.0)    # what floor gave
+
+
+def test_low_fps_avg_counts_exactly_at_whole_counts():
+    # 0.1 % of 3,000 is exactly 3 frames: a whole count takes no extra frame (the 4th slowest is a 5 ms one)
+    frames = [5.0] * 2997 + [40.0] * 3
+    assert stats.low_fps_avg(frames, 0.1) == pytest.approx(25.0)
+
+
+def test_low_fps_avg_refuses_a_share_outside_0_to_100():
+    for bad in (0.0, -1.0, 150.0):                 # 150 % would quietly average every frame
+        with pytest.raises(ValueError):
+            stats.low_fps_avg([10.0] * 100, bad)
+
+
 def test_trailing_median_excludes_the_current_value():
     out = stats.trailing_median([10.0, 10.0, 10.0, 100.0, 10.0], window=3)
     assert out == [None, 10.0, 10.0, 10.0, 10.0]   # the 100 ms frame is compared with 10s, not itself
@@ -63,6 +82,19 @@ def test_trailing_median_matches_brute_force_on_random_data():
             prev = vals[max(0, i - w):i]
             expect = stats.median(prev) if prev else None
             assert fast[i] == (pytest.approx(expect) if expect is not None else None), (w, i)
+
+
+def test_trailing_median_skips_missing_values_but_keeps_their_place():
+    # a None is a missing sample: it never enters the median, but still ages out of the window
+    out = stats.trailing_median([10.0, None, 30.0, None, None, 50.0], window=2)
+    assert out == [None, 10.0, 10.0, 30.0, 30.0, None]
+    rng = random.Random(99)
+    vals = [None if rng.random() < 0.2 else rng.choice([5.0, 7.0, 13.9, 21.0]) for _ in range(300)]
+    for w in (1, 3, 25):
+        fast = stats.trailing_median(vals, w)
+        for i in range(len(vals)):
+            prev = [v for v in vals[max(0, i - w):i] if v is not None]
+            assert fast[i] == (pytest.approx(stats.median(prev)) if prev else None), (w, i)
 
 
 def test_mad_ignores_one_outlier():

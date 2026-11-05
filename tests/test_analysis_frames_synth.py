@@ -6,6 +6,7 @@ truth_moments() / match_events() (scripts/e2e_truth.py), so the bar is the judge
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -15,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 from e2e_truth import EXPECTATIONS, _overlaps, judge, match_events, truth_moments  # noqa: E402
 
 from lagdoctor.analysis import attribute, events, frames  # noqa: E402
-from lagdoctor.model import F, Diagnosis  # noqa: E402
+from lagdoctor.model import F, Capture, Diagnosis, SourceStatus  # noqa: E402
 from tests import synth  # noqa: E402
 
 
@@ -98,7 +99,7 @@ def test_the_hog_events_name_the_hogs():
 
 
 def test_network_spikes_losses_and_server_gaps_become_events():
-    s = synth.laglab("smooth", net_spikes=[(10.0, 11.0, 80.0)], net_losses=[20.0],
+    s = synth.laglab("smooth", net_spikes=[(10.0, 11.0, 80.0)], net_losses=[20.0, 20.5],
                      server_gaps=[(15.0, 180.0, "delay"), (16.0, 60.0, "loss")])
     evs = pipeline(s)[2]
     spikes = [e for e in evs if e.kind == "net_spike"]
@@ -108,6 +109,32 @@ def test_network_spikes_losses_and_server_gaps_become_events():
     assert len(loss) == 1 and loss[0].t_start <= 20.0 <= loss[0].t_end and loss[0].detail["burst"]
     gaps = [e for e in evs if e.kind == "net_gap"]
     assert [(g.t_start, g.severity, g.detail["kind"]) for g in gaps] == [(15.0, 180.0, "delay")]
+
+
+@pytest.mark.parametrize("label, kw", [("one lost probe", dict(net_losses=[60.2])),
+                                       ("one 42 ms ping", dict(net_spikes=[(60.0, 60.4, 36.0)]))])
+def test_one_lost_or_slow_ping_in_two_minutes_is_no_network_event(label, kw):
+    # A8, at the network sampler's real 0.5 s rounds (synth._network)
+    s = synth.laglab("smooth", duration_s=120.0, **kw)
+    assert len(s.cap.net_flows["lost"]["internet"]) == len(kw.get("net_losses", ()))     # the fixture did it
+    assert [e for e in pipeline(s)[2] if e.kind.startswith("net_")] == [], label
+
+
+def test_four_lost_rounds_in_a_row_are_one_loss_burst():
+    s = synth.laglab("smooth", duration_s=120.0, net_losses=[60.0, 60.5, 61.0, 61.5])
+    loss = [e for e in pipeline(s)[2] if e.kind == "net_loss"]
+    assert len(loss) == 1 and loss[0].detail["burst"] and loss[0].detail["lost"] == 4
+
+
+def test_a_cap_above_a_60_hz_refresh_is_animation_judder_not_an_fps_drop():
+    # A11: 86 FPS into a 60 Hz composed display drops every third frame; every shown frame holds one refresh,
+    # so the swings are 0 ms and only the animation error says it is jerky
+    s = synth.laglab("smooth", fps_cap=86.0, refresh_hz=60.0)
+    fr, _, evs, _, _ = pipeline(s)
+    pacing = [e for e in evs if e.kind == "pacing"]
+    assert pacing and all(e.detail["criterion"] == "anim" and e.severity >= 2.0 for e in pacing)
+    assert all(e.t_start >= min(fr[F.T]) for e in evs if e.kind != "mark")
+    assert [e for e in evs if e.kind == "fps_drop"] == []
 
 
 def test_marks_link_to_the_stutters_they_cover():
@@ -144,12 +171,110 @@ def test_same_seed_same_answer():
 
 def test_os_wakeup_hiccups_never_make_a_hitch_in_the_smooth_control():
     """With the wake-up delays measured on this laptop, the worst a smooth run shows is a frame held for
-    3 refreshes (20.8 ms) instead of 1 or 2: a "stutter"-class event at most, never a hitch."""
+    3 refreshes (20.8 ms) where the 120 FPS cadence holds 2: one refresh late, which is no stutter at all (A2).
+    This test used to allow such "stutter"-class events; that pinned the wrong behaviour."""
+    slips = 0
     for seed in range(1, 6):
         s = synth.laglab("smooth", seed=seed, hiccups=synth.MEASURED_HICCUP_RATE)
-        _, stats, evs, _, _ = pipeline(s)
+        fr, stats, evs, _, _ = pipeline(s)
+        slips += sum(1 for x in frames.display_series(fr)[2] if x > 2.5 * 1000.0 / 144.003)
         assert stats["hitches"] == 0
-        assert all(e.detail["class"] == "stutter" and e.severity < 21.0 for e in evs if e.kind == "stutter")
+        assert [e for e in evs if e.kind == "stutter"] == []
+    assert slips >= 3                                    # the 3-refresh holds this guards are in the data
+
+
+@pytest.mark.parametrize("fps_cap", [100.0, 120.0, 130.0])
+@pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
+def test_the_smooth_control_with_the_measured_hiccups_has_no_stutters(fps_cap, seed):
+    # A2: caps between 0.67 and 1 x the 144 Hz refresh hold frames 1 or 2 refreshes; a late wake-up adds one
+    s = synth.laglab("smooth", seed=seed, fps_cap=fps_cap, hiccups=synth.MEASURED_HICCUP_RATE)
+    _, _, evs, _, _ = pipeline(s)
+    assert [e for e in evs if e.kind == "stutter"] == []
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
+def test_the_end_to_end_judge_passes_the_smooth_control_with_the_measured_hiccups(seed):
+    from lagdoctor.analysis.diagnose import diagnose
+    s = synth.laglab("smooth", seed=seed, hiccups=synth.MEASURED_HICCUP_RATE)
+    d = diagnose(s.cap)
+    v = judge("smooth", s.log, s.cap.clock_origin, d, has_discrete_gpu=True)
+    assert v.ok, [(c.name, c.detail) for c in v.checks if not c.ok]
+
+
+@pytest.mark.parametrize("seed", [1, 2, 3])
+@pytest.mark.parametrize("mode", synth.HITCH_MODES)
+def test_the_hitches_are_still_found_with_the_measured_hiccups(mode, seed):
+    s = synth.laglab(mode, seed=seed, hiccups=synth.MEASURED_HICCUP_RATE)
+    evs = pipeline(s)[2]
+    truth = truth_moments(s.log, s.cap.clock_origin)
+    recall, precision = match_events(truth, [(e.t_start, e.t_end) for e in evs if e.kind == "stutter"])
+    assert recall == 1.0 and precision == 1.0, (recall, precision)     # no wake-up slip became a stutter
+
+
+def test_a_stall_is_never_reported_as_no_hitches():
+    # A4: the rows of two 5 s freezes are missing (PM 2.4); the headline once said "no hitches >= 50 ms"
+    from lagdoctor.analysis.diagnose import diagnose
+    fr = synth.frames_table([10.0] * 3900, display_ms=10.0, displayed=1, gpu_ms=0.5)
+    fr[F.T] = [t + (5.0 if i >= 500 else 0.0) + (5.0 if i >= 2000 else 0.0) for i, t in enumerate(fr[F.T])]
+    cap = synth.capture(fr, synth.system_table(50.0, game_top_thread_pct=20.0), duration=50.0)
+    cap.sources = synth.sources(("frames", "system"))
+    d = diagnose(cap)
+    assert d.lag_type != "unknown"                                 # frame timing counts as measured
+    assert d.stats["hitches"] == 2 and d.stats["freezes"] == 2 and d.stats["worst_frame_ms"] >= 5000.0
+    assert d.stats["hitch_rate_bound"] is None and "no hitches" not in d.headline
+
+
+# ------------------------------------------------------------------- PresentMon's own captures ---
+
+GOLD = (("test_case_0", 1268), ("test_case_5", 24892))     # dwm.exe with four hitches; PresentBench at ~86 FPS
+
+
+@pytest.fixture(scope="module")
+def gold(presentmon_exe, gold_etl_dir):
+    """PresentMon's gold ETW captures replayed (--etl_file needs no rights), on a 60 Hz panel, t rebased to 0."""
+    from lagdoctor.capture import presentmon as pm
+    out = {}
+    for case, pid in GOLD:
+        src = pm.PresentMonSource(pid, exe=presentmon_exe, etl_file=gold_etl_dir / f"{case}.etl")
+        src.start(0.0)
+        deadline = time.monotonic() + 60.0
+        while src._thread is not None and src._thread.is_alive():
+            assert time.monotonic() < deadline, f"the {case} replay did not finish in 60 s"
+            time.sleep(0.1)
+        src.stop()
+        assert src.status().state == "ok", src.status()
+        cols = {k: list(v) for k, v in src.result()["columns"].items()}
+        t0 = min(x for x in cols[F.T] if isinstance(x, float))
+        cols[F.T] = [x - t0 if isinstance(x, float) else x for x in cols[F.T]]
+        inv = {"cpu": {"threads": 16}, "settings": {"hags": None},
+               "displays": [{"device": r"\\.\DISPLAY1", "primary": True, "hz": 60.0}]}
+        out[case] = Capture(started_at="2026-11-04T00:00:00+00:00", clock_origin=0.0,
+                            duration_s=max(x for x in cols[F.T] if isinstance(x, float)), target={"pid": pid},
+                            sources={"frames": SourceStatus("ok")}, inventory=inv, frames=cols)
+    return out
+
+
+def events_of(cap):
+    fr = frames.main_chain(cap)
+    return events.find_events(cap, fr, frames.frame_stats(fr, cap.duration_s))
+
+
+def test_gold_dropped_frame_judder_reports_its_animation_error(gold):
+    # A11 on PresentMon's own output: PresentBench presents ~86 FPS into a 60 Hz composed screen and a third of
+    # its frames are dropped; every shown frame holds one refresh, so only the animation error is jerky
+    pacing = [e for e in events_of(gold["test_case_5"]) if e.kind == "pacing"]
+    assert len(pacing) == 1 and pacing[0].detail["criterion"] == "anim"
+    assert pacing[0].severity == pytest.approx(pacing[0].detail["anim_p95_ms"]) and pacing[0].severity > 2.0
+    assert pacing[0].t_start >= 0.0                                   # the first row, rebased to 0
+
+
+def test_gold_hitches_do_not_count_as_their_own_pacing(gold):
+    # A1 on PresentMon's own output: dwm.exe's four hitches (100 to 450 ms) are stutters; without their swings
+    # under 10 % of the swings reach 4 ms (15 % with them)
+    evs = events_of(gold["test_case_0"])
+    assert sorted(round(e.severity) for e in evs if e.kind == "stutter") == [100, 150, 284, 450]
+    pacing = [e for e in evs if e.kind == "pacing"]
+    assert pacing and all(e.detail["swing_pct"] < 10.0 for e in pacing)
 
 
 def test_synth_rejects_unknown_modes_and_knobs():

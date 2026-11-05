@@ -104,4 +104,6 @@ def judge(mode: str, log: dict[str, Any], clock_origin: float, d: Diagnosis,
     elif mode == "smooth":
         n = sum(1 for e in d.events if e.kind == "stutter")
         v.checks.append(Check("no stutters in the control", n == 0, f"{n} stutter events"))
+        # LagLab's control never lags on purpose, so the verdict must name no lag of any kind
+        v.checks.append(Check("no lag in the control", d.lag_type == "none", f"lag type {d.lag_type!r}"))
     return v

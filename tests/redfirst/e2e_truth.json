@@ -13,5 +13,10 @@
    "file": "scripts/e2e_truth.py",
    "old": "    if has_discrete_gpu and \"intel\" in renderer:",
    "new": "    if False:",
-   "tests": ["tests/test_e2e_truth.py::test_wrong_gpu_is_required_only_when_laglab_ran_on_intel_with_a_discrete_gpu_present"]}
+   "tests": ["tests/test_e2e_truth.py::test_wrong_gpu_is_required_only_when_laglab_ran_on_intel_with_a_discrete_gpu_present"]},
+  {"name": "smooth control ignores the lag type",
+   "file": "scripts/e2e_truth.py",
+   "old": "        v.checks.append(Check(\"no lag in the control\", d.lag_type == \"none\", f\"lag type {d.lag_type!r}\"))",
+   "new": "        pass",
+   "tests": ["tests/test_e2e_truth.py::test_the_smooth_control_fails_on_any_lag_verdict"]}
 ]

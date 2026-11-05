@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from lagdoctor.analysis import events as ev
 from lagdoctor.analysis import frames as fa
 from lagdoctor.model import F, S, Capture, LagEvent
 from tests.synth import capture as make_cap, frames_table as make_frames, system_table as make_system
@@ -139,6 +140,55 @@ def test_baseline_window_size():
 def test_frame_stats_of_nothing_is_not_measured():
     s = fa.frame_stats(make_frames([]), 30.0)
     assert s["frames"] == 0 and s["avg_fps"] is None and s["hitches"] is None and s["duration_s"] == 30.0
+
+
+def stalled(seconds, n=3000, at=1500):
+    """n frames of 10 ms whose rows from `at` on come `seconds` later: the rows of a stall are missing (PM 2.4)."""
+    fr = make_frames([10.0] * n)
+    fr[F.T] = [t + (seconds if i >= at else 0.0) for i, t in enumerate(fr[F.T])]
+    return fr
+
+
+def test_a_stall_counts_in_the_frame_statistics():
+    # A4: 5 s of missing rows is one 5,010 ms interval (the gap holds the next row's own 10 ms)
+    s = fa.frame_stats(stalled(5.0), 40.0)
+    assert s["frames"] == 3000
+    assert (s["hitches"], s["severe_hitches"], s["freezes"]) == (1, 1, 1)
+    assert s["worst_frame_ms"] == pytest.approx(5010.0)
+    assert s["time_beyond_50_ms"] == pytest.approx(4960.0)
+    assert s["avg_fps"] == pytest.approx(3000 / 35.0)               # 2,999 x 10 ms + 5,010 ms
+    assert s["low1_fps"] == pytest.approx(1000.0 / ((5010.0 + 29 * 10.0) / 30))
+    assert s["hitch_rate_bound"] is None
+
+
+def test_a_stall_too_short_to_be_a_hitch_still_withholds_the_rule_of_three():
+    # 30 ms of missing rows at a 10 ms baseline is a stall (>= 2.5 M, +8 ms) but no hitch: the counts stay 0,
+    # yet frames were not seen, so "no hitches in n frames" cannot be claimed
+    s = fa.frame_stats(stalled(0.020), 1.0)
+    assert s["hitches"] == 0 and s["worst_frame_ms"] == pytest.approx(30.0)
+    assert s["hitch_rate_bound"] is None
+    assert fa.frame_stats(stalled(0.0), 1.0)["hitch_rate_bound"] == pytest.approx(3 / 3000)   # the control
+
+
+def test_frame_stats_and_the_stutter_events_see_the_same_stalls():
+    fr = stalled(0.6, at=1000)
+    fr[F.T] = [t + (0.3 if i >= 2000 else 0.0) for i, t in enumerate(fr[F.T])]
+    gaps = fa.stall_gaps(fr)
+    assert [round(g[2]) for g in gaps] == [610, 310]
+    s = fa.frame_stats(fr, 40.0)
+    assert s["hitches"] == 2 and s["freezes"] == 1 and s["worst_frame_ms"] == pytest.approx(610.0)
+    cap = make_cap(fr)
+    stalls = [e for e in ev.find_events(cap, fa.main_chain(cap), s) if e.kind == "stutter"]
+    assert [(round(e.severity), e.detail["stall"]) for e in stalls] == [(610, True), (310, True)]
+
+
+def test_stalls_with_no_frame_shown_between_them_are_one_frozen_screen():
+    # rows 1500 and 1501 both follow a stall and row 1500 was never shown: the screen froze across both
+    fr = make_frames([10.0] * 3000, displayed=[0 if i == 1500 else 1 for i in range(3000)], display_ms=10.0)
+    fr[F.T] = [t + (0.3 if i >= 1500 else 0.0) + (0.4 if i >= 1501 else 0.0) for i, t in enumerate(fr[F.T])]
+    assert len(fa.stall_gaps(fr)) == 2
+    s = fa.frame_stats(fr, 40.0)
+    assert s["worst_frame_ms"] == pytest.approx(720.0) and s["hitches"] == 1     # 310 + 410 ms, one interval
 
 
 # ------------------------------------------------------------------------------------ the bound ---
@@ -291,6 +341,91 @@ def test_no_frames_falls_back_to_the_3d_engine():
     assert b["verdict"] == "gpu" and b["confidence"] == "low"
     cap = make_cap({}, make_system(20.0, game_gpu_pct=94.9, game_top_thread_pct=30.0))
     assert fa.bound(cap, fa.main_chain(cap), [])["verdict"] == "unknown"
+
+
+def test_the_1_ms_gap_never_calls_a_gpu_idle_a_quarter_of_the_frame_the_limit():
+    # A14: at 500 FPS a GPU busy 1.0 of 2.0 ms (r = 0.5) idles half of every frame: the saturated thread limits it
+    assert bound_of(2.0, 1.0, thread=95.0, n=6000)["verdict"] == "cpu_main"
+    # the gap still settles the borderline zone: r just over 0.75 with FT - G <= 1 ms is GPU-bound ...
+    assert bound_of(4.0, 3.004, thread=95.0, n=3000)["verdict"] == "gpu"          # r = 0.751, gap 0.996 ms
+    # ... but at r = 0.75 itself the ratio says CPU-or-other, whatever the gap
+    assert bound_of(4.0, 3.0, thread=95.0, n=3000)["verdict"] == "cpu_main"       # r = 0.750, gap 1.0 ms
+
+
+def test_vsync_needs_the_game_to_ask_for_it():
+    # A14 / LC 3.3: frames on whole periods with FT on 2 P is VSync only when SyncInterval >= 1 and tearing is off
+    p = 1000.0 / 60.0
+
+    def verdict(sync, tearing):
+        fr = make_frames([2 * p] * 1200, gpu_ms=5.0, display_ms=2 * p, displayed=1)
+        fr[F.SYNC_INTERVAL], fr[F.ALLOWS_TEARING] = [sync] * 1200, [tearing] * 1200
+        cap = make_cap(fr, make_system(2.0 + 1200 * 2 * p / 1000.0, game_top_thread_pct=30.0), hz=60.0)
+        return fa.bound(cap, fa.main_chain(cap), [])
+
+    assert verdict(1, 0)["verdict"] == "vsync"
+    assert verdict(-1, 0)["verdict"] == "vsync"           # unknown (OpenGL, Vulkan) rules nothing out
+    assert verdict(None, None)["verdict"] == "vsync"      # nor do missing columns
+    b = verdict(0, 0)
+    assert b["verdict"] != "vsync" and b["vsync"] is False and "SyncInterval 0" in " ".join(b["notes"])
+    assert verdict(1, 1)["verdict"] != "vsync"
+
+
+def vsync_halved(gpu_ms=None, thread=40.0, cpu_busy=None, cpu_wait=0.0, runtime="Other", k=2, hz=60.0, n=900):
+    """A game held by VSync at k refreshes a frame (FT = k P, every frame shown k periods)."""
+    p = 1000.0 / hz
+    fr = make_frames([k * p] * n, gpu_ms=gpu_ms, display_ms=k * p, displayed=1, cpu_busy=cpu_busy, runtime=runtime)
+    fr[F.CPU_WAIT_MS] = [cpu_wait] * n
+    cap = make_cap(fr, make_system(2.0 + n * k * p / 1000.0, game_top_thread_pct=thread), hz=hz)
+    return fa.bound(cap, fa.main_chain(cap), [])
+
+
+def test_vsync_at_two_refreshes_names_the_gpu_that_needs_more_than_one():
+    # A6: a GPU needing 17 ms on 60 Hz (P = 16.67 ms) cannot make every refresh, so VSync rounds 60 down to 30
+    b = vsync_halved(gpu_ms=17.0)
+    assert b["verdict"] == "gpu" and b["vsync"] is True
+    assert any("rounds the frame rate down to 30 FPS" in x for x in b["notes"])
+    assert vsync_halved(gpu_ms=16.5)["verdict"] == "vsync"        # fits in one period: the display holds it
+    assert vsync_halved(gpu_ms=17.0, k=1)["verdict"] == "vsync"   # k = 1 is the refresh rate itself
+
+
+def test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one():
+    assert vsync_halved(gpu_ms=5.0, thread=90.0)["verdict"] == "cpu_main"      # the busiest thread saturated
+    assert vsync_halved(gpu_ms=5.0, thread=80.0)["verdict"] == "vsync"
+    # MsCPUBusy says it where MsCPUWait is measured (DXGI): 20 ms of work > 16.7 ms, 13.3 ms waiting in Present
+    p2 = 2 * 1000.0 / 60.0
+    assert vsync_halved(gpu_ms=5.0, cpu_busy=20.0, cpu_wait=p2 - 20.0, runtime="DXGI")["verdict"] == "cpu_main"
+    assert vsync_halved(gpu_ms=5.0, cpu_busy=16.0, cpu_wait=p2 - 16.0, runtime="DXGI")["verdict"] == "vsync"
+    # runtime "Other" (OpenGL, Vulkan) puts the wait into MsCPUBusy, so it says nothing (PM 8.2)
+    assert vsync_halved(gpu_ms=5.0, cpu_busy=20.0, cpu_wait=p2 - 20.0, runtime="Other")["verdict"] == "vsync"
+
+
+def test_hags_comes_from_the_games_own_adapter_first():
+    # A12: settings.hags fell back to the NVIDIA GPU at start; the game rendered on the Intel GPU (HAGS off)
+    cap = make_cap({}, hags=True)
+    cap.inventory["adapters"] = [{"luid": "NV", "hags": True}, {"luid": "INTEL", "hags": False}]
+    cap.target = {"pid": 1, "adapter_luid": "INTEL"}
+    assert fa.hags_on(cap) is False
+    cap.target = {"pid": 1}                                       # adapter unknown: the inventory's value
+    assert fa.hags_on(cap) is True
+    cap.target = {"pid": 1, "adapter_luid": "INTEL"}
+    cap.inventory["adapters"][1]["hags"] = None                   # the adapter's own readout failed
+    assert fa.hags_on(cap) is True
+
+
+def test_times_and_milliseconds_past_1e7_are_missing():
+    # A15: a corrupt 1e308 must not overflow a sum; a byte count past 1e7 is real and kept
+    assert fa._bounded(1e7) == 1e7 and fa._bounded(-1e7) == -1e7
+    assert fa._bounded(1.0000001e7) is None and fa._bounded(1e308) is None
+    assert fa._num_col("gpu_busy_ms", 2e7) is None and fa._num_col("t", 2e7) is None
+    assert fa._num_col("game_cpu_pct", 2e7) is None and fa._num_col("disk_read_bps", 2e9) == 2e9
+    fr = make_frames([10.0] * 50, display_ms=10.0, displayed=1)
+    fr[F.T][-1] = 1e308
+    fr[F.DISPLAY_MS][10] = 1e308
+    fr[F.FRAME_MS][20] = 1e308
+    out = fa.main_chain(make_cap(fr))
+    assert len(out[F.T]) == 49 and out[F.DISPLAY_MS][10] is None and out[F.FRAME_MS][20] is None
+    s = fa.frame_stats(out, 1e308)
+    assert s["frames"] == 48 and s["avg_fps"] == pytest.approx(100.0) and s["duration_s"] is None
 
 
 def test_refresh_comes_from_the_games_display():
