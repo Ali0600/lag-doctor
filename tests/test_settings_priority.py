@@ -15,25 +15,39 @@ from lagdoctor.winapi import process
 
 GAME, GAME_CHILD, HOG, SERVICE, PROTECTED, OTHER_USER = 1000, 1004, 2000, 3000, 3004, 3008
 CT = 134_000_000_000_000_000
+NAMES = {GAME: "Game.exe", GAME_CHILD: "GameCrashHandler.exe", HOG: "OneDrive.exe", SERVICE: "SearchIndexer.exe",
+         PROTECTED: "MsMpEng.exe", OTHER_USER: "explorer.exe"}
 
 
 class FakeProc:
-    """The winapi.process calls the fix makes, in memory. `opened` lists every PID a real call would open."""
+    """The winapi.process calls the fix makes, in memory. `opened` lists every PID a real call would open;
+    running_name stands for the system snapshot, which opens nothing, so it is not listed there."""
 
     def __init__(self) -> None:
         self.classes = {pid: process.NORMAL for pid in (GAME, GAME_CHILD, HOG, SERVICE, PROTECTED, OTHER_USER)}
         self.ctimes = {pid: CT for pid in self.classes}
+        self.names = dict(NAMES)
         self.services = {SERVICE: ["WSearch"]}
         self.protected = {PROTECTED}
         self.other_users = {OTHER_USER}
         self.owner_check_denied = False
         self.opened: list[int] = []
+        self.snapshots: list[int] = []
         self.sets: list[tuple[int, int]] = []
 
     def _open(self, pid, create_time):
         self.opened.append(pid)
         if pid not in self.classes or (create_time is not None and self.ctimes[pid] != create_time):
             raise process.ProcessGone(errno.ESRCH, f"process {pid} is not running")
+
+    def running_name(self, pid, create_time):
+        self.snapshots.append(pid)
+        if pid not in self.classes or self.ctimes[pid] != create_time:
+            return None
+        return self.names.get(pid, "python.exe")
+
+    def is_running(self, pid, create_time):
+        return self.running_name(pid, create_time) is not None
 
     def service_pids(self):
         return {pid: list(names) for pid, names in self.services.items()}
@@ -76,7 +90,9 @@ def journal(tmp_path):
 
 
 def params(pid=HOG, **extra):
-    return {"pid": pid, "create_time": CT, "class": "below_normal", "exclude": [GAME, GAME_CHILD], **extra}
+    """What the report suggests: the process, its name as the report showed it, and the game's PIDs."""
+    return {"pid": pid, "create_time": CT, "class": "below_normal", "exclude": [GAME, GAME_CHILD],
+            "name": NAMES.get(pid, "python.exe"), **extra}
 
 
 def test_lowers_a_background_process_for_the_session_and_undo_restores_it(fix, fake, journal):
@@ -141,8 +157,51 @@ def test_a_process_that_exited_is_gone_and_nothing_is_written(fix, fake, journal
 
 
 def test_a_reused_pid_is_gone(fix, fake):
-    fake.ctimes[HOG] = CT + 1                      # same pid, another process
+    fake.ctimes[HOG] = CT + 1                      # same pid, another process (it could be the game)
     assert fix.plan(params()).before == GONE
+    assert fake.opened == []                       # told apart by the snapshot, never by opening it
+    assert HOG in fake.snapshots
+
+
+def test_a_process_that_exits_after_the_snapshot_is_gone(fix, fake):
+    # The snapshot still showed it; by the handle checks it has exited.
+    fake.running_name = lambda pid, create_time: NAMES[pid]
+    del fake.classes[HOG]
+    assert fix.plan(params()).before == GONE
+    assert fake.sets == []
+
+
+def test_a_process_with_another_name_than_the_report_showed_is_refused(fix, fake):
+    # The report blamed hog.exe, but (pid, create time) belong to OneDrive.exe: never change the wrong one.
+    with pytest.raises(Refused, match="OneDrive.exe, not hog.exe"):
+        fix.plan(params(name="hog.exe"))
+    assert fake.opened == [] and fake.sets == []
+
+
+@pytest.mark.parametrize("game_name", ["OneDrive.exe", "ONEDRIVE.EXE"])
+def test_a_process_with_the_games_name_is_refused_before_anything_is_opened(fix, fake, game_name):
+    # A same-named sibling of the game (Electron, CEF) is not its child, so "exclude" misses it.
+    with pytest.raises(Refused, match="game"):
+        fix.plan(params(game_name=game_name))
+    assert fake.opened == [] and fake.snapshots == [] and fake.sets == []
+
+
+def test_image_names_compare_without_case(fix, fake):
+    plan = fix.plan(params(name="onedrive.EXE", game_name="Game.exe"))
+    assert (plan.before, plan.after) == ("normal", "below_normal")
+
+
+def test_ended_is_decided_by_the_snapshot_without_opening_anything(fix, fake):
+    assert fix.ended(params()) is False
+    fake.ctimes[HOG] = CT + 1                      # the PID now belongs to another process
+    assert fix.ended(params()) is True
+    del fake.classes[HOG]
+    assert fix.ended(params()) is True
+    # An entry an older lag-doctor journaled has no name or exclude list; it still settles.
+    assert fix.ended({"pid": HOG, "create_time": CT, "class": "below_normal"}) is True
+    assert fake.opened == []
+    with pytest.raises(ValueError):
+        fix.ended({"pid": HOG})
 
 
 def test_a_process_that_exits_between_the_checks_and_the_read_is_gone(fix, fake):
@@ -206,21 +265,30 @@ def test_the_class_only_ever_goes_down(fix, fake, current, target, wanted):
     {"pid": True}, {"pid": 0}, {"pid": -4}, {"pid": 2**32}, {"pid": "2000"},
     {"create_time": None}, {"create_time": 0}, {"create_time": True}, {"create_time": 1.5},
     {"exclude": GAME}, {"exclude": [True]}, {"exclude": [0]}, {"exclude": list(range(4, 4 * 5000, 4))},
-    {"exlude": [GAME]}, {"name": "x" * 300}, {"name": "bad\nname"}, {"name": 5},
+    {"exclude": []}, {"exclude": None},
+    {"exlude": [GAME]}, {"name": "x" * 300}, {"name": "bad\nname"}, {"name": 5}, {"name": ""}, {"name": None},
+    {"game_name": ""}, {"game_name": 5}, {"game_name": "x" * 300}, {"game_name": "bad\tname"},
 ])
 def test_bad_params_are_refused_before_anything_is_opened(fix, fake, bad):
     with pytest.raises(ValueError):
         fix.plan(params(**bad))
-    assert fake.opened == []
+    assert fake.opened == [] and fake.snapshots == []
 
 
 def test_missing_params_are_refused(fix, fake):
-    for key in ("pid", "create_time", "class"):
+    # Without "exclude" the game could not be told apart; without "name" the process could not be checked.
+    for key in ("pid", "create_time", "class", "exclude", "name"):
         incomplete = params()
         del incomplete[key]
         with pytest.raises(ValueError):
             fix.plan(incomplete)
-    assert fake.opened == []
+    assert fake.opened == [] and fake.snapshots == []
+
+
+def test_game_name_is_optional(fix, fake):
+    assert "game_name" not in params()
+    assert fix.plan(params()).after == "below_normal"
+    assert fix.plan(params(game_name=None)).after == "below_normal"
 
 
 def test_a_forced_undo_never_reaches_an_excluded_process(fix, fake, journal):

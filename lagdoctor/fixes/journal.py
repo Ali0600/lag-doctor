@@ -7,18 +7,21 @@ things back (see Fix.heal). Writes are atomic (temp file + fsync + replace)
 and guarded by a lock file, so two lag-doctor windows cannot interleave.
 
 A journal that cannot be parsed is never silently replaced with an empty one:
-that would forget how to undo the user's changes. Its bytes are parked next to
-it and the load fails loudly.
+that would forget how to undo the user's changes. It stays where it is, a copy
+of its bytes is saved next to it (once: the same bytes are never copied twice),
+and the load fails loudly, so nothing is changed or undone until it is readable.
+Keys a newer lag-doctor added to an entry are kept as they are, not refused.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import msvcrt
 import os
 import time
 import uuid
 from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Literal
@@ -30,11 +33,20 @@ JOURNAL_SCHEMA = "lagdoctor.journal/1"
 
 
 class JournalCorrupt(RuntimeError):
-    """The journal file could not be read; its bytes were parked at `parked`."""
+    """The journal file could not be read; a copy of its bytes is at `parked`."""
 
-    def __init__(self, message: str, parked: Path) -> None:
+    def __init__(self, message: str, parked: Path, path: Path | None = None, reason: str = "") -> None:
         super().__init__(message)
         self.parked = parked
+        self.path = path
+        self.reason = reason
+
+    def plain(self) -> str:
+        """What to tell the user, in one paragraph."""
+        where = f" ({self.path})" if self.path else ""
+        return (f"lag-doctor cannot read its fix journal{where}: {self.reason}. It was left where it is and "
+                f"copied to {self.parked}. Fixes and undo are paused until the journal can be read again, so "
+                f"nothing was changed. If a newer lag-doctor wrote it, undo with that version.")
 
 
 @dataclass
@@ -51,6 +63,24 @@ class JournalEntry:
     note: str = ""
     session_only: bool = False  # the change disappears by itself (e.g. a process priority)
     history: list[str] = field(default_factory=list)
+    extra: dict[str, Any] = field(default_factory=dict)   # keys from a newer lag-doctor, written back as they were
+
+
+_KNOWN = frozenset(f.name for f in fields(JournalEntry)) - {"extra"}
+
+
+def _load_entry(raw: Any) -> JournalEntry:
+    """One entry from its JSON object. Unknown keys go to `extra`; a missing field is still an error."""
+    if not isinstance(raw, dict):
+        raise ValueError(f"an entry is not an object: {raw!r:.80}")
+    known = {k: v for k, v in raw.items() if k in _KNOWN}
+    return JournalEntry(**known, extra={k: v for k, v in raw.items() if k not in _KNOWN})
+
+
+def _dump_entry(e: JournalEntry) -> dict[str, Any]:
+    d = asdict(e)
+    extra = d.pop("extra")
+    return {**d, **{k: v for k, v in extra.items() if k not in d}}     # a known field always wins
 
 
 def _now_iso() -> str:
@@ -62,6 +92,7 @@ class Journal:
         self.path = Path(path) if path else paths.journal_path()
         self._lock_path = self.path.with_name(self.path.name + ".lock")
         self._lock_timeout = lock_timeout
+        self._top_extra: dict[str, Any] = {}     # top-level keys a newer lag-doctor wrote, kept on rewrite
 
     # ------------------------------------------------------------ storage --
     @contextmanager
@@ -87,6 +118,7 @@ class Journal:
             os.close(fd)
 
     def _read(self) -> list[JournalEntry]:
+        self._top_extra = {}
         if not self.path.exists():
             return []
         raw = self.path.read_bytes()
@@ -94,18 +126,35 @@ class Journal:
             data = json.loads(raw.decode("utf-8"))
             if data.get("schema") != JOURNAL_SCHEMA:
                 raise ValueError(f"unexpected schema {data.get('schema')!r}")
-            return [JournalEntry(**e) for e in data["entries"]]
+            if not isinstance(data["entries"], list):
+                raise ValueError("'entries' is not a list")
+            entries = [_load_entry(e) for e in data["entries"]]
         except Exception as exc:  # noqa: BLE001 - any parse failure must park the bytes
-            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            parked = self.path.with_name(f"{self.path.stem}.corrupt-{stamp}-{uuid.uuid4().hex[:6]}.json")
-            parked.write_bytes(raw)
+            parked = self._park(raw)
             raise JournalCorrupt(
-                f"the fix journal {self.path} could not be read ({exc}); its contents were saved to "
-                f"{parked}. Nothing was changed.", parked) from exc
+                f"the fix journal {self.path} could not be read ({exc}); it was left in place and copied to "
+                f"{parked}. Nothing was changed.", parked, self.path, str(exc)) from exc
+        self._top_extra = {k: v for k, v in data.items() if k not in ("schema", "entries")}
+        return entries
+
+    def _park(self, raw: bytes) -> Path:
+        """Copy unreadable bytes next to the journal, once: the copy is named by their hash, so reading the
+        same bad file again (every command does) finds the copy instead of adding another."""
+        digest = hashlib.sha256(raw).hexdigest()[:16]
+        parked = self.path.with_name(f"{self.path.stem}.corrupt-{digest}.json")
+        if parked.is_file() and parked.read_bytes() == raw:
+            return parked
+        if parked.exists():                      # the same name with other bytes: never overwrite it
+            parked = self.path.with_name(f"{self.path.stem}.corrupt-{digest}-{uuid.uuid4().hex[:6]}.json")
+        tmp = parked.with_name(parked.name + ".tmp")
+        tmp.write_bytes(raw)
+        os.replace(tmp, parked)                  # whole or absent: a half copy never sits under the hash name
+        return parked
 
     def _write(self, entries: list[JournalEntry]) -> None:
         tmp = self.path.with_name(self.path.name + ".tmp")
-        payload = json.dumps({"schema": JOURNAL_SCHEMA, "entries": [asdict(e) for e in entries]}, indent=1)
+        payload = json.dumps({**self._top_extra, "schema": JOURNAL_SCHEMA,
+                              "entries": [_dump_entry(e) for e in entries]}, indent=1)
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(payload)
             f.flush()
@@ -158,3 +207,8 @@ class Journal:
     def undoable(self) -> list[JournalEntry]:
         """Applied changes that have not been undone, newest first (undo in that order)."""
         return [e for e in reversed(self.entries()) if e.state == "applied"]
+
+    def outstanding(self) -> list[JournalEntry]:
+        """What `undo` offers, newest first: applied changes, and conflicts (a value that is neither the
+        original nor lag-doctor's, e.g. after a crash between two writes), which undo restores with --force."""
+        return [e for e in reversed(self.entries()) if e.state in ("applied", "conflict")]

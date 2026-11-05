@@ -1,13 +1,15 @@
 """The safety every fix shares: write-ahead journal, readback, undo, heal, corruption, sandboxed registry."""
 from __future__ import annotations
 
+import hashlib
+import json
 import threading
 import time
 import winreg
 
 import pytest
 
-from lagdoctor.fixes.base import ABSENT, GONE, Fix
+from lagdoctor.fixes.base import ABSENT, GONE, NOT_CONNECTED, Fix
 from lagdoctor.fixes.journal import Journal, JournalCorrupt
 from lagdoctor.fixes.registry import RegistryBackend, dword, sz
 
@@ -146,12 +148,32 @@ def test_undoing_newest_first_restores_the_first_original(journal):
     assert fix.store["k"] == "A"
 
 
+class SessionFix(FakeFix):
+    session_only = True                      # like a process priority: it goes away with its subject
+
+
 def test_undo_of_a_session_only_change_whose_subject_is_gone(journal):
-    fix = FakeFix({"k": 1})
+    # Changed on purpose (review finding SEC-4): this used FakeFix, which is not session-only, so it pinned
+    # "undone" for every fix. Only a session-only change goes away with its subject.
+    fix = SessionFix({"k": 1})
     fix.apply(fix.plan({"key": "k", "want": 2}), journal)
-    fix.store["k"] = dict(GONE)              # e.g. the game process exited
+    fix.store["k"] = dict(GONE)              # e.g. the process it changed exited
     res = fix.undo(journal.undoable()[0], journal)
     assert res.ok and journal.entries()[0].state == "undone"
+
+
+def test_undo_of_a_lasting_change_whose_subject_is_not_there_keeps_the_entry(journal):
+    fix = FakeFix({"k": 1})                  # not session-only: e.g. an unplugged display keeps its mode
+    fix.apply(fix.plan({"key": "k", "want": 2}), journal)
+    fix.store["k"] = dict(GONE)
+    [entry] = journal.undoable()
+    for force in (False, True):
+        res = fix.undo(entry, journal, force=force)
+        assert not res.ok and res.state == "applied" and "run undo again when it is connected" in res.message
+    assert journal.get(entry.id).state == "applied" and journal.get(entry.id).note == NOT_CONNECTED
+    assert fix.writes == [2]                 # nothing written while it was away
+    fix.store["k"] = 2                       # back, with lag-doctor's value
+    assert fix.undo(journal.undoable()[0], journal).ok and fix.store["k"] == 1
 
 
 @pytest.mark.parametrize("live, state", [(1, "failed"), (2, "applied"), (5, "conflict")])
@@ -161,6 +183,77 @@ def test_heal_settles_an_entry_left_pending_by_a_crash(journal, live, state):
     fix.heal(entry, journal)
     assert journal.get(entry.id).state == state
     assert fix.store["k"] == live            # healing never writes
+
+
+@pytest.mark.parametrize("cls, state", [(SessionFix, "undone"), (FakeFix, "applied")])
+def test_heal_of_an_entry_whose_subject_is_not_there(journal, cls, state):
+    fix = cls({"k": dict(GONE)})
+    entry = journal.begin("fake", "fake:k", {"key": "k"}, before=1, after=2,
+                          session_only=cls.session_only)
+    fix.heal(entry, journal)
+    assert journal.get(entry.id).state == state   # a lasting change stays on the undo list, outcome unknown
+    assert fix.writes == []
+
+
+def test_a_conflict_is_left_alone_and_restored_with_force(journal):
+    # A crash left the value neither the original nor ours (game_dvr_off between its two writes).
+    fix = FakeFix({"k": 5})
+    entry = journal.begin("fake", "fake:k", {"key": "k"}, before=1, after=2)
+    fix.heal(entry, journal)
+    [entry] = journal.outstanding()
+    assert entry.state == "conflict" and journal.undoable() == []
+    res = fix.undo(entry, journal)
+    assert not res.ok and fix.store["k"] == 5 and journal.get(entry.id).state == "conflict"
+    res = fix.undo(entry, journal, force=True)
+    assert res.ok and res.state == "undone" and fix.store["k"] == 1
+    assert journal.outstanding() == []
+
+
+def test_a_forced_restore_of_a_conflict_that_does_not_take_stays_a_conflict(journal):
+    fix = FakeFix({"k": 5})
+    entry = journal.begin("fake", "fake:k", {"key": "k"}, before=1, after=2)
+    fix.heal(entry, journal)
+    fix.write_ignored = True
+    res = fix.undo(journal.outstanding()[0], journal, force=True)
+    assert not res.ok and res.state == "conflict" and "did not take" in res.message
+    assert journal.get(entry.id).state == "conflict" and fix.store["k"] == 5
+
+
+def test_a_failed_restore_that_leaves_the_change_in_place_stays_undoable(journal):
+    class StoredForLater(FakeFix):
+        """Each write lands in the store, but readback says it has not taken yet (and the restore fails)."""
+
+        def write(self, params, value):
+            if value == 1:
+                raise OSError("the original could not be put back")
+            super().write(params, value)
+
+        def readback(self, params):
+            return {"pending": self.read(params)}
+
+        def also_ours(self, live, before, after):
+            return live == {"pending": after}
+
+    fix = StoredForLater({"k": 1})
+    res = fix.apply(fix.plan({"key": "k", "want": 2}), journal)
+    assert not res.ok and res.state == "applied" and f"lagdoctor undo {res.entry_id}" in res.message
+    assert "could not be put back" in res.message
+    assert journal.get(res.entry_id).state == "applied"
+
+
+def test_the_default_ended_check_reads_the_live_value():
+    assert FakeFix({"k": dict(GONE)}).ended({"key": "k"}) is True
+    assert FakeFix({"k": 1}).ended({"key": "k"}) is False
+
+
+def test_undo_says_plainly_when_the_value_cannot_be_read(journal):
+    class Unreadable(FakeFix):
+        def read(self, params):
+            raise OSError("Windows did not answer")
+    fix = FakeFix({"k": 1})
+    fix.apply(fix.plan({"key": "k", "want": 2}), journal)
+    res = Unreadable({"k": 2}).undo(journal.undoable()[0], journal)
+    assert not res.ok and "could not be read (Windows did not answer)" in res.message
 
 
 def test_a_corrupt_journal_is_parked_never_replaced(journal):
@@ -173,6 +266,66 @@ def test_a_corrupt_journal_is_parked_never_replaced(journal):
     with pytest.raises(JournalCorrupt):
         journal.begin("fake", "t", {}, 1, 2)             # and nothing gets written over it
     assert journal.path.read_bytes() == original
+    assert "copied to" in str(err.value) and str(err.value.parked) in str(err.value)
+
+
+def _parked(journal: Journal) -> list:
+    return sorted(journal.path.parent.glob(f"{journal.path.stem}.corrupt-*"))
+
+
+def test_a_corrupt_journal_is_copied_aside_once_not_on_every_read(journal):
+    journal.path.write_bytes(b'{"schema": "lagdoctor.journal/2", "entries": []}')    # a newer format
+    for _ in range(4):                                   # every command reads it again
+        with pytest.raises(JournalCorrupt) as err:
+            journal.entries()
+    assert _parked(journal) == [err.value.parked]
+    journal.path.write_bytes(b"\x00\xffdamaged")         # other bad bytes get their own copy
+    with pytest.raises(JournalCorrupt):
+        journal.entries()
+    assert len(_parked(journal)) == 2
+    message = err.value.plain()
+    assert str(err.value.parked) in message and "paused" in message and "lagdoctor.journal/2" in message
+
+
+def test_a_parked_copy_is_never_overwritten(journal):
+    bad = b'{"schema": "lagdoctor.journal/1", "entries": [ {broken'
+    journal.path.write_bytes(bad)
+    taken = journal.path.with_name(f"{journal.path.stem}.corrupt-{hashlib.sha256(bad).hexdigest()[:16]}.json")
+    taken.write_bytes(b"something else under that name")
+    with pytest.raises(JournalCorrupt) as err:
+        journal.entries()
+    assert err.value.parked != taken and err.value.parked.read_bytes() == bad
+    assert taken.read_bytes() == b"something else under that name"
+
+
+def test_unknown_entry_keys_are_kept_not_called_corrupt(journal):
+    # A newer lag-doctor added a field: this one still reads the journal and writes the field back unchanged.
+    entry = journal.begin("fake", "fake:k", {"key": "k"}, 1, 2)
+    data = json.loads(journal.path.read_text(encoding="utf-8"))
+    data["entries"][0]["restart_pending"] = {"hz": 144}
+    data["written_by"] = "lag-doctor 9.9"
+    journal.path.write_text(json.dumps(data), encoding="utf-8")
+    [loaded] = journal.entries()
+    assert loaded.extra == {"restart_pending": {"hz": 144}} and loaded.state == "pending"
+    journal.set_state(entry.id, "applied")
+    data = json.loads(journal.path.read_text(encoding="utf-8"))
+    assert data["entries"][0]["restart_pending"] == {"hz": 144} and "extra" not in data["entries"][0]
+    assert data["entries"][0]["state"] == "applied" and data["written_by"] == "lag-doctor 9.9"
+    assert _parked(journal) == []
+
+
+@pytest.mark.parametrize("bad", [
+    b'{"schema": "lagdoctor.journal/1", "entries": [{"id": "x"}]}',          # fields missing
+    b'{"schema": "lagdoctor.journal/1", "entries": {"id": "x"}}',            # not a list
+    b'{"schema": "lagdoctor.journal/1", "entries": {}}',                     # not a list, even when empty
+    b'{"schema": "lagdoctor.journal/1", "entries": ["x"]}',                  # an entry that is not an object
+    b'["lagdoctor.journal/1"]',
+])
+def test_a_journal_that_cannot_be_understood_is_still_corrupt(journal, bad):
+    journal.path.write_bytes(bad)
+    with pytest.raises(JournalCorrupt):
+        journal.entries()
+    assert journal.path.read_bytes() == bad
 
 
 def test_the_journal_lock_blocks_a_second_writer(journal):

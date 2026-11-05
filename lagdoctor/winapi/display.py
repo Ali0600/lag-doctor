@@ -14,6 +14,7 @@ from ctypes import wintypes
 from lagdoctor.winapi.dxgi import LUID, luid_str
 
 ENUM_CURRENT_SETTINGS = 0xFFFFFFFF              # (DWORD)-1 (WT 6.1)
+ENUM_REGISTRY_SETTINGS = 0xFFFFFFFE             # (DWORD)-2: the mode kept in the user's profile (WinUser.h; WT 6.1)
 DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x1
 DISPLAY_DEVICE_PRIMARY_DEVICE = 0x4
 DISPLAY_DEVICE_MIRRORING_DRIVER = 0x8           # pseudo devices of mirror drivers: not a monitor
@@ -277,7 +278,8 @@ def _qdc_paths() -> dict[str, dict]:
         out[name] = {"adapter_luid": luid_str(t.adapterId.HighPart, t.adapterId.LowPart),
                      "internal": is_internal(t.outputTechnology),
                      "hz": rational_hz(t.refreshRate.Numerator, t.refreshRate.Denominator),
-                     "friendly": friendly}
+                     "friendly": friendly,
+                     "device_path": tgt.monitorDevicePath if named else ""}
     return out
 
 
@@ -321,6 +323,29 @@ def list_displays() -> list[dict]:
 def current_mode(device: str) -> dict:
     """{width, height, hz} of the display now; hz None when the driver reports 'hardware default'."""
     dm = _current_devmode(check_device(device))
+    return {"width": dm.dmPelsWidth, "height": dm.dmPelsHeight,
+            "hz": dm.dmDisplayFrequency if dm.dmDisplayFrequency > 1 else None}
+
+
+def monitor_path(device: str) -> str | None:
+    r"""Which monitor this output shows now, as its device interface path (DISPLAYCONFIG_TARGET_DEVICE_NAME
+    .monitorDevicePath, WT 6.2), e.g. '\\?\DISPLAY#CMN153C#4&25e05db5&0&UID8388688#{e6f07b5f-...}'. It stays
+    the same for one monitor on one port, unlike the GDI name, which Windows hands out again when monitors
+    change. None when no active path uses this name (unplugged, or switched off). OSError if QDC fails."""
+    return _qdc_paths().get(check_device(device), {}).get("device_path") or None
+
+
+def stored_mode(device: str) -> dict | None:
+    """{width, height, hz} that Windows keeps for this display in the user's profile (ENUM_REGISTRY_SETTINGS):
+    the mode it uses at the next sign-in. hz None for 'hardware default'; None when nothing is stored (an
+    output that is not attached reads as all zeros here). OSError if Windows refuses the query."""
+    device = check_device(device)
+    dm = _devmode()
+    if not _user32.EnumDisplaySettingsW(device, ENUM_REGISTRY_SETTINGS, ctypes.byref(dm)):
+        err = ctypes.get_last_error() or ERROR_DEVICE_NOT_CONNECTED
+        raise ctypes.WinError(err, f"EnumDisplaySettingsW({device}, registry) failed")
+    if not dm.dmPelsWidth or not dm.dmPelsHeight:
+        return None
     return {"width": dm.dmPelsWidth, "height": dm.dmPelsHeight,
             "hz": dm.dmDisplayFrequency if dm.dmDisplayFrequency > 1 else None}
 

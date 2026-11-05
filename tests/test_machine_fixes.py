@@ -8,6 +8,7 @@ from __future__ import annotations
 import pytest
 
 from lagdoctor.fixes import catalog
+from lagdoctor.fixes.base import GONE
 from lagdoctor.fixes.journal import Journal
 from lagdoctor.fixes.power import PowerPlanFix
 from lagdoctor.fixes.refresh_rate import QDC_TOLERANCE_HZ, RefreshRateFix
@@ -63,26 +64,41 @@ class FakePower:
             self.active = guid
 
 
-_FOLLOW = object()     # QueryDisplayConfig follows the mode
+_FOLLOW = object()     # QueryDisplayConfig (or the stored mode) follows the mode on screen
+PANEL = r"\\?\DISPLAY#CMN153C#4&25e05db5&0&UID8388688#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+OTHER = r"\\?\DISPLAY#GSM5B7F#5&1a2b3c4d&0&UID4352#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
 
 
 class FakeDisplay:
-    """One 1920x1080 panel offering 60 and 144 Hz; QueryDisplayConfig reads the exact rate (+0.003 Hz)."""
+    """One 1920x1080 panel offering 60 and 144 Hz; QueryDisplayConfig reads the exact rate (+0.003 Hz).
+
+    `stored` is the mode Windows keeps in the profile (ENUM_REGISTRY_SETTINGS): CDS_UPDATEREGISTRY stores
+    the new mode on success and on DISP_CHANGE_RESTART, whether or not it is on screen yet. `path` is the
+    monitor at DEV (its monitorDevicePath)."""
 
     def __init__(self) -> None:
         self.mode = {"width": 1920, "height": 1080, "hz": 60}
         self.offered = [60, 144]
         self.exact_hz: object = _FOLLOW        # or pin QueryDisplayConfig's answer (stale, odd, or None)
+        self.stored: object = _FOLLOW          # or pin the profile's mode (a dict, or None for none stored)
+        self.path = PANEL
         self.connected = True
         self.calls: list[tuple[str, int]] = []
         self.test_result: dict[int, int] = {}
         self.set_result: dict[int, int] = {}
         self.applies_on = {0}                  # result codes after which the new rate is on screen
+        self.stores_on = {0, 1}                # result codes after which the new rate is in the profile
 
     def current_mode(self, device):
         if not self.connected:
             raise OSError(1167, "The device is not connected")
         return dict(self.mode)
+
+    def stored_mode(self, device):
+        return dict(self.mode) if self.stored is _FOLLOW else (dict(self.stored) if self.stored else None)
+
+    def monitor_path(self, device):
+        return self.path if self.connected else None
 
     def list_displays(self):
         if not self.connected:
@@ -98,8 +114,12 @@ class FakeDisplay:
         if test_only:
             return self.test_result.get(hz, 0 if hz in self.offered else -2)
         rc = self.set_result.get(hz, 0)
+        if rc in self.stores_on:
+            self.stored = {**self.mode, "hz": hz}
         if rc in self.applies_on:
             self.mode["hz"] = hz
+        if self.stored == self.mode:
+            self.stored = _FOLLOW
         return rc
 
 
@@ -275,14 +295,227 @@ def test_refresh_rate_never_changes_the_resolution_on_undo(journal):
     assert fake.calls == calls_before and fake.mode == mode(144, 1280, 720)
 
 
-def test_refresh_rate_undo_after_the_display_was_unplugged(journal):
+def test_refresh_rate_undo_while_the_display_is_unplugged_keeps_the_entry(journal):
+    # Changed on purpose (review finding SEC-4): this used to expect "undone". Windows keeps the stored mode for
+    # that monitor, so it comes back at lag-doctor's rate when plugged in again; the entry must stay undoable.
+    fake = FakeDisplay()
+    fix = RefreshRateFix(display=fake)
+    assert fix.apply(fix.plan({"device": DEV, "hz": 144}), journal).ok
+    fake.connected = False
+    [entry] = journal.undoable()
+    for force in (False, True):
+        res = fix.undo(entry, journal, force=force)
+        assert not res.ok and res.state == "applied", res.message
+        assert "run undo again when it is connected" in res.message
+    assert journal.get(entry.id).state == "applied" and "not connected" in journal.get(entry.id).note
+    assert fake.calls == [("test", 144), ("set", 144)]          # nothing was written while it was away
+    fake.connected = True                                        # back, still at lag-doctor's 144 Hz
+    [entry] = journal.undoable()
+    res = fix.undo(entry, journal)
+    assert res.ok and res.state == "undone", res.message
+    assert fake.mode == mode(60)
+
+
+def test_refresh_rate_an_entry_from_before_monitor_identities_still_undoes(journal):
+    # An entry an earlier lag-doctor journaled has no "monitor": the GDI name alone is used, as it was then.
+    fake = FakeDisplay()
+    fix = RefreshRateFix(display=fake)
+    entry = journal.begin("refresh_rate", "t", {"device": DEV, "hz": 144}, before=mode(60), after=mode(144))
+    journal.set_state(entry.id, "applied")
+    fake.mode = mode(144)
+    fake.connected = False
+    res = fix.undo(journal.get(entry.id), journal)
+    assert not res.ok and res.state == "applied" and "when it is connected" in res.message, res.message
+    fake.connected = True
+    assert fix.undo(journal.get(entry.id), journal).ok and fake.mode == mode(60)
+
+
+def test_refresh_rate_plan_stores_which_monitor_it_read(journal):
+    fake = FakeDisplay()
+    fix = RefreshRateFix(display=fake)
+    plan = fix.plan({"device": DEV, "hz": 144})                  # the report's suggestion has no identity
+    assert plan.params == {"device": DEV, "hz": 144, "monitor": PANEL}
+    fix.apply(plan, journal)
+    assert journal.entries()[0].params["monitor"] == PANEL       # so undo can check it
+    fake.path = None                                             # Windows did not say which monitor it is
+    with pytest.raises(LookupError, match="same screen"):
+        fix.plan({"device": DEV, "hz": 144})
+
+
+def test_refresh_rate_a_name_that_now_shows_another_monitor_is_not_read_or_written(journal):
     fake = FakeDisplay()
     fix = RefreshRateFix(display=fake)
     fix.apply(fix.plan({"device": DEV, "hz": 144}), journal)
+    [entry] = journal.undoable()
+    # Docked: Windows gives DISPLAY1 to an external monitor that also runs 1920x1080 at 144 Hz.
+    fake.path = OTHER
+    calls = list(fake.calls)
+    assert fix.read(entry.params) == GONE                        # to the fix, its monitor is not connected
+    with pytest.raises(RuntimeError, match="no longer shows the monitor"):
+        fix.write(entry.params, mode(60))
+    assert fake.calls == calls
+
+
+def test_refresh_rate_undo_leaves_another_monitor_at_the_same_name_alone(journal):
+    fake = FakeDisplay()
+    fix = RefreshRateFix(display=fake)
+    fix.apply(fix.plan({"device": DEV, "hz": 144}), journal)
+    [entry] = journal.undoable()
+    fake.path = OTHER
+    calls = list(fake.calls)
+    for force in (False, True):
+        res = fix.undo(entry, journal, force=force)
+        assert not res.ok and res.state == "applied", res.message
+    assert fake.calls == calls and fake.mode == mode(144)        # that monitor was never touched
+    fake.path = PANEL                                            # the right one is back on DISPLAY1
+    assert fix.undo(journal.undoable()[0], journal).ok and fake.mode == mode(60)
+
+
+@pytest.mark.parametrize("monitor", ["", 5, "x" * 200, "bad\npath"])
+def test_refresh_rate_refuses_a_junk_monitor_identity(monitor):
+    fake = FakeDisplay()
+    with pytest.raises(ValueError):
+        RefreshRateFix(display=fake).plan({"device": DEV, "hz": 144, "monitor": monitor})
+    assert fake.calls == []
+
+
+def test_refresh_rate_restart_needed_puts_the_stored_mode_back(journal):
+    # DISP_CHANGE_RESTART: Windows did not switch, but it stored 144 Hz for the next sign-in (review finding CC-9).
+    fake = FakeDisplay()
+    fake.set_result[144] = 1
+    fix = RefreshRateFix(display=fake)
+    res = fix.apply(fix.plan({"device": DEV, "hz": 144}), journal)
+    assert not res.ok and res.state == "reverted" and "restart" in res.message, res.message
+    assert fake.stored_mode(DEV) == mode(60) and fake.mode == mode(60)
+    assert fake.calls == [("test", 144), ("set", 144), ("test", 60), ("set", 60)]
+    assert journal.entries()[0].state == "reverted"
+
+
+def test_refresh_rate_a_restart_that_cannot_be_put_back_stays_undoable(journal):
+    fake = FakeDisplay()
+    fake.set_result[144] = 1                                     # stored for after a restart
+    fake.set_result[60] = -1                                     # and storing 60 Hz back fails
+    fix = RefreshRateFix(display=fake)
+    res = fix.apply(fix.plan({"device": DEV, "hz": 144}), journal)
+    assert not res.ok and res.state == "applied", res.message
+    assert f"lagdoctor undo {res.entry_id}" in res.message
+    assert fake.stored_mode(DEV) == mode(144) and fake.mode == mode(60)
+    [entry] = journal.undoable()
+    assert entry.id == res.entry_id
+    assert fix.read(entry.params) == {**mode(60), "after_restart": mode(144)}
+    del fake.set_result[60]                                      # later the driver takes it
+    res = fix.undo(entry, journal)                               # ours, so no --force needed
+    assert res.ok and res.state == "undone", res.message
+    assert fake.stored_mode(DEV) == mode(60) and fake.mode == mode(60)
+
+
+def test_refresh_rate_a_restore_that_also_needs_a_restart_counts_once_the_original_is_stored(journal):
+    # Storing 60 Hz back returns DISP_CHANGE_RESTART too, but it did store it: the readback is what decides.
+    fake = FakeDisplay()
+    fake.set_result[144] = 1
+    fake.set_result[60] = 1
+    fix = RefreshRateFix(display=fake)
+    res = fix.apply(fix.plan({"device": DEV, "hz": 144}), journal)
+    assert not res.ok and res.state == "reverted", res.message
+    assert fake.stored_mode(DEV) == mode(60) and fake.mode == mode(60)
+
+
+def test_refresh_rate_a_stored_mode_that_differs_from_the_screen_is_left_alone():
+    fake = FakeDisplay()
+    fake.stored = mode(144)                                      # e.g. a full-screen game switched to 60 Hz
+    fix = RefreshRateFix(display=fake)
+    assert fix.read({"device": DEV, "hz": 144}) == {**mode(60), "after_restart": mode(144)}
+    with pytest.raises(ValueError, match="stored for it"):
+        fix.plan({"device": DEV, "hz": 144})
+    fake.stored = None                                           # nothing stored at all
+    with pytest.raises(ValueError, match="stored for it"):
+        fix.plan({"device": DEV, "hz": 144})
+    assert fake.calls == []
+
+
+def test_refresh_rate_heal_finds_a_change_stored_for_after_a_restart(journal):
+    fake = FakeDisplay()
+    entry = journal.begin("refresh_rate", "t", {"device": DEV, "hz": 144, "monitor": PANEL}, before=mode(60),
+                          after=mode(144))
+    fake.stored = mode(144)                                      # the tool died right after DISP_CHANGE_RESTART
+    res = RefreshRateFix(display=fake).heal(entry, journal)
+    assert res.ok and journal.get(entry.id).state == "applied", res.message
+
+
+def test_refresh_rate_heal_while_the_display_is_unplugged_keeps_the_entry(journal):
+    fake = FakeDisplay()
     fake.connected = False
-    res = fix.undo(journal.undoable()[0], journal)
-    assert res.ok and res.state == "undone" and "no longer exists" in res.message
-    assert fake.calls == [("test", 144), ("set", 144)]
+    entry = journal.begin("refresh_rate", "t", {"device": DEV, "hz": 144, "monitor": PANEL}, before=mode(60),
+                          after=mode(144))
+    res = RefreshRateFix(display=fake).heal(entry, journal)
+    assert not res.ok and journal.get(entry.id).state == "applied", res.message
+    assert fake.calls == []
+
+
+# ======================================================================== display readers (read-only)
+
+def _gdi_monitor_interface(device: str) -> str:
+    """The monitor's device interface name from GDI (EnumDisplayDevicesW + EDD_GET_DEVICE_INTERFACE_NAME), an
+    API independent of the QueryDisplayConfig path monitor_path() reads."""
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.EnumDisplayDevicesW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD,
+                                           ctypes.POINTER(display_api.DISPLAY_DEVICEW), wintypes.DWORD]
+    user32.EnumDisplayDevicesW.restype = wintypes.BOOL
+    mon = display_api.DISPLAY_DEVICEW()
+    mon.cb = ctypes.sizeof(mon)
+    assert user32.EnumDisplayDevicesW(device, 0, ctypes.byref(mon), 0x1), f"no monitor on {device}"
+    return mon.DeviceID
+
+
+def test_live_monitor_path_matches_gdi_and_names_a_monitor():
+    displays = display_api.list_displays()
+    assert displays
+    for d in displays:
+        path = display_api.monitor_path(d["device"])
+        assert path == _gdi_monitor_interface(d["device"])
+        assert path.upper().startswith("\\\\?\\DISPLAY#")
+    assert display_api.monitor_path("\\\\.\\DISPLAY999") is None
+
+
+def test_live_the_stored_mode_is_the_one_on_screen():
+    # The fix relies on this: with no change pending, the profile's mode is the mode on screen. (A full-screen
+    # game that switched modes, or a change waiting for a restart, would make it differ.)
+    for d in display_api.list_displays():
+        assert display_api.stored_mode(d["device"]) == display_api.current_mode(d["device"])
+
+
+def test_monitor_path_is_the_qdc_targets_device_path(monkeypatch):
+    for paths, want in (({"\\\\.\\DISPLAY1": {"device_path": PANEL}}, PANEL),
+                        ({"\\\\.\\DISPLAY1": {"device_path": ""}}, None), ({}, None)):
+        monkeypatch.setattr(display_api, "_qdc_paths", lambda paths=paths: paths)
+        assert display_api.monitor_path("\\\\.\\display1") == want
+    with pytest.raises(ValueError):
+        display_api.monitor_path("DISPLAY1")
+
+
+def test_stored_mode_reads_the_profile_and_an_empty_one_is_none(monkeypatch):
+    seen: list = []
+
+    class FakeUser32:
+        def __init__(self, width, height, hz, ok=True):
+            self.width, self.height, self.hz, self.ok = width, height, hz, ok
+
+        def EnumDisplaySettingsW(self, device, which, dm_ref):
+            seen.append((device, which))
+            dm = dm_ref._obj                      # the DEVMODEW behind ctypes.byref()
+            dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency = self.width, self.height, self.hz
+            return self.ok
+
+    for user32, want in ((FakeUser32(1920, 1080, 144), mode(144)), (FakeUser32(1920, 1080, 1), mode(None)),
+                         (FakeUser32(0, 0, 0), None)):
+        monkeypatch.setattr(display_api, "_user32", user32)
+        assert display_api.stored_mode(DEV) == want
+    assert seen[0] == ("\\\\.\\DISPLAY1", 0xFFFFFFFE)            # ENUM_REGISTRY_SETTINGS, (DWORD)-2
+    monkeypatch.setattr(display_api, "_user32", FakeUser32(1920, 1080, 144, ok=False))
+    with pytest.raises(OSError):
+        display_api.stored_mode(DEV)
 
 
 def test_refresh_rate_plan_for_a_display_that_is_not_connected():
