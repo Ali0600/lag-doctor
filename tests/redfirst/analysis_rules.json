@@ -661,6 +661,15 @@
   ]
  },
  {
+  "name": "residuals judged on marks",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if half:\n            return None                      # attribute.py",
+  "new": "        if False:\n            return None                      # attribute.py",
+  "tests": [
+   "tests/test_analysis_rules.py::test_marks_never_rule_out_the_residual_causes_they_were_not_judged_for"
+  ]
+ },
+ {
   "name": "unmeasured causes not ruled out keep coverage",
   "file": "lagdoctor/analysis/rules.py",
   "old": "            c.lack(fam, W_STEADY, f\"{labels.cause_text(other)} was not measured",
@@ -710,6 +719,15 @@
   "file": "lagdoctor/analysis/rules.py",
   "old": "f\"the PC switched Wi-Fi access points {roams} time{'s' if roams != 1 else ''} \"",
   "new": "f\"the PC switched to {[b for b in bssid if b][-1]} {roams} time{'s' if roams != 1 else ''} \"",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_wifi_roaming_counts_access_point_changes_and_never_prints_them"
+  ]
+ },
+ {
+  "name": "roam spikes timed by the channel only",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        series = aps if roams else chans",
+  "new": "        series = chans",
   "tests": [
    "tests/test_analysis_rules_network.py::test_wifi_roaming_counts_access_point_changes_and_never_prints_them"
   ]

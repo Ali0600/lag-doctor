@@ -1543,6 +1543,8 @@ def _stutter_cause(cap: Capture, ctx: dict, cause: str) -> Any:
     if label == "too_few_events":
         return (Unchecked(cause, f"only {n:.0f} {what}: blaming a cause needs at least {MIN_EVENTS}") if ids else None)
     if cause in RESIDUAL_CAUSES:
+        if half:
+            return None                      # attribute.py works out no residual for marks: nothing was judged
         _residual_items(c, entry, ids, phrase, what)
     else:
         _event_link(c, cause, family, phrase)
@@ -1674,7 +1676,9 @@ def _wifi_roaming(cap: Capture, ctx: dict) -> Any:
     if done is not None:
         return done
     t = fa._col(cap.network, N.T)
-    bssid = [_text(x, 40) for x in fa._col(cap.network, N.WIFI_BSSID)]
+    aps = [(float(ti), b) for ti, b in ((_num(ti), _text(x, 40)) for ti, x in zip(t, fa._col(cap.network, N.WIFI_BSSID)))
+           if ti is not None and b is not None]
+    bssid = [b for _, b in aps]
     chans = [(_num(ti), _num(ch)) for ti, ch in zip(t, fa._col(cap.network, N.WIFI_CHANNEL))]
     chans = [(float(a), int(b)) for a, b in chans if a is not None and b is not None]
     roams = _changes(bssid)
@@ -1691,7 +1695,8 @@ def _wifi_roaming(cap: Capture, ctx: dict) -> Any:
     else:
         c.lack("wifi", W_STEADY, "the Wi-Fi channel was not read")
     if roams or hops:
-        times = [ta for (ta, a), (_, b) in zip(chans, chans[1:]) if a != b]
+        series = aps if roams else chans          # when the switches happened, by what showed them
+        times = [tb for (_, a), (tb, b) in zip(series, series[1:]) if a != b]
         spikes = [ev for ev in e.events if ev.kind in ("net_spike", "net_loss")]
         near = sum(1 for x in times if any(ev.t_start - ROAM_SPIKE_S <= x <= ev.t_end + ROAM_SPIKE_S for ev in spikes))
         if near:
@@ -1767,13 +1772,12 @@ def _bufferbloat(cap: Capture, ctx: dict) -> Any:
     c = _Case(cap, ctx, "bufferbloat")
     e = c.env
     t = fa._col(cap.network, N.T)
+    cols = [fa._col(cap.network, n) for n in (N.NIC_RX_BPS, N.NIC_TX_BPS, N.INET_RTT_MS, N.GW_RTT_MS)]
     rows = []
     for i, ti in enumerate(t):
-        x = _num(ti)
-        if x is None:
+        if _num(ti) is None:
             continue
-        rx, tx = _fin(fa._at(fa._col(cap.network, N.NIC_RX_BPS), i)), _fin(fa._at(fa._col(cap.network, N.NIC_TX_BPS), i))
-        inet, gw = _fin(fa._at(fa._col(cap.network, N.INET_RTT_MS), i)), _fin(fa._at(fa._col(cap.network, N.GW_RTT_MS), i))
+        rx, tx, inet, gw = (_fin(fa._at(col, i)) for col in cols)
         rows.append((rx, tx, inet if inet is not None and inet > 0 else None, gw if gw is not None and gw > 0 else None))
     rx_peak = max((r[0] for r in rows if r[0] is not None), default=None)
     tx_peak = max((r[1] for r in rows if r[1] is not None), default=None)
@@ -1964,7 +1968,7 @@ def _bandwidth_hog(cap: Capture, ctx: dict) -> Any:
         if isinstance(d, dict) and _fin(d.get("mbps")) and _fin(d.get("mbps")) > 0 and _num(d.get("t")) is not None:
             dl.append((float(d["t"]), _text(d.get("source"), 40) or "a download", float(d["mbps"])))
     if dl:
-        t0, src, rate = max(dl, key=lambda x: x[2])
+        _, src, rate = max(dl, key=lambda x: x[2])
         c.support("background", W_STEADY, f"{src} was downloading at up to {rate:.0f} Mbit/s during the capture")
         inet = e.net(N.INET_RTT_MS)
         times = [t for t, _, _ in dl]
@@ -2036,5 +2040,3 @@ RULES: list[Rule] = [
     Rule("bandwidth_hog", "background", ("network",), None, _bandwidth_hog, "network"),
 ]
 RULE_BY_CAUSE: dict[str, Rule] = {r.cause: r for r in RULES}
-GPU_SIDE = tuple(r.cause for r in RULES if r.gate in ("gpu", "gpu_event"))
-CPU_SIDE = tuple(r.cause for r in RULES if r.gate == "cpu")

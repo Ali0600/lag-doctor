@@ -11,7 +11,7 @@ import copy
 import pytest
 
 from lagdoctor.analysis import rules
-from lagdoctor.model import F, G, S, Finding, LagEvent, SourceStatus
+from lagdoctor.model import F, S, Finding, LagEvent, SourceStatus
 from tests import synth
 
 NV, INTEL = synth.NVIDIA_LUID, synth.INTEL_LUID
@@ -954,3 +954,11 @@ def test_marks_stand_in_for_frames_at_half_weight():
     res = run("game_cpu_spike", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0}, events=marks,
               causes=causes)
     assert is_finding(res, "low") and "marked moments" in res.evidence[0].text
+
+
+def test_marks_never_rule_out_the_residual_causes_they_were_not_judged_for():
+    marks = [LagEvent(i, "mark", 3.0 * i - 3.0, 3.0 * i + 0.5, 0.0, {}) for i in range(1, 13)]
+    causes = {"game_stall": lift("contradicts", a=0, n=12, weight=1.0, lift_=None, half_weight=True)}
+    res = run("game_stall", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0}, events=marks,
+              causes=causes)
+    assert res is None

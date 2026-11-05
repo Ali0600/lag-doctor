@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from e2e_truth import EXPECTATIONS, judge  # noqa: E402
+from e2e_truth import judge  # noqa: E402
 
 from lagdoctor.analysis import attribute, events, frames, rules  # noqa: E402
 from lagdoctor.analysis import diagnose as dg  # noqa: E402

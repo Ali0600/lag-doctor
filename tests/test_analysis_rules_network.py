@@ -56,6 +56,9 @@ def test_wifi_roaming_counts_access_point_changes_and_never_prints_them():
     res = run("wifi_roaming", net(wifi_bssid=bssid, wifi_channel=36))
     assert is_finding(res, "high") and "1 time " in res.evidence[0].text
     assert not any("aa:bb" in e.text for e in res.evidence) and "aa:bb" not in res.title + res.summary
+    spike = LagEvent(1, "net_spike", 14.0, 16.0, 90.0, {"target": "internet"})        # same channel throughout
+    res = run("wifi_roaming", net(wifi_bssid=bssid, wifi_channel=36), events=[spike])
+    assert any("within 3 s of 1 of those switches" in e.text for e in res.evidence)
 
 
 def test_wifi_roaming_from_a_channel_change_and_its_ping_spike():
