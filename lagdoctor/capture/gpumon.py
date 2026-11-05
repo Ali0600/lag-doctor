@@ -7,11 +7,18 @@ not known yet: polling NVML may wake a sleeping Optimus dGPU (WT 11.5 item 7), s
 a game on another GPU leaves this source "off".
 
 Throttling is a share, not a bit (WT 11.5 item 16): nv_throttle_pct is how much
-the cumulative SW thermal, HW thermal, HW power-brake and SW power-cap counters
-grew over the row's interval, summed and clamped to 0..100.
+the cumulative SW thermal, HW thermal and HW power-brake counters grew over the
+row's interval, summed and clamped to 0..100 (LC 4.2). The SW power cap is the
+design limit of a GPU-bound laptop, not throttling (LC 4.1, 4.2), so its share
+goes to nv_power_cap_pct instead.
+
+The nvidia-smi child runs in a job object that kills it when lag-doctor's last
+handle to the job closes, which Windows does when lag-doctor dies however it
+dies, so a hard kill never leaves it polling the GPU into a dead pipe.
 """
 from __future__ import annotations
 
+import ctypes
 import datetime as _dt
 import math
 import os
@@ -20,6 +27,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from ctypes import wintypes
 from typing import IO, Any, Iterator, Sequence
 
 from lagdoctor import clock
@@ -38,10 +46,17 @@ REFRESH_POLL_S = 0.01
 # Waits out refresh periods up to ~0.85 s (nvidia-smi's help puts the utilisation sample period at 1/6 to 1 s
 # "depending on the product") and still ends before the next 1 s tick.
 REFRESH_WAIT_S = 0.9
+# A row counts as aligned only if it was read at most this long after the fingerprint was last seen unchanged,
+# so at most this long after the refresh (a normal poll gap is ~10 ms). A thread held up longer (load) reads
+# late, and the share over its interval would be off [inferred].
+ALIGN_SLACK_S = 0.025
 NVIDIA_VENDOR_ID = 0x10DE     # DXGI VendorId of the NVIDIA adapter (WT 5.1)
 # LC 1.4: treat a power reading at or below the 1.00 W minimum power limit as invalid [inferred].
 MIN_VALID_POWER_W = 1.0
-THROTTLE_REASONS = tuple(nvml.THROTTLE_FIELDS)
+COUNTERS = tuple(nvml.THROTTLE_FIELDS)          # every cumulative counter read, from NVML or nvidia-smi
+# LC 4.2: heat and the HW power brake hold the clocks down. (hw_slowdown has no counter; nv_reasons shows it.)
+THROTTLE_REASONS = ("sw_thermal_slowdown", "hw_thermal_slowdown", "hw_power_brake_slowdown")
+POWER_CAP_REASONS = ("sw_power_cap",)           # LC 4.1: the normal limit of a GPU-bound laptop
 DEVICE_KEYS = ("name", "clock_max_mhz", "mem_total_mb", "temp_target_c")
 # Values the driver samples; nv_clock_max_mhz is left out because it comes from the device listing.
 _SAMPLED = tuple(c for c in G.ALL if c not in (G.T, G.CLOCK_MAX_MHZ))
@@ -142,15 +157,15 @@ def pick_device(devices: Sequence[dict], adapter: dict | None) -> tuple[dict | N
     return first, "the game's GPU has no PCI location; watching the first NVIDIA GPU"
 
 
-def throttle_pct(prev: dict | None, cur: dict | None, dt_s: Any) -> float | None:
-    """Share (0..100) of dt_s that the clocks were held down by heat or power, from two readings of the
-    cumulative per-reason nanosecond counters. None when it cannot be known: no earlier reading, no counter
-    in both, a counter that went backwards (driver reload), or a bad interval."""
+def share_pct(prev: dict | None, cur: dict | None, dt_s: Any, reasons: Sequence[str]) -> float | None:
+    """Share (0..100) of dt_s that `reasons` held the clocks down, from two readings of the cumulative
+    per-reason nanosecond counters. None when it cannot be known: no earlier reading, no counter in both,
+    a counter that went backwards (driver reload), or a bad interval."""
     if not prev or not cur or not isinstance(dt_s, (int, float)) or not 0 < dt_s < math.inf:
         return None
     total = 0
     seen = 0
-    for reason in THROTTLE_REASONS:
+    for reason in reasons:
         a, b = prev.get(reason), cur.get(reason)
         if a is None or b is None:
             continue
@@ -160,9 +175,18 @@ def throttle_pct(prev: dict | None, cur: dict | None, dt_s: Any) -> float | None
         seen += 1
     if not seen:
         return None
-    # Reasons overlap (SW thermal and SW power cap both ran 100 % of the time here, mask 0x24), so the
-    # sum can pass 100 and is clamped: it is an upper bound of the time the clocks were held down.
+    # Reasons can overlap, so the sum can pass 100 and is clamped: an upper bound of the time held down.
     return min(100.0, 100.0 * total / (dt_s * 1e9))
+
+
+def throttle_pct(prev: dict | None, cur: dict | None, dt_s: Any) -> float | None:
+    """nv_throttle_pct: the share held down by heat or the HW power brake (LC 4.2), never the power cap."""
+    return share_pct(prev, cur, dt_s, THROTTLE_REASONS)
+
+
+def power_cap_pct(prev: dict | None, cur: dict | None, dt_s: Any) -> float | None:
+    """nv_power_cap_pct: the share spent at the SW power cap, the design limit (LC 4.1)."""
+    return share_pct(prev, cur, dt_s, POWER_CAP_REASONS)
 
 
 def reasons_text(mask: int | None) -> str | None:
@@ -174,12 +198,12 @@ def plausible_power(watts: float | None) -> float | None:
     return watts if watts is not None and watts > MIN_VALID_POWER_W else None
 
 
-def make_row(t: float, s: dict, clock_max_mhz: Any, pct: float | None) -> dict:
-    """One G row from a sample dict shaped like Nvml.sample()."""
+def make_row(t: float, s: dict, clock_max_mhz: Any, pct: float | None, cap_pct: float | None) -> dict:
+    """One G row from a sample dict shaped like Nvml.sample(); pct and cap_pct are the two shares."""
     return {G.T: t, G.UTIL_PCT: s.get("util_pct"), G.MEM_USED_MB: s.get("mem_used_mb"), G.TEMP_C: s.get("temp_c"),
             G.POWER_W: plausible_power(s.get("power_w")), G.POWER_LIMIT_W: s.get("power_limit_w"),
             G.CLOCK_MHZ: s.get("clock_mhz"), G.CLOCK_MAX_MHZ: clock_max_mhz, G.PSTATE: s.get("pstate"),
-            G.REASONS: reasons_text(s.get("reasons")), G.THROTTLE_PCT: pct}
+            G.REASONS: reasons_text(s.get("reasons")), G.THROTTLE_PCT: pct, G.POWER_CAP_PCT: cap_pct}
 
 
 # --------------------------------------------------------- nvidia-smi text ---
@@ -237,7 +261,7 @@ def parse_smi_row(line: str, columns: Sequence[str]) -> dict | None:
     m = _PSTATE.fullmatch(raw.get("pstate", ""))
     mask = raw.get("clocks_event_reasons.active", "")
     throttle: dict[str, int | None] = {}
-    for reason in THROTTLE_REASONS:
+    for reason in COUNTERS:
         us = _int(raw.get(f"clocks_event_reasons_counters.{reason}", ""))
         throttle[reason] = None if us is None else us * 1000            # microseconds -> ns, as NVML gives
     bus_id = raw.get("pci.bus_id", "")
@@ -329,10 +353,88 @@ class _Stop(Exception):
         self.state, self.why = state, why
 
 
+# ------------------------------------------------- the nvidia-smi child's job ---
+
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000       # winnt.h
+JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9         # JOBOBJECTINFOCLASS
+
+
+class _BasicLimits(ctypes.Structure):             # JOBOBJECT_BASIC_LIMIT_INFORMATION, 64 bytes on x64
+    _fields_ = [("PerProcessUserTimeLimit", ctypes.c_longlong), ("PerJobUserTimeLimit", ctypes.c_longlong),
+                ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD), ("SchedulingClass", wintypes.DWORD)]
+
+
+class _ExtendedLimits(ctypes.Structure):          # JOBOBJECT_EXTENDED_LIMIT_INFORMATION, 144 bytes on x64
+    _fields_ = [("BasicLimitInformation", _BasicLimits), ("IoInfo", ctypes.c_ulonglong * 6),
+                ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+
+nvml._check_sizes([(_BasicLimits, 64), (_ExtendedLimits, 144)])   # a wrong size makes SetInformationJobObject fail
+
+_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_k32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+_k32.CreateJobObjectW.restype = wintypes.HANDLE
+_k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD]
+_k32.SetInformationJobObject.restype = wintypes.BOOL
+_k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+_k32.AssignProcessToJobObject.restype = wintypes.BOOL
+_k32.IsProcessInJob.argtypes = [wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)]
+_k32.IsProcessInJob.restype = wintypes.BOOL
+_k32.CloseHandle.argtypes = [wintypes.HANDLE]
+_k32.CloseHandle.restype = wintypes.BOOL
+
+
+class KillOnCloseJob:
+    """A job object whose processes die when its last handle closes: at close(), or when this process
+    dies, however it dies, since Windows then closes the handle. Children are added by the handle
+    subprocess.Popen already holds, so no process is ever opened."""
+
+    def __init__(self) -> None:
+        self._handle = _k32.CreateJobObjectW(None, None)
+        if not self._handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        limits = _ExtendedLimits()
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        if not _k32.SetInformationJobObject(self._handle, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                                            ctypes.byref(limits), ctypes.sizeof(limits)):
+            err = ctypes.get_last_error()
+            self.close()
+            raise ctypes.WinError(err)
+
+    @staticmethod
+    def _process(proc: subprocess.Popen) -> int:
+        handle = getattr(proc, "_handle", None)        # CreateProcess's handle, full access to our own child
+        if not handle:
+            raise OSError("the child's process handle is not available")
+        return int(handle)
+
+    def add(self, proc: subprocess.Popen) -> None:
+        if not _k32.AssignProcessToJobObject(self._handle, self._process(proc)):
+            raise ctypes.WinError(ctypes.get_last_error())
+
+    def holds(self, proc: subprocess.Popen) -> bool:
+        inside = wintypes.BOOL()
+        if not _k32.IsProcessInJob(self._process(proc), self._handle, ctypes.byref(inside)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        return bool(inside.value)
+
+    def close(self) -> None:
+        if self._handle:
+            _k32.CloseHandle(self._handle)
+            self._handle = None
+
+
 # --------------------------------------------------------------- collector ---
 
 class NvidiaSampler(Collector):
-    """Collector "gpu": G columns at 1 Hz, plus the device description for inventory["nvidia"]."""
+    """Collector "gpu": G columns at 1 Hz, plus the device description for inventory["nvidia"].
+
+    `row_aligned[i]` says whether row i was read just after a driver refresh (NVML; False when none came
+    within REFRESH_WAIT_S or the read came more than ALIGN_SLACK_S after it), or None for nvidia-smi rows,
+    which cannot be aligned."""
 
     name = "gpu"
 
@@ -340,10 +442,12 @@ class NvidiaSampler(Collector):
         super().__init__()
         self.adapter = adapter if isinstance(adapter, dict) else None
         self.series = SeriesBuilder(G.ALL)
-        self._lock = threading.Lock()                 # guards series and _device for result()
+        self.row_aligned: list[bool | None] = []
+        self._lock = threading.Lock()                 # guards series, row_aligned and _device for result()
         self._device: dict | None = None
         self._child: subprocess.Popen | None = None
         self._child_lock = threading.Lock()
+        self._job: KillOnCloseJob | None = None
         self.smi_malformed = 0
         self.smi_exit_code: int | None = None
         self.smi_stderr = ""
@@ -396,33 +500,43 @@ class NvidiaSampler(Collector):
             if got is None:
                 break
             sample, t, aligned = got
-            pct = None
+            pct = cap = None
             if prev is not None:
+                both = aligned and prev[2]
                 pct = throttle_pct(prev[1], sample["throttle_ns"], t - prev[0])
-                if pct and not (aligned and prev[2]):
-                    pct = None    # an unaligned read cannot tell which refreshes its counter steps belong to
-            if self._add(make_row(t, sample, dev.get("clock_max_mhz"), pct), "nvml") == 1:
+                cap = power_cap_pct(prev[1], sample["throttle_ns"], t - prev[0])
+                # An unaligned read cannot tell which refreshes its counter steps belong to; a zero is still zero.
+                if pct and not both:
+                    pct = None
+                if cap and not both:
+                    cap = None
+            if self._add(make_row(t, sample, dev.get("clock_max_mhz"), pct, cap), "nvml", aligned) == 1:
                 self.set_status("ok", detail, tool="nvml")
             prev = (t, sample["throttle_ns"], aligned)
         self._finish(detail, "nvml")
 
     def _read_after_refresh(self, nv: Nvml, index: int) -> tuple[dict, float, bool] | None:
-        """(sample, t, aligned): a full sample read just after the driver's next refresh, or after
-        REFRESH_WAIT_S without one (aligned False). None when stopping."""
+        """(sample, t, aligned): a full sample read just after the driver's next refresh. aligned is False
+        after REFRESH_WAIT_S without one, or when the refresh may lie more than ALIGN_SLACK_S before the
+        read (the poll that saw it came late, or the sample did). None when stopping."""
         mark = nv.refresh_mark(index)
-        deadline = clock.now() + REFRESH_WAIT_S
-        aligned = False
+        unchanged_at = clock.now()               # the last moment the fingerprint was seen unchanged
+        deadline = unchanged_at + REFRESH_WAIT_S
+        changed_at = None
         while clock.now() < deadline:
             if self.stopping:
                 return None
             time.sleep(REFRESH_POLL_S)
             if nv.refresh_mark(index) != mark:
-                aligned = True
+                changed_at = clock.now()
                 break
+            unchanged_at = clock.now()
         if self.stopping:
             return None
         sample = nv.sample(index)
-        return sample, self.now(), aligned
+        read_at = clock.now()
+        aligned = changed_at is not None and read_at - unchanged_at <= ALIGN_SLACK_S
+        return sample, read_at - self.origin, aligned
 
     # ---- nvidia-smi -----------------------------------------------------
     def _run_smi(self, nvml_reason: str) -> None:
@@ -443,11 +557,13 @@ class NvidiaSampler(Collector):
                 self.set_status("unavailable", f"{why}, and nvidia-smi did not start: {exc}", tool="nvidia-smi")
                 return
             self._child = child
+            # Tied to our lifetime at once. (A hard kill in the instant before this line still leaves it running.)
+            job_note = self._join_job(child)
         tail = _Tail()
         drain = threading.Thread(target=tail.drain, args=(child.stderr,), name="lagdoctor-gpu-smi-stderr",
                                  daemon=True)
         drain.start()
-        detail = f"nvidia-smi streaming every {PERIOD_S:g} s ({why})"
+        detail = f"nvidia-smi streaming every {PERIOD_S:g} s ({why})" + (f"; {job_note}" if job_note else "")
         stop: _Stop | None = None
         try:
             detail = self._read_smi(child.stdout, detail)
@@ -455,6 +571,8 @@ class NvidiaSampler(Collector):
             stop = exc
         finally:
             self.smi_exit_code = self._end_child(wait=True)
+            if self._job is not None:
+                self._job.close()             # after the reap, so its exit code stays TerminateProcess's own
             drain.join(SMI_STOP_TIMEOUT_S)
             for stream in (child.stdout, child.stderr):
                 try:
@@ -528,12 +646,26 @@ class NvidiaSampler(Collector):
     def _smi_add(self, t: float, row: dict, prev: tuple | None, detail: str) -> tuple:
         # nvidia-smi's rows cannot be aligned to the driver's refreshes, so one row's share can read 50 %
         # or 150 % (clamped) when its second holds one or three of them; analysis averages over windows.
-        pct = None
+        pct = cap = None
         if prev is not None:
-            pct = throttle_pct(prev[1], row["throttle_ns"], (row["when"] - prev[0]).total_seconds())
-        if self._add(make_row(t, row, row.get("clock_max_mhz"), pct), "nvidia-smi") == 1:
+            dt_s = (row["when"] - prev[0]).total_seconds()
+            pct = throttle_pct(prev[1], row["throttle_ns"], dt_s)
+            cap = power_cap_pct(prev[1], row["throttle_ns"], dt_s)
+        if self._add(make_row(t, row, row.get("clock_max_mhz"), pct, cap), "nvidia-smi", None) == 1:
             self.set_status("ok", detail, tool="nvidia-smi")
         return row["when"], row["throttle_ns"]
+
+    def _join_job(self, child: subprocess.Popen) -> str | None:
+        """Put the nvidia-smi child in a kill-on-close job; on failure, the note that says it is not."""
+        try:
+            self._job = KillOnCloseJob()
+            self._job.add(child)
+        except OSError as exc:
+            if self._job is not None:
+                self._job.close()
+                self._job = None
+            return f"nvidia-smi is not tied to lag-doctor's lifetime, so a hard kill could leave it running ({exc})"
+        return None
 
     def _end_child(self, wait: bool) -> int | None:
         """Stop the nvidia-smi child (TerminateProcess: it holds no ETW session or anything else that outlives
@@ -563,9 +695,10 @@ class NvidiaSampler(Collector):
         with self._lock:
             self._device = {k: dev.get(k) for k in DEVICE_KEYS}
 
-    def _add(self, row: dict, source: str) -> int:
+    def _add(self, row: dict, source: str, aligned: bool | None) -> int:
         with self._lock:
             self.series.add(**row)
+            self.row_aligned.append(aligned)
             n = len(self.series)
         self.publish(source=source, **row)
         return n

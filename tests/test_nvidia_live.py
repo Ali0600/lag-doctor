@@ -95,7 +95,7 @@ def test_nvml_sample_matches_a_one_shot_nvidia_smi_read(nv, smi):
     within("power_limit_w", float(r["enforced.power.limit"]), 1.0)
     assert int(r["pstate"].lstrip("P")) in (before["pstate"], after["pstate"])
     assert int(r["clocks_event_reasons.active"], 16) in (before["reasons"], after["reasons"])
-    for reason in gpumon.THROTTLE_REASONS:
+    for reason in gpumon.COUNTERS:
         # the same cumulative counter: nvidia-smi prints whole microseconds, NVML gives nanoseconds
         smi_ns = int(r[f"clocks_event_reasons_counters.{reason}"]) * 1000
         assert before["throttle_ns"][reason] - 999 <= smi_ns <= after["throttle_ns"][reason], reason
@@ -147,16 +147,28 @@ def test_sampler_reads_each_row_just_after_a_driver_refresh(nv):
     assert st.state == "ok" and st.tool == "nvml" and "NVML" in st.detail, st
     cols = s.result()["columns"]
     t = cols[G.T]
+    aligned = s.row_aligned
     assert len(t) >= 4 and len(refreshes) >= 6, (t, refreshes)
+    assert len(aligned) == len(t)
     for i, row_t in enumerate(t):
-        print(f"row {i}: t={row_t:.3f} util={cols[G.UTIL_PCT][i]} temp={cols[G.TEMP_C][i]} "
+        print(f"row {i}: t={row_t:.3f} aligned={aligned[i]} util={cols[G.UTIL_PCT][i]} temp={cols[G.TEMP_C][i]} "
               f"clock={cols[G.CLOCK_MHZ][i]}/{cols[G.CLOCK_MAX_MHZ][i]} power={cols[G.POWER_W][i]} "
-              f"reasons={cols[G.REASONS][i]!r} throttle={cols[G.THROTTLE_PCT][i]}")
+              f"reasons={cols[G.REASONS][i]!r} throttle={cols[G.THROTTLE_PCT][i]} cap={cols[G.POWER_CAP_PCT][i]}")
+    # One row the sampler itself marks unaligned (load held it up past ALIGN_SLACK_S, or no refresh came) is
+    # allowed; a row it calls aligned must be one. The rest must be aligned, or this would check nothing.
+    good = [i for i, a in enumerate(aligned) if a]
+    assert len(good) >= len(t) - 1, aligned
+    for i in good:
         # The recorder sees a refresh up to a poll later than the sampler may, so the window is two-sided;
         # refreshes are ~500 ms apart, so a row read at a random moment lands this close only ~12 % of the time.
-        nearest = min(refreshes, key=lambda r: abs(r - (origin + row_t)))
-        assert abs(nearest - (origin + row_t)) <= 0.03, ("row not read just after a refresh", i, row_t)
-    assert all(v is not None and 0.0 <= v <= 100.0 for v in cols[G.THROTTLE_PCT][1:]), cols[G.THROTTLE_PCT]
+        nearest = min(refreshes, key=lambda r: abs(r - (origin + t[i])))
+        assert abs(nearest - (origin + t[i])) <= 0.03, ("row marked aligned but not read just after a refresh", i, t[i])
+    for column in (G.THROTTLE_PCT, G.POWER_CAP_PCT):
+        values = cols[column]
+        for i in range(1, len(t)):
+            # None only where this row or the one before was unaligned (its share is not known then)
+            assert (values[i] is None and not (aligned[i] and aligned[i - 1])) or \
+                (values[i] is not None and 0.0 <= values[i] <= 100.0), (column, i, values, aligned)
     dev = s.result()["device"]
     want = {k: nv.devices()[0][k] for k in gpumon.DEVICE_KEYS}
     assert dev == want

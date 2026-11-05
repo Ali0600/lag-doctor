@@ -119,6 +119,18 @@ def find_steam_log() -> Path | None:
     return steam_log_path(value, kind)
 
 
+def given_steam_log(value: object) -> Path | str | None:
+    """NetworkSampler's steam_log argument: None (look it up in HKCU), "" (no Steam log), or that exact file,
+    which must be a plain local drive path like the one HKCU gives (never UNC or a device). ValueError else."""
+    if value is None or value == "":
+        return value
+    text = str(value) if isinstance(value, (str, Path)) else None
+    if text is None or not 3 <= len(text) <= 260 or any(ord(c) < 32 for c in text) \
+            or not _LOCAL_DRIVE_PATH.match(text):
+        raise ValueError(f"not a local Steam log file path: {value!r}")
+    return Path(text)
+
+
 class LogTail:
     """New complete lines of a growing text file, at most max_bytes per poll.
 
@@ -131,6 +143,7 @@ class LogTail:
         self.path = Path(path)
         self.max_bytes, self.max_line = max_bytes, max_line
         self.bytes_read = 0
+        self.readable: bool | None = None   # did the last poll() see the file (and read it, if it had grown)?
         self._partial = b""
         self._skip_partial = False
         st = self._stat()
@@ -146,6 +159,7 @@ class LogTail:
     def poll(self) -> list[str]:
         self.bytes_read = 0
         st = self._stat()
+        self.readable = st is not None
         if st is None:
             return []
         ident = (st.st_dev, st.st_ino)
@@ -162,6 +176,7 @@ class LogTail:
                 f.seek(self._pos)
                 data = f.read(self.max_bytes)
         except OSError:
+            self.readable = False
             return []
         self._pos += len(data)
         self.bytes_read = len(data)
@@ -282,19 +297,26 @@ class _Round:
 class NetworkSampler(Collector):
     """Collector "network" (docs/DESIGN.md, Collector specifics -> network).
 
-    server_ip / internet_ip: hosts to ping besides the router (ValueError for anything else). The other
+    server_ip / internet_ip: hosts to ping besides the router (ValueError for anything else). steam_log:
+    None looks the Steam log up in this user's HKCU; a path uses exactly that file (an elevated child is
+    handed the user's own, since its HKCU may be another account's); "" reads no Steam log. The other
     keywords are the cadence (round, ICMP timeout, route/Steam/BSSID checks), workers per target, and
     `net`, the machine (SystemNet; tests pass a fake).
+
+    result()["downloads"] is None when no download log was read at all (not measured, never "none
+    seen"); "download_sources" names the logs that were read.
     """
 
     name = "network"
 
     def __init__(self, server_ip: str | None = None, internet_ip: str = "1.1.1.1", *, round_s: float = 0.5,
                  timeout_ms: int = 1000, route_every_s: float = 5.0, steam_every_s: float = 2.0,
-                 bssid_every_s: float = 15.0, workers: int = 3, net: Any = None) -> None:
+                 bssid_every_s: float = 15.0, workers: int = 3, steam_log: str | Path | None = None,
+                 net: Any = None) -> None:
         super().__init__()
         if not round_s > 0 or not 1 <= timeout_ms <= icmp.MAX_TIMEOUT_MS or workers < 1:
             raise ValueError(f"bad cadence: round_s={round_s}, timeout_ms={timeout_ms}, workers={workers}")
+        self._steam_arg = given_steam_log(steam_log)
         self.internet_ip = str(icmp.check_target(internet_ip))
         self.round_s, self.timeout_ms = round_s, timeout_ms
         self.route_every_s, self.steam_every_s, self.bssid_every_s = route_every_s, steam_every_s, bssid_every_s
@@ -334,6 +356,7 @@ class NetworkSampler(Collector):
         self._downloads: collections.deque[dict] = collections.deque(maxlen=MAX_EVENTS)
         self._steam: LogTail | None = None
         self._steam_path: Path | None = None
+        self._sources: list[str] = []                       # download logs read at least once
         self._wall0 = self._cap0 = 0.0
         self._next_route = self._next_steam = self._next_bssid = 0.0
 
@@ -360,7 +383,8 @@ class NetworkSampler(Collector):
                 "wifi_scans": list(self._scans.copy()),
                 "route": dict(self._route),
                 "interface": dict(self._interface),
-                "downloads": [dict(d) for d in self._downloads],
+                "downloads": [dict(d) for d in self._downloads] if self._sources else None,
+                "download_sources": list(self._sources),
             }
 
     # ---- the loop ---------------------------------------------------------------
@@ -383,10 +407,15 @@ class NetworkSampler(Collector):
             except Exception as exc:  # noqa: BLE001 - a broken layout or API means no pings of that kind
                 self._can_ping[version] = False
                 self._problems[f"icmp{version}"] = f"IPv{version} pings disabled, ICMP self-test failed: {exc}"
-        try:
-            self._steam_path = self.net.steam_log()
-        except Exception as exc:  # noqa: BLE001
-            self._notes["steam"] = f"Steam download log not read: {exc}"
+        if self._steam_arg is None:
+            try:
+                self._steam_path = self.net.steam_log()
+            except Exception as exc:  # noqa: BLE001
+                self._notes["steam"] = f"Steam download log not read: {exc}"
+        elif self._steam_arg == "":
+            self._notes["steam"] = "Steam download log not read: none was given"
+        else:
+            self._steam_path = self._steam_arg              # exactly this file, never this account's HKCU
         if self._steam_path is not None:
             self._steam = LogTail(self._steam_path)
         else:
@@ -664,7 +693,14 @@ class NetworkSampler(Collector):
     # ---- Steam downloads ---------------------------------------------------------
     def _read_steam(self) -> None:
         read_t = self.now()
-        for line in self._steam.poll():
+        lines = self._steam.poll()
+        if self._steam.readable and "steam" not in self._sources:
+            with self._lock:
+                self._sources.append("steam")
+            self._notes.pop("steam", None)
+        elif not self._steam.readable and "steam" not in self._sources:
+            self._notes["steam"] = f"Steam download log not read: {self._steam.path} could not be read"
+        for line in lines:
             parsed = parse_steam_rate(line)
             if parsed is None:
                 continue

@@ -11,12 +11,18 @@ layouts, NE 4.6 for how the server flow and its gaps are found, NE 5 for the ses
   the field semantics; until it passes, `layout` is "unverified".
 - Times come from EventHeader.TimeStamp (raw QPC ticks, see winapi/etw.py), never from when an
   event arrived: ETW delivers in batches when buffers flush (NE 5.4). A 2 s reorder buffer puts
-  them in order before any inter-arrival is computed (NE 4.6.8).
+  them in order before any inter-arrival is computed (NE 4.6.8). A packet that comes later than
+  that never enters the timeline, so a gap whose span holds one is not a measured silence: it is
+  dropped (a late receive) or its kind becomes "unknown" (a late send), and the status says so.
+- A server that goes quiet for good leaves no packet to close its last gap, so the end of the
+  capture closes it: an "open" gap, when our own packets to it went on for at least a second
+  after its last one (the server stopped answering, not the game hanging up).
 
 The flow logic is the `FlowTable` class, fed `(t, Packet)` tuples, so it is testable without ETW.
 """
 from __future__ import annotations
 
+import bisect
 import heapq
 import ipaddress
 import math
@@ -73,6 +79,9 @@ BURST_PACKETS, BURST_FRACTION = 3, 0.25  # 4.6.6: >= 3 packets within 0.25 x nom
 LOCAL_OVERLAP = 0.5             # a tx silence must cover half the rx gap to call the gap local
 MIN_INTERVALS = 8               # fewer inter-arrivals than this: no nominal tick yet
 SKIP_PORTS = frozenset({53})    # 4.6.3: DNS is never the game server
+# An open gap at the end needs our own packets to the server to go on this long after its last one;
+# a game that hangs up stops sending with it [inferred, like the rest of 4.6].
+OPEN_TX_S = 1.0
 
 # Bounds: nothing grows per event without a cap.
 MAX_FLOWS = 256
@@ -84,8 +93,11 @@ MAX_SERVERS = 64
 MAX_PROBE = 64
 TOP_TALKERS = 8
 
+LAG_BUCKET_S, LAG_BUCKETS = 0.1, 300    # delivery-lag histogram: 100 ms steps up to 30 s, then one overflow
+
 TICK_S = 0.25
 PIDS_EVERY_S, NAMES_EVERY_S, LOCAL_EVERY_S, HEALTH_EVERY_S = 1.0, 5.0, 10.0, 10.0
+PUMP_EVERY_S = 1.0              # how often the consumer thread is checked, so its death is timed
 SELFTEST_WAIT_S = 4.0           # flush timer 1 s (NE 5.3) plus slack
 SELFTEST_SERVER = "1.1.1.1"     # the default internet anchor (DESIGN network); answers DNS on UDP and TCP
 
@@ -248,7 +260,8 @@ def top_talkers(per_pid: dict[int, list[int]], names: dict[int, str | None], n: 
 class _Flow:
     __slots__ = ("key", "local", "serverable", "rx_packets", "tx_packets", "rx_bytes", "tx_bytes",
                  "rx_times", "tx_times", "bin_sec", "bin_rx", "bin_tx", "bin_rx_bytes", "first_sec",
-                 "last_rx", "rx_tick", "tx_tick", "server_s")
+                 "first_rx", "last_rx", "last_tx", "rx_tick", "tx_tick", "server_s", "late_rx", "late_tx",
+                 "gap_starts", "gap_log")
 
     def __init__(self, key: tuple, local: tuple[str, int], first_sec: int) -> None:
         self.key, self.local = key, local
@@ -259,10 +272,17 @@ class _Flow:
         self.bin_sec: list[int | None] = [None] * WINDOW_S     # ring of per-second counts
         self.bin_rx, self.bin_tx, self.bin_rx_bytes = [0] * WINDOW_S, [0] * WINDOW_S, [0] * WINDOW_S
         self.first_sec = first_sec
+        self.first_rx: float | None = None
         self.last_rx: float | None = None
+        self.last_tx: float | None = None
         self.rx_tick: float | None = None
         self.tx_tick: float | None = None
         self.server_s = 0
+        # Newest packet that came too late for the timeline, per direction (-inf: none).
+        self.late_rx = self.late_tx = -math.inf
+        # Recorded gaps of this flow in time order (they never overlap): start times, and [start, end, record].
+        self.gap_starts: list[float] = []
+        self.gap_log: list[list] = []
 
     def _slot(self, sec: int) -> int:
         i = sec % WINDOW_S
@@ -285,7 +305,7 @@ class _Flow:
 
 
 class _Gap:
-    __slots__ = ("flow", "start", "end", "burst_until", "deadline", "burst")
+    __slots__ = ("flow", "start", "end", "burst_until", "deadline", "burst", "phantom", "unknown")
 
     def __init__(self, flow: _Flow, start: float, end: float) -> None:
         self.flow, self.start, self.end = flow, start, end
@@ -293,14 +313,20 @@ class _Gap:
         tx_wait = gap_threshold(flow.tx_tick) if flow.tx_tick else 0.0
         self.deadline = end + max(BURST_FRACTION * flow.rx_tick, tx_wait)
         self.burst = 1                       # the packet that ended the gap
+        self.phantom = False                 # a late receive fell inside: the server did not go quiet
+        self.unknown = False                 # a late send fell inside: "local" cannot be told
 
 
 class FlowTable:
     """Per-process byte counts and per-flow UDP timing for the game, fed `(t, Packet)` in arrival order.
 
     `add()` buffers the game's UDP packets; `advance(now)` finalises everything older than
-    now - REORDER_S in timestamp order; `finish()` finalises the rest. Each completed second
-    re-picks the server flow, re-estimates its tick and appends one server_rx row.
+    now - REORDER_S in timestamp order; `finish(end)` finalises the rest and, given the capture's
+    end, closes a silence still open then. Each completed second re-picks the server flow,
+    re-estimates its tick and appends one server_rx row.
+
+    counts["late"] counts packets that came after their time was finalised; counts["gaps_late"]
+    the gaps left out because a late receive fell inside them.
     """
 
     def __init__(self, game_pids: Iterable[int] = (), local: Iterable[str] = (), *,
@@ -315,14 +341,15 @@ class FlowTable:
         self._next_sec: int | None = None  # next whole-second boundary to close
         self._last_t = -math.inf           # newest finalised packet
         self._server: _Flow | None = None
+        self._last_server: _Flow | None = None   # the most recent server, kept after it stops being one
         self._servers: dict[tuple, _Flow] = {}
         self._pending: list[_Gap] = []
         self._talkers: dict[int, list[int]] = {}
         self.gaps: list[list] = []
         self.server_rx: list[list] = []
         self.counts = {"game_events": 0, "local_endpoints": 0, "unknown_endpoints": 0, "late": 0,
-                       "flows_evicted": 0, "pending_overflow": 0, "gaps_dropped": 0, "talkers_dropped": 0,
-                       "server_changes": 0, "retransmits": 0}
+                       "flows_evicted": 0, "pending_overflow": 0, "gaps_dropped": 0, "gaps_late": 0,
+                       "talkers_dropped": 0, "server_changes": 0, "retransmits": 0}
 
     # ---- inputs ---------------------------------------------------------
     def set_game_pids(self, pids: Iterable[int]) -> None:
@@ -366,6 +393,7 @@ class FlowTable:
         if t <= self._final_t:               # older than what is already finalised
             self.counts["late"] += 1
             self._totals(flow, rx, pkt.size)
+            self._late(flow, rx, t)
             return
         heapq.heappush(self._heap, (t, self._seq, flow, rx, pkt.size))
         self._seq += 1
@@ -376,11 +404,15 @@ class FlowTable:
     def advance(self, now: float) -> None:
         self._finalize_until(now - self.reorder_s)
 
-    def finish(self) -> None:
-        """Finalise every buffered packet and settle every open gap (end of capture)."""
+    def finish(self, end: float | None = None) -> None:
+        """Finalise every buffered packet and settle every pending gap (end of capture). `end` is
+        when the capture stopped listening (capture clock): a server silent since before then by
+        more than a gap gets an "open" gap. None (a replay) closes nothing."""
         if self._heap:
             self._finalize_until(max(t for t, *_ in self._heap))
         self._settle(math.inf)
+        if end is not None:
+            self._open_gap(end)
 
     # ---- outputs --------------------------------------------------------
     @property
@@ -400,7 +432,10 @@ class FlowTable:
             server = {"ip": f.key[2], "port": f.key[3], "proto": f.key[1], "pid": f.key[0],
                       "rx_packets": f.rx_packets, "tx_packets": f.tx_packets,
                       "rx_bytes": f.rx_bytes, "tx_bytes": f.tx_bytes,
-                      "tick_ms": round(f.rx_tick * 1000.0, 3) if f.rx_tick else None}
+                      "tick_ms": round(f.rx_tick * 1000.0, 3) if f.rx_tick else None,
+                      # when its packets came, so a reader can tell how much of the capture they cover
+                      "first_rx_t": None if f.first_rx is None else round(f.first_rx, 6),
+                      "last_rx_t": None if f.last_rx is None else round(f.last_rx, 6)}
         return {"server": server, "talkers": top_talkers(self._talkers, names or {}),
                 "gaps": [list(g) for g in self.gaps], "server_rx": [list(r) for r in self.server_rx]}
 
@@ -466,15 +501,25 @@ class FlowTable:
             flow.bin_rx[i] += 1
             flow.bin_rx_bytes[i] += size
             prev, flow.last_rx = flow.last_rx, t
+            if flow.first_rx is None:
+                flow.first_rx = t
             flow.rx_times.append(t)
             for g in self._pending:
                 if g.flow is flow and g.end <= t <= g.burst_until:
                     g.burst += 1
             if flow is self._server and prev is not None and flow.rx_tick and t - prev > gap_threshold(flow.rx_tick):
-                self._pending.append(_Gap(flow, prev, t))
+                # A late packet newer than `prev` lies inside this span (it arrived after prev was final,
+                # so before t could be): the server did not go quiet, the delivery did.
+                if flow.late_rx > prev:
+                    self.counts["gaps_late"] += 1
+                else:
+                    g = _Gap(flow, prev, t)
+                    g.unknown = flow.late_tx > prev
+                    self._pending.append(g)
         else:
             flow.bin_tx[i] += 1
             flow.tx_times.append(t)
+            flow.last_tx = t
         self._last_t = t
         if self._pending:
             self._settle(t)
@@ -485,12 +530,75 @@ class FlowTable:
             if now < g.deadline:
                 keep.append(g)
                 continue
+            if g.phantom:
+                self.counts["gaps_late"] += 1
+                continue
             local = tx_paused(g.flow.tx_times, g.start, g.end, g.flow.tx_tick, min(now, g.deadline))
-            if len(self.gaps) < MAX_GAPS:
-                self.gaps.append([round(g.start, 6), round((g.end - g.start) * 1000.0, 3), gap_kind(g.burst, local)])
-            else:
-                self.counts["gaps_dropped"] += 1
+            kind = gap_kind(g.burst, local)
+            if g.unknown and kind == "local":
+                kind = "unknown"            # the missing sends may only have been late
+            self._record(g.flow, g.start, g.end, kind)
         self._pending = keep
+
+    def _record(self, flow: _Flow, start: float, end: float, kind: str) -> None:
+        if len(self.gaps) >= MAX_GAPS:
+            self.counts["gaps_dropped"] += 1
+            return
+        rec = [round(start, 6), round((end - start) * 1000.0, 3), kind]
+        self.gaps.append(rec)
+        flow.gap_starts.append(start)
+        flow.gap_log.append([start, end, rec, True])
+
+    def _late(self, flow: _Flow, rx: bool, t: float) -> None:
+        """A packet that came after its time was finalised (NE 4.6.8's window was too short for it).
+        It is not in the timeline, so a gap whose span holds it was not a measured silence."""
+        if rx:
+            flow.late_rx = max(flow.late_rx, t)
+        else:
+            flow.late_tx = max(flow.late_tx, t)
+        for g in self._pending:
+            if g.flow is not flow:
+                continue
+            if g.start < t < g.end:
+                if rx:
+                    g.phantom = True
+                else:
+                    g.unknown = True
+            elif rx and g.end <= t <= g.burst_until:
+                g.burst += 1                # part of the burst after the gap, as it would have been on time
+        # A recorded gap of this flow around t: the flow's gaps never overlap, so it is the last one starting before t.
+        i = bisect.bisect_left(flow.gap_starts, t) - 1
+        if i < 0:
+            return
+        entry = flow.gap_log[i]
+        start, end, rec, kept = entry
+        if not kept or not start < t < end:
+            return
+        if rx:
+            entry[3] = False
+            self.counts["gaps_late"] += 1
+            for k in range(len(self.gaps) - 1, -1, -1):
+                if self.gaps[k] is rec:
+                    del self.gaps[k]
+                    break
+        elif rec[2] == "local":
+            rec[2] = "unknown"
+
+    def _open_gap(self, end: float) -> None:
+        """The most recent server went quiet for good: no packet closed its last silence, so the end does
+        (CC-1). Only when our own packets to it went on after its last one; when they stopped too, the
+        game itself hung up (left the match), which is no lost connection."""
+        flow = self._last_server
+        if flow is None or flow.last_rx is None or not flow.rx_tick:
+            return
+        # Its newest packet, late or not: the stop delivers whatever was still buffered, so none came after.
+        last = max(flow.last_rx, flow.late_rx)
+        if end - last <= gap_threshold(flow.rx_tick):
+            return
+        sent = max(flow.last_tx if flow.last_tx is not None else -math.inf, flow.late_tx)
+        if sent - last < OPEN_TX_S:
+            return
+        self._record(flow, last, end, "open")
 
     def _tick(self, boundary: int) -> None:
         """Close the second [boundary - 1, boundary): pick the server, re-estimate its tick, add a row."""
@@ -514,6 +622,7 @@ class FlowTable:
             self._server = best
         if best is None:
             return
+        self._last_server = best
         best.rx_tick = median_interval(best.rx_times, boundary)
         best.tx_tick = median_interval(best.tx_times, boundary)
         best.server_s += 1
@@ -523,12 +632,14 @@ class FlowTable:
             self.server_rx.append([float(boundary), best.rx_in(sec)])
 
 
-def analyze(events: Iterable[tuple[float, Packet]], game_pids: Iterable[int], local: Iterable[str]) -> dict:
-    """Run decoded `(t, Packet)` tuples through a FlowTable and return its result (tests, replays)."""
+def analyze(events: Iterable[tuple[float, Packet]], game_pids: Iterable[int], local: Iterable[str],
+            end: float | None = None) -> dict:
+    """Run decoded `(t, Packet)` tuples through a FlowTable and return its result (tests, replays).
+    `end`: when the recording stopped, to close a silence still open then (None: close nothing)."""
     table = FlowTable(game_pids, local)
     for t, pkt in events:
         table.add(t, pkt)
-    table.finish()
+    table.finish(end)
     return table.result()
 
 
@@ -649,6 +760,11 @@ class FlowTracker(Collector):
         self._bad_time = 0
         self._pid_errors = 0
         self._unknown_seen = 0           # unknown_endpoints count at the last address refresh
+        self._started = False            # the ETW session started: only then does an empty list mean "none seen"
+        self._pump_alive_t = 0.0         # last check that found the consumer thread running (capture clock)
+        self._pump_dead: tuple[float, Any] | None = None   # (t, ProcessTrace rc) when it was found stopped by itself
+        self._lag_max: float | None = None                   # delivery lag of the game's packets (now - timestamp)
+        self._lag_hist = [0] * (LAG_BUCKETS + 1)
 
     # ---- collector contract --------------------------------------------
     def run(self) -> None:
@@ -665,18 +781,23 @@ class FlowTracker(Collector):
             self._session_health = _safe_health(session)
             return
         self._session = session
+        self._started = True
+        self._pump_alive_t = self.now()
         self.set_status("ok", "Kernel-Network flows; address layout unverified (self-test pending)", TOOL)
         if self._selftest_on:
             threading.Thread(target=self._run_selftest, name="lagdoctor-net-selftest", daemon=True).start()
         else:
             self._selftest = {"verified": False, "reason": "self-test turned off"}
-        due = {"pids": 0.0, "names": 0.0, "local": LOCAL_EVERY_S, "health": HEALTH_EVERY_S}
+        due = {"pids": 0.0, "names": 0.0, "local": LOCAL_EVERY_S, "health": HEALTH_EVERY_S, "pump": 0.0}
         last_local = 0.0
         try:
             for t in self.ticks(TICK_S):
                 with self._lock:
                     self._table.advance(t)
                     unknown = self._table.counts["unknown_endpoints"]
+                if t >= due["pump"]:
+                    due["pump"] = t + PUMP_EVERY_S
+                    self._check_pump(session, t)
                 if t >= due["pids"]:
                     due["pids"] = t + PIDS_EVERY_S
                     self._refresh_inputs(local=False)
@@ -696,21 +817,30 @@ class FlowTracker(Collector):
                     self._judge_health(self._session_health)
                 self._publish()
         finally:
+            end = self.now()
+            self._check_pump(session, end)            # before our own stop: a stopped consumer stopped by itself
             try:
                 session.stop()
             except Exception as exc:  # noqa: BLE001 - still settle what was captured
                 self.set_status("partial", f"error while stopping the ETW session: {type(exc).__name__}: {exc}")
             self._session_health = _safe_health(session)
+            if self._pump_dead is not None:
+                # Packets were delivered until about when the consumer was last seen running, less the
+                # reorder window they may still have been on their way in.
+                end = max(0.0, self._pump_alive_t - self._table.reorder_s)
             with self._lock:
-                self._table.finish()
+                self._table.finish(end)
             self._resolve_names()
-            self._judge_health(self._session_health, final=True)
+            self._judge_health(self._session_health)
             self._publish()
 
     def result(self) -> dict[str, Any]:
         with self._lock:
             out = self._table.result(self._names)
             counts = dict(self._table.counts)
+        if not self._started:
+            # Nothing was listened to: "no talkers, no gaps" would read as measured and clean.
+            out["talkers"] = out["gaps"] = out["server_rx"] = None
         out["layout"] = self.layout()
         out["health"] = self.health(counts)
         return out
@@ -726,10 +856,27 @@ class FlowTracker(Collector):
             if counts is None:
                 counts = dict(self._table.counts)
             bad = dict(self._layout_bad)
+            lag_max, lag_p99 = self._lag_max, self._lag_p99()
         h.update(counts)
         h.update({"ignored": self._ignored, "layout_mismatch": bad, "bad_time": self._bad_time,
-                  "selftest": dict(self._selftest), "names": self._names_note, "pid_errors": self._pid_errors})
+                  "selftest": dict(self._selftest), "names": self._names_note, "pid_errors": self._pid_errors,
+                  "consumer_stopped_t": None if self._pump_dead is None else round(self._pump_dead[0], 3),
+                  "delivery_lag_max_s": None if lag_max is None else round(lag_max, 3),
+                  "delivery_lag_p99_s": lag_p99})
         return h
+
+    def _lag_p99(self) -> float | None:
+        """An upper bound of the 99th percentile of the game packets' delivery lag: the top of its 100 ms
+        histogram step, or the largest lag past the last step (call with the lock held)."""
+        n = sum(self._lag_hist)
+        if not n:
+            return None
+        need, seen = 0.99 * n, 0
+        for i, c in enumerate(self._lag_hist):
+            seen += c
+            if seen >= need:
+                return round((i + 1) * LAG_BUCKET_S, 3) if i < LAG_BUCKETS else round(self._lag_max, 3)
+        return round(self._lag_max, 3)
 
     # ---- consumer thread ------------------------------------------------
     def _on_event(self, ev: etw.EtwEvent) -> None:
@@ -756,6 +903,10 @@ class FlowTracker(Collector):
                 table.add(t, pkt)
                 if probing and self._probe is not None:
                     self._probe.append(pkt)
+                lag = self.now() - t            # how long ETW took to hand it over
+                if self._lag_max is None or lag > self._lag_max:
+                    self._lag_max = lag
+                self._lag_hist[min(LAG_BUCKETS, max(0, int(lag / LAG_BUCKET_S)))] += 1
             else:
                 table.count(pid, spec[1], size)
 
@@ -805,10 +956,31 @@ class FlowTracker(Collector):
         wanted = set(pids)
         return {pid: info.name for pid, info in self._snapshotter.snapshot().items() if pid in wanted}
 
-    def _judge_health(self, h: dict, final: bool = False) -> None:
+    def _check_pump(self, session: Any, t: float) -> None:
+        """Time the consumer thread's state. Only our own stop() ends it on purpose, and that comes after
+        the last check, so a stopped thread found here stopped by itself (4201, 998, or its session stopped
+        from outside, NE 5.4)."""
+        h = _safe_health(session)
+        if h.get("pump_alive") is True:
+            self._pump_alive_t = t
+        elif h.get("pump_alive") is False and self._pump_dead is None:
+            self._pump_dead = (t, h.get("process_trace_rc"))
+
+    def _judge_health(self, h: dict) -> None:
         problems = []
-        if not final and not h.get("pump_alive") and not self.stopping:
-            problems.append(f"the ETW consumer stopped (ProcessTrace returned {h.get('process_trace_rc')})")
+        if self._pump_dead is not None:      # kept at the end too: the flows stop where the consumer did
+            dead_t, rc = self._pump_dead
+            problems.append(f"the ETW consumer stopped by itself by t={dead_t:.0f} s (last seen running at "
+                            f"t={self._pump_alive_t:.0f} s; ProcessTrace returned {rc}), so no flows were "
+                            "recorded after that")
+        with self._lock:
+            late, late_gaps = self._table.counts["late"], self._table.counts["gaps_late"]
+            lag_max = self._lag_max
+        if late:
+            worst = f", up to {lag_max:.1f} s" if lag_max is not None else ""
+            problems.append(f"{late} game packets arrived more than {self._table.reorder_s:g} s late (ETW delivery "
+                            f"stalled{worst}), so gaps around them were not counted"
+                            + (f" ({late_gaps} left out)" if late_gaps else ""))
         if h.get("lost") or h.get("buffers_lost"):
             problems.append(f"ETW dropped {h.get('lost') or 0} events and {h.get('buffers_lost') or 0} buffers, "
                             "so flow timing has holes")

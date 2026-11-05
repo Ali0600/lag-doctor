@@ -22,6 +22,7 @@ import re
 import signal
 import subprocess
 import threading
+import time
 from ctypes import wintypes
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
@@ -412,6 +413,10 @@ class PresentMonSource(Collector):
 
     The game is watched with is_alive() (default: its PID is still listed by psutil.pids()), because
     --terminate_on_proc_exit never fires if anti-cheat strips PresentMon's handle (PM 8.1).
+    A live PresentMon that ends by itself with exit code 0 while the game still runs had its trace session
+    stopped from outside (PM 5, 7.1: e.g. another capture's --stop_existing_session), so its frames stop
+    there: the capture is "partial" and says when. The game is given EXITED_GRACE_S to vanish first, since
+    --terminate_on_proc_exit can beat our own liveness check.
     live() gives {frames, fps (busiest chain over its last second of frame times), malformed}.
     stop() takes at most about 20 s on its worst path (CTRL_BREAK, session stop, kill + clean-up), which
     with the base class's 5 s join stays inside DESIGN's 25 s.
@@ -424,6 +429,8 @@ class PresentMonSource(Collector):
     KILL_WAIT_S = 1.0
     WATCH_INTERVAL_S = 1.0
     EXIT_WAIT_S = 5.0              # after stdout ends, how long the process may take to exit
+    EXITED_GRACE_S = 1.5           # PresentMon ended by itself: how long the game gets to be seen gone too
+    ALIVE_POLL_S = 0.25
     STDERR_LINES = 20
     LINE_LIMIT_BYTES = 64 * 1024
     PUBLISH_EVERY_S = 0.25
@@ -458,6 +465,8 @@ class PresentMonSource(Collector):
         self._notes: list[str] = []
         self._row_errors = 0
         self._last_publish = 0.0
+        self._last_frame_t: float | None = None
+        self._alone: tuple[float, float | None] | None = None   # (t, last frame t) when it ended by itself
 
     # ---- collector interface ---------------------------------------------------------
     def run(self) -> None:
@@ -529,6 +538,8 @@ class PresentMonSource(Collector):
             self._exit_code = self._stop_path = None
             self._stderr_head.clear()
             self._stderr_tail.clear()
+        self._alone = None
+        self._last_publish = 0.0       # a new run's first frames show at once, not held back by the last run's
         headers_before = self._parser.headers
         stderr_thread = threading.Thread(target=self._drain_stderr, args=(proc.stderr,), daemon=True,
                                          name="lagdoctor-frames-stderr")
@@ -541,6 +552,9 @@ class PresentMonSource(Collector):
             watcher.start()
         try:
             self._read_stdout(proc.stdout)
+            # Its output ended though nobody asked it to stop: told apart from the game's own exit in _settle.
+            if self.etl_file is None and proc is not self._handled and not self.stopping:
+                self._alone = (self.now(), self._last_frame_t)
         except BaseException:
             # Keep the pipe drained while PresentMon is stopped below: a full pipe blocks its shutdown (PM 4).
             threading.Thread(target=_discard, args=(proc.stdout,), daemon=True).start()
@@ -594,6 +608,8 @@ class PresentMonSource(Collector):
         fr = frame_row(row, self.origin, key)
         with self._lock:
             self._series.add(**fr)
+            if self._last_frame_t is None or fr[F.T] > self._last_frame_t:
+                self._last_frame_t = fr[F.T]
             chain = self._chains.get(key)
             if chain is None:
                 chain = self._chains[key] = {"frames": 0, "displayed": 0, "runtimes": collections.Counter()}
@@ -638,17 +654,35 @@ class PresentMonSource(Collector):
                 self._stderr_head.append(line)
             self._stderr_tail.append(line)
 
-    def _watch_game(self, done: threading.Event) -> None:
+    def _probe_alive(self) -> bool | None:
+        """Is the game still running? None when the check itself failed."""
         is_alive = self._is_alive or (lambda: self.pid in psutil.pids())
+        try:
+            return bool(is_alive())
+        except Exception:  # noqa: BLE001 - a broken check must not end the capture
+            return None
+
+    def _watch_game(self, done: threading.Event) -> None:
         while not done.wait(self.WATCH_INTERVAL_S):
-            try:
-                alive = bool(is_alive())
-            except Exception:  # noqa: BLE001 - a broken check must not end the capture
-                continue
-            if not alive:
+            if self._probe_alive() is False:
                 self._note("the game exited, so the capture was stopped")
                 self._stop_child()
                 return
+
+    def _game_after_exit(self) -> str:
+        """After PresentMon ended by itself: "exited" if the game is gone within EXITED_GRACE_S (its
+        --terminate_on_proc_exit beat our snapshot), else "running", or "unknown" if no check worked."""
+        deadline = clock.now() + self.EXITED_GRACE_S
+        seen = None
+        while True:
+            alive = self._probe_alive()
+            if alive is False:
+                return "exited"
+            seen = seen or alive
+            left = deadline - clock.now()
+            if left <= 0:
+                return "running" if seen else "unknown"
+            time.sleep(min(self.ALIVE_POLL_S, left))
 
     def _stop_child(self) -> None:
         if not self._stop_lock.acquire(timeout=30.0):
@@ -717,6 +751,20 @@ class PresentMonSource(Collector):
             problems.append("PresentMon did not exit")
         elif code != 0:
             problems.append(f"PresentMon ended with exit code {code}")
+        elif self._alone is not None and path == "exited":
+            ended_t, last_t = self._alone
+            game = self._game_after_exit()
+            last = f"t={last_t:.1f} s" if last_t is not None else "its start"
+            if game == "exited":
+                if "the game exited, so the capture was stopped" not in notes:
+                    notes.append("the game exited, so the capture was stopped")
+            elif game == "running":
+                problems.append(f"PresentMon stopped on its own at t={ended_t:.1f} s while the game kept running "
+                                f"(most likely its {SESSION_NAME!r} trace session was stopped from outside, e.g. by "
+                                f"another capture); no frames after {last}")
+            else:
+                problems.append(f"PresentMon stopped on its own at t={ended_t:.1f} s and whether the game was still "
+                                f"running could not be checked; no frames after {last}")
         if self._parser.malformed:
             problems.append(f"{self._parser.malformed} malformed CSV row(s) skipped")
         if self._row_errors:
