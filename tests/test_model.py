@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from lagdoctor.model import (CAPTURE_SCHEMA, F, G, N, S, Capture, Diagnosis, Evidence, Finding,
+from lagdoctor.model import (CAPTURE_SCHEMA, F, G, N, S, Capture, CaptureError, Diagnosis, Evidence, Finding,
                              SeriesBuilder, SourceStatus)
 
 
@@ -68,6 +68,82 @@ def test_loading_a_file_that_is_not_a_capture_fails_loudly(tmp_path):
         json.dump({"schema": "something/else"}, f)
     with pytest.raises(ValueError, match="not a lag-doctor capture"):
         Capture.load(p)
+
+
+def _gz(path, payload) -> None:
+    with gzip.open(path, "wb") as f:
+        f.write(payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8"))
+
+
+def test_a_capture_from_a_newer_build_with_extra_fields_still_loads(tmp_path):
+    raw = _capture().to_json()
+    raw["future_field"] = {"x": 1}
+    raw["sources"]["frames"]["confidence"] = 0.9
+    raw["tool_version"] = "0.2.0\x1b[2J"                      # text from a file: shown only as safe characters
+    _gz(tmp_path / "c.gz", raw)
+    back = Capture.load(tmp_path / "c.gz")
+    assert back.target == {"pid": 42, "name": "game.exe"} and back.sources["frames"] == SourceStatus(
+        "ok", tool="PresentMon 2.6.0")
+    (note,) = [n for n in back.notes if "does not know" in n]
+    assert "future_field" in note and "sources.confidence" in note and "(0.2.0??2J)" in note and "\x1b" not in note
+
+
+def test_a_newer_capture_format_is_refused_as_newer(tmp_path):
+    _gz(tmp_path / "c.gz", dict(_capture().to_json(), schema="lagdoctor.capture/2"))
+    with pytest.raises(CaptureError, match="newer version") as info:
+        Capture.load(tmp_path / "c.gz")
+    assert info.value.kind == "newer"
+
+
+@pytest.mark.parametrize("make", [
+    lambda p: p.write_text('{"findings": []}', encoding="utf-8"),             # a diagnosis.json: not gzip at all
+    lambda p: _gz(p, [1, 2, 3]),
+    lambda p: _gz(p, {"schema": "other.tool/1"}),
+    lambda p: _gz(p, {"schema": "lagdoctor.capture/x"}),
+    lambda p: _gz(p, {"no": "schema"}),
+])
+def test_files_that_are_not_captures_say_so(tmp_path, make):
+    make(tmp_path / "c.gz")
+    with pytest.raises(CaptureError, match="not a lag-doctor capture") as info:
+        Capture.load(tmp_path / "c.gz")
+    assert info.value.kind == "foreign"
+
+
+@pytest.mark.parametrize("make,why", [
+    (lambda p: p.write_bytes(gzip.compress(json.dumps(_capture().to_json()).encode())[:30]), "cut short"),
+    (lambda p: _gz(p, b"{not json"), "not valid JSON"),
+    (lambda p: _gz(p, {k: v for k, v in _capture().to_json().items() if k != "started_at"}), "no started_at"),
+    (lambda p: _gz(p, dict(_capture().to_json(), target=["a"])), "target is a list"),
+    (lambda p: _gz(p, dict(_capture().to_json(), duration_s=True)), "duration_s is a bool"),
+    (lambda p: _gz(p, dict(_capture().to_json(), sources={"frames": {"detail": "x"}})), "has no state"),
+])
+def test_a_damaged_capture_says_damaged(tmp_path, make, why):
+    make(tmp_path / "c.gz")
+    with pytest.raises(CaptureError, match=why) as info:
+        Capture.load(tmp_path / "c.gz")
+    assert info.value.kind == "damaged" and "damaged" in str(info.value)
+
+
+def test_a_capture_that_expands_past_the_limit_is_not_loaded(tmp_path, monkeypatch):
+    import lagdoctor.model as model
+    cap = _capture()
+    cap.notes = ["x" * 5000]
+    cap.save(tmp_path / "c.gz")
+    monkeypatch.setattr(model, "MAX_CAPTURE_JSON_BYTES", 4096)
+    with pytest.raises(CaptureError, match="more than") as info:
+        Capture.load(tmp_path / "c.gz")
+    assert info.value.kind == "too_large"
+
+
+def test_a_save_that_fails_leaves_no_half_written_file(tmp_path, monkeypatch):
+    import lagdoctor.model as model
+
+    def broken(*a, **k):
+        raise OSError(28, "There is not enough space on the disk")
+    monkeypatch.setattr(model.json, "dump", broken)
+    with pytest.raises(OSError):
+        _capture().save(tmp_path / "c.ldcap.json.gz")
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_diagnosis_json_has_no_nan():

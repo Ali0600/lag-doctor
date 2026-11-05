@@ -1,12 +1,17 @@
 """The capture session, with fake collectors: where results land, one clock, and how a capture ends."""
 from __future__ import annotations
 
+import signal
+import subprocess
+import sys
 import threading
 import time
+import uuid
 
 import pytest
 
 from lagdoctor import clock
+from lagdoctor.capture import session as sess
 from lagdoctor.capture.base import Collector
 from lagdoctor.capture.session import Session, SessionOptions, session_dir, status_line
 from lagdoctor.model import Capture
@@ -265,6 +270,165 @@ def test_inventory_sections_that_failed_are_noted():
                 printer=lambda line: None)
     cap = s.run()
     assert "System details: displays could not be read (QueryDisplayConfig failed)." in cap.notes
+
+
+# ------------------------------------------------- Ctrl+C, and stopping whatever happens (LC-1, CC-4) ---
+
+def _session(cols, opts=None, printer=None):
+    return Session(TARGET, opts or SessionOptions(duration_s=0.1, hotkey=None), collectors=cols,
+                   inventory=INVENTORY, alive=lambda: True, hotkey_factory=NoHotkey,
+                   printer=printer or (lambda line: None))
+
+
+def _wait_for(pred, seconds=3.0):
+    deadline = time.monotonic() + seconds
+    while not pred() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return pred()
+
+
+class PressWhileStopping(Fake):
+    """The user presses Ctrl+C again while this collector is being stopped (SIGINT in this process only)."""
+
+    def on_stop(self):
+        signal.raise_signal(signal.SIGINT)
+        time.sleep(0.5)
+
+
+def test_a_second_ctrl_c_while_stopping_does_not_lose_the_capture():
+    cols = full_set()[:2] + [PressWhileStopping("gpu", result={"columns": {"t": [0.0]}})]
+    lines = []
+    s = _session(cols, printer=lines.append)
+    try:
+        cap = s.run()
+    except KeyboardInterrupt:
+        pytest.fail("Ctrl+C while the collectors stopped escaped Session.run(): the capture was lost")
+    assert cap.frames == {"t": [0.1], "frame_ms": [16.7]} and s.stop_reason == "duration"
+    assert sess.STOPPING_MESSAGE + "\n" in lines                          # said when the stop began
+    assert _wait_for(lambda: sess.STILL_STOPPING_MESSAGE + "\n" in lines)  # and the press was answered
+    assert signal.getsignal(signal.SIGINT) is signal.default_int_handler   # the old handler is back
+
+
+def test_the_first_ctrl_c_stops_the_recording_without_raising():
+    calls = []
+
+    def alive():
+        calls.append(1)
+        if len(calls) == 2:
+            signal.raise_signal(signal.SIGINT)                # handled at once, on this (the main) thread
+        return True
+    s, cap = run_session(full_set(), duration=None, alive=alive, opts=SessionOptions(duration_s=None, hotkey=None),
+                         stop=threading.Event())
+    assert s.stop_reason == "Ctrl+C" and cap.target["stop_reason"] == "Ctrl+C" and cap.frames
+
+
+def test_ctrl_c_while_starting_still_stops_what_was_started():
+    class Interrupted(Fake):
+        def start(self, origin):
+            raise KeyboardInterrupt
+    cols = full_set()[:2] + [Interrupted("gpu")] + full_set()[3:4]
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            _session(cols).run()
+        running = [c.name for c in cols if c._thread is not None]
+        assert running == [], f"{running} were started and never stopped"
+    finally:
+        for c in cols:
+            c.stop()
+
+
+def test_ctrl_c_while_the_hotkey_starts_still_stops_the_collectors():
+    class Interrupting:
+        def __init__(self, hotkey, on_press):
+            pass
+
+        def start(self):
+            raise KeyboardInterrupt
+
+        def stop(self):
+            pass
+    cols = full_set()[:2]
+    s = Session(TARGET, SessionOptions(duration_s=0.1, hotkey="ctrl+alt+l"), collectors=cols, inventory=INVENTORY,
+                alive=lambda: True, hotkey_factory=Interrupting, printer=lambda line: None)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            s.run()
+        assert [c.name for c in cols if c._thread is not None] == []
+    finally:
+        for c in cols:
+            c.stop()
+
+
+def test_a_lag_key_that_cannot_be_used_is_noted_and_the_capture_goes_on():
+    def bad_key(hotkey, on_press):
+        raise ValueError("unknown key 'lag' in 'ctrl+alt+lag'")
+    cols = full_set()
+    s = Session(TARGET, SessionOptions(duration_s=0.1, hotkey="ctrl+alt+lag"), collectors=cols, inventory=INVENTORY,
+                alive=lambda: True, hotkey_factory=bad_key, printer=lambda line: None)
+    cap = s.run()
+    assert any("could not be used" in n and "unknown key" in n for n in cap.notes)
+    assert cap.frames and all(c._thread is None for c in cols)
+
+
+def test_a_stop_request_carries_its_reason():
+    stop = threading.Event()
+    sess.request_stop(stop, "window closed")
+    sess.request_stop(stop, "Ctrl+C")                          # the first reason wins
+    s, cap = run_session(full_set(), duration=None, opts=SessionOptions(duration_s=None, hotkey=None), stop=stop)
+    assert s.stop_reason == "window closed" and cap.target["stop_reason"] == "window closed"
+
+
+def test_a_callers_ctrl_c_guard_must_share_the_stop_event():
+    with pytest.raises(ValueError):
+        _session(full_set()).run(threading.Event(), ctrl_c=sess.CtrlC(threading.Event()))
+
+
+def test_a_console_that_cannot_be_written_does_not_end_the_capture():
+    def broken(line):
+        raise OSError(6, "The handle is invalid")
+    cols = full_set()
+    cap = _session(cols, printer=broken).run()
+    assert cap.frames and all(c._thread is None for c in cols)
+    assert any("console could not be written" in n for n in cap.notes)
+
+
+def test_only_one_capture_lock_at_a_time():
+    name = f"Local\\lagdoctor-test-{uuid.uuid4().hex}"
+    first, second = sess.CaptureLock(name), sess.CaptureLock(name)
+    try:
+        assert first.acquire() and first.held
+        assert second.acquire() is False and not second.held
+        first.release()
+        assert second.acquire()                                  # free again once released
+    finally:
+        first.release()
+        second.release()
+
+
+def test_the_capture_lock_sees_another_process_holding_it():
+    name = f"Local\\lagdoctor-test-{uuid.uuid4().hex}"
+    holder = subprocess.Popen(
+        [sys.executable, "-c", "import ctypes, sys; k = ctypes.WinDLL('kernel32');"
+         "k.CreateMutexW.restype = ctypes.c_void_p; h = k.CreateMutexW(None, False, sys.argv[1]);"
+         "print('held' if h else 'failed', flush=True); sys.stdin.read()", name],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    lock = sess.CaptureLock(name)
+    try:
+        assert holder.stdout.readline().strip() == "held"
+        assert lock.acquire() is False
+        holder.stdin.close()
+        holder.wait(10)
+        assert lock.acquire()                                    # its handle closed with its process
+    finally:
+        lock.release()
+        if holder.poll() is None:
+            holder.kill()
+
+
+def test_session_dir_names_a_folder_for_any_target_name(tmp_path):
+    from datetime import datetime
+    d = session_dir(tmp_path, {"name": 12345}, datetime(2026, 11, 4, 18, 0, 0))   # a capture holds any JSON
+    assert d.name == "20261104-180000-game"
 
 
 def test_session_dir_never_reuses_a_folder(tmp_path):

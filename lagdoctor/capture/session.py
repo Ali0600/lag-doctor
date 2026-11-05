@@ -6,9 +6,16 @@ game exiting), stops them in parallel so one slow stop cannot stretch the
 others, and copies each collector's result() into the Capture exactly as the
 table in docs/DESIGN.md says. A collector that crashes or cannot start leaves
 its status in Capture.sources; the session carries on with the rest.
+
+Once anything has started, everything is stopped, whatever happens. On the main
+thread Ctrl+C never raises inside the session: the first press stops the
+recording and later ones are only counted (CtrlC), so a second press while the
+collectors stop cannot lose the capture.
 """
 from __future__ import annotations
 
+import contextlib
+import signal
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -22,6 +29,12 @@ from lagdoctor.model import Capture, SourceStatus
 STATUS_PERIOD_S = 1.0
 STOP_TIMEOUT_S = {"frames": 25.0}          # PresentMon's stop can take two 10 s waits (DESIGN: Collector contract)
 DEFAULT_STOP_TIMEOUT_S = 5.0
+STOPPING_MESSAGE = "Stopping and saving the capture (Ctrl+C will not lose it now)..."
+STILL_STOPPING_MESSAGE = ("Still stopping and saving the capture; Ctrl+C will not lose it. "
+                          "(To abandon it, close this window.)")
+# One capture at a time per Windows session. "Local\" is the namespace of this sign-in session, shared by
+# every account and elevation running in it, so an unelevated watch and an elevated capture child meet here.
+CAPTURE_LOCK_NAME = "Local\\lag-doctor-capture"
 
 # Which result() keys go where (docs/DESIGN.md, "What each collector's result() returns").
 NETWORK_FLOW_KEYS = ("targets", "probes", "lost", "wifi_scans", "route", "downloads")
@@ -36,6 +49,84 @@ class SessionOptions:
     hotkey: str | None = "ctrl+alt+l"
     presentmon_exe: Path | None = None
     frames: bool = True                    # False when the user chose to run without ETW rights
+
+
+def request_stop(stop: threading.Event, reason: str) -> None:
+    """Ask a session to stop, saying why (the first reason given wins; it becomes target["stop_reason"])."""
+    if not stop.is_set() and not getattr(stop, "reason", ""):
+        stop.reason = reason
+    stop.set()
+
+
+class CtrlC:
+    """Ctrl+C while a capture runs. Python can only set a signal handler on the main thread; elsewhere this
+    does nothing (and Ctrl+C never reaches other threads anyway).
+
+    The first press asks the recording to stop, through `stop`. Once the stop has begun (`stopping`), every
+    press is only counted and answered, so a second Ctrl+C can never lose the capture. Leaving the block
+    puts the previous handler back; presses counted meanwhile are not replayed.
+    """
+
+    def __init__(self, stop: threading.Event, say: Callable[[str], None] | None = None) -> None:
+        self.stop = stop
+        self.say = say
+        self.presses = 0
+        self.stopping = False
+        self.installed = False
+        self._old: Any = None
+
+    def __enter__(self) -> "CtrlC":
+        if threading.current_thread() is threading.main_thread():
+            self._old = signal.signal(signal.SIGINT, self._on_sigint)
+            self.installed = True
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self.installed:
+            # None = the old handler was not set from Python; Python's own default is the best match.
+            signal.signal(signal.SIGINT, self._old if self._old is not None else signal.default_int_handler)
+            self.installed = False
+
+    def _on_sigint(self, signum: int, frame: object) -> None:
+        self.presses += 1
+        if not self.stopping and not self.stop.is_set():
+            request_stop(self.stop, "Ctrl+C")
+            return
+        if self.say is not None:
+            # Not printed here: the handler may have interrupted a print, and a nested write would raise.
+            threading.Thread(target=self.say, args=(STILL_STOPPING_MESSAGE,), name="lagdoctor-ctrl-c",
+                             daemon=True).start()
+
+
+class CaptureLock:
+    """One capture at a time in this Windows session: a named mutex held for the whole recording."""
+
+    def __init__(self, name: str | None = None) -> None:
+        self.name = name if name is not None else CAPTURE_LOCK_NAME
+        self._handle: int | None = None
+
+    def acquire(self) -> bool:
+        """True when this process now holds the lock; False when another recording holds it.
+        Raises OSError when Windows could not say (so the caller refuses rather than guesses)."""
+        from lagdoctor.winapi.elevation import hold_named_mutex
+        if self._handle is None:
+            self._handle = hold_named_mutex(self.name)
+        return self._handle is not None
+
+    @property
+    def held(self) -> bool:
+        return self._handle is not None
+
+    def release(self) -> None:
+        from lagdoctor.winapi.elevation import release_named_mutex
+        handle, self._handle = self._handle, None
+        release_named_mutex(handle)
+
+    def __enter__(self) -> "CaptureLock":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.release()
 
 
 class Session:
@@ -59,35 +150,52 @@ class Session:
         self._marks_lock = threading.Lock()
         self.origin = 0.0
         self.stop_reason = ""
+        self._printer_broken = False
 
     # ------------------------------------------------------------------ run --
-    def run(self, stop: threading.Event | None = None) -> Capture:
-        stop = stop or threading.Event()
-        if self.inventory is None:
-            self.inventory = _collect_inventory(self.target)
-        for section, why in sorted((self.inventory.get("errors") or {}).items()):
-            self.notes.append(f"System details: {section} could not be read ({why}).")
-        if self.collectors is None:
-            self.collectors = default_collectors(self.target, self.inventory, self.opts)
-        if self.alive is None:
-            self.alive = _default_alive(self.target)
+    def run(self, stop: threading.Event | None = None, ctrl_c: CtrlC | None = None) -> Capture:
+        """Record until the duration, `stop`, Ctrl+C or the game's exit; then stop everything and assemble.
 
-        self.origin = clock.now()
-        started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+        `ctrl_c`: the caller's own CtrlC (entered, made with this `stop`), to keep the protection past the
+        return, e.g. over the save. Without it the session installs one for the length of run().
+        """
+        stop = stop if stop is not None else threading.Event()
+        if ctrl_c is not None and ctrl_c.stop is not stop:
+            raise ValueError("ctrl_c must be made with the same stop event")
+        guard = ctrl_c if ctrl_c is not None else CtrlC(stop, lambda text: self._print(text + "\n"))
+        with (contextlib.nullcontext(guard) if ctrl_c is not None else guard):
+            if self.inventory is None:
+                self.inventory = _collect_inventory(self.target)
+            for section, why in sorted((self.inventory.get("errors") or {}).items()):
+                self.notes.append(f"System details: {section} could not be read ({why}).")
+            if self.collectors is None:
+                self.collectors = default_collectors(self.target, self.inventory, self.opts)
+            if self.alive is None:
+                self.alive = _default_alive(self.target)
+
+            self.origin = clock.now()
+            started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+            hotkey = None
+            # From the first start on, whatever happens (an exception, a KeyboardInterrupt), everything stops.
+            try:
+                self._start_collectors()
+                hotkey = self._start_hotkey()
+                self._watch(stop)
+            finally:
+                guard.stopping = True
+                self._print(STOPPING_MESSAGE + "\n")
+                if hotkey is not None:
+                    self._stop_hotkey(hotkey)
+                self._stop_all()
+            end = clock.now()
+            return self._assemble(started_at, end - self.origin)
+
+    def _start_collectors(self) -> None:
         for c in self.collectors:
             try:
                 c.start(self.origin)
             except Exception as exc:  # noqa: BLE001 - one collector must not stop the capture
                 c.set_status("failed", f"could not start: {type(exc).__name__}: {exc}")
-        hotkey = self._start_hotkey()
-        try:
-            self._watch(stop)
-        finally:
-            if hotkey is not None:
-                hotkey.stop()
-            self._stop_all()
-        end = clock.now()
-        return self._assemble(started_at, end - self.origin)
 
     def _start_hotkey(self):
         if not self.opts.hotkey:
@@ -96,12 +204,34 @@ class Session:
         if factory is None:
             from lagdoctor.winapi.hotkey import HotkeyListener
             factory = HotkeyListener
-        listener = factory(self.opts.hotkey, self._on_mark)
-        if listener.start():
+        try:
+            listener = factory(self.opts.hotkey, self._on_mark)
+            started = listener.start()
+        except Exception as exc:  # noqa: BLE001 - a bad key (the CLI checks it first) must not end the capture
+            self.notes.append(f"The lag key {self.opts.hotkey} could not be used ({type(exc).__name__}: {exc}); "
+                              "no marks were recorded.")
+            return None
+        if started:
             return listener
         why = getattr(listener, "error", "") or "unknown reason"
         self.notes.append(f"The lag key {self.opts.hotkey} could not be registered ({why}); no marks were recorded.")
         return None
+
+    def _stop_hotkey(self, listener) -> None:
+        try:
+            listener.stop()
+        except Exception as exc:  # noqa: BLE001 - the collectors must still be stopped
+            self.notes.append(f"The lag key could not be released cleanly ({type(exc).__name__}: {exc}).")
+
+    def _print(self, text: str) -> None:
+        """The status line and messages. A console that went away (its window closed) must not end the capture."""
+        if self._printer_broken:
+            return
+        try:
+            self.printer(text)
+        except Exception as exc:  # noqa: BLE001
+            self._printer_broken = True
+            self.notes.append(f"The status line stopped: the console could not be written to ({type(exc).__name__}).")
 
     def _on_mark(self, when: float) -> None:
         with self._marks_lock:
@@ -112,7 +242,7 @@ class Session:
             while True:
                 elapsed = clock.now() - self.origin
                 if stop.is_set():
-                    self.stop_reason = "stopped"
+                    self.stop_reason = getattr(stop, "reason", "") or "stopped"
                     return
                 if self.opts.duration_s is not None and elapsed >= self.opts.duration_s:
                     self.stop_reason = "duration"
@@ -122,8 +252,8 @@ class Session:
                     self.notes.append(f"The game exited after {elapsed:.0f} s, so the capture ended there.")
                     return
                 self._route_server()
-                self.printer("\r" + status_line(elapsed, {c.name: c.live() for c in self.collectors},
-                                                self.opts.hotkey) + " ")
+                self._print("\r" + status_line(elapsed, {c.name: c.live() for c in self.collectors},
+                                               self.opts.hotkey) + " ")
                 wait = STATUS_PERIOD_S
                 if self.opts.duration_s is not None:
                     wait = max(0.0, min(wait, self.opts.duration_s - elapsed))
@@ -131,7 +261,7 @@ class Session:
         except KeyboardInterrupt:
             self.stop_reason = "Ctrl+C"
         finally:
-            self.printer("\n")
+            self._print("\n")
 
     def _route_server(self) -> None:
         """When the flow tracker finds the game server, the network sampler starts pinging it too."""
@@ -315,6 +445,8 @@ def _default_alive(target: dict[str, Any]) -> Callable[[], bool]:
 def session_dir(base: Path, target: dict[str, Any], when: datetime | None = None) -> Path:
     """A fresh folder per capture: <base>/<yyyymmdd-hhmmss>-<game>, never one that already exists."""
     when = when or datetime.now()
+    if not isinstance(target.get("name"), str):
+        target = dict(target, name=None)          # a capture from elsewhere may hold any JSON value here
     stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in (target.get("name") or "game"))
     stem = stem.rsplit(".", 1)[0].strip("._")[:40] or "game"
     Path(base).mkdir(parents=True, exist_ok=True)
