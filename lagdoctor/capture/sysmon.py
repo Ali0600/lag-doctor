@@ -10,7 +10,8 @@ threads, and writes one row of S columns plus an `others` row (the top 8 other p
 - Identity is (pid, create_time) and (tid, create_time): PIDs and TIDs are reused.
 - The game_* columns are the target process only; its child processes count as others.
 - GPU Engine values stay unclamped per sample, are averaged over the trailing 1 s, and only the average is
-  clamped (single samples reached 3,652 %, WT verify log 13).
+  clamped (single samples reached 3,652 %, WT verify log 13). An others row gives each process's busiest
+  engine on any adapter (field 4) and on the game's adapter (field 6, None if it has no engine there).
 - A failed read is None in the row, never 0. Nothing here opens a handle to any process.
 """
 from __future__ import annotations
@@ -19,7 +20,7 @@ import heapq
 import re
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from lagdoctor.capture import target as tgt
@@ -163,6 +164,8 @@ class GpuSample:
     total: dict[tuple[str, str], float]     # the busiest engine of each type, summed over all processes
     other: dict[tuple[str, str], float]     # the same without the game
     per_pid: dict[int, float]               # each process's busiest engine on any adapter
+    # each process's busiest engine on each adapter it has an engine on, keyed (pid, luid)
+    per_pid_adapter: dict[tuple[int, str], float] = field(default_factory=dict)
 
 
 def gpu_sample(engine: dict[str, float | None], game_pid: int,
@@ -175,6 +178,7 @@ def gpu_sample(engine: dict[str, float | None], game_pid: int,
     eng_other: dict[tuple[str, int, int, str], float] = {}
     game: dict[tuple[str, str], float] = {}
     per_pid: dict[int, float] = {}
+    per_pid_adapter: dict[tuple[int, str], float] = {}
     for inst, v in engine.items():
         if v is None:
             continue
@@ -189,13 +193,14 @@ def gpu_sample(engine: dict[str, float | None], game_pid: int,
         else:
             eng_other[key] = eng_other.get(key, 0.0) + v
         per_pid[pid] = max(per_pid.get(pid, 0.0), v)
+        per_pid_adapter[(pid, luid)] = max(per_pid_adapter.get((pid, luid), 0.0), v)
     total: dict[tuple[str, str], float] = {}
     for (luid, _phys, _eng, typ), v in eng_all.items():
         total[(luid, typ)] = max(total.get((luid, typ), 0.0), v)
     other: dict[tuple[str, str], float] = {}
     for (luid, _phys, _eng, typ), v in eng_other.items():
         other[(luid, typ)] = max(other.get((luid, typ), 0.0), v)
-    return GpuSample(game, total, other, per_pid)
+    return GpuSample(game, total, other, per_pid, per_pid_adapter)
 
 
 def choose_adapter(luid_3d_use: dict[str, float], fallback: str | None, window: list[GpuSample | None]) -> str | None:
@@ -237,6 +242,16 @@ def pid_gpu_pct(window: list[GpuSample | None], pid: int) -> float | None:
     if not valid:
         return None
     return min(100.0, sum(s.per_pid.get(pid, 0.0) for s in valid) / len(valid))
+
+
+def pid_gpu_pct_on(window: list[GpuSample | None], pid: int, adapter: str | None) -> float | None:
+    """A process's busiest engine on `adapter` (the game's), averaged like game_gpu_pct: unclamped samples
+    over the trailing window, then the mean clamped to 100. None when the adapter is unknown, or when the
+    process has no engine on it in the window (it may use another GPU: that is not this GPU's load)."""
+    valid = [s for s in window if s is not None]
+    if adapter is None or not any((pid, adapter) in s.per_pid_adapter for s in valid):
+        return None
+    return min(100.0, sum(s.per_pid_adapter.get((pid, adapter), 0.0) for s in valid) / len(valid))
 
 
 def _sum_matching(values: dict[str, float | None], match: Callable[[str], bool]) -> float | None:
@@ -358,18 +373,22 @@ class ProcessRates:
         return cols, others
 
 
-def top_others(rates: list[tuple], gpu_window: list[GpuSample | None], n: int = TOP_OTHERS) -> list[list]:
+def top_others(rates: list[tuple], gpu_window: list[GpuSample | None], adapter: str | None,
+               n: int = TOP_OTHERS) -> list[list]:
     """The others row: the top `n` by CPU among processes that did anything,
-    as [pid, name, cpu, io, gpu, create_time]. The create time (raw FILETIME ticks) lets a fix on that
-    process prove later that the PID was not reused."""
+    as [pid, name, cpu, io, gpu, create_time, gpu_game]. gpu is the busiest engine on any adapter;
+    gpu_game the busiest on `adapter`, the game's (pid_gpu_pct_on: None when that adapter is unknown or the
+    process has no engine there). The create time (raw FILETIME ticks) lets a fix on that process prove
+    later that the PID was not reused."""
     rows = []
     for pid, name, cpu, io, created in rates:
         gpu = pid_gpu_pct(gpu_window, pid)
         if cpu > 0 or io > 0 or (gpu or 0) > 0:
-            rows.append((cpu, io, gpu or 0.0, pid, name, gpu, created))
+            rows.append((cpu, io, gpu or 0.0, pid, name, gpu, created, pid_gpu_pct_on(gpu_window, pid, adapter)))
     best = heapq.nlargest(n, rows, key=lambda r: (r[0], r[1], r[2], -r[3]))
-    return [[pid, name, round(cpu, 2), round(io, 1), None if gpu is None else round(gpu, 2), created]
-            for cpu, io, _g, pid, name, gpu, created in best]
+    return [[pid, name, round(cpu, 2), round(io, 1), None if gpu is None else round(gpu, 2), created,
+             None if game_gpu is None else round(game_gpu, 2)]
+            for cpu, io, _g, pid, name, gpu, created, game_gpu in best]
 
 
 # ---------------------------------------------------------------- the collector ---
@@ -581,7 +600,8 @@ class SystemSampler(Collector):
         self.series.add(**row)
         self._rows += 1
         if rates is not None:
-            self.others.append([t, top_others(rates, window)])
+            # the same adapter as game_gpu_pct, so gpu_game says what else loaded the game's own GPU
+            self.others.append([t, top_others(rates, window, adapter)])
         temps = [k for k in get(T_TEMP).values() if k is not None]
         self.publish(t=t, cpu_total_pct=row[S.CPU_TOTAL_PCT], cpu_max_core_pct=row[S.CPU_MAX_CORE_PCT],
                      game_cpu_pct=row[S.GAME_CPU_PCT], game_top_thread_pct=row[S.GAME_TOP_THREAD_PCT],

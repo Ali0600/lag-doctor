@@ -1,8 +1,9 @@
 """A stand-in for `nvidia-smi --query-gpu=... --format=csv,nounits -lms N`, for the gpu collector's tests.
 
-It prints the header and first row of a real capture (smi_stream_591.86.csv) with live timestamps, a SW
-thermal counter that grows by --share of the elapsed time and a SW power-cap counter that grows by
---cap-share, CRLF-terminated like the real tool on a pipe. After --rows rows it idles until killed (as
+It prints the header and first row of a real capture (--fixture, smi_stream_591.86_default_limit.csv: the
+collector's own field list) with live timestamps, a SW thermal counter that grows by --share of the elapsed
+time and a SW power-cap counter that grows by --cap-share, CRLF-terminated like the real tool on a pipe. The
+columns it rewrites are found by their header names. After --rows rows it idles until killed (as
 nvidia-smi does), or exits with --exit. Like nvidia-smi, it keeps going when its stdout pipe is gone.
 --heartbeat FILE appends a byte to FILE on every row, and the stand-in exits once FILE.stop exists.
 Run it with the base interpreter (not the venv launcher), so terminating it ends the process that writes.
@@ -31,6 +32,10 @@ a = p.parse_args()
 with open(a.fixture, encoding="utf-8") as f:
     lines = f.read().splitlines()
 header, template = lines[0], lines[1].split(", ")
+names = [part.split(" [")[0].strip() for part in header.split(",")]     # "power.draw [W]" -> "power.draw"
+col = {name: names.index(name) for name in ("timestamp", "index", "pci.bus_id",
+                                            "clocks_event_reasons_counters.sw_thermal_slowdown",
+                                            "clocks_event_reasons_counters.sw_power_cap")}
 out = sys.stdout.buffer
 
 
@@ -58,18 +63,19 @@ if a.fail_text:
     emit(a.fail_text)
     sys.exit(9 if a.exit is None else a.exit)
 emit(header + (", extra.field [x]" if a.extra_column else ""))
-sw_thermal_us, sw_power_cap_us = int(template[14]), int(template[17])
+THERMAL, CAP = col["clocks_event_reasons_counters.sw_thermal_slowdown"], col["clocks_event_reasons_counters.sw_power_cap"]
+sw_thermal_us, sw_power_cap_us = int(template[THERMAL]), int(template[CAP])
 start = time.perf_counter()
 for n in range(a.rows):
     now = datetime.datetime.now()
     elapsed_us = (time.perf_counter() - start) * 1e6
     for g in range(a.gpus):
         row = list(template)
-        row[0] = now.strftime("%Y/%m/%d %H:%M:%S.%f")[:-3]
-        row[1] = str(g)
-        row[2] = f"00000000:{g + 1:02X}:00.0"
-        row[14] = str(sw_thermal_us + int(elapsed_us * a.share))
-        row[17] = str(sw_power_cap_us + int(elapsed_us * a.cap_share))
+        row[col["timestamp"]] = now.strftime("%Y/%m/%d %H:%M:%S.%f")[:-3]
+        row[col["index"]] = str(g)
+        row[col["pci.bus_id"]] = f"00000000:{g + 1:02X}:00.0"
+        row[THERMAL] = str(sw_thermal_us + int(elapsed_us * a.share))
+        row[CAP] = str(sw_power_cap_us + int(elapsed_us * a.cap_share))
         emit(", ".join(row))
     if a.junk and n == 0:
         emit("this is not a row")

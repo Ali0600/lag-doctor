@@ -101,7 +101,34 @@ def test_gpu_sample_sums_an_engine_over_processes_and_takes_the_busiest_engine()
     assert s.total == {(NV, "3D"): 110.0, (NV, "Copy"): 7.0, (INTEL, "3D"): 11.0}
     assert s.other == {(NV, "3D"): 50.0, (NV, "Copy"): 1.0, (INTEL, "3D"): 11.0}
     assert s.per_pid == {10: 60.0, 20: 50.0, 30: 11.0}
+    assert s.per_pid_adapter == {(10, NV): 60.0, (20, NV): 50.0, (30, INTEL): 11.0}
     assert sysmon.gpu_sample({}, 10) is None
+
+
+def _on(pid_values: dict[tuple[int, str], float]) -> GpuSample:
+    return GpuSample({}, {}, {}, {}, pid_values)
+
+
+@pytest.mark.parametrize("samples, expected", [
+    ([400.0, 0.0, 0.0, 0.0], 100.0),         # unclamped samples, then the mean (one clamped sample would give 25)
+    ([3652.0, 0.0, 0.0, 0.0], 100.0),        # only the mean is clamped (WT verify log 13)
+    ([40.0, 20.0, None], 30.0),              # a failed read is left out, not counted as 0
+    ([99.6, 100.4], 100.0),
+    ([0.0, 0.0], 0.0),                       # an engine there that idled: 0, which is measured
+])
+def test_gpu_on_the_games_adapter_is_averaged_like_game_gpu_pct(samples, expected):
+    window = [None if v is None else _on({(7, NV): v}) for v in samples]
+    assert sysmon.pid_gpu_pct_on(window, 7, NV) == pytest.approx(expected)
+
+
+def test_gpu_on_the_games_adapter_is_none_when_nothing_there_was_measured():
+    window = [_on({(7, INTEL): 80.0}), _on({(7, INTEL): 60.0})]
+    assert sysmon.pid_gpu_pct_on(window, 7, NV) is None           # it only uses the other GPU
+    assert sysmon.pid_gpu_pct_on(window, 7, INTEL) == pytest.approx(70.0)
+    assert sysmon.pid_gpu_pct_on(window, 7, None) is None         # the game's adapter is not known
+    assert sysmon.pid_gpu_pct_on([None, None], 7, NV) is None
+    # an engine there in part of the window: the absent samples count as idle, as game_gpu_pct counts them
+    assert sysmon.pid_gpu_pct_on([_on({(7, NV): 40.0}), _on({})], 7, NV) == pytest.approx(20.0)
 
 
 def _gs(game=0.0, total=None, other=0.0, typ="3D", luid=NV):
@@ -216,14 +243,16 @@ def test_a_gone_or_replaced_game_has_no_game_columns():
 
 def test_top_others_keeps_the_8_busiest_that_did_anything():
     rates = [(pid, f"p{pid}.exe", float(pid), 0.0, 1000 + pid) for pid in range(1, 13)]
-    rows = sysmon.top_others(rates, [])
+    rows = sysmon.top_others(rates, [], NV)
     assert [r[0] for r in rows] == [12, 11, 10, 9, 8, 7, 6, 5]
-    assert rows[0] == [12, "p12.exe", 12.0, 0.0, None, 1012]          # the create time rides along
-    gpu = [GpuSample({}, {}, {}, {31: 5.0})]
+    assert rows[0] == [12, "p12.exe", 12.0, 0.0, None, 1012, None]    # the create time rides along
+    gpu = [GpuSample({}, {}, {}, {31: 5.0, 34: 9.0}, {(31, INTEL): 5.0, (34, NV): 9.0})]
     rows = sysmon.top_others([(30, "idle.exe", 0.0, 0.0, 7), (31, "enc.exe", 0.0, 0.0, 8),
-                              (32, "io.exe", 0.0, 9e5, 9), (33, "busy.exe", 50.0, 0.0, 10)], gpu)
-    assert [r[0] for r in rows] == [33, 32, 31]
-    assert rows[2] == [31, "enc.exe", 0.0, 0.0, 5.0, 8]
+                              (32, "io.exe", 0.0, 9e5, 9), (33, "busy.exe", 50.0, 0.0, 10),
+                              (34, "gpu.exe", 0.0, 0.0, 11)], gpu, NV)
+    assert [r[0] for r in rows] == [33, 32, 34, 31]                   # fields 0-5 and the ranking as before
+    assert rows[2] == [34, "gpu.exe", 0.0, 0.0, 9.0, 11, 9.0]         # busy on the game's GPU
+    assert rows[3] == [31, "enc.exe", 0.0, 0.0, 5.0, 8, None]         # busy, but only on the other GPU
 
 
 def test_cost_stats_median_from_the_histogram():
@@ -350,6 +379,57 @@ def test_failed_reads_become_none_and_the_first_tick_is_only_a_baseline():
     assert all(row[1] and {o[0] for o in row[1]} == {CHILD, 300} for row in r["others"])
     st = s.status()
     assert st.state == "ok" and "PDH collect failed in 1" in st.detail and "snapshot failed in 1" in st.detail
+
+
+class TwoGpuPdh(FakePdh):
+    """The game draws on the Intel GPU; other processes load either GPU (WT 2.2 instance names)."""
+
+    def read(self, path):
+        if path == sysmon.G_ENGINE:
+            return {eng(GAME, 0x10C49, 0, "3D"): 30.0, eng(CHILD, 0x10C49, 0, "3D"): 10.0,
+                    eng(300, 0x10F83, 0, "3D"): 80.0, eng(300, 0x10C49, 5, "VideoDecode"): 5.0,
+                    eng(301, 0x10F83, 0, "Compute_0"): 40.0}
+        return super().read(path)
+
+
+class ThreeOthersSnap(FakeSnap):
+    def snapshot(self, threads_for=()):
+        procs = super().snapshot(threads_for)
+        procs[301] = p(301, self.calls * 50_000, create=1301, name="trainer.exe")
+        return procs
+
+
+def test_others_rows_say_how_busy_each_process_kept_the_games_own_gpu():
+    # A10: field 4 is a process's busiest engine on any adapter, so a job on the other GPU looked like it was
+    # competing with the game. Field 6 is the same on the game's adapter (the one game_gpu_pct uses).
+    s = SystemSampler({"pid": GAME, "create_time": 1100}, period_s=0.05,
+                      pdh_factory=lambda paths: TwoGpuPdh(paths), snapshotter=ThreeOthersSnap(),
+                      foreground=lambda: GAME, layout_check=lambda snapshotter: None)
+    r = _run(s, 6, 0.05)
+    assert r["game_adapter_luid"] == INTEL and r["columns"][S.GAME_GPU_PCT][-1] == pytest.approx(30.0)
+    assert r["others"]
+    for _t, row in r["others"]:
+        by_pid = {o[0]: o for o in row}
+        assert set(by_pid) == {CHILD, 300, 301} and all(len(o) == 7 for o in row)
+        assert {pid: o[5] for pid, o in by_pid.items()} == {CHILD: 1200, 300: 1300, 301: 1301}   # create times
+        assert [by_pid[pid][4] for pid in (CHILD, 300, 301)] == [10.0, 80.0, 40.0]     # any adapter, unchanged
+        assert [by_pid[pid][6] for pid in (CHILD, 300, 301)] == [10.0, 5.0, None]      # the game's adapter only
+
+
+def test_others_rows_have_no_game_gpu_figure_while_the_games_adapter_is_unknown():
+    class NoGameGpu(TwoGpuPdh):            # the game has no GPU engine at all, and nothing named its adapter
+        def read(self, path):
+            got = super().read(path)
+            if path == sysmon.G_ENGINE:
+                got = {k: v for k, v in got.items() if not k.startswith(f"pid_{GAME}_")}
+            return got
+
+    s = SystemSampler({"pid": GAME, "create_time": 1100}, period_s=0.05,
+                      pdh_factory=lambda paths: NoGameGpu(paths), snapshotter=ThreeOthersSnap(),
+                      foreground=lambda: GAME, layout_check=lambda snapshotter: None)
+    r = _run(s, 5, 0.05)
+    assert r["game_adapter_luid"] is None and r["others"]
+    assert all(o[6] is None and o[4] is not None for _t, row in r["others"] for o in row)
 
 
 def test_a_counter_that_never_reads_makes_the_source_partial():

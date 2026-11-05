@@ -141,6 +141,9 @@ _PROTOTYPES: dict[str, tuple[list, Any]] = {
     "nvmlDeviceGetTemperature": ([_DEV, ctypes.c_int, _U], _RC),
     "nvmlDeviceGetPowerUsage": ([_DEV, _U], _RC),                  # milliwatts
     "nvmlDeviceGetEnforcedPowerLimit": ([_DEV, _U], _RC),          # milliwatts
+    # milliwatts; nvidia-smi's power.default_limit (LC 1.4, 4.2). Here 80000 against nvidia-smi's 80.00 W
+    # (2026-11-05), while the enforced limit was 93.39 W.
+    "nvmlDeviceGetPowerManagementDefaultLimit": ([_DEV, _U], _RC),
     "nvmlDeviceGetClockInfo": ([_DEV, ctypes.c_int, _U], _RC),     # MHz
     "nvmlDeviceGetPerformanceState": ([_DEV, ctypes.POINTER(ctypes.c_int)], _RC),
     "nvmlDeviceGetCurrentClocksEventReasons": ([_DEV, ctypes.POINTER(ctypes.c_ulonglong)], _RC),
@@ -244,7 +247,9 @@ class Nvml:
 
     # ---- public ---------------------------------------------------------
     def devices(self) -> list[dict]:
-        """{index, name, pci_bus_id, mem_total_mb, clock_max_mhz, temp_target_c} per GPU, in NVML index order."""
+        """{index, name, pci_bus_id, mem_total_mb, clock_max_mhz, temp_target_c, power_default_w} per GPU, in NVML
+        index order. power_default_w is the board's default power limit, the yardstick for a lowered enforced
+        limit (LC 4.2's power-limit variant)."""
         with self._lock:
             self._check_open()
             count = ctypes.c_uint()
@@ -342,7 +347,7 @@ class Nvml:
 
     def _describe(self, index: int, h: ctypes.c_void_p | None) -> dict:
         d: dict[str, Any] = {"index": index, "name": None, "pci_bus_id": None, "mem_total_mb": None,
-                             "clock_max_mhz": None, "temp_target_c": None}
+                             "clock_max_mhz": None, "temp_target_c": None, "power_default_w": None}
         if h is None:
             return d
         if self._call("nvmlDeviceGetName", h, self._name, _NAME_LEN):
@@ -357,6 +362,8 @@ class Nvml:
             if self._call("nvmlDeviceGetTemperatureThreshold", h, threshold, ctypes.byref(self._uint)):
                 d["temp_target_c"] = self._uint.value
                 break
+        if self._call("nvmlDeviceGetPowerManagementDefaultLimit", h, ctypes.byref(self._uint)):
+            d["power_default_w"] = self._uint.value / 1000.0
         return d
 
     def _read_fields(self, h: ctypes.c_void_p, fields: Any, names: tuple[str, ...]) -> dict[str, int | None]:

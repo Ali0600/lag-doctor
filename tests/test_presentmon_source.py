@@ -7,9 +7,11 @@ unelevated negative test of PM 6.2, which fails before any capture starts.
 """
 from __future__ import annotations
 
+import _winapi
 import contextlib
 import csv
 import ctypes
+import hashlib
 import os
 import shutil
 import statistics
@@ -122,11 +124,88 @@ def test_the_pid_range_ends_are_accepted():
 
 def test_the_exe_is_launched_by_the_absolute_path_that_was_verified(presentmon_exe, tmp_path, monkeypatch):
     # A bare name would be looked up by CreateProcess (the Python folder comes first), not opened as checked.
+    # The path is the checked handle's own final path now (SEC-9), so compared as a file, not as text.
     shutil.copyfile(presentmon_exe, tmp_path / presentmon_exe.name)
     monkeypatch.chdir(tmp_path)
     src = pm.PresentMonSource(1234, exe=presentmon_exe.name)
     with src._exe_guard() as prefix:
-        assert prefix == [str(tmp_path / presentmon_exe.name)]
+        assert len(prefix) == 1 and prefix[0].startswith("\\\\?\\")
+        assert os.path.samefile(prefix[0], tmp_path / presentmon_exe.name)
+        assert src._exe_used == prefix[0]
+
+
+def test_a_relative_exe_is_the_file_named_when_the_source_was_made(presentmon_exe, tmp_path, monkeypatch):
+    # The launch runs the checked file's own path now, so a relative name can no longer reach CreateProcess's
+    # search; what is left of the absolute path is which file: the one named, not one where the process stands
+    # at launch.
+    (tmp_path / "named").mkdir()
+    (tmp_path / "later").mkdir()
+    shutil.copyfile(presentmon_exe, tmp_path / "named" / presentmon_exe.name)
+    monkeypatch.chdir(tmp_path / "named")
+    src = pm.PresentMonSource(1234, exe=presentmon_exe.name)
+    monkeypatch.chdir(tmp_path / "later")
+    with src._exe_guard() as prefix:
+        assert os.path.samefile(prefix[0], tmp_path / "named" / presentmon_exe.name)
+
+
+def test_spawn_runs_exactly_the_program_it_is_given_where_a_command_line_would_not(presentmon_exe, tmp_path):
+    # The pinned path can run through a folder whose name ends in "." (reachable by a junction). As a command
+    # line, Windows drops that dot and runs whatever sits in the dotless folder; as the program it does not.
+    name = presentmon_exe.name
+    dotted = "\\\\?\\" + str(tmp_path / "x.")
+    os.mkdir(dotted)
+    (tmp_path / "x").mkdir()
+    try:
+        shutil.copyfile(presentmon_exe, dotted + "\\" + name)
+        shutil.copyfile(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "hostname.exe",
+                        tmp_path / "x" / name)
+        proc = pm.spawn([dotted + "\\" + name, "--help"], console=False)
+        out, err = proc.communicate(timeout=30)
+        assert err.startswith(b"PresentMon 2.6.0"), (proc.returncode, out, err)
+    finally:
+        if os.path.exists(dotted + "\\" + name):
+            os.remove(dotted + "\\" + name)
+        os.rmdir(dotted)                                   # a plain path could not name this folder
+
+
+def test_the_spawn_runs_the_checked_file_even_if_a_junction_is_repointed_after_the_check(
+        presentmon_exe, gold_etl_dir, tmp_path, monkeypatch):
+    # SEC-9: exe= goes through a folder junction. Between the check and the launch the junction is re-pointed to
+    # a folder holding another program under PresentMon's name. The launch must still run the checked bytes.
+    # An ETL replay: no capture, no rights needed.
+    def digest(path) -> str:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    name = presentmon_exe.name
+    genuine, decoy, link = tmp_path / "genuine", tmp_path / "decoy", tmp_path / "link"
+    genuine.mkdir()
+    decoy.mkdir()
+    shutil.copyfile(presentmon_exe, genuine / name)
+    shutil.copyfile(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "hostname.exe", decoy / name)
+    _winapi.CreateJunction(str(genuine), str(link))
+    real_spawn, launched, by_given_path = pm.spawn, [], []
+
+    def repoint_then_spawn(argv, console):
+        if not launched:                                   # the check is done, the launch not yet
+            os.rmdir(link)
+            _winapi.CreateJunction(str(decoy), str(link))
+            by_given_path.append(digest(link / name))
+        launched.append((argv[0], digest(argv[0])))        # what this launch is about to run
+        return real_spawn(argv, console)
+
+    monkeypatch.setattr(pm, "spawn", repoint_then_spawn)
+    try:
+        src = pm.PresentMonSource(None, exe=link / name, etl_file=gold_etl_dir / "test_case_5.etl")
+        run_to_end(src, timeout=60)
+    finally:
+        if os.path.lexists(link):
+            os.rmdir(link)                                 # the junction only
+    assert by_given_path == [digest(decoy / name)] != [pm.setup.SHA256]       # the re-point took
+    assert [d for _exe, d in launched] == [pm.setup.SHA256]                    # the launch was the checked file
+    st, r = src.status(), src.result()
+    assert st.state == "ok", st
+    assert sum(c["frames"] for c in r["swap_chains"].values()) == 647          # PresentMon ran the replay
+    assert r["presentmon"]["exe"] == launched[0][0]
 
 
 def test_an_etl_path_can_never_read_as_an_option(tmp_path, monkeypatch):

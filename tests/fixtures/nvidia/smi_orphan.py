@@ -19,7 +19,7 @@ from lagdoctor.capture import gpumon         # noqa: E402
 
 here = Path(__file__).resolve().parent
 gpumon.smi_argv = lambda: [sys.executable, "-I", str(here / "fake_smi.py"), "--fixture",
-                           str(here / "smi_stream_591.86.csv"), "--heartbeat", heartbeat]
+                           str(here / "smi_stream_591.86_default_limit.csv"), "--heartbeat", heartbeat]
 gpumon.Nvml.open = classmethod(lambda cls: None)
 s = gpumon.NvidiaSampler(None)
 s.start(clock.now())

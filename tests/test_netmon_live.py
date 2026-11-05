@@ -2,7 +2,8 @@
 
 Echo requests go only to 127.0.0.1, ::1, the default gateway and 1.1.1.1: about 51 per run of this
 file (8 loopback, 4 to the router and 1.1.1.1, 1 TTL-limited, about 40 in the 10 s capture, which
-also self-tests on loopback). Nothing is changed: routes, Wi-Fi and the registry are only read.
+also self-tests on loopback). Nothing is changed: routes, Wi-Fi and the registry are only read. The
+tests of the capture's judge at the end run it on the fake machine of test_netmon_sampler: no packets.
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import psutil
 import pytest
 
 from lagdoctor import clock
-from lagdoctor.capture.netmon import NetworkSampler, band_of
+from lagdoctor.capture.netmon import COLUMN, NetworkSampler, band_of
 from lagdoctor.model import N
 from lagdoctor.winapi import icmp, iphlp, wlan
 
@@ -209,6 +210,68 @@ def test_a_scan_notification_arrives_on_a_foreign_thread(wifi):
 
 # ---------------------------------------------------------------- the collector ---
 
+# A capture whose status is partial only because a ping send or a read failed now and then still passes: one
+# hiccup is the network, not the sampler. A read or send that failed more often than this (per read, per
+# target, in the ~20 rounds) is broken, and the judge still fails it.
+TRANSIENT_MAX = 1
+# Reads made every round: each failure blanks that round's value and nothing else.
+ROUND_READS = ("network adapter counters", "Wi-Fi quality", "Wi-Fi retry counter")
+# Reads made at the route checks (every 5 s): a failure keeps the last answer, or starts a series late.
+ROUTE_READS = ("default route", "network adapter", "route toward the internet", "route toward the server")
+
+
+def _span(values: list[float]) -> str:
+    return f"{min(values):.1f}-{max(values):.1f} ms" if values else "no replies"
+
+
+def judge_capture(s: NetworkSampler, rounds: tuple[int, int], gateways: set[str]) -> None:
+    """Assert what a capture of this machine must show (`rounds`: the row count it must have). Partial is
+    accepted only for transient reasons (a ping send or read that failed at most TRANSIENT_MAX times); every
+    other check is still made, with each such failure allowed exactly the values it cost."""
+    res, st = s.result(), s.status()
+    cols = res["columns"]
+    n = len(cols["t"])
+    failures = {what: count for what, (count, _last) in s._failures.items()}
+    errors = {target: k for target, k in s._errors.items() if k}
+    # Lasting problems (no router, Wi-Fi unreadable, an ICMP self-test, the scan notifications) and probes
+    # not sent because earlier ones were stuck are never transient.
+    assert not s._problems and not any(s._skipped.values()), st
+    assert set(failures) <= {*ROUND_READS, *ROUTE_READS}, st
+    assert all(k <= TRANSIENT_MAX for k in (*failures.values(), *errors.values())), (failures, errors, st)
+    assert st.state == ("partial" if failures or errors else "ok"), st
+    assert rounds[0] <= n <= rounds[1], n
+    assert res["targets"]["gateway"] in gateways
+    late_router = "default route" in failures                       # no router until the next route check
+    late_link = late_router or "network adapter" in failures       # no adapter (NIC, Wi-Fi) until then
+    for target, top in (("gateway", 200.0), ("internet", 500.0)):
+        p = res["probes"][target]
+        replies = [v for v in cols[COLUMN[target]] if v is not None]
+        assert p["from_t"] is not None, (target, p)
+        assert p["from_t"] == cols["t"][0] or (late_router and target == "gateway"), (target, p)
+        probed = sum(1 for t in cols["t"] if t >= p["from_t"])
+        assert p["sent"] + errors.get(target, 0) == probed, (target, p, errors)   # sent, or failed to send
+        assert p["lost"] == p["sent"] - len(replies) == len(res["lost"][target])
+        assert len(replies) >= 0.8 * probed and all(0 < v < top for v in replies), (target, replies)
+    assert res["probes"]["server"] == {"sent": 0, "lost": 0, "from_t": None}
+    assert all(v is None or v >= 0 for v in cols[N.NIC_RX_BPS] + cols[N.NIC_TX_BPS])
+    # the NIC rate's first reading is only a baseline
+    _per_round(cols[N.NIC_RX_BPS], 1, failures.get("network adapter counters", 0), late_link)
+    if res["interface"]["kind"] == "wifi":
+        _per_round(cols[N.WIFI_SIGNAL_PCT], 0, failures.get("Wi-Fi quality", 0), late_link)
+        assert res["interface"]["band"] and res["interface"]["channel"]
+
+
+def _per_round(values: list, structural: int, failed: int, late: bool) -> None:
+    """A series read once a round: missing in exactly `structural` rows plus one per failed read. After a
+    failed route check it may start later, so only the rows after its first value are counted then."""
+    first = next((i for i, v in enumerate(values) if v is not None), None)
+    assert first is not None, values
+    if late:
+        assert sum(v is None for v in values[first:]) <= failed, (failed, values)
+    else:
+        assert sum(v is None for v in values) == structural + failed, (structural, failed, values)
+
+
 def test_a_ten_second_capture_of_this_machine(defaults):
     s = NetworkSampler()
     s.start(clock.now())
@@ -218,32 +281,153 @@ def test_a_ten_second_capture_of_this_machine(defaults):
         s.stop()
     res = s.result()
     cols = res["columns"]
-    n = len(cols["t"])
     gw = [v for v in cols[N.GW_RTT_MS] if v is not None]
     inet = [v for v in cols[N.INET_RTT_MS] if v is not None]
-    print(f"\n10 s capture: {n} rows; router RTT {min(gw):.1f}-{max(gw):.1f} ms ({len(gw)} replies), "
-          f"1.1.1.1 RTT {min(inet):.1f}-{max(inet):.1f} ms ({len(inet)} replies); probes {res['probes']}; "
-          f"interface {res['interface']}; route {res['route']}; status {s.status()}")
-    assert 18 <= n <= 22, n
-    assert res["targets"]["gateway"] in {r["NextHop"] for r in defaults}
-    for target, replies, top in (("gateway", gw, 200.0), ("internet", inet, 500.0)):
-        p = res["probes"][target]
-        assert p["from_t"] == cols["t"][0]
-        assert p["sent"] == n and p["lost"] == n - len(replies) == len(res["lost"][target])
-        assert len(replies) >= 0.8 * n and all(0 < v < top for v in replies), (target, replies)
-    assert res["probes"]["server"] == {"sent": 0, "lost": 0, "from_t": None}
-    assert all(v is None or v >= 0 for v in cols[N.NIC_RX_BPS] + cols[N.NIC_TX_BPS])
-    assert sum(v is not None for v in cols[N.NIC_RX_BPS]) >= n - 1      # only the first row has no rate
-    if res["interface"]["kind"] == "wifi":
-        assert sum(v is not None for v in cols[N.WIFI_SIGNAL_PCT]) == n
-        assert res["interface"]["band"] and res["interface"]["channel"]
-    assert s.status().state == "ok", s.status()
-    # The route, against Windows' own answer: the same egress adapter, and a physical one is never a VPN. A
-    # virtual one (a VPN tunnel when one is up) has no independent VPN-or-not readout: skipped.
+    print(f"\n10 s capture: {len(cols['t'])} rows; router RTT {_span(gw)} ({len(gw)} replies), 1.1.1.1 RTT "
+          f"{_span(inet)} ({len(inet)} replies); probes {res['probes']}; interface {res['interface']}; "
+          f"route {res['route']}; status {s.status()}")
+    # The route, against Windows' own answer, first: a virtual egress (a VPN tunnel when one is
+    # up) has no independent VPN-or-not readout, and a tunnel changes what the probes and the status see.
     egress = _egress_adapter()
     print(f"egress per Find-NetRoute/Get-NetAdapter: {egress}")
     if egress is None or not egress["HardwareInterface"]:
         pytest.skip(f"the internet goes out through {(egress or {}).get('InterfaceDescription')!r}, a virtual "
                     "adapter (a VPN tunnel?); whether the route is a VPN cannot be checked independently here")
+    judge_capture(s, (18, 22), {r["NextHop"] for r in defaults})
+    # a physical egress: the same adapter Windows names, and never a VPN
     assert res["route"]["if_index"] == egress["ifIndex"], (res["route"], egress)
     assert res["route"]["vpn"] is False
+
+
+# ------------------------------------------------- the judge, on the fake machine (no packets) ---
+
+def _fake_capture(net=None, seconds: float = 1.0, **kw) -> NetworkSampler:
+    from tests.test_netmon_sampler import FakeNet, run_for, sampler
+    s = sampler(net if net is not None else FakeNet(), **kw)
+    run_for(s, seconds)
+    return s
+
+
+FAKE_ROUNDS = (8, 13)          # 1 s of 0.1 s rounds, as test_netmon_sampler counts them
+FAKE_GATEWAYS = {"192.168.0.1"}
+
+
+def _fails_once(exc: BaseException, then):
+    seen: list[int] = []
+
+    def behave(*args):
+        if not seen:
+            seen.append(1)
+            raise exc
+        return then(*args)
+    return behave
+
+
+def test_the_judge_passes_a_clean_capture():
+    s = _fake_capture()
+    assert s.status().state == "ok"
+    judge_capture(s, FAKE_ROUNDS, FAKE_GATEWAYS)
+
+
+def _one_failed_send(net):
+    from tests.test_netmon_sampler import INET
+    net.behave[INET] = _fails_once(OSError(1231, "The network location cannot be reached"),
+                                   lambda ip: (0.002, (0, 5.0, ip)))
+    return net
+
+
+def test_one_failed_ping_send_is_partial_and_still_passes_the_judge():
+    # The live test used to demand "ok", so one transient send failure failed it.
+    from tests.test_netmon_sampler import FakeNet
+    s = _fake_capture(_one_failed_send(FakeNet()))
+    st = s.status()
+    assert st.state == "partial" and "1 pings to the internet failed to send" in st.detail, st
+    judge_capture(s, FAKE_ROUNDS, FAKE_GATEWAYS)
+
+
+@pytest.mark.parametrize("what", ["Wi-Fi quality", "network adapter counters"])
+def test_one_failed_read_is_partial_and_still_passes_the_judge(what):
+    from tests.test_netmon_sampler import FakeNet, FakeWlan
+    exc = OSError(31, "A device attached to the system is not functioning")
+    net = FakeNet()
+    if what == "Wi-Fi quality":
+        wl = FakeWlan()
+        wl.quality = _fails_once(exc, FakeWlan().quality)
+        net = FakeNet(wlan=wl)
+    else:
+        real, reads = net.if_row, []
+
+        def counters(idx):                 # the round's counter read; the adapter's identity read comes first
+            reads.append(idx)
+            if len(reads) == 4:
+                raise exc
+            return real(idx)
+        net.if_row = counters
+    s = _fake_capture(net)
+    st = s.status()
+    assert st.state == "partial" and f"{what} not read 1 time" in st.detail, st
+    judge_capture(s, FAKE_ROUNDS, FAKE_GATEWAYS)
+
+
+def test_a_failed_first_route_check_starts_the_router_late_and_still_passes_the_judge():
+    from tests.test_netmon_sampler import FakeNet
+    net = FakeNet()
+    net.default_route = _fails_once(OSError(8, "Not enough memory resources are available"), net.default_route)
+    s = _fake_capture(net, route_every_s=0.25)
+    p = s.result()["probes"]["gateway"]
+    assert p["from_t"] > s.result()["columns"]["t"][0] and "default route not read 1 time" in s.status().detail
+    judge_capture(s, FAKE_ROUNDS, FAKE_GATEWAYS)
+
+
+@pytest.mark.parametrize("read", ["retries", "quality"])
+def test_the_judge_still_fails_a_read_that_keeps_failing(read):
+    # A failed retry counter costs no value the judge counts, so only the TRANSIENT_MAX bound can catch it.
+    from tests.test_netmon_sampler import FakeNet, FakeWlan
+
+    def broken(guid):
+        raise OSError(31, "A device attached to the system is not functioning")
+
+    wl = FakeWlan()
+    setattr(wl, read, broken)
+    s = _fake_capture(FakeNet(wlan=wl))
+    assert s.status().state == "partial"
+    with pytest.raises(AssertionError):
+        judge_capture(s, FAKE_ROUNDS, FAKE_GATEWAYS)
+
+
+def test_the_judge_still_fails_a_lasting_problem_beside_a_transient_one():
+    # Scan notifications that could not be registered cost no row; partial is then "explained" by the failed
+    # send too, so only the lasting-problem check can refuse it.
+    from tests.test_netmon_sampler import FakeNet, FakeWlan
+
+    class NoScans(FakeWlan):
+        def on_scan_complete(self, callback):
+            raise OSError(1062, "The service has not been started")
+
+    s = _fake_capture(_one_failed_send(FakeNet(wlan=NoScans())))
+    assert s.status().state == "partial" and "Wi-Fi scans not recorded" in s.status().detail
+    with pytest.raises(AssertionError):
+        judge_capture(s, FAKE_ROUNDS, FAKE_GATEWAYS)
+
+
+def test_the_judge_still_fails_a_value_that_no_failure_explains():
+    from tests.test_netmon_sampler import FakeNet, FakeWlan
+
+    class Gappy(FakeWlan):                 # no error, yet every other read has no value
+        n = 0
+
+        def quality(self, guid):
+            self.n += 1
+            return None if self.n % 2 else super().quality(guid)
+
+    s = _fake_capture(FakeNet(wlan=Gappy()))
+    assert s.status().state == "ok" and s.result()["interface"]["band"] == "5 GHz"
+    with pytest.raises(AssertionError):
+        judge_capture(s, FAKE_ROUNDS, FAKE_GATEWAYS)
+
+
+def test_the_judge_still_fails_a_status_that_disagrees_with_its_counts():
+    s = _fake_capture()
+    s.set_status("partial", "a reason the counts do not show", tool="test")
+    with pytest.raises(AssertionError):
+        judge_capture(s, FAKE_ROUNDS, FAKE_GATEWAYS)

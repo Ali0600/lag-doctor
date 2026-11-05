@@ -21,12 +21,17 @@ from lagdoctor import clock
 from lagdoctor.capture import gpumon
 from lagdoctor.capture.gpumon import (NvidiaSampler, adapter_vendor, parse_smi_header, parse_smi_row, pci_location,
                                       pick_device, plausible_power, reasons_text, throttle_pct)
+from lagdoctor.capture.session import Session, SessionOptions
 from lagdoctor.model import G
 from lagdoctor.winapi import nvml
 from lagdoctor.winapi.nvml import Nvml, reason_names
 
 FIXTURES = Path(__file__).parent / "fixtures" / "nvidia"
-SMI_CAPTURE = FIXTURES / "smi_stream_591.86.csv"       # real nvidia-smi 591.86 output from this laptop
+# Real nvidia-smi 591.86 output from this laptop. The first was recorded before the field list asked for
+# power.default_limit (and holds real thermal + power-cap throttling, mask 0x24); the second is the collector's
+# own command, recorded 2026-11-05 with the GPU near idle.
+SMI_CAPTURE = FIXTURES / "smi_stream_591.86.csv"
+SMI_STREAM = FIXTURES / "smi_stream_591.86_default_limit.csv"
 FAKE_SMI = FIXTURES / "fake_smi.py"
 GIB = 1 << 30
 
@@ -43,6 +48,7 @@ class FakeLib:
         self.handle_rc: dict[int, int] = {}
         self.util, self.mem_used, self.mem_total = 50, 3 * GIB, 8 * GIB
         self.temp, self.power_mw, self.limit_mw, self.clock, self.max_clock = 70, 45_500, 88_000, 1500, 2100
+        self.default_limit_mw = 80_000         # this laptop's default (the enforced limit above it is Dynamic Boost)
         self.pstate, self.reasons = 3, 0x24
         self.fields = {269: 7_000, 270: 0, 271: 11, 74: 9_000}
         self.field_rc: dict[int, int] = {}
@@ -114,6 +120,8 @@ class FakeLib:
     def nvmlDeviceGetTemperature(self, h, sensor, ref): return self._out("nvmlDeviceGetTemperature", ref, self.temp)
     def nvmlDeviceGetPowerUsage(self, h, ref): return self._out("nvmlDeviceGetPowerUsage", ref, self.power_mw)
     def nvmlDeviceGetEnforcedPowerLimit(self, h, ref): return self._out("nvmlDeviceGetEnforcedPowerLimit", ref, self.limit_mw)
+    def nvmlDeviceGetPowerManagementDefaultLimit(self, h, ref):
+        return self._out("nvmlDeviceGetPowerManagementDefaultLimit", ref, self.default_limit_mw)
     def nvmlDeviceGetClockInfo(self, h, kind, ref): return self._out("nvmlDeviceGetClockInfo", ref, self.clock)
     def nvmlDeviceGetPerformanceState(self, h, ref): return self._out("nvmlDeviceGetPerformanceState", ref, self.pstate)
     def nvmlDeviceGetCurrentClocksEventReasons(self, h, ref):
@@ -232,11 +240,22 @@ def test_devices_describe_each_gpu_and_a_gpu_without_a_handle_is_listed_empty():
     nv, _ = fake_nvml(lib)
     assert nv.devices() == [
         {"index": 0, "name": "Fake GPU 0", "pci_bus_id": "00000000:01:00.0", "mem_total_mb": 8192.0,
-         "clock_max_mhz": 2100, "temp_target_c": 75},
+         "clock_max_mhz": 2100, "temp_target_c": 75, "power_default_w": 80.0},
         {"index": 1, "name": None, "pci_bus_id": None, "mem_total_mb": None, "clock_max_mhz": None,
-         "temp_target_c": None},
+         "temp_target_c": None, "power_default_w": None},
     ]
     assert all(v is None for k, v in nv.sample(1).items() if k != "throttle_ns")
+
+
+def test_the_default_power_limit_is_read_in_watts_and_a_refused_read_is_none():
+    # LC 4.2: the power-limit variant is the enforced limit held under this default; NVML gives milliwatts.
+    lib = FakeLib()
+    lib.default_limit_mw = 80_500
+    nv, _ = fake_nvml(lib)
+    assert nv.devices()[0]["power_default_w"] == 80.5
+    lib.rc["nvmlDeviceGetPowerManagementDefaultLimit"] = 3      # NVML_ERROR_NOT_SUPPORTED: not known, never 0
+    dev = nv.devices()[0]
+    assert dev["power_default_w"] is None and dev["temp_target_c"] == 75 and dev["clock_max_mhz"] == 2100
 
 
 @pytest.mark.parametrize("thresholds, expected", [({7: 75}, 75), ({5: 83}, 83), ({7: 75, 5: 83}, 75), ({}, None)])
@@ -455,26 +474,49 @@ def _capture_lines() -> list[str]:
     return SMI_CAPTURE.read_text(encoding="utf-8").splitlines()
 
 
+def _stream_lines() -> list[str]:
+    return SMI_STREAM.read_text(encoding="utf-8").splitlines()
+
+
+def _old_columns() -> list[str]:
+    """The earlier capture's own columns: parsed by name, a field it never asked for reads None."""
+    return parse_smi_header(_capture_lines()[0])
+
+
 def test_parse_smi_header_strips_units_and_matches_what_we_ask_for():
-    assert parse_smi_header(_capture_lines()[0]) == list(gpumon.SMI_FIELDS)
-    assert parse_smi_header(_capture_lines()[1]) is None
+    assert parse_smi_header(_stream_lines()[0]) == list(gpumon.SMI_FIELDS)
+    assert parse_smi_header(_stream_lines()[1]) is None
+    # the earlier capture differs only by the default limit, so its rows below still test the same parser
+    assert _old_columns() == [f for f in gpumon.SMI_FIELDS if f != "power.default_limit"]
 
 
 def test_parse_smi_row_from_a_real_capture():
-    row = parse_smi_row(_capture_lines()[1], gpumon.SMI_FIELDS)
+    row = parse_smi_row(_capture_lines()[1], _old_columns())
     assert row == {
         "when": dt.datetime(2026, 11, 4, 18, 8, 2, 93000), "index": 0, "pci_bus_id": "00000000:01:00.0",
         "name": "NVIDIA GeForce RTX 3070 Laptop GPU", "util_pct": 63,
         "mem_used_mb": 4282.0,                      # used 4108 + reserved 174, NVML's definition
-        "mem_total_mb": 8192.0, "temp_c": 82, "power_w": 47.51, "power_limit_w": 55.0, "clock_mhz": 720,
-        "clock_max_mhz": 2100, "pstate": 3, "reasons": 0x24,
+        "mem_total_mb": 8192.0, "temp_c": 82, "power_w": 47.51, "power_limit_w": 55.0, "power_default_w": None,
+        "clock_mhz": 720, "clock_max_mhz": 2100, "pstate": 3, "reasons": 0x24,
         "throttle_ns": {"sw_thermal_slowdown": 27_495_830_139_000, "hw_thermal_slowdown": 0,
                         "hw_power_brake_slowdown": 244_000, "sw_power_cap": 662_562_344_000},
     }
 
 
+def test_parse_smi_row_from_the_collectors_own_command_reads_the_default_limit():
+    row = parse_smi_row(_stream_lines()[1], gpumon.SMI_FIELDS)
+    assert row == {
+        "when": dt.datetime(2026, 11, 5, 5, 4, 42, 311000), "index": 0, "pci_bus_id": "00000000:01:00.0",
+        "name": "NVIDIA GeForce RTX 3070 Laptop GPU", "util_pct": 26, "mem_used_mb": 575.0, "mem_total_mb": 8192.0,
+        "temp_c": 51, "power_w": 19.6, "power_limit_w": 92.88, "power_default_w": 80.0, "clock_mhz": 345,
+        "clock_max_mhz": 2100, "pstate": 8, "reasons": 0x1,
+        "throttle_ns": {"sw_thermal_slowdown": 60_664_294_262_000, "hw_thermal_slowdown": 0,
+                        "hw_power_brake_slowdown": 490_000, "sw_power_cap": 8_599_677_200_000},
+    }
+
+
 def test_the_real_capture_gives_a_per_reason_share_that_matches_by_hand():
-    a, b = (parse_smi_row(line, gpumon.SMI_FIELDS) for line in _capture_lines()[1:3])
+    a, b = (parse_smi_row(line, _old_columns()) for line in _capture_lines()[1:3])
     dt_s = (b["when"] - a["when"]).total_seconds()                       # 1.007 s
     only = {"sw_thermal_slowdown": a["throttle_ns"]["sw_thermal_slowdown"]}
     later = {"sw_thermal_slowdown": b["throttle_ns"]["sw_thermal_slowdown"]}
@@ -495,35 +537,36 @@ def _with(line: str, **values: str) -> str:
 @pytest.mark.parametrize("field, text", [("power.draw", "[N/A]"), ("temperature.gpu", "[Not Supported]"),
                                          ("utilization.gpu", "N/A"), ("pstate", "[Unknown Error]"),
                                          ("clocks_event_reasons.active", "[N/A]"), ("memory.used", "nan"),
-                                         ("name", "[N/A]"), ("name", "N/A")])
+                                         ("name", "[N/A]"), ("name", "N/A"), ("power.default_limit", "[N/A]")])
 def test_parse_smi_row_reads_not_available_as_none(field, text):
-    line = _with(_capture_lines()[1], **{field.replace(".", "__"): text})
+    line = _with(_stream_lines()[1], **{field.replace(".", "__"): text})
     row = parse_smi_row(line, gpumon.SMI_FIELDS)
     key = {"power.draw": "power_w", "temperature.gpu": "temp_c", "utilization.gpu": "util_pct",
            "pstate": "pstate", "clocks_event_reasons.active": "reasons", "memory.used": "mem_used_mb",
-           "name": "name"}[field]
+           "name": "name", "power.default_limit": "power_default_w"}[field]
     assert row is not None and row[key] is None
 
 
 def test_parse_smi_row_counters_not_available_read_none():
-    line = _with(_capture_lines()[1], clocks_event_reasons_counters__sw_power_cap="[N/A]")
+    line = _with(_stream_lines()[1], clocks_event_reasons_counters__sw_power_cap="[N/A]")
     assert parse_smi_row(line, gpumon.SMI_FIELDS)["throttle_ns"]["sw_power_cap"] is None
 
 
 @pytest.mark.parametrize("text, expected", [("P0", 0), ("P15", 15), ("P16", None), ("P", None), ("3", None)])
 def test_parse_smi_pstate(text, expected):
-    assert parse_smi_row(_with(_capture_lines()[1], pstate=text), gpumon.SMI_FIELDS)["pstate"] == expected
+    assert parse_smi_row(_with(_stream_lines()[1], pstate=text), gpumon.SMI_FIELDS)["pstate"] == expected
 
 
 def test_parse_smi_row_keeps_a_comma_in_the_gpu_name():
-    line = _capture_lines()[1].replace("NVIDIA GeForce RTX 3070 Laptop GPU", "Odd, Name GPU")
+    line = _stream_lines()[1].replace("NVIDIA GeForce RTX 3070 Laptop GPU", "Odd, Name GPU")
     assert parse_smi_row(line, gpumon.SMI_FIELDS)["name"] == "Odd, Name GPU"
 
 
 @pytest.mark.parametrize("line", ["", "garbage", "2026/11/04 18:08:02.093, 0", "NVIDIA-SMI has failed because it "
                                   "couldn't communicate with the NVIDIA driver.",
-                                  _with(_capture_lines()[1], timestamp="yesterday"),
-                                  _with(_capture_lines()[1], index="[N/A]")])
+                                  _with(_stream_lines()[1], timestamp="yesterday"),
+                                  _with(_stream_lines()[1], index="[N/A]"),
+                                  _capture_lines()[1]])                 # a row of a shorter field list
 def test_parse_smi_row_refuses_what_is_not_a_row(line):
     assert parse_smi_row(line, gpumon.SMI_FIELDS) is None
 
@@ -548,7 +591,8 @@ class GridNvml:
         self.period, self.share, self.mark_moves, self.reason = period, share, mark_moves, reason
         self.mark_delay = mark_delay              # each fingerprint read takes this long (a thread held up)
         self._devices = devices or [{"index": 0, "name": "Fake GPU", "pci_bus_id": "00000000:01:00.0",
-                                     "mem_total_mb": 8192.0, "clock_max_mhz": 2100, "temp_target_c": 75}]
+                                     "mem_total_mb": 8192.0, "clock_max_mhz": 2100, "temp_target_c": 75,
+                                     "power_default_w": 80.0}]
         self.values = values
         self.sampled: list[int] = []
         self.closed = 0
@@ -698,14 +742,14 @@ def test_the_game_gpu_is_picked_by_pci_location_not_position(monkeypatch):
     monkeypatch.setattr(gpumon, "PERIOD_S", 0.5)
     monkeypatch.setattr(gpumon, "REFRESH_WAIT_S", 0.3)
     devices = [{"index": 0, "name": "First", "pci_bus_id": "00000000:02:00.0", "mem_total_mb": 4096.0,
-                "clock_max_mhz": 1800, "temp_target_c": 80},
+                "clock_max_mhz": 1800, "temp_target_c": 80, "power_default_w": 60.0},
                {"index": 1, "name": "Second", "pci_bus_id": "00000000:01:00.0", "mem_total_mb": 8192.0,
-                "clock_max_mhz": 2100, "temp_target_c": 75}]
+                "clock_max_mhz": 2100, "temp_target_c": 75, "power_default_w": 80.0}]
     fake = GridNvml(period=0.22, share=0.0, devices=devices)
     s = run_sampler(monkeypatch, fake, 1.2, adapter={"vendor": "nvidia", "pci": "01:00.0"})
     assert fake.sampled and set(fake.sampled) == {1}
     assert s.result()["device"] == {"name": "Second", "clock_max_mhz": 2100, "mem_total_mb": 8192.0,
-                                    "temp_target_c": 75}
+                                    "temp_target_c": 75, "power_default_w": 80.0}
     assert "Second" in s.status().detail and "PCI location" in s.status().detail
 
 
@@ -734,6 +778,28 @@ def test_result_columns_device_live_and_close(monkeypatch):
     assert fake.closed == 1
     st = s.status()
     assert st.state == "ok" and st.tool == "nvml" and "999.99" in st.detail
+
+
+SESSION_TARGET = {"pid": 4242, "create_time": 1, "name": "Game.exe", "exe": r"C:\Games\Game.exe", "adapter_luid": None}
+
+
+def test_the_default_power_limit_reaches_the_captures_inventory(monkeypatch):
+    # rules.py counts the power cap as LC 4.2's power-limit variant only against inventory["nvidia"]
+    # ["power_default_w"], which no collector wrote. Here through the real NVML wrapper (over a fake library),
+    # the real collector and the session's own assembly of the capture.
+    lib = FakeLib()
+    monkeypatch.setattr(gpumon.Nvml, "open", classmethod(lambda cls: Nvml(lib.fns())))
+    monkeypatch.setattr(gpumon, "PERIOD_S", 0.2)
+    monkeypatch.setattr(gpumon, "REFRESH_WAIT_S", 0.05)          # the fake never refreshes, so rows come unaligned
+    session = Session(SESSION_TARGET, SessionOptions(duration_s=1.0, network=False, hotkey=None, frames=False),
+                      collectors=[NvidiaSampler(None)], inventory={"adapters": []}, alive=lambda: True,
+                      printer=lambda line: None)
+    cap = session.run()
+    assert cap.sources["gpu"].state == "ok", cap.sources["gpu"]
+    assert cap.inventory["nvidia"] == {"name": "Fake GPU 0", "clock_max_mhz": 2100, "mem_total_mb": 8192.0,
+                                       "temp_target_c": 75, "power_default_w": 80.0}
+    assert cap.gpu[G.POWER_LIMIT_W][0] == 88.0                     # the enforced limit, beside its yardstick
+    assert "nvmlDeviceGetPowerManagementDefaultLimit" in lib.calls
 
 
 def test_a_value_never_measured_makes_the_source_partial(monkeypatch):
@@ -771,7 +837,7 @@ def test_stop_is_prompt_while_waiting_for_a_refresh(monkeypatch):
 
 def fake_smi_argv(*args: str) -> list[str]:
     # the base interpreter, not the venv launcher, so terminating the child ends the process that writes
-    return [getattr(sys, "_base_executable", sys.executable), "-I", str(FAKE_SMI), "--fixture", str(SMI_CAPTURE),
+    return [getattr(sys, "_base_executable", sys.executable), "-I", str(FAKE_SMI), "--fixture", str(SMI_STREAM),
             *args]
 
 
@@ -817,15 +883,16 @@ def test_fallback_streams_rows_and_says_which_source_ran(monkeypatch, no_nvml):
     assert "nvidia-smi streaming" in st.detail and "test: NVML switched off" in st.detail
     assert "not tied to lag-doctor's lifetime" not in st.detail
     cols = s.result()["columns"]
-    assert cols[G.UTIL_PCT][0] == 63 and cols[G.MEM_USED_MB][0] == 4282.0 and cols[G.PSTATE][0] == 3
-    assert cols[G.REASONS][0] == "sw_power_cap,sw_thermal_slowdown"
+    assert cols[G.UTIL_PCT][0] == 26 and cols[G.MEM_USED_MB][0] == 575.0 and cols[G.PSTATE][0] == 8
+    assert cols[G.REASONS][0] == "gpu_idle" and cols[G.POWER_LIMIT_W][0] == 92.88
     got = cols[G.THROTTLE_PCT][1:]
     assert got and all(v is not None and abs(v - 50) <= 3 for v in got), got      # heat only, not + 30 power cap
     cap = cols[G.POWER_CAP_PCT][1:]
     assert all(v is not None and abs(v - 30) <= 3 for v in cap), cap
     assert cols[G.POWER_CAP_PCT][0] is None and set(s.row_aligned) == {None}     # smi rows are never aligned
+    # power.default_limit: the yardstick of LC 4.2's power-limit variant (rules read inventory["nvidia"])
     assert s.result()["device"] == {"name": "NVIDIA GeForce RTX 3070 Laptop GPU", "clock_max_mhz": 2100,
-                                    "mem_total_mb": 8192.0, "temp_target_c": None}
+                                    "mem_total_mb": 8192.0, "temp_target_c": None, "power_default_w": 80.0}
 
 
 def test_a_child_that_cannot_join_the_job_still_streams_and_says_so(monkeypatch, no_nvml):

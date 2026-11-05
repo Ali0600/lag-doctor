@@ -437,7 +437,8 @@
   "old": "self.exe = Path(os.path.abspath(exe)) if exe is not None else None",
   "new": "self.exe = Path(exe) if exe is not None else None",
   "tests": [
-   "tests/test_presentmon_source.py::test_the_exe_is_launched_by_the_absolute_path_that_was_verified"
+   "tests/test_presentmon_source.py::test_the_exe_is_launched_by_the_absolute_path_that_was_verified",
+   "tests/test_presentmon_source.py::test_a_relative_exe_is_the_file_named_when_the_source_was_made"
   ]
  },
  {
@@ -452,8 +453,8 @@
  {
   "name": "exe run without its integrity check",
   "file": "lagdoctor/capture/presentmon.py",
-  "old": "            stack.enter_context(setup.pinned(path))",
-  "new": "            stack.enter_context(contextlib.nullcontext(path))",
+  "old": "            launch = stack.enter_context(setup.pinned(path))",
+  "new": "            launch = stack.enter_context(contextlib.nullcontext(path))",
   "tests": [
    "tests/test_presentmon_source.py::test_an_exe_that_fails_its_check_is_never_run"
   ]
@@ -774,6 +775,62 @@
   "new": "        pass       # a new run's first frames show at once",
   "tests": [
    "tests/test_presentmon_source.py::test_a_retried_capture_shows_its_first_frames_at_once"
+  ]
+ },
+ {
+  "name": "SEC-9: pinned yields the given path, not the checked handle's own",
+  "file": "lagdoctor/setup.py",
+  "old": "        yield launch",
+  "new": "        yield path",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_a_junction_repointed_after_the_check_cannot_change_what_the_pinned_path_runs",
+   "tests/test_presentmon_setup.py::test_pinned_locks_the_file_against_writers_until_the_block_ends"
+  ]
+ },
+ {
+  "name": "SEC-9: the launch path loses its long-path prefix",
+  "file": "lagdoctor/setup.py",
+  "old": "            return Path(buf.value)",
+  "new": "            return Path(buf.value[4:])",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_the_launch_path_keeps_its_prefix_so_windows_cannot_renormalise_it"
+  ]
+ },
+ {
+  "name": "SEC-9: an unreadable final path falls back to the given path",
+  "file": "lagdoctor/setup.py",
+  "old": "            raise VerifyError(f\"{path} was checked, but the checked file's own path could not be read: {exc}\") from exc",
+  "new": "            launch = path",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_no_launch_path_when_the_checked_files_own_path_cannot_be_read"
+  ]
+ },
+ {
+  "name": "SEC-9: the final path taken from a buffer too small for it",
+  "file": "lagdoctor/setup.py",
+  "old": "        if n < size:                  # done: n is the length without the terminating null",
+  "new": "        if True:                  # done: n is the length without the terminating null",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_a_launch_path_longer_than_the_first_buffer_is_read_whole"
+  ]
+ },
+ {
+  "name": "SEC-9: the collector launches by the given path again",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "            self._exe_used = str(launch)\n            yield [str(launch)]",
+  "new": "            self._exe_used = str(path)\n            yield [str(path)]",
+  "tests": [
+   "tests/test_presentmon_source.py::test_the_spawn_runs_the_checked_file_even_if_a_junction_is_repointed_after_the_check",
+   "tests/test_presentmon_source.py::test_the_exe_is_launched_by_the_absolute_path_that_was_verified"
+  ]
+ },
+ {
+  "name": "SEC-9: spawn leaves the program to the command line, which renormalises it",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "    return subprocess.Popen(argv, executable=argv[0], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,",
+  "new": "    return subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,",
+  "tests": [
+   "tests/test_presentmon_source.py::test_spawn_runs_exactly_the_program_it_is_given_where_a_command_line_would_not"
   ]
  }
 ]

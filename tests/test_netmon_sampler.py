@@ -468,6 +468,73 @@ def test_scan_notifications_from_a_foreign_thread_keep_only_the_interface_in_use
     assert scans == [pytest.approx(fired - s.origin, abs=1e-9)]
 
 
+def test_scans_watched_with_none_seen_are_an_empty_list():
+    net = FakeNet()
+    s = sampler(net)
+    res = run_for(s, 0.4)
+    assert net.wlan.callback is not None and res["wifi_scans"] == []
+    assert "Wi-Fi scans not" not in s.status().detail
+
+
+class NoScanWlan(FakeWlan):
+    def on_scan_complete(self, callback):
+        raise OSError(1062, "The service has not been started")
+
+
+@pytest.mark.parametrize("make_net, state, why", [
+    (lambda: FakeNet(wlan=NoScanWlan()), "partial",
+     "Wi-Fi scans not recorded: their notifications could not be registered"),
+    (lambda: FakeNet(wlan_error="the WLAN AutoConfig service is not running (error 1062)"), "partial",
+     "Wi-Fi signal and scans not measured: the WLAN AutoConfig service is not running"),
+    (lambda: FakeNet(nic_type=6), "ok", "Wi-Fi scans not watched: the link in use is not Wi-Fi"),
+])
+def test_scans_never_registered_are_not_measured_never_none_seen(make_net, state, why):
+    # wifi_scans [] reads as "no background scan happened"; when nothing listened for them it is None, with why.
+    s = sampler(make_net())
+    res = run_for(s, 0.4)
+    st = s.status()
+    assert res["wifi_scans"] is None
+    assert st.state == state and why in st.detail, st
+
+
+def test_scans_registered_on_a_later_try_clear_the_earlier_failure():
+    class FirstTryFails(FakeWlan):
+        tries = 0
+
+        def on_scan_complete(self, callback):
+            self.tries += 1
+            if self.tries == 1:
+                raise OSError(1062, "The service has not been started")
+            super().on_scan_complete(callback)
+
+    net = FakeNet(wlan=FirstTryFails())
+    real_route, real_row, checks = net.default_route, net.if_row, []
+
+    def route():                           # from the second route check on, the link is another Wi-Fi adapter
+        checks.append(1)
+        r = real_route()
+        return dict(r, if_index=9) if len(checks) >= 2 else r
+
+    net.default_route = route
+    net.if_row = lambda idx: real_row(8 if idx == 9 else idx)
+    s = sampler(net, route_every_s=0.15)
+    res = run_for(s, 0.6)
+    assert net.wlan.tries == 2 and res["wifi_scans"] == []
+    assert s.status().state == "ok" and "Wi-Fi scans not" not in s.status().detail, s.status()
+
+
+def test_a_wifi_adapter_unknown_to_the_wlan_service_has_no_scans_and_says_why():
+    class Elsewhere(FakeWlan):
+        def interfaces(self):           # another adapter, and not connected: no way to tell which one is ours
+            return [{"guid": "{99999999-2222-3333-4444-555555555555}", "description": "Other", "connected": False}]
+
+    s = sampler(FakeNet(wlan=Elsewhere()))
+    res = run_for(s, 0.4)
+    st = s.status()
+    assert res["wifi_scans"] is None and st.state == "partial"
+    assert "Wi-Fi signal and scans not measured: the adapter in use is unknown" in st.detail
+
+
 def test_stop_is_bounded_while_probes_are_stuck():
     net = FakeNet()
     net.behave[INET] = lambda ip: (1.5, (11010, None, None))
