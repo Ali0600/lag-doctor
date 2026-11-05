@@ -1,0 +1,17 @@
+[
+  {"name": "judge accepts any cause",
+   "file": "scripts/e2e_truth.py",
+   "old": "        right = sum(1 for e in matched if e.causes and e.causes[0] == exp.event_cause)",
+   "new": "        right = len(matched)",
+   "tests": ["tests/test_e2e_truth.py::test_the_right_moments_with_the_wrong_cause_fail"]},
+  {"name": "an empty verdict passes",
+   "file": "scripts/e2e_truth.py",
+   "old": "        return bool(self.checks) and all(c.ok for c in self.checks)",
+   "new": "        return all(c.ok for c in self.checks)",
+   "tests": ["tests/test_e2e_truth.py::test_a_verdict_with_no_checks_is_not_a_pass"]},
+  {"name": "wrong_gpu never required",
+   "file": "scripts/e2e_truth.py",
+   "old": "    if has_discrete_gpu and \"intel\" in renderer:",
+   "new": "    if False:",
+   "tests": ["tests/test_e2e_truth.py::test_wrong_gpu_is_required_only_when_laglab_ran_on_intel_with_a_discrete_gpu_present"]}
+]
