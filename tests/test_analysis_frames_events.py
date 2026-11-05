@@ -123,18 +123,21 @@ def test_a_frame_one_refresh_late_on_a_quantised_display_is_no_stutter():
     assert len(late) == 1 and late[0].severity == pytest.approx(4 * P144)
 
 
-def test_the_cadence_rule_holds_k_refreshes_up_to_5_percent_past_k_periods():
-    # presents at 1.04 P hold one refresh, so a 3-refresh hold is 2 late: a stutter; at 1.06 P they hold two
+def test_the_cadence_rule_holds_k_refreshes_only_within_half_a_percent_of_k_periods():
+    # Changed on purpose (item 8, A2): a 5 % slack read every cap from 137 to 143 FPS on 144 Hz as a one-refresh
+    # cadence, so their single slips were "stutters". Presents at 1.0049 P hold one refresh (measurement jitter), so
+    # a 3-refresh hold is 2 late: a stutter; at 1.0051 P the cadence holds two now and then
     holds = [1] * 300 + [3] + [1] * 300
-    assert len(kinds(run(held(1.04 * P144, holds)), "stutter")) == 1
-    assert kinds(run(held(1.06 * P144, holds)), "stutter") == []
+    assert len(kinds(run(held(1.0049 * P144, holds)), "stutter")) == 1
+    assert kinds(run(held(1.0051 * P144, holds)), "stutter") == []
+    assert kinds(run(held(1000.0 / 141.0, holds)), "stutter") == []      # the 141 FPS cap advised for 144 Hz
 
 
 def test_the_cadence_rule_follows_the_games_frame_rate_where_it_is():
-    # 400 frames presented at 1.04 P (one refresh each) with a 3-refresh hold, then 600 at 120 FPS: E follows the
+    # 400 frames presented at 1.004 P (one refresh each) with a 3-refresh hold, then 600 at 120 FPS: E follows the
     # trailing presents, so the early hold is a stutter though the run's overall cadence would hold two
     holds = [1] * 200 + [3] + [1] * 199 + [2 if i % 5 == 4 else 1 for i in range(600)]
-    pres = [1.04 * P144] * 400 + [1000.0 / 120.0] * 600
+    pres = [1.004 * P144] * 400 + [1000.0 / 120.0] * 600
     cap = make_cap(make_frames(pres, display_ms=[h * P144 for h in holds], displayed=1), hz=144.003)
     late = kinds(run(cap), "stutter")
     assert len(late) == 1 and late[0].severity == pytest.approx(3 * P144)

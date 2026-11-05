@@ -35,7 +35,7 @@ def causes(d: Diagnosis) -> set[str]:
 # ----------------------------------------------------------------------------- acceptance ---
 
 @pytest.mark.parametrize("hiccups", [0.0, synth.MEASURED_HICCUP_RATE])
-@pytest.mark.parametrize("seed", [1, 2])
+@pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
 @pytest.mark.parametrize("mode", synth.MODES)
 def test_every_laglab_scenario_passes_the_end_to_end_judge(mode, seed, hiccups):
     s = synth.laglab(mode, seed=seed, hiccups=hiccups)
@@ -93,9 +93,9 @@ def test_the_smooth_control_gets_no_limit_pacing_or_stutter_finding(seed):
     assert {"gpu_limit", "cpu_limit", "uneven_pacing"} <= set(d.cleared)       # checked, with what was measured
 
 
-FRAME_RULES = ("cpu_limit", "gpu_limit", "vsync_judder", "uneven_pacing", "frame_cap", "windowed_composition",
-               "shader_compile", "background_hogs", "game_cpu_spike", "asset_streaming", "driver_dpc", "gpu_spike",
-               "game_stall")
+FRAME_RULES = ("cpu_limit", "gpu_limit", "vsync_judder", "dropped_frames", "uneven_pacing", "frame_cap",
+               "windowed_composition", "shader_compile", "background_hogs", "game_cpu_spike", "asset_streaming",
+               "driver_dpc", "gpu_spike", "game_stall")
 
 
 def test_without_frame_timing_frame_rules_are_unchecked_and_nothing_claims_no_stutter():
@@ -371,9 +371,11 @@ def test_lag_type_is_the_category_with_the_most_lag_time(lag, frames_ok, want):
     assert dg.pick_lag_type(lag, frames_ok) == want
 
 
-# Changed on purpose: the old points pinned LC 4.14's 0.9 x refresh (a cap rule), and "waiting" at 30 FPS on 144 Hz
-# counting nothing (A6). Now: steady time under 80 % of the target (LC 2.4, S18; DECISIONS 2026-11-04) counts,
-# whatever holds the rate there; a cap or a VSync lock is the game's own target.
+# Changed on purpose, twice. The first points pinned LC 4.14's 0.9 x refresh (a cap rule), and "waiting" at 30 FPS on
+# 144 Hz counting nothing (A6). Now: steady time under 80 % of the target (LC 2.4, S18; DECISIONS 2026-11-04) counts,
+# whatever holds the rate there; a cap or a VSync lock is the game's own target. Item 6: the rate judged is the
+# steady one (bound "steady_fps"), never avg_fps, which holds every stutter and freeze; this test once fed avg_fps
+# alone, so it could not see that. avg_fps is set to the far side of each point here, and is never read.
 @pytest.mark.parametrize("verdict, fps, hz, steady", [
     ("gpu", 115.1, 144.0, 25.0), ("gpu", 115.3, 144.0, 0.0),            # 0.8 x 144 = 115.2
     ("gpu", 120.0, 144.0, 0.0),                                         # DECISIONS: not "low" for the whole capture
@@ -383,10 +385,51 @@ def test_lag_type_is_the_category_with_the_most_lag_time(lag, frames_ok, want):
     ("unknown", 30.0, 144.0, 25.0),                                     # the frame rate is measured all the same
     ("capped", 30.0, 144.0, 0.0), ("vsync", 30.0, 60.0, 0.0)])         # their own target: never low FPS
 def test_steady_time_under_80_percent_of_the_refresh_counts_as_low_fps(verdict, fps, hz, steady):
-    lag = dg.lag_time([], [], {"avg_fps": fps}, {"verdict": verdict, "refresh_hz": hz, "steady_s": 25.0}, True)
-    assert lag["low_fps"] == steady
-    assert dg.lag_time([], [], {"avg_fps": fps}, {"verdict": verdict, "refresh_hz": hz, "steady_s": 25.0},
-                       False)["low_fps"] == 0.0                         # frames not measured: nothing to count
+    other_side = {"avg_fps": 1000.0 if steady else 1.0}
+    b = {"verdict": verdict, "refresh_hz": hz, "steady_s": 25.0, "steady_fps": fps}
+    assert dg.lag_time([], [], other_side, b, True)["low_fps"] == steady
+    assert dg.lag_time([], [], other_side, b, False)["low_fps"] == 0.0       # frames not measured: nothing to count
+    assert dg.lag_time([], [], {"avg_fps": fps}, dict(b, steady_fps=None), True)["low_fps"] == 0.0   # no steady rate
+
+
+@pytest.mark.parametrize("ft_ms, lag", [(1000.0 / 120.1, "stutter"), (10.0, "low_fps")])
+def test_freezes_never_make_a_steady_frame_rate_low(ft_ms, lag):
+    # Item 6 (A1): six 600 ms freezes pull a steady GPU-bound 120.1 FPS on the 144 Hz panel to a 113 FPS average,
+    # and that once counted all 55 s of 120 FPS as low frame rate; 100 FPS steady is low (under 0.8 x 144 = 115.2)
+    d = diagnose(gpu_bound_with_freezes(600.0, n=6, ft=ft_ms))
+    assert d.stats["bound"] == "gpu" and d.stats["freezes"] == 6
+    assert d.lag_type == lag, d.headline
+    if lag == "stutter":
+        assert d.stats["avg_fps"] < 0.8 * synth.REFRESH_HZ                   # the average alone would say low FPS
+        assert d.headline.startswith("6 stutters (") and "Low frame rate" not in d.headline
+    else:
+        assert d.headline.startswith("Low frame rate (") and "; also 6 freezes, worst 600 ms" in d.headline
+
+
+def test_a_steady_rate_other_programs_gpu_work_may_set_is_no_cap_and_counts_as_low_fps():
+    # Item 9 (A7): the ML job keeps the game's GPU 80 % busy while the game runs a regular 58 FPS on the 144 Hz panel
+    # with its own GPU work short, which is what a frame-rate cap looks like. It was "capped", the game's own target,
+    # so lag time counted nothing ("No lag stood out") and the report said "limited by FPS cap"
+    from lagdoctor.report import console
+    s = synth.laglab("smooth", fps_cap=58.0, gpu_other_pct=80.0)
+    d = diagnose(s.cap)
+    assert d.stats["bound"] == "unknown" and d.lag_type == "low_fps"
+    assert d.headline.startswith("Low frame rate (58 FPS average on a 144 Hz screen)"), d.headline
+    assert next(f for f in d.findings if f.cause == "gpu_contention").confidence == "high"
+    text = console.render(d, s.cap)
+    assert "limited by -" in text and "limited by FPS cap" not in text and "frame-rate cap" not in d.headline
+    assert not [c for c, t in d.cleared.items() if "frame-rate cap" in t], d.cleared
+    assert "80% busy" in d.unchecked["frame_cap"] and "80% busy" in d.unchecked["gpu_limit"]
+    quiet = diagnose(synth.laglab("smooth", fps_cap=58.0).cap)        # control: the job on the other GPU
+    assert quiet.stats["bound"] == "capped" and quiet.lag_type == "none"
+
+
+def test_a_shared_gpu_never_turns_a_cadence_into_vsync_judder():
+    # A7: with the cap verdict gone, vsync_judder would have called the cadence's 1- and 2-refresh holds "VSync
+    # judder"; a shared GPU hides whether VSync, a cap or the GPU sets that cadence
+    d = diagnose(synth.laglab("smooth", gpu_other_pct=80.0).cap)
+    assert d.stats["bound"] == "unknown" and d.lag_type == "none", d.headline
+    assert "vsync_judder" not in causes(d) and "80% busy" in d.unchecked["vsync_judder"]
 
 
 def test_pacing_counts_only_where_a_confident_pacing_finding_claims_it():

@@ -19,8 +19,10 @@ from lagdoctor.model import F, N, Capture, LagEvent
 STUTTER_X = fa.STUTTER_X     # LC 2.4: D >= 2.5 x M (frames.py holds the stutter and stall test both share)
 STUTTER_MIN_MS = fa.STUTTER_MIN_MS   # LC 2.4 (S20): ... and D - M >= 8 ms, on a quantised display D - max(M, E)
 STALL_COVER = fa.STALL_COVER
-CADENCE_SLACK = 0.05         # [inferred] (A2) a present cadence up to 5 % past k refresh periods still holds
-                             # k: timer jitter around a VSync-locked k*P must not read as k + 1
+CADENCE_SLACK = 0.005        # [measured] (A2) the cadence's trailing median strays this far past k refresh
+                             # periods by jitter alone: p99.9 +0.50 % on the refresh-locked LagLab model at 144 Hz
+                             # with the measured wake-ups (tests/synth.py, 30 seeds); gold test_case_5's dwm.exe
+                             # at 60 Hz stays within 0.32 %. Any slower cadence holds k + 1 refreshes regularly
 MERGE_S = 0.25               # LC 2.4: stutters closer than 250 ms (one 4 Hz sample) are one episode
 # ---- FPS drops (LC 2.4, S18) ---------------------------------------------------------------------
 FPS_WINDOW_S = 1.0           # LC 2.4: 1 s rolling displayed FPS ...
@@ -157,8 +159,10 @@ def _regular_hold(cap: Capture, fr: dict[str, list], rows: list[int], d: list[fl
     cadence produces, ceil(Mp / P - CADENCE_SLACK) * P, with Mp the trailing median of MsBetweenPresents over
     the same frames as M and P the refresh period. At 120 FPS on 144 Hz the screen holds frames for one or
     two refreshes, so M is one refresh (6.94 ms) while two (13.9 ms) are normal, and a frame held for three
-    is only one refresh late: no stutter. None where this does not apply: the refresh is unknown, the series
-    is presents only, or the display is not quantised (< 90 % of D on whole periods: VRR or tearing, LC 3.3).
+    is only one refresh late: no stutter. A cap just under the refresh (141 FPS on 144 Hz) holds two as well,
+    one frame in 47, so the slack absorbs only the jitter of Mp. None where this does not apply: the refresh is
+    unknown, the series is presents only, or the display is not quantised (< 90 % of D on whole periods: VRR or
+    tearing, LC 3.3).
     """
     none: list[float | None] = [None] * len(d)
     hz = fa.refresh_hz(cap)
@@ -515,10 +519,17 @@ def summary_stats(cap: Capture, events: Iterable[LagEvent]) -> dict[str, Any]:
     inet = _net_rows(cap, N.INET_RTT_MS)
     diffs = [abs(b[1] - a[1]) for a, b in zip(inet, inet[1:]) if a[1] is not None and b[1] is not None]
     out["jitter_ms"] = st.mean(diffs) if diffs else None
+    counts = probe_loss(cap, "internet")
+    out["loss_pct"] = 100.0 * counts[0] / counts[1] if counts else None
+    return out
+
+
+def probe_loss(cap: Capture, role: str) -> tuple[float, float] | None:
+    """(lost, sent) probes of one target over the capture, from the network collector's `probes` table (DESIGN,
+    network); None when it was not recorded or does not add up. loss_pct and the packet_loss rule both read it."""
     nf = cap.net_flows if isinstance(cap.net_flows, dict) else {}
     targets = nf.get("targets") if isinstance(nf.get("targets"), dict) else {}
-    probe = _role_entry(nf.get("probes"), "internet", targets)
+    probe = _role_entry(nf.get("probes"), role, targets)
     sent = _num(probe.get("sent")) if isinstance(probe, dict) else None
     lost = _num(probe.get("lost")) if isinstance(probe, dict) else None
-    out["loss_pct"] = 100.0 * lost / sent if sent and lost is not None and 0 <= lost <= sent else None
-    return out
+    return (float(lost), float(sent)) if sent and lost is not None and 0 <= lost <= sent else None

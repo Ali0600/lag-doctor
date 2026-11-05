@@ -192,6 +192,41 @@ def test_the_smooth_control_with_the_measured_hiccups_has_no_stutters(fps_cap, s
     assert [e for e in evs if e.kind == "stutter"] == []
 
 
+P144 = 1000.0 / synth.REFRESH_HZ
+
+
+def three_refresh_holds(fr) -> int:
+    return sum(1 for x in frames.display_series(fr)[2] if round(x / P144) == 3)
+
+
+@pytest.mark.parametrize("fps_cap", [137.0, 138.0, 141.0, 142.0, 143.0])
+def test_a_cap_just_under_the_refresh_has_no_stutters_with_the_measured_hiccups(fps_cap):
+    # Item 8 (A2): under the refresh every cadence holds some frames two refreshes (one in 47 at the advised 141 FPS
+    # cap on 144 Hz), so a late wake-up's 3-refresh hold is one refresh late. A 5 % slack read these caps as
+    # one-refresh cadences and made those 20.8 ms frames "stutters"
+    slips = 0
+    for seed in range(1, 9):
+        s = synth.laglab("smooth", seed=seed, fps_cap=fps_cap, hiccups=synth.MEASURED_HICCUP_RATE)
+        fr, _, evs, _, _ = pipeline(s)
+        slips += three_refresh_holds(fr)
+        assert [e for e in evs if e.kind == "stutter"] == [], seed
+    assert slips >= 3                                    # the slips this guards are in the data
+
+
+def test_a_game_held_to_the_refresh_still_stutters_when_it_misses_two_refreshes():
+    # Item 8: the slack absorbs only the jitter of the present cadence, so at a cadence on the refresh itself a
+    # frame held 3 refreshes (20.8 ms, +13.9 ms over the one-refresh hold) is still a stutter, every time
+    slips = stutters = 0
+    for seed in range(1, 6):
+        s = synth.laglab("smooth", seed=seed, fps_cap=synth.REFRESH_HZ, hiccups=synth.MEASURED_HICCUP_RATE)
+        fr, _, evs, _, _ = pipeline(s)
+        slips += three_refresh_holds(fr)
+        found = [e for e in evs if e.kind == "stutter"]
+        stutters += len(found)
+        assert all(e.severity == pytest.approx(3 * P144, abs=0.05) for e in found), seed
+    assert stutters == slips >= 5
+
+
 @pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
 def test_the_end_to_end_judge_passes_the_smooth_control_with_the_measured_hiccups(seed):
     from lagdoctor.analysis.diagnose import diagnose

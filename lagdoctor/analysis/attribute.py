@@ -61,6 +61,9 @@ IRQ_RISE_PCT = 5.0           # LC 4.10 (PAL, S30): % Interrupt Time > 5 % (Proce
 PERF_DROP_FRAC = 0.20        # LC 4.5: % Processor Performance >= 20 % below normal
 LIMIT_SHARE = 0.25           # LC 4.5: % Performance Limit < 100 on >= 25 % of samples
 NV_THROTTLE_PCT = 30.0       # LC 10 (4.2): held down by heat or power >= 30 % of the time
+HEAT_REASONS = ("sw_thermal_slowdown", "hw_thermal_slowdown", "hw_power_brake_slowdown", "hw_slowdown")
+                             # LC 4.2: the nv_reasons names of heat and the HW power brake (capture/gpumon's
+                             # THROTTLE_REASONS, plus hw_slowdown, which has no counter)
 VRAM_FULL_FRAC = 0.90        # LC 4.3, 10: dedicated VRAM >= 90 % full ...
 SHARED_RISE_MB_PER_S = 256.0 / 60.0   # LC 4.3, 10: ... and the game's shared usage +256 MiB/min
 DISK_BUSY_PCT = 90.0         # LC 4.8 (PAL, S30): disk idle < 10 %
@@ -111,6 +114,17 @@ def game_pids(cap: Capture) -> set[int]:
     if _is_pid(target.get("pid")):
         out.add(target["pid"])
     return out
+
+
+def game_gpu_pct(p: Any) -> tuple[float, bool]:
+    """One `others` entry's GPU use as (%, measured on any adapter?), A10. Field 7 (gpu_game_pct: its busiest engine
+    on the game's adapter) where the entry has it, a missing value counting as 0: no engine there, or no game adapter
+    known at that tick. Else field 5 (older captures): its busiest engine on any adapter, which may be another GPU."""
+    if isinstance(p, (list, tuple)) and len(p) >= 7:
+        x, anywhere = fa._bounded(p[6]), False
+    else:
+        x, anywhere = (fa._bounded(p[4]) if isinstance(p, (list, tuple)) and len(p) >= 5 else None), True
+    return (float(x) if x is not None and x > 0 else 0.0), anywhere
 
 
 def tool_processes(cap: Capture) -> tuple[frozenset[int], frozenset[str]]:
@@ -215,9 +229,39 @@ def _gpu(cap: Capture, column: str) -> _Series:
     return _Series(ts, vs)
 
 
+def cap_in_throttle(cap: Capture) -> bool:
+    """A capture an earlier build saved before the power-cap split (DECISIONS 2026-11-04): its gpu table has rows but
+    no nv_power_cap_pct column, and its nv_throttle_pct counted the GPU's software power cap too, which during
+    GPU-bound play is the design limit, not throttling (LC 4.1)."""
+    gpu = cap.gpu if isinstance(cap.gpu, dict) else {}
+    return bool(fa._col(gpu, G.T)) and G.POWER_CAP_PCT not in gpu
+
+
+def heat_named(reasons: Any) -> bool:
+    """Whether an nv_reasons cell names heat or the HW power brake (HEAT_REASONS)."""
+    return isinstance(reasons, str) and any(r.strip().lower() in HEAT_REASONS for r in reasons.split(","))
+
+
+def throttle_readings(cap: Capture) -> list[tuple[float, float | None, bool]]:
+    """(t, nv_throttle_pct or None, heat_named(nv_reasons)) of every gpu row with a time."""
+    t, v, why = fa._col(cap.gpu, G.T), fa._col(cap.gpu, G.THROTTLE_PCT), fa._col(cap.gpu, G.REASONS)
+    return [(float(ti), read(G.THROTTLE_PCT, fa._at(v, i)), heat_named(fa._at(why, i)))
+            for i, ti in ((i, fa._bounded(x)) for i, x in enumerate(t)) if ti is not None]
+
+
+def _gpu_heat(cap: Capture) -> _Series:
+    """nv_throttle_pct as the share heat and the HW power brake held the GPU down (LC 4.2). In a capture that counted
+    the power cap in it (cap_in_throttle), a row says so only when its reasons named heat or the brake, or its share
+    was 0; any other row's share may be the power cap alone, so it is unknown (None)."""
+    old = cap_in_throttle(cap)
+    rows = throttle_readings(cap)
+    return _Series([t for t, _, _ in rows], [x if not old or named or x == 0 else None for _, x, named in rows])
+
+
 @dataclass
 class _Others:
-    """The `others` table: top non-game processes per tick ([pid, name, cpu_pct, io_bps, gpu_pct, ...])."""
+    """The `others` table: top non-game processes per tick ([pid, name, cpu_pct, io_bps, gpu_pct, create_time,
+    gpu_game_pct]; older captures stop after field 5 or 6)."""
 
     total: _Series        # sum of the listed processes' CPU
     top: _Series          # the busiest one's CPU
@@ -226,6 +270,7 @@ class _Others:
     by_name: dict[str, dict[str, _Sparse]]             # summed over every background process of one exe name
     helpers: dict[str, dict[str, _Sparse]]             # the same over the game's own child processes (A10)
     roles: dict[tuple[int, str], str]                  # (pid, name) -> "background" | "game_helper" | "tool"
+    gpu_any_adapter: bool = False                      # some "gpu" reading is field 5 (any adapter): game_gpu_pct
 
 
 def _others(cap: Capture) -> _Others:
@@ -238,6 +283,7 @@ def _others(cap: Capture) -> _Others:
     t = [r[0] for r in rows]
     total, top, io_top = [], [], []
     seen: dict[tuple[int, str], dict[str, dict[int, float]]] = {}       # tick index -> value, listed ticks only
+    any_adapter = False
     for k, (_ti, entries) in enumerate(rows):
         cpus, ios = [], []
         for e in entries:
@@ -246,7 +292,9 @@ def _others(cap: Capture) -> _Others:
             pid, name = e[0], e[1]
             if not isinstance(pid, int) or isinstance(pid, bool) or not isinstance(name, str):
                 continue
-            cpu, io, gpu = fa._bounded(e[2]), read("io_bps", e[3]), fa._bounded(e[4])    # %, bytes/s, %
+            gpu, anywhere = game_gpu_pct(e)                     # A10: the game's adapter where the row says it
+            any_adapter = any_adapter or anywhere
+            cpu, io = fa._bounded(e[2]), read("io_bps", e[3])  # %, bytes/s
             cols = seen.setdefault((pid, name), {"cpu": {}, "io": {}, "gpu": {}})
             for key, x in (("cpu", cpu), ("io", io), ("gpu", gpu)):
                 cols[key][k] = float(x) if x is not None and x >= 0 else 0.0
@@ -282,7 +330,7 @@ def _others(cap: Capture) -> _Others:
     grouped = {role: {name: {c: sparse(vals) for c, vals in cols.items()} for name, cols in names.items()}
                for role, names in sums.items()}
     return _Others(total_s, _Series(t, top), _Series(t, io_top), per, grouped["background"], grouped["game_helper"],
-                   roles)
+                   roles, any_adapter)
 
 
 # --------------------------------------------------------------------------- checks ---
@@ -363,7 +411,7 @@ def _causes(cap: Capture, others: _Others) -> list[_Cause]:
     dpc, irq = _system(cap, S.DPC_PCT), _system(cap, S.INTERRUPT_PCT)
     perf = _system(cap, S.CPU_PERF_PCT)
     limited = _system(cap, S.CPU_PERF_LIMIT_PCT, lambda x: 1.0 if x < 100.0 else 0.0)
-    throttle = _gpu(cap, G.THROTTLE_PCT)
+    throttle = _gpu_heat(cap)
     shared, vram = _system(cap, S.GAME_SHARED_MB), _system(cap, S.VRAM_USED_MB)
     unfocused = _system(cap, S.GAME_FOCUSED, lambda x: 1.0 if x == 0 else 0.0)
 
@@ -768,7 +816,7 @@ def _blame_process(cause: str, others: _Others, windows: list[tuple[float, float
     fmt = _mbps if col == "io" else _pct
     unit = "" if col == "io" else (" of a CPU" if col == "cpu" else " of a GPU engine")
     many = f" ({len(rises)} processes)" if len(rises) > 1 else ""
-    where = " (its busiest engine on any adapter)" if col == "gpu" else ""
+    where = " (its busiest engine on any adapter)" if col == "gpu" and others.gpu_any_adapter else ""
     who = "the program that rose the most" if role == "background" else "a helper process of the game rose the most"
     return _Blame(name, role, rises[:BLAME_MAX_PIDS],
                   f"{who}: {name}{many} reached {fmt(x)}{unit}{where}, against {fmt(normal)} normally")

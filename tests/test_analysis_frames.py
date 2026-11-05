@@ -258,6 +258,50 @@ def test_a_cadence_within_3_percent_of_a_refresh_multiple_is_not_a_cap():
     assert bound_of(far, 0.5, thread=30.0, hz=144.003)["verdict"] == "capped"
 
 
+@pytest.mark.parametrize("shared, verdict", [(10.0, "unknown"), (9.9, "capped")])
+def test_a_regular_cadence_on_a_shared_gpu_is_no_cap(shared, verdict):
+    # Item 9 (A7, LC 4.6): other programs at 10 % or more of the game's GPU pace it as evenly as a cap would, and its
+    # own GPU busy reads short (PM 3.2). It was "capped", the game's own target, so 58 FPS on 144 Hz was never lag
+    b = bound_of(17.2, 3.4, thread=30.0, hz=144.003, gpu_other_pct=shared)
+    assert b["verdict"] == verdict
+    if verdict == "unknown":
+        assert b["cap_fps"] is None and b["confidence"] == "low"
+        assert b["notes"][0].startswith("other programs kept the game's GPU 10% busy (median of 1 s windows")
+    else:
+        assert b["cap_fps"] == pytest.approx(1000.0 / 17.2)
+
+
+@pytest.mark.parametrize("shared, verdict", [(10.0, "unknown"), (9.9, "waiting")])
+def test_a_short_gpu_busy_on_a_shared_gpu_is_not_waiting_on_something_else(shared, verdict):
+    # A7: "neither the CPU nor the GPU is at its limit" cannot be said while other programs keep that GPU busy
+    jitter = [17.2 * (1.1 if i % 4 < 2 else 0.9) for i in range(1200)]       # irregular: not a frame cap
+    assert bound_of(jitter, 3.4, thread=30.0, hz=144.003, gpu_other_pct=shared)["verdict"] == verdict
+
+
+def test_a_shared_gpu_leaves_the_other_verdicts_alone():
+    for kw, verdict in ((dict(frame_ms=20.0, gpu_ms=19.5), "gpu"), (dict(frame_ms=26.0, gpu_ms=0.5, thread=99.0),
+                                                                   "cpu_main")):
+        assert bound_of(hz=144.003, gpu_other_pct=80.0, **{"thread": 30.0, **kw})["verdict"] == verdict
+
+
+def test_the_steady_frame_rate_is_the_displayed_rate_outside_lag_events():
+    # Item 6 (A1): what lag time judges low FPS on. A 600 ms freeze pulls the average down, never the steady rate;
+    # frames never shown do not count where display is tracked, as in avg_fps
+    ms = [8.0] * 600 + [600.0] + [8.0] * 600
+    cap = make_cap(make_frames(ms, gpu_ms=7.8, display_ms=ms, displayed=1), hz=144.003)
+    fr = fa.main_chain(cap)
+    evs = ev.find_events(cap, fr, None)
+    assert [e.severity for e in evs if e.kind == "stutter"] == [600.0]
+    assert fa.bound(cap, fr, evs)["steady_fps"] == pytest.approx(125.0)
+    assert fa.frame_stats(fr, cap.duration_s)["avg_fps"] == pytest.approx(1000.0 * 1201 / 10200.0)
+    shown = [1 if i % 2 else 0 for i in range(2400)]                       # every other frame dropped
+    half = make_cap(make_frames([4.0] * 2400, gpu_ms=0.5, display_ms=[8.0 if s else None for s in shown],
+                                displayed=shown), hz=144.003)
+    assert fa.bound(half, fa.main_chain(half), [])["steady_fps"] == pytest.approx(125.0)       # not the 250 presented
+    plain = make_cap(make_frames([10.0] * 1200, gpu_ms=0.5))                 # no display tracking: the presents
+    assert fa.bound(plain, fa.main_chain(plain), [])["steady_fps"] == pytest.approx(100.0)
+
+
 def test_a_regular_cadence_with_a_saturated_thread_is_cpu_bound_not_capped():
     assert bound_of(26.0, 0.5, thread=99.0, hz=144.003)["verdict"] == "cpu_main"
     assert bound_of(26.0, 0.5, thread=84.0, hz=144.003)["verdict"] == "capped"

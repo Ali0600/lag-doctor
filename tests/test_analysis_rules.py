@@ -12,7 +12,7 @@ import re
 import pytest
 
 from lagdoctor.analysis import rules
-from lagdoctor.model import F, S, Finding, LagEvent, SourceStatus
+from lagdoctor.model import F, G, S, Finding, LagEvent, SourceStatus
 from tests import synth
 
 NV, INTEL = synth.NVIDIA_LUID, synth.INTEL_LUID
@@ -505,6 +505,28 @@ def test_a_game_held_by_its_own_cpu_thread_is_not_starved_of_the_gpu():
     assert is_finding(res, "high")
 
 
+def on_the_games_adapter(game_gpu):
+    """The others rows as the sampler writes them now (A10): create time, then each process's busiest engine on the
+    game's own adapter (gpu_game_pct, field 7). The training job runs on the other GPU: 100 % there, none here."""
+    return [[0.25 * k, [[7777, "python.exe", 100.0, 0.0, 100.0, 134000000000007777, None],
+                        [2656, "dwm.exe", 3.0, 0.0, 3.0, 134000000000002656, game_gpu]]] for k in range(1, 121)]
+
+
+def test_gpu_contention_names_the_user_of_the_games_own_gpu_where_the_table_says_it():
+    # Item 12 (A10): field 7 is the game adapter's engine; field 5 covers any adapter and blamed the job on the other
+    res = run("gpu_contention", contention(80.0, others=on_the_games_adapter(12.0)), stats={"avg_fps": 58.0},
+              bound=STARVED)
+    assert is_finding(res, "high") and res.title == "Another program kept the game's GPU 80% busy: dwm.exe"
+    text = " ".join(e.text for e in res.evidence)
+    assert "The busiest other user of the game's GPU in the process table was dwm.exe (process 2656, its busiest " \
+           "engine there 12% busy, median)." in text
+    assert "python.exe" not in text and "covers any GPU" not in text
+    nobody = run("gpu_contention", contention(80.0, others=on_the_games_adapter(0.0)), stats={"avg_fps": 58.0},
+                 bound=STARVED)
+    assert nobody.title == "Another program kept the game's GPU 80% busy"   # field 7 says 0: nobody is named
+    assert not any("python.exe" in e.text for e in nobody.evidence)
+
+
 def test_gpu_contention_never_names_the_game_or_lag_doctor():
     rows = [[0.25 * k, [[4242, "game.exe", 50.0, 0.0, 100.0], [5555, "python.exe", 30.0, 0.0, 90.0],
                         [6000, "PresentMon-2.6.0-x64.exe", 5.0, 0.0, 80.0]]] for k in range(1, 121)]
@@ -586,6 +608,61 @@ def test_the_power_cap_is_context_and_the_power_limit_variant_needs_a_limit_belo
     for limit, default in ((88.8, 80.0), (80.0, 80.0), (35.0, None)):        # above, at, or default unknown
         res = run("gpu_throttle", cap_of(limit, default), bound={"verdict": "gpu"})
         assert isinstance(res, rules.Cleared), (limit, default)
+
+
+def saved_before_the_power_cap_split(share, reasons, heat_every=0):
+    """An NVIDIA table as the earlier build wrote it: nv_throttle_pct held the SW power cap too, and there is no
+    nv_power_cap_pct column at all (DECISIONS 2026-11-04). Every `heat_every`-th row names a thermal slowdown."""
+    g = nv(share, nv_reasons=lambda t: "sw_thermal_slowdown,sw_power_cap" if heat_every and int(t) % heat_every == 0
+           else reasons)
+    del g[G.POWER_CAP_PCT]
+    return g
+
+
+def test_an_earlier_captures_power_cap_is_never_read_as_throttling(tmp_path):
+    # Item 11: `lagdoctor analyze` on a capture saved before the split read a GPU-bound laptop's normal power cap
+    # (sw_power_cap in every reading, 100 % of the time) as "likely throttling", through the real load path
+    from lagdoctor.analysis.diagnose import diagnose
+    from lagdoctor.model import Capture
+    cap = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=saved_before_the_power_cap_split(100.0, "sw_power_cap"),
+               inventory={"power": dict(POWER)})
+    cap.frames = synth.frames_table([20.0] * 1500, gpu_ms=19.6)
+    cap.system = synth.system_table(30, game_gpu_pct=97.0, game_top_thread_pct=40.0)
+    loaded = Capture.load(cap.save(tmp_path / "old.ldcap.json.gz"))
+    assert G.POWER_CAP_PCT not in loaded.gpu                              # the column is missing, not None
+    d = diagnose(loaded)
+    assert d.stats["bound"] == "gpu" and "gpu_throttle" not in {f.cause for f in d.findings}
+    assert d.unchecked["gpu_throttle"].startswith("this capture was saved by an earlier lag-doctor")
+    plan = next(f for f in d.findings if f.cause == "power_plan")          # the quiet plan, but no GPU support
+    assert not any("GPU" in e.text for e in plan.evidence)
+
+
+@pytest.mark.parametrize("heat_every, kind", [(2, Finding), (4, rules.Unchecked)])
+def test_an_earlier_capture_counts_only_the_readings_that_named_heat_or_the_brake(heat_every, kind):
+    # Item 11: half the readings naming a thermal slowdown at 100 % count as 50 % (30 % or more); 7 of 30, 23 %
+    cap = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=saved_before_the_power_cap_split(100.0, "sw_power_cap",
+                                                                                                 heat_every))
+    res = run("gpu_throttle", cap, bound={"verdict": "gpu"})
+    assert isinstance(res, kind)
+    if kind is Finding:
+        assert res.confidence == "high" and "counting only the 15 of 30 readings that named one" in res.evidence[0].text
+    else:
+        assert "only 7 of 30 readings named heat or the power brake" in res.text
+
+
+def test_an_earlier_captures_low_share_still_rules_throttling_out():
+    # the old share held the power cap as well, so under 30 % it bounds heat and the brake from above
+    cap = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=saved_before_the_power_cap_split(20.0, "sw_power_cap"))
+    res = run("gpu_throttle", cap, bound={"verdict": "gpu"})
+    assert isinstance(res, rules.Cleared) and res.text == ("The GPU was held down by heat or its power brake only 20% "
+                                                           "of the time (under 30%, the power cap included).")
+
+
+def test_the_heat_reason_names_cover_the_collectors():
+    from lagdoctor.analysis import attribute
+    from lagdoctor.capture import gpumon
+    assert set(gpumon.THROTTLE_REASONS) <= set(attribute.HEAT_REASONS)
+    assert not set(gpumon.POWER_CAP_REASONS) & set(attribute.HEAT_REASONS)
 
 
 def test_power_plan_never_counts_the_gpus_power_cap_as_support():
@@ -856,31 +933,42 @@ ONE_REFRESH = synth.frames_table([11.1] * 300, display_ms=1000.0 / 60.0, display
 
 
 @pytest.mark.parametrize("dropped, kind", [(10.0, Finding), (9.9, rules.Cleared)])
-def test_vsync_judder_claims_dropped_frame_judder_above_a_fixed_refresh(dropped, kind):
+def test_dropped_frames_is_its_own_cause_above_a_fixed_refresh(dropped, kind):
     # A11: ~90 FPS into a 60 Hz composed screen: every shown frame holds one refresh (no 1P/2P judder), a third of
-    # the frames are never shown, and only the animation error sees the jerky motion
-    res = run("vsync_judder", sixty_hz(), frames=ONE_REFRESH, stats={"avg_fps": 60.0, "dropped_pct": dropped},
-              bound=dict(ABOVE, verdict="waiting", refresh_hz=60.0), events=[anim_pacing()])
+    # the frames are never shown, and only the animation error sees the jerky motion. Changed on purpose (item 13):
+    # vsync_judder claimed this, so the headline said "possibly VSync judder" where VSync is not involved
+    def judged(cause):
+        return run(cause, sixty_hz(), frames=ONE_REFRESH, stats={"avg_fps": 60.0, "dropped_pct": dropped},
+                   bound=dict(ABOVE, verdict="waiting", refresh_hz=60.0), events=[anim_pacing()])
+    res = judged("dropped_frames")
     assert isinstance(res, kind)
     if kind is Finding:
         assert res.event_ids == [1] and res.title == "Frames are dropped: the game runs faster than the 60 Hz screen"
         assert any(f.title.startswith("Cap the frame rate at 60 FPS") for f in res.fixes)
+    else:
+        assert res.text == "Only 9.9% of the frames were never shown (under 10%)."
+    vsync = judged("vsync_judder")                                      # no frame held two refreshes: no VSync judder
+    assert isinstance(vsync, rules.Cleared) and "shown for one refresh" in vsync.text
 
 
 def test_dropped_frame_judder_needs_presents_faster_than_the_refresh_and_no_vrr():
     def judged(fps=90.0, **bound):
         frames = synth.frames_table([1000.0 / fps] * 300, display_ms=1000.0 / 60.0, displayed=1)
-        return run("vsync_judder", sixty_hz(), frames=frames, stats={"avg_fps": 60.0, "dropped_pct": 33.0},
+        return run("dropped_frames", sixty_hz(), frames=frames, stats={"avg_fps": 60.0, "dropped_pct": 33.0},
                    bound={**ABOVE, "verdict": "waiting", "refresh_hz": 60.0, **bound}, events=[anim_pacing()])
     assert is_finding(judged(61.1))                                     # 61.1 FPS: past the 1 Hz slack
-    assert isinstance(judged(60.9), rules.Cleared)                      # within it: no frame to drop
-    assert isinstance(judged(vrr=True), rules.Cleared)                  # VRR shows frames as they come
+    slower = judged(60.9)                                               # within it: no frame to drop
+    assert isinstance(slower, rules.Cleared) and slower.text.startswith("The game presented about 61 FPS, no faster")
+    vrr = judged(vrr=True)                                              # VRR shows frames as they come
+    assert isinstance(vrr, rules.Cleared) and vrr.text.startswith("VRR was on")
     short = judged(quantised_pct=None, ft_ms=None, verdict="unknown")   # too short for a bound verdict (LC 2.6)
     assert is_finding(short) and short.event_ids == [1]
-    smeared = run("vsync_judder", sixty_hz(), frames=ONE_REFRESH, stats={"avg_fps": 60.0, "dropped_pct": 33.0},
+    smeared = run("dropped_frames", sixty_hz(), frames=ONE_REFRESH, stats={"avg_fps": 60.0, "dropped_pct": 33.0},
                   bound=dict(ABOVE, verdict="waiting", refresh_hz=60.0),
                   events=[LagEvent(1, "pacing", 0.5, 29.5, 6.4, {"criterion": "anim", "quantised_pct": 89.9})])
     assert not is_finding(smeared)                                      # not on whole refreshes: tearing, not drops
+    capped = judged(verdict="capped", cap_fps=90.0)                     # under a cap the frame_cap rule claims it
+    assert capped is None
 
 
 @pytest.mark.parametrize("cap_fps", [86.0, 61.1])
@@ -917,6 +1005,8 @@ def test_unexplained_pacing_keeps_the_pacing_causes_open():
                                             events=[anim_pacing()])
     assert not any(1 in f.event_ids for f in findings)
     assert "uneven_pacing" not in cleared and "6.4 ms animation error" in unchecked["uneven_pacing"]
+    # the 5 % of frames never shown might be part of it too, so dropped frames are not ruled out either (item 13)
+    assert "dropped_frames" not in cleared and "6.4 ms animation error" in unchecked["dropped_frames"]
     short = anim_pacing(0.5, 3.4)                                    # 9.7 % of the capture: under the uneven share
     _, cleared, _ = full_run(sixty_hz(), stats={"dropped_pct": 5.0}, bound=dict(ABOVE, verdict="waiting",
                                                                                  refresh_hz=60.0), events=[short])
@@ -1440,5 +1530,8 @@ def test_gold_dropped_frame_judder_is_claimed_not_checked_and_fine(gold_case_5):
     pacing = [e for e in d.events if e.kind == "pacing"]
     assert len(pacing) == 1
     assert labels.severity_text("pacing", pacing[0].severity, pacing[0].detail).endswith("ms animation error")
-    f = next(f for f in d.findings if f.cause == "vsync_judder")
+    f = next(f for f in d.findings if f.cause == "dropped_frames")
     assert f.event_ids == [pacing[0].id] and f.title.startswith("Frames are dropped")
+    # item 13: its own cause, so the verdict no longer says "possibly VSync judder" where VSync is not involved
+    assert "possibly frames dropped (the game runs faster than the screen)" in d.headline, d.headline
+    assert "VSync" not in d.headline and not [f for f in d.findings if f.cause == "vsync_judder"]
