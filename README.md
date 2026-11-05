@@ -67,6 +67,9 @@ uv run python -m lagdoctor analyze CAPTURE              # re-run the analysis on
 - **The low-frame-rate threshold** (80 % of the refresh rate) comes from a study of 60–120 Hz screens and is
   not tuned above that.
 - **Long recordings use RAM**: about 0.7 KB per frame, so a 3-hour evening at 240 FPS needs about 1.8 GiB.
+- **Single-player games: add `--no-network`.** The game-traffic tracker follows UDP only, so it cannot tell an
+  offline game from one that talks to its server over TCP. Without the flag, internet ping spikes and lost
+  pings count as network lag even in a game that never goes online.
 
 ## How it works
 
