@@ -36,6 +36,9 @@ uv run python -m lagdoctor ...                           # the tool (see README)
   absolute path (reported UNISOLATED) or write into their own tree (stops the run).
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
   a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
+- **Text a player reads is plain words.** Research citations (`WT 8`, `LC 4.9`, `NE 7 row 9`) and review ids
+  (`CC-5`) go in comments, never in a string the report, console or a fix shows; `tests/test_user_text.py`
+  scans every module but `winapi/`. Name sources with `labels.source_text`, never by their ids.
 - **Column names come from `lagdoctor/model.py`** (`F`, `S`, `G`, `N`); `SeriesBuilder` rejects unknown names.
 - **One clock**: `lagdoctor.clock.now()` (QPC seconds). PresentMon runs with `--qpc_time`; its rows are
   timed by `TimeInQPC`, never by when they arrive (they arrive 0.1–2 s late, in bursts).

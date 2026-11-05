@@ -142,6 +142,34 @@ def test_missing_sources_are_reported_not_hidden():
     assert "Not measured, so not ruled out" in text and "PresentMon needs admin rights" in text
 
 
+def _visible(page: str) -> str:
+    """The HTML report's text as a reader sees it: no style block, no tags, entities decoded."""
+    import html
+    return html.unescape(re.sub(r"<[^>]+>", "", re.sub(r"<style>.*?</style>", "", page, flags=re.S)))
+
+
+def test_missing_sources_are_named_in_words_in_both_reports():
+    # Ids like net_flows are jargon: each report names a source as a player would (literals here, not
+    # labels.SOURCES). A source the labels do not know is still listed, and so is a standard source the capture
+    # never recorded, which only the HTML report listed before.
+    cap = make_capture(with_frames=False)               # frames and net_flows unavailable, no "gpu" source at all
+    cap.sources["future_probe"] = SourceStatus("failed", "it crashed")
+    cap.sources["odd"] = "damaged"                       # not a SourceStatus: a damaged capture file
+    d = make_diagnosis()
+    d.measured = {"gpu": "not recorded in this capture", "system": "ok", "net_flows": "needs ETW rights",
+                  "latency_probe": "ok"}                 # measured, though the capture's own list lacks it
+    text = " ".join(console.render(d, cap, width=300).split())
+    page = " ".join(_visible(html_report.render(d, cap)).split())
+    for out in (text, page):
+        assert "frame timing (PresentMon): PresentMon needs admin rights (access denied)" in out
+        assert out.count("the game's own network traffic (ETW): needs ETW rights") == 1
+        assert "NVIDIA telemetry (NVML): not recorded in this capture" in out
+        assert "future probe: it crashed" in out
+        assert "odd: not measured" in out
+        assert "the system sampler:" not in out and "latency probe:" not in out
+        assert not re.search(r"\b(net_flows|future_probe)\b", out)
+
+
 def test_lost_pings_are_drawn_as_marks():
     page = html_report.render(make_diagnosis(), make_capture())
     net = page[page.index("<h2>Network</h2>"):page.index("<h2>Worst moments</h2>")]

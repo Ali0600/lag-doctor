@@ -164,12 +164,12 @@ def _missing(out: _Out, d: Diagnosis, cap: Capture, checkup: bool) -> None:
             out.para(f"Not checked without a recording ({len(d.unchecked)} more causes, such as frame rate, stutter, "
                      f"CPU and GPU load, and the network): run `lagdoctor watch` while you play.", indent="", sub="  ")
         return
-    sources = cap.sources if isinstance(cap.sources, dict) else {}
-    missing = [f"{src} ({getattr(st, 'detail', '') or getattr(st, 'state', '?')})"
-               for src, st in sorted(sources.items(), key=lambda kv: str(kv[0])) if getattr(st, "state", None) != "ok"]
+    missing = labels.not_measured(cap.sources, d.measured)
     if missing:
         out.add()
-        out.para("Not measured, so not ruled out: " + "; ".join(missing), indent="", sub="  ")
+        out.add("Not measured, so not ruled out:")
+        for name, why in missing:
+            out.para(f"- {name}: {why}", indent="  ", sub="    ")
     if d.unchecked:
         out.add()
         out.add("Could not check:")

@@ -123,9 +123,6 @@ NIC_MIN_ROWS = 10            # [inferred] probe rounds with the adapter's byte c
 DOWNLOAD_NEAR_S = 5.0        # [inferred] pings this close to a logged download rate count as "during" it
 
 OK_STATES = ("ok", "partial")
-SOURCE_TEXT = {"frames": "frame timing (PresentMon)", "system": "the system sampler",
-               "gpu": "NVIDIA telemetry (NVML)", "network": "the ping and Wi-Fi monitor",
-               "net_flows": "the game's own network traffic (ETW)"}
 BALANCED_GUID = "381b4222-f694-41f0-9685-ff5bb260df2e"   # WT 7.1: GUID_TYPICAL_POWER_SAVINGS (Balanced)
 QUIET_PLAN_WORDS = ("silent", "quiet", "power saver", "battery saver", "eco", "whisper")   # [inferred]
 PERFORMANCE_PLAN_WORDS = ("performance", "turbo")        # [inferred] plans worth switching to
@@ -258,7 +255,7 @@ class _Env:
         return _text(getattr(s, "detail", None), 300) or str(getattr(s, "state", "not measured"))
 
     def need(self, name: str) -> str:
-        return f"needs {SOURCE_TEXT.get(name, name)}, which was not measured: {self.why(name)}"
+        return f"needs {labels.source_text(name)}, which was not measured: {self.why(name)}"
 
     @property
     def frames_measured(self) -> bool:
@@ -635,12 +632,12 @@ def _gpu_preference_fix(e: _Env, best: dict) -> FixSuggestion:
     if pref == 2:
         return _advice(f"Pick {_name(best)} in the game's own settings or in the GPU maker's control panel",
                        "Windows is already set to High performance for this game, yet it still rendered on the "
-                       "integrated GPU: OpenGL and Vulkan games may ignore the Windows setting (WT 8).")
+                       "integrated GPU: OpenGL and Vulkan games may ignore the Windows setting.")   # WT 8
     if exe:
         return FixSuggestion(
             title=f"Run the game on {_name(best)} (Windows graphics preference: High performance)",
-            detail="Takes effect the next time the game starts. The registry format behind this setting is "
-                   "community-documented, not Microsoft-documented (WT 8); OpenGL and Vulkan games may ignore it.",
+            detail="The registry format behind this setting is "
+                   "community-documented, not Microsoft-documented; OpenGL and Vulkan games may ignore it.",   # WT 8
             fix_id="gpu_preference", params={"exe": exe, "preference": 2}, needs_restart="game")
     return _advice("Set the game to High performance in Settings > System > Display > Graphics",
                    "lag-doctor could not tell which program file the game runs from, so it cannot set this itself.")
@@ -672,7 +669,7 @@ def _hybrid_copy(cap: Capture, ctx: dict) -> Any:
                                             "(HybridPresent = 1)")
     elif e.frames_measured:
         c.neutral("frame_timing", "PresentMon did not mark the frames as cross-adapter, but it only can when the "
-                                  "game creates its swap chain during the capture (PM 9)")
+                                  "game creates its swap chain during the capture")   # PM 9
     oem = [t for t in _dict(e.inv.get("oem")).get("tools") or [] if isinstance(t, str)]
     armoury = any("armoury" in t.lower() for t in oem)
     fixes = [_advice("Let the discrete GPU drive the screen directly",
@@ -972,11 +969,11 @@ def _power_cap_item(c: _Case) -> bool:
     if share >= NV_THROTTLE_PCT and limit is not None and default and limit < default:
         c.support("gpu_telemetry", W_STEADY, f"the GPU sat at its power cap {share:.0f}% of the time with the cap at "
                                              f"{limit:.0f} W, below its {default:.0f} W default (on battery or in a "
-                                             "quiet mode, LC 4.2)", share, "%", NV_THROTTLE_PCT)
+                                             "quiet mode)", share, "%", NV_THROTTLE_PCT)   # LC 4.2
         return True
     if share > 0:
         c.neutral("gpu_telemetry", f"the GPU sat at its software power cap {share:.0f}% of the time: the design limit "
-                                   "of a GPU-bound laptop, not throttling (LC 4.1)"
+                                   "of a GPU-bound laptop, not throttling"   # LC 4.1
                   + ("" if default else "; whether the cap was below the GPU's default was not recorded"),
                   share, "%", NV_THROTTLE_PCT)
     return False
@@ -1532,8 +1529,8 @@ def _windowed_composition(cap: Capture, ctx: dict) -> Any:
     if setting is False and runtime in (None, "DXGI"):
         fixes.append(FixSuggestion(title="Turn on Windows' \"Optimizations for windowed games\"",
                                    detail="It moves DirectX 10 and 11 games in windowed and borderless mode to the "
-                                          "faster flip model. The registry format behind it is community-documented "
-                                          "(WT 8).", fix_id="windowed_optimizations_on", needs_restart="game"))
+                                          "faster flip model. The registry format behind it is community-documented.",
+                                   fix_id="windowed_optimizations_on", needs_restart="game"))   # WT 8
     fixes.append(_advice("Or switch the game to exclusive fullscreen, or borderless with flip model"))
     return c.conclude("Windowed mode adds a copy and delay", "The game's frames are copied and then composed with the "
                                                               "desktop, which adds delay and costs frame rate.", fixes)
@@ -1554,7 +1551,7 @@ def _game_dvr(cap: Capture, ctx: dict) -> Any:
         # VideoEncode use would do too, but no collector records it yet)
         fixes = [FixSuggestion(title="Turn off Game Bar capture and background recording",
                                detail="Changes two of your own Windows settings; the registry meaning is community-"
-                                      "documented (WT 8). Restart the game afterwards.",
+                                      "documented.",   # WT 8
                                fix_id="game_dvr_off", needs_restart="game"), others]
         return c.conclude("Background recording is on", "Recording the screen in the background uses GPU time the "
                                                          "game could have.", fixes)
@@ -1929,7 +1926,7 @@ def _shader_compile(cap: Capture, ctx: dict) -> Any:
     fixes = [_advice("Let the game finish compiling shaders", "Many games do it in a loading step; play through "
                                                               "once and the stutter fades."),
              _advice("Record the same route a second time", "If the stutters drop by half or more, it was shader "
-                                                            "compilation (LC 4.9)."),
+                                                            "compilation."),   # LC 4.9
              _advice("Expect it again after a game or GPU driver update", "Those clear the shader cache.")]
     return c.conclude("Possible shader-compilation stutter early in the session",
                       "The game's own stutters bunched up at the start, as when it compiles shaders the first time "
@@ -2346,7 +2343,7 @@ def _server_lag(cap: Capture, ctx: dict) -> Any:
             c.neutral("network_path", f"{len(local)} gap{'s' if len(local) != 1 else ''} came from the game itself "
                                       "pausing its own sending, not the network")
         if _dict(e.flows()).get("layout") == "unverified":
-            c.neutral("network_path", "which address is the server is not verified on this PC yet (NE 4.4)")
+            c.neutral("network_path", "which address is the server is not verified on this PC yet")   # NE 4.4
     if server:
         m = st.median(server)
         if m > INET_BAD_MS and (inet_med is None or inet_med < INET_NOTICEABLE_MS):
@@ -2414,7 +2411,7 @@ def _packet_loss(cap: Capture, ctx: dict) -> Any:
         _steady_loss(c, against=not near)
     if near and not far:
         c.neutral("network_path", "pings to your router were lost while the internet answered: routers often drop "
-                                  "pings to themselves (NE 7 row 9)")
+                                  "pings to themselves")   # NE 7 row 9
     wifi = e.on_wifi()
     fixes = ([_advice("On Wi-Fi: move closer to the router or use a cable")] if wifi else []) + \
         [_advice("Check the network cable and the router", "Restart the router; contact the provider if it keeps "
@@ -2453,7 +2450,7 @@ def _steady_loss(c: _Case, against: bool) -> None:
                                             f"under {ev_mod.LOSS_PCT:.0f}%)", pct, "%", ev_mod.LOSS_PCT)
     else:                      # too few lost probes to count, however large a share of a short capture
         c.neutral("network_path", f"{lost:.0f} of {sent:.0f} pings to the internet {'was' if lost == 1 else 'were'} "
-                                  f"lost ({pct:.1f}%), too few to be an outage (NE 2.4)", pct, "%", ev_mod.LOSS_PCT)
+                                  f"lost ({pct:.1f}%), too few to be an outage", pct, "%", ev_mod.LOSS_PCT)   # NE 2.4
 
 
 def _vpn_route(cap: Capture, ctx: dict) -> Any:

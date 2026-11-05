@@ -69,13 +69,14 @@ verification log; trust a note's *Corrected* entries over its body.
   exits; the unelevated parent waits, loads it, analyses, reports and offers fixes. So fixes and the journal
   stay in the user's own context.
 - The child is `python -E -s -m lagdoctor watch --pid P --capture-only --create-time T --out-file F
-  --presentmon-exe X --inventory-file I --parent-sid S --steam-log L` (hidden flags; every path absolute).
+  --presentmon-exe X --inventory-file I --parent-sid S --parent-procs pid:ct,... (--steam-log L | --no-steam-log)`
+  (hidden flags; every path absolute; `launch_elevated` refuses any empty argument or control character).
   An administrator approving the prompt for a standard user runs the child as *that* account, with its own
   profile and HKCU, so the parent hands over what it read in the user's own context: the PresentMon it
-  verified (the child verifies it again), the inventory (read before the prompt), the user's Steam log
-  (`""` = none) and its SID (the child notes when its token user differs). The child refuses to record a
-  process whose create time differs (the game exited during the prompt), and the parent refuses to analyse a
-  capture of another process.
+  verified (the child verifies it again), the inventory (read before the prompt), the user's Steam log (or that
+  there is none) and its SID (the child notes when its token user differs), plus its own process identity for
+  `target["tool_pids"]`. The child refuses to record a process whose create time differs (the game exited during
+  the prompt), and the parent refuses to analyse a capture of another process.
 - `-E -s` keep the user's PYTHON* variables and user site-packages out of the elevated interpreter. It still
   runs the checkout's own code, which the user can write: UAC shows the signed Python launcher, not the code
   it runs, and is not a security boundary for same-user code (see DECISIONS backlog for elevating only
@@ -298,14 +299,17 @@ The session copies these into the `Capture`. Keys not listed here go nowhere, so
 |---|---|
 | `frames`, capture/presentmon.py, `PresentMonSource(pid, exe=None, etl_file=None, *, is_alive=None)` | `columns` (F, every swap chain of the target) → `frames`; `swap_chains` `{"0x…": {"frames", "displayed", "runtime"}}` (an unfiltered replay keys them `"<pid>:0x…"`), `main_chain` (most displayed frames), `presentmon` `{version, exe, args, exit_code, stop_path, rows, malformed, rejoined, headers, stderr_tail}` → `target["presentmon"]`; `live()` = `{frames, fps, malformed}` |
 | `system`, capture/sysmon.py, `SystemSampler(target)` | `columns` (S) → `system`; `others` → `others`; `game_adapter_luid` (adapter whose 3D engine the game used most) → `target["adapter_luid"]`; `game_pids` (game + children seen) → `target["pids"]`; `cost` `{ticks, median_ms, max_ms, mean_ms}` (also in the status detail) |
-| `gpu`, capture/gpumon.py, `NvidiaSampler(adapter)` | `columns` (G) → `gpu`; `device` `{name, clock_max_mhz, mem_total_mb, temp_target_c}` or None → `inventory["nvidia"]`; `live()` adds `source` ("nvml"/"nvidia-smi") |
+| `gpu`, capture/gpumon.py, `NvidiaSampler(adapter)` | `columns` (G) → `gpu`; `device` `{name, clock_max_mhz, mem_total_mb, temp_target_c, power_default_w}` or None → `inventory["nvidia"]`; `live()` adds `source` ("nvml"/"nvidia-smi") |
 | `network`, capture/netmon.py, `NetworkSampler(server_ip=None, *, steam_log=None)` | `columns` (N) → `network`; `targets` `{gateway, internet, server}` (IPs or None), `probes` `{target: {"sent", "lost", "from_t"}}`, `lost` `{target: [t, …]}`, `wifi_scans` `[t, …]`, `route` `{if_index, description, vpn: bool \| None, toward}` → `net_flows[…]` under the same keys; `interface` `{name, kind: "wifi"/"ethernet"/"other", band, channel}` → `inventory["network"]`; `downloads` `[{t, source, mbps}]` from the Steam log, or None when no download log was read, with `download_sources` (the logs read) → `net_flows[…]` |
 | `net_flows`, capture/netflows.py, `FlowTracker(game_pids or a callable)` | `server` `{ip, port, proto, pid, rx_packets, tx_packets, rx_bytes, tx_bytes, tick_ms, first_rx_t, last_rx_t}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8; `gaps` `[[t, ms, kind], …]` (t = the last packet before the silence; kind: "delay" burst after the gap / "loss" no burst / "local" our own tx paused too / "open" the server went silent for good while we kept sending / "unknown" a late delivery hides which); `server_rx` `[[t, pps], …]` (t = end of each 1 s bin); talkers, gaps and server_rx are None when the session never ran; `layout` "verified"/"unverified"; `health` → `net_flows[…]` |
 
-`others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct, create_time], …]]`: up to 8 non-game processes
-that did something that tick, ranked by CPU, `cpu_pct` with 100 = one logical CPU, `io_bps` read + write
-bytes, `gpu_pct` their busiest engine on any adapter, `create_time` raw FILETIME ticks (so a fix can prove a
-PID was not reused). lag-doctor's own process is included: its load is real.
+`others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct, create_time, gpu_game_pct], …]]`: up to 8
+non-game processes that did something that tick, ranked by CPU, `cpu_pct` with 100 = one logical CPU, `io_bps`
+read + write bytes, `gpu_pct` their busiest engine on any adapter, `create_time` raw FILETIME ticks (so a fix can
+prove a PID was not reused), `gpu_game_pct` their busiest engine on the game's adapter (None while that adapter
+is unknown). lag-doctor's own process is included: its load is real, and `target["tool_pids"]` (written by the
+session from handle-free snapshots: this process, its venv launcher, its PresentMon and nvidia-smi children, and
+in the elevated flow the waiting parent) lets the analysis keep it out of the blame.
 
 ### Collector specifics
 
@@ -324,7 +328,9 @@ because `0` or junk means *every process*):
   (`MsCPUBusy`, `MsCPUWait`, `MsBetweenAppStart`; `MsGPUBusy` and all CPU columns on frames whose `FrameType`
   is not `Application`).
 - Only the pinned 2.6.0 bytes ever run: before every launch (the clean-up helper too) the exe's SHA-256 is
-  checked through a handle that refuses writers, held until the process has started.
+  checked through a handle that refuses writers, held until the process has started, and the launch uses that
+  handle's final path (GetFinalPathNameByHandleW), so a folder junction re-pointed after the check cannot
+  redirect it.
 - Stop (PM 7.4): `CTRL_BREAK_EVENT` to the `CREATE_NEW_PROCESS_GROUP` child when we share a console; else, or
   if it has not exited in 10 s, a second PresentMon `--terminate_existing_session --session_name lagdoctor`
   (exit 0 stopped, 7 none); only then `kill()` plus the same cleanup. Never `terminate()` first: it leaks the
@@ -376,7 +382,8 @@ round on their own worker (blocking `IcmpSendEcho2`, so use enough workers that 
 next round). RTT `None` = no reply within 1000 ms; `probes`/`lost` count them, `from_t` says when probing a
 target began, so "not probed" never reads as "lost". Wi-Fi quality, retries and channel and the NIC octets
 (`GetIfEntry2`) are read every round; `best_route` every 5 s (a VPN egress is reported); ACM
-`scan_complete` notifications are timestamped into `wifi_scans`. Steam `logs\content_log.txt` is tailed
+`scan_complete` notifications are timestamped into `wifi_scans` (None when the notifications could not be
+registered, so "no scan" is never claimed unmeasured). Steam `logs\content_log.txt` is tailed
 for "Current download rate" lines (each placed at its own time stamp); `steam_log=` overrides where that log
 is (the elevated child gets the user's). Delivery Optimization is not read (it would mean a PowerShell spawn
 during play). Location-gated calls are never made: the BSSID column holds per-session labels ("AP 1"), never
@@ -431,7 +438,8 @@ game      {exe, drive, media, free_gb, gpu_preference, monitor_device, launcher}
           launcher: "steam"/"epic"/"other"/None from the exe path
 oem       {tools: [names of running OEM utilities, e.g. "ArmouryCrate.Service.exe"]}
 network   {name, kind, band, channel}                    filled by the session from the network collector
-nvidia    {name, clock_max_mhz, mem_total_mb, temp_target_c}   filled by the session from the gpu collector
+nvidia    {name, clock_max_mhz, mem_total_mb, temp_target_c, power_default_w}   from the gpu collector
+          power_default_w: the GPU's default power limit (NVML), so a mode that lowered the enforced limit shows
 ```
 
 ## Target selection (capture/target.py)
@@ -484,10 +492,18 @@ def diagnose(cap) -> Diagnosis
 
 ### Frames and stats
 - Series for stutter detection: `display_ms` over displayed frames (fallback `frame_ms` when display
-  tracking is missing), LC 2.4. Bound and pacing use app frames only (`frame_type` "Application" or None).
+  tracking is missing; `stats["frames_source"]` says which), LC 2.4. Bound and pacing use app frames only
+  (`frame_type` "Application" or None).
+- A stall is a jump in `t` between consecutive rows of the chain that the row's own frame time covers less than
+  half of (PresentMon can leave only such a gap when several chains exist, PM 10 rule 7). One helper,
+  `frames.stall_gaps`, feeds both the events and the stats: each stall is one interval of the series behind
+  `avg_fps`, the lows, the worst frame, the hitch/severe/freeze counts and `time_beyond_50_ms`.
 - `low1_fps` / `low01_fps` = FPS of the average of exactly `ceil(p·n)` slowest frames (never "all frames ≥ the
   quantile", which sweeps in ties, LC 2.5); `p1_fps` = 1000 / P99 frame time, reported separately and labelled.
   Below 1,000 frames the 1% figures are `None` ("not enough frames"), below 10,000 the 0.1% figure (LC 2.6).
+  `hitch_rate_bound` (rule of three, 3/n) exists only with zero hitches and no stall.
+- Every value read from a capture is bounded (`frames._num_col`, `_bounded`: magnitudes past 1e7 in seconds, ms
+  or % are missing), so a damaged capture degrades instead of producing infinite evidence.
 
 `Diagnosis.stats` keys (missing or None = not measured; the report shows "-"):
 
@@ -495,47 +511,80 @@ def diagnose(cap) -> Diagnosis
 frames, duration_s                         int, float      frames analysed (main chain), capture seconds
 avg_fps, low1_fps, low01_fps, p1_fps       float
 median_frame_ms, p99_frame_ms, worst_frame_ms   float
-stutters, stutters_per_min                 int, float      stutter events (any class)
-hitches, severe_hitches, freezes           int             frames >= 50 / 150 / 500 ms (LC 2.4 classes)
+stutters, stutters_per_min                 int, float      stutter events (any class); None without frames
+hitches, severe_hitches, freezes           int             frames >= 50 / 150 / 500 ms (LC 2.4 classes, nested)
 time_beyond_50_ms                          float           sum of (D - 50) over D > 50
-hitch_rate_bound                           float | None    3/n when zero hitches in n > 30 frames (rule of three)
+hitch_rate_bound                           float | None    3/n when zero hitches and no stall in n > 30 frames
 dropped_pct                                float           % of frames never displayed
+frames_source                              str             "display" or "present"
 bound, bound_r, gpu_busy_pct               str, float, float   verdict; r; 100 x median GPU busy / median frame time
 refresh_hz, present_mode, runtime          float, str, str     the game's display; most common mode and runtime
 swap_chains, main_chain                    int, str        chains seen; the address the analysis used (the
                                                            HTML frame chart draws only that chain)
 ping_gw_ms, ping_inet_ms, ping_server_ms   float           medians
 jitter_ms, loss_pct                        float           internet anchor: mean consecutive difference; lost / sent
+marks                                      list            [{t, events: [ids], causes: [<= 2]}], one per lag-key press
 ```
+
+### The bound verdict (LC 3.4)
+`bound()` judges steady stretches only (frames outside stutters and FPS drops, at least 10 s and 300 app
+frames), in order: VSync (displayed intervals quantised on whole refresh periods, SyncInterval not 0 and
+AllowsTearing not 1; with k = round(FT/P) >= 2 the hardware is tested against one period: GPU busy past
+(k-1)·P gives `gpu`, a saturated busiest thread `cpu_main`, with a note that VSync rounds the rate down to
+refresh/k), a frame cap (a regular present cadence: robust CoV, (IQR/1.349)/median per 5 s window, under 3 %,
+away from k·P, with r < 0.75 and an unsaturated thread), `gpu` (r >= 0.90, or r above 0.75 with FT − G <= 1 ms;
+G minus 0.5 ms when HAGS is on for the game's adapter), `cpu_main` (r <= 0.75 and busiest thread >= 0.85 of a
+CPU over >= 1 s), `cpu_all`, `waiting`, else `mixed`. Without frames, a 3D engine at >= 95 % gives a probable
+`gpu`. While other programs keep the game's GPU >= 10 % busy (`frames.gpu_shared`, LC 4.6), a `capped` or
+`waiting` verdict becomes `unknown`: a shared GPU paces a game as evenly as a cap. `bound` also returns
+`steady_fps`, the rate outside stutters and drops.
 
 ### Lag events (LC 2.4; NE 2.2, 4.6)
 - **stutter**: `D ≥ 2.5 × M` and `D − M ≥ 8 ms`, where `M` = median of the previous
-  `clamp(round(10·√median_ms), 20, 120)` frames; events closer than 250 ms merge. `severity` = worst frame ms;
-  `detail` = `{worst_t, worst_ms, baseline_ms, frames, class: "stutter"|"hitch"|"severe"|"freeze"}`
-  (hitch ≥ 50 ms and ≥ 2 M, severe ≥ 150 ms, freeze ≥ 500 ms). Also a stall: a jump in `t` between consecutive
-  rows of the chain, which PresentMon can leave when several chains exist (PM 10 rule 7).
-  The event spans `[t_first − frame_ms_first/1000, t_last]` of its frames.
+  `clamp(round(10·√median_ms), 20, 120)` frames. On a quantised display (refresh known, ≥ 90 % of D on whole
+  periods) the excess is measured against the longest hold the regular cadence produces:
+  `D − max(M, E) ≥ 8 ms` with `E = ceil(Mp/P − 0.005) × P`, Mp the trailing median MsBetweenPresents and P the
+  refresh period (DECISIONS 2026-11-04; the 0.005 slack only absorbs measured jitter). Events closer than
+  250 ms merge; stalls are stutters too. `severity` = worst frame ms; `detail` = `{worst_t, worst_ms,
+  baseline_ms, frames, class: "stutter"|"hitch"|"severe"|"freeze", stall, source}` (hitch ≥ 50 ms and ≥ 2 M,
+  severe ≥ 150 ms, freeze ≥ 500 ms). The span is `[t − max(frame_ms, D)/1000, t]` of its frames, never before
+  the chain's first row.
 - **fps_drop**: 1 s rolling displayed FPS below 80 % of the target for ≥ 2 s; target = the cap if one is
-  detected, else the refresh rate if VSync-locked, else the run's p90 FPS. `severity` = % below target.
-- **pacing**: over 2 s, more than 10 % of `|D_i − D_(i−1)| ≥ 4 ms`, or p95 `|anim_error_ms|` > 2 ms.
-  `severity` = median swing ms.
-- **net_spike**: internet (or server) RTT ≥ 30 ms above its rolling 120 s minimum and ≥ 2× the median;
-  **net_loss**: a lost probe (any 15 s window ≥ 1 %, or a burst); **net_gap**: each `net_flows` gap ≥ 100 ms.
-- **mark**: each hotkey press; its window is `[mark − 3 s, mark + 0.5 s]` (LC 2.4).
+  detected, else the refresh rate (refresh/k) if VSync-locked, else the run's p90 FPS, and never above the
+  refresh rate on a fixed-refresh display. `severity` = % below target; `detail` `{target_fps, target_from, fps,
+  min_fps}`.
+- **pacing**: over 2 s, more than 10 % of `|D_i − D_(i−1)| ≥ 4 ms`, or p95 `|anim_error_ms|` > 2 ms, with frames
+  inside stutter and stall spans left out (a hitch must not create the pacing that outranks it).
+  `detail["criterion"]` = "swing" / "anim" / "both"; `severity` = the median swing ≥ 4 ms, or the animation-error
+  p95 when only that fired; `detail` also `{swing_pct, anim_p95_ms, present_swing_pct, quantised_pct, frames}`.
+- **net_spike**: internet (or server) RTT ≥ 30 ms above its rolling 120 s minimum and ≥ 2× the median, on at
+  least 2 of 3 consecutive probe rounds, or one reply ≥ 100 ms over the minimum (NE 2.2's levels are 15 s window
+  figures; one slow ICMP reply is often just deprioritised, NE 2.4).
+- **net_loss**: at least 2 lost probes and ≥ 1 % in a 15 s window; "burst" = at least 2 consecutive lost rounds.
+- **net_gap**: each `net_flows` gap ≥ 100 ms, spanning `[t, t + ms]` (t = the last packet before the silence),
+  with its kind.
+- **mark**: each hotkey press; its window is `[mark − 3 s, mark + 0.5 s]` (LC 2.4); `detail` `{frame_events
+  (stutter and fps_drop ids), pacing_events, net_events, visible_in_frames}`.
 
 ### Attribution (LC 5.2)
-For each stutter/fps_drop event: the worst frame's split (CPU busy vs GPU busy vs waiting) says which side was
-slow; then each 4 Hz signal in `[t_start − 0.5 s, t_end + 0.25 s]` is "active" when it clears both a robust
-z-score against its baseline (median/MAD of the windows with no event within 2 s) and an absolute floor.
-Lift test: a cause *supports* when `a ≥ 3`, `a/n ≥ 0.30` and `lift ≥ 2` (n ≥ 5 events). Each event is then
-attributed to its single best cause (explaining away), first in `ev.causes`. Cause ids and signals:
+For each stutter/fps_drop event, the slowest *presented* frame in its span says which side was slow (CPU busy
+vs GPU busy vs waiting). When no presented frame holds at least half of the lost time (a stall, or the screen
+stopping while the game kept presenting), the side is None: the bound verdict never stands in for it, except
+for a slow frame that simply has no GPU timing (`detail["side_source"]` = "verdict", which rules do not count
+as frame-timing evidence). Each 4 Hz signal is then "active" when its busiest 1 s mean in
+`[t_start − 0.5 s, t_end + 0.25 s]` clears both a robust z-score (≥ 3.5 against the median/MAD of quiet 1 s
+windows with no event within 2 s; the guard relaxes to 1 s, then 0.5 s, when fewer than 8 quiet windows exist)
+and an absolute floor. Lift test: a cause *supports* when `a ≥ 3`, `a/n ≥ 0.30` and `lift ≥ 2` (n ≥ 5 events).
+Each event is then attributed to its single best cause (explaining away), first in `ev.causes`; when nothing
+moved, the residual is `gpu_spike` (GPU side), `game_cpu_spike` (a saturated thread) or `game_stall`, and no
+cause at all when the sampler did not measure that moment.
 
 | side | signal that moved | cause id |
 |---|---|---|
 | CPU | game's busiest thread up | `game_cpu_spike` (the game's own work: loading, shader compiles, logic) |
 | CPU | game I/O reads up (disk busy or read latency up) | `asset_streaming` |
 | CPU | hard page faults up, RAM low | `memory_paging` |
-| CPU | another process's CPU up | `background_cpu` (`detail["process"]` names it) |
+| CPU | another process's CPU up (or machine-wide CPU beyond the game) | `background_cpu` |
 | any | another process's disk or GPU up | `background_disk` / `background_gpu` |
 | any | DPC/interrupt time up on the busiest CPU | `driver_dpc` (capped at "possible": PDH cannot name the driver) |
 | CPU | `cpu_perf_pct` or `cpu_perf_limit_pct` down | `cpu_throttle` |
@@ -543,38 +592,79 @@ attributed to its single best cause (explaining away), first in `ev.causes`. Cau
 | GPU | VRAM near full and `game_shared_mb` rising | `vram_overflow` |
 | GPU | GPU busy long, nothing else moved | `gpu_spike` |
 | none | game not focused (`game_focused` = 0) | `not_focused` |
-| none | nothing moved, thread idle, GPU idle | `game_stall` (the game waited on itself) |
+| none | nothing moved, thread idle | `game_stall` (the game waited on itself) |
+
+Blame for the background causes names the processes whose own rise clears the cause's floor (CPU: 25 % of a
+CPU; disk and GPU: the cause floors), ordered by rise (`detail["process_rises"]`), never by PID. Every process
+has a role (`detail["process_role"]`): lag-doctor's own processes (`target["tool_pids"]`, PresentMon by its exe,
+nvidia-smi) are never named; the game's own children (`target["pids"]`) are named as the game's helpers, never
+with "pause or close" advice. `background_gpu` blames by each process's GPU on the game's adapter (others field 7)
+when the capture has it.
 
 ### Session rules (analysis/rules.py, LC 4, NE 7)
-Each rule is a pure function `fn(cap, ctx) -> Finding | Cleared | Unchecked`, declares the sources it `needs`
-and, for side-specific causes, a `gate` on the bound verdict (GPU-side causes need "gpu" or "mixed";
-CPU-side need "cpu_main", "cpu_all", "mixed" or "unknown"; LC 5.1). A rule whose source was not measured is
-`unchecked` with the reason. Rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_throttle`,
-`cpu_throttle`, `vram_overflow`, `ram_pressure`, `power_plan`, `refresh_rate`, `vsync_judder`, `uneven_pacing`,
-`frame_cap`, `windowed_composition`, `game_dvr`, `game_mode_off`, `not_focused`, `background_hogs`,
-`hdd_streaming`, `shader_compile` (first-run stutter that a second run does not repeat: advice only),
-and the network rules `wifi_weak`, `wifi_roaming`, `wifi_scan_spikes`, `bufferbloat`, `isp_latency`,
-`server_lag`, `packet_loss`, `vpn_route`, `bandwidth_hog`.
+Each rule is a pure function `fn(cap, ctx) -> Finding | Cleared | Unchecked | None` (None: measured, no
+evidence either way, silent), declares the sources it `needs`, its family and category, and for side-specific
+causes a `gate` on the bound verdict (`gpu`: "gpu" or "mixed"; `cpu`: "cpu_main", "cpu_all", "mixed" or
+"unknown", LC 5.1; `gpu_event`: anything but CPU-bound). A gate failure turns a Finding into Cleared (a definite
+verdict) or Unchecked (verdict unknown). A rule whose source was not measured is `unchecked` with the reason.
+Some clearances are held open (`_holds_open`): `gpu_limit` while other programs share the game's GPU, and
+`cpu_limit` while the busiest thread is in LC 3.2's grey zone (0.6–0.85 of a CPU); and pacing causes stay open
+while pacing events that no finding claims cover ≥ 10 % of the capture.
+
+The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_contention`, `gpu_throttle`,
+`cpu_throttle`, `vram_overflow`, `ram_pressure`, `power_plan`, `refresh_rate`, `vsync_judder`, `dropped_frames`,
+`uneven_pacing`, `frame_cap`, `windowed_composition`, `game_dvr`, `game_mode_off`, `not_focused`,
+`background_hogs`, `hdd_streaming`, `shader_compile`, the stutter causes `game_cpu_spike`, `asset_streaming`,
+`driver_dpc`, `gpu_spike`, `game_stall` (from the lift test), and the network rules `wifi_weak`, `wifi_roaming`,
+`wifi_scan_spikes`, `bufferbloat`, `isp_latency`, `server_lag`, `packet_loss`, `vpn_route`, `bandwidth_hog`.
 - `wrong_gpu`: the game rendered (by its 3D engine's LUID) on an integrated adapter while a discrete one
-  exists.
+  exists; likely when GPU-bound, possible otherwise.
 - `hybrid_copy`: the game rendered on the discrete adapter but its window is on a display driven by the
   integrated one (`HybridPresent = 1` is strong evidence, 0 is not evidence).
-- `uneven_pacing`: pacing events cover ≥ 10 % of the capture with no single cause.
-- `background_hogs`: non-game processes summing ≥ 25 % of one CPU (or any VideoEncode/disk hog) across the
-  stutter or fps_drop events, named with their numbers.
+- `gpu_contention`: other programs keep the game's GPU ≥ 10 % busy (median of steady 1 s windows); stronger when
+  the game looks starved; names the top other GPU user on the game's adapter.
+- `gpu_throttle`: `nv_throttle_pct` (heat and power brake only); the power cap is context, the power-limit
+  variant only when the enforced limit is below `inventory.nvidia.power_default_w`. A capture from before the
+  split (no `nv_power_cap_pct` column) counts the share only with a thermal or brake reason active.
+- `vsync_judder` (real VSync judder) and `dropped_frames` (the game presents faster than a fixed refresh and
+  frames are dropped, `rules._dropped_judder`); `uneven_pacing`: pacing events with uneven *presents*
+  (present_swing_pct > 10 %) covering ≥ 10 % of the capture, weighed as a steady metric.
+- `game_dvr`: background recording known off concludes against; unknown is advice only (no auto-fix);
+  `game_dvr_off` is offered only when background recording is known on.
+- `background_hogs`: processes named with their rise; `background_priority` is offered only for a (pid, name)
+  pair whose create time is unambiguous, never for a process with the game's image name, with the game's PIDs in
+  `exclude`.
+- `packet_loss`: loss events, and a steady overall loss ≥ 1 % from at least 2 lost probes; never "no ping was
+  lost" when some were. `server_lag`: argued only when a server flow covers most of the capture; no server flow
+  is unchecked (a TCP-only or offline game); an "open" gap is a lost connection; "local" gaps are the game
+  pausing its own sending. `bandwidth_hog`: checked only from a source that sees all traffic (ETW talkers, or the
+  NIC counters).
 
 ### Scoring (LC 5)
 - Evidence families: frame timing, GPU telemetry, GPU engine/memory, CPU threads, CPU frequency/limits,
-  memory, disk, interrupts, background processes, static configuration, network path, Wi-Fi. Per family only
-  the strongest supporting and the strongest contradicting item count. Weights: 1 static setting, 2 steady
-  metric past threshold, 3 event-linked with lift ≥ 4, 4 direct readout (a throttle counter, `FrameType`).
-  Static configuration adds at most +2 and never makes a cause likely on its own.
+  memory, disk, interrupts, background processes, static configuration, network path, Wi-Fi, foreground. Per
+  family only the strongest supporting and the strongest contradicting item count. Weights: 1 a setting that
+  only makes a cause likelier, 2 a steady metric past threshold, 3 event-linked with lift ≥ 4, 4 a direct
+  readout (a throttle counter, `FrameType`, a static readout that is itself the cause). Static configuration adds
+  at most +2 and never makes a cause likely on its own.
 - Labels → `Finding.confidence`: `high` = likely (S ≥ 4, key family measured and supporting), `medium` =
   possible (2 ≤ S < 4), `low` = worth checking. "Checked and fine" (S ≤ −2 with coverage) → `Diagnosis.cleared`;
-  "not enough data" or not measured → `Diagnosis.unchecked`.
-- Rank by label, then S, then explained share of events, then whether an auto-fix exists. Lag type = the
-  category with the most lag time; the headline names the top finding in one sentence. With zero hitches,
-  say "no hitches ≥ 50 ms in N frames (at most 3/N at 95 %)".
+  "not enough data" or not measured → `Diagnosis.unchecked`; inconclusive stays silent.
+- Rank by label, then S, then explained share of events, then whether an auto-fix exists.
+
+### Lag type and headline (analysis/diagnose.py)
+- Lag time per category: **stutter** = stutter spans; **low FPS** = fps_drop spans, plus the steady time when the
+  steady rate (`bound.steady_fps`, so freezes never lower it) is under 80 % of the target (the refresh rate; 60 Hz
+  when unknown) for every verdict except `capped` and `vsync`, whose own cap or lock is the target; **pacing** =
+  pacing claimed by a confident pacing finding or dropped-frame judder, minus stutter and fps_drop spans;
+  **network** = network events without router-only losses (unless an internet, server or non-local gap overlaps)
+  and without "local" gaps, named only with ≥ 2 events or ≥ max(1 s, 1 % of the capture).
+- Lag type = the category with the most lag time, "mixed" when the runner-up has ≥ 50 % of it, "none" with
+  frames measured and no lag, "unknown" without frames.
+- The headline names the top finding in one sentence; whenever the lag type is not stutter and there were
+  severe hitches or freezes it adds "; also N severe hitches, worst X ms"; an open gap reads "the game server
+  stopped answering at m:ss"; with zero hitches it says "no hitches ≥ 50 ms in N frames (at most 3/N at 95 %)";
+  without frames it opens "Frame timing was not measured (why), so stutter and frame rate could not be checked".
 
 ## Fixes (fixes/)
 
@@ -617,12 +707,22 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 
 ## Report
 
-- **Console**: the headline, key stats, up to three findings with their top evidence lines and fixes, then
-  "checked and fine" and "not measured / could not check". Fits one terminal screen; a fix command is never
-  wrapped.
+- **Console**: the headline, key stats ("limited by" the bound verdict), up to three findings with their top
+  evidence lines and fixes, the moments the user marked with the lag key (how many matched a lag event, which
+  showed nothing in what was measured), then "checked and fine" (neutral topic names: "Game Mode", never "Game
+  Mode off"), "not measured" and "could not check", grouped by the missing source. Fits one terminal screen; a
+  fix command is never wrapped; control characters from capture strings never reach the terminal. `check`
+  prints a settings check-up instead (no verdict line, one line for what needs a recording).
+- **Both reports** list the same "not measured" sources (`labels.not_measured`: the capture's own source list,
+  then the standard sources it never recorded), each named in words (`labels.SOURCES`: "the game's own network
+  traffic (ETW)", never `net_flows`) with its reason. Text a player reads never carries the research notes'
+  citations (`WT 8`, `LC 4.9`, `CC-5`): they stay in comments. A fix's `detail` never repeats the restart note
+  the HTML report adds for `needs_restart` (both checked by `tests/test_user_text.py`).
 - **HTML** (`report/html.py`): one self-contained file (inline CSS + SVG, no script, no URL), light/dark via
-  `prefers-color-scheme`: verdict, stat tiles, frame-time chart with stutters and marks, CPU/GPU chart, VRAM
-  chart, ping chart, finding cards, checked-and-fine, system snapshot, not measured.
+  `prefers-color-scheme`: verdict, stat tiles, frame-time chart (main swap chain only) with stutters and marks,
+  CPU/GPU chart, VRAM chart, ping chart (lost pings from the collector's own record), marks on every time chart,
+  finding cards, marked moments, worst moments, checked-and-fine, system snapshot, not measured. Each section
+  falls back to a note on odd values instead of failing the page.
 
 ## CLI
 

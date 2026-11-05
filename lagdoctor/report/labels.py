@@ -1,6 +1,8 @@
 """Plain-English labels shared by the console and HTML reports."""
 from __future__ import annotations
 
+from typing import Any
+
 from lagdoctor.report.charts import number
 
 LAG_TYPES = {
@@ -132,6 +134,12 @@ BOUND = {
     "unknown": "not measured",
 }
 
+# A capture's sources (Capture.sources keys) in words, for the reports and the rules' "needs X" reasons.
+SOURCES = {
+    "frames": "frame timing (PresentMon)", "system": "the system sampler", "gpu": "NVIDIA telemetry (NVML)",
+    "network": "the ping and Wi-Fi monitor", "net_flows": "the game's own network traffic (ETW)",
+}
+
 
 def severity_text(kind: str, severity: float, detail: dict | None = None) -> str:
     """An event's severity in words. A pacing event flagged by its animation error alone (events.py's
@@ -203,6 +211,27 @@ def cause_text(cause: str) -> str:
 
 def topic_text(cause: str) -> str:
     return TOPICS.get(cause, cause.replace("_", " "))
+
+
+def source_text(source: str) -> str:
+    return SOURCES.get(source, source.replace("_", " "))
+
+
+def not_measured(sources: Any, measured: Any) -> list[tuple[str, str]]:
+    """(source in words, why) for every source that did not run cleanly, for both reports: the capture's own
+    list (Capture.sources), then the sources the analysis expected but the capture never recorded
+    (Diagnosis.measured). An unknown source is still listed, by its id in words."""
+    sources = sources if isinstance(sources, dict) else {}
+    measured = measured if isinstance(measured, dict) else {}
+    out = [(source_text(str(src)), _why(getattr(st, "detail", None) or getattr(st, "state", None)))
+           for src, st in sorted(sources.items(), key=lambda kv: str(kv[0])) if getattr(st, "state", None) != "ok"]
+    out += [(source_text(str(src)), _why(why)) for src, why in sorted(measured.items(), key=lambda kv: str(kv[0]))
+            if why != "ok" and src not in sources]
+    return out
+
+
+def _why(value: Any) -> str:
+    return value if isinstance(value, str) and value.strip() else "not measured"
 
 
 def group_unchecked(unchecked: dict[str, str]) -> list[tuple[str, list[str]]]:

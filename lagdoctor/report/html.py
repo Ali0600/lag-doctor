@@ -398,14 +398,8 @@ def _cleared(d: Diagnosis) -> str:
 
 
 def _not_measured(d: Diagnosis, cap: Capture) -> str:
-    items = []
-    sources = _dict(cap.sources)
-    for src, st in sorted(sources.items(), key=lambda kv: str(kv[0])):
-        if getattr(st, "state", None) != "ok":
-            items.append(f"<li><strong>{e(src)}</strong>: {e(getattr(st, 'detail', '') or getattr(st, 'state', '?'))}</li>")
-    for what, why in sorted(_dict(d.measured).items(), key=lambda kv: str(kv[0])):
-        if why != "ok" and what not in sources:
-            items.append(f"<li><strong>{e(what)}</strong>: {e(why)}</li>")
+    items = [f"<li><strong>{e(name)}</strong>: {e(why)}</li>"
+             for name, why in labels.not_measured(cap.sources, d.measured)]
     unchecked = "".join(f"<li><strong>{e(', '.join(topics))}</strong>: {e(why)}</li>"
                         for why, topics in labels.group_unchecked(d.unchecked))
     if not items and not unchecked:
