@@ -66,3 +66,6 @@ uv run python -m lagdoctor ...                           # the tool (see README)
   `paths.private_copy`) and `scripts/e2e.py` stops before its UAC prompt (exit 3); run them in the user's
   Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`).
 - `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
+- `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` is
+  timing-sensitive under full-suite load (failed once on 2026-11-05 with 0 delay gaps, then 4/4 alone): rerun it alone
+  before blaming a change for it.
