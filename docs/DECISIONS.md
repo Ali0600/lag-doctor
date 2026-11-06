@@ -8,6 +8,8 @@
   Revisit hook: `capture/session.py` already gathers `live()` once a second for the console line.
 - **An elevated helper that relays PresentMon rows to an unelevated tool** (no whole-capture elevation).
   Revisit hook: `PresentMonSource` reads a line stream; a named-pipe reader could replace the child's stdout.
+  Its installed form, a pipe-triggered LocalService capture service from a signed MSI (one approval at install, none
+  per recording, no sign-out), with its constraints and the experiments that gate it: `docs/research/install-and-rights.md`.
 - **The Wi-Fi background-scan fix** (`WlanSetInterface` background_scan_enabled / media_streaming_mode,
   session-scoped). The DACL allows it unelevated but it was never executed. Revisit hook: the
   `wifi_scan_spikes` rule, once a capture shows ping spikes lined up with `wifi_scans`.
@@ -16,9 +18,9 @@
 - **Compact frame storage for long captures** (`array('d')` columns, interned strings, or rows spilled to a
   temp file and streamed into the gzip writer). Today a frame costs about 0.7 KB of RAM and a 3-hour 240 FPS
   evening about 1.8 GiB. Revisit hook: `PresentMonSource`'s `SeriesBuilder` and `Capture.save`.
-- **Elevate only code the user cannot write** (an install under Program Files or a signed frozen exe, or the
-  elevated relay above). Today `--elevate` runs the checkout's Python as administrator. Revisit hook:
-  `cli.elevated_argv`.
+- **Elevate only code the user cannot write** (a per-machine install under Program Files, or the elevated relay
+  above; a frozen exe draws antivirus false positives, see `docs/research/install-and-rights.md`). Today `--elevate`
+  runs the checkout's Python as administrator. Revisit hook: `cli.elevated_argv`.
 - **Ask before recording without frame timing** ("PresentMon is not ready: record everything else? [y/N]")
   instead of stopping. Today `watch` stops, and `--no-elevate` records without it. Revisit hook: the
   not-ready branch at the top of `cli.cmd_watch`.
