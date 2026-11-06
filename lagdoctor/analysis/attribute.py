@@ -242,6 +242,21 @@ def heat_named(reasons: Any) -> bool:
     return isinstance(reasons, str) and any(r.strip().lower() in HEAT_REASONS for r in reasons.split(","))
 
 
+THERMAL_ONLY = ("sw_thermal_slowdown", "hw_thermal_slowdown")
+BRAKE_OR_EITHER = ("hw_power_brake_slowdown", "hw_slowdown")     # NVML's HW slowdown may be heat or the brake
+
+
+def held_by(cap: Capture) -> str:
+    """What held the NVIDIA GPU down, in the words of its own reasons: "heat" when the readings named heat and never
+    the power brake (nor HW slowdown, which may be either), else "heat or its power brake". nv_throttle_pct adds
+    the two up, so only the reasons can tell them apart; a GPU slowed only by heat once read as maybe braked."""
+    gpu = cap.gpu if isinstance(cap.gpu, dict) else {}
+    named = {r.strip().lower() for cell in fa._col(gpu, G.REASONS) if isinstance(cell, str) for r in cell.split(",")}
+    if named & set(THERMAL_ONLY) and not named & set(BRAKE_OR_EITHER):
+        return "heat"
+    return "heat or its power brake"
+
+
 def throttle_readings(cap: Capture) -> list[tuple[float, float | None, bool]]:
     """(t, nv_throttle_pct or None, heat_named(nv_reasons)) of every gpu row with a time."""
     t, v, why = fa._col(cap.gpu, G.T), fa._col(cap.gpu, G.THROTTLE_PCT), fa._col(cap.gpu, G.REASONS)
@@ -477,7 +492,7 @@ def _causes(cap: Capture, others: _Others) -> list[_Cause]:
                   lambda v: f"{100 * v:.0f}%")],
                why_missing="no CPU frequency or limit counters"),
         _Cause("gpu_throttle", [_Part(throttle, +1, lambda m: NV_THROTTLE_PCT,
-                                      "the NVIDIA GPU was held down by heat or its power brake {v} of the time "
+                                      f"the NVIDIA GPU was held down by {held_by(cap)} {{v}} of the time "
                                       "(normally {n})", _pct)],
                why_missing="no NVIDIA throttle readings"),
         _Cause("vram_overflow", [_Part(shared, +1, lambda m: SHARED_RISE_MB_PER_S * BASE_WINDOW_S,

@@ -1,0 +1,233 @@
+[
+ {
+  "name": "a watch without PresentMon records anyway",
+  "file": "lagdoctor/cli.py",
+  "old": "            if exe is None and not args.no_elevate:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_cli.py::test_a_watch_without_presentmon_stops_before_it_even_looks_for_the_game"
+  ]
+ },
+ {
+  "name": "--no-elevate refused too",
+  "file": "lagdoctor/cli.py",
+  "old": "            if exe is None and not args.no_elevate:",
+  "new": "            if exe is None:",
+  "tests": [
+   "tests/test_cli.py::test_a_watch_without_frame_timing_says_so_before_it_records"
+  ]
+ },
+ {
+  "name": "--elevate users told to add a flag that clashes with it",
+  "file": "lagdoctor/cli.py",
+  "old": "                other = \"use --no-elevate instead of --elevate\" if args.elevate else \"add --no-elevate\"",
+  "new": "                other = \"add --no-elevate\"",
+  "tests": [
+   "tests/test_cli.py::test_a_watch_without_presentmon_stops_before_it_even_looks_for_the_game"
+  ]
+ },
+ {
+  "name": "the game is looked for before PresentMon is checked",
+  "file": "lagdoctor/cli.py",
+  "old": "        if not child:\n            exe, frames_why = _presentmon_exe()",
+  "new": "        tgt.find_target(name=args.game, pid=args.pid, auto=args.game is None and args.pid is None)\n        if not child:\n            exe, frames_why = _presentmon_exe()",
+  "tests": [
+   "tests/test_cli.py::test_a_watch_without_presentmon_stops_before_it_even_looks_for_the_game"
+  ]
+ },
+ {
+  "name": "the elevated child records without frame timing",
+  "file": "lagdoctor/cli.py",
+  "old": "            if exe is None:                   # this window was opened only for frame timing: record nothing",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_cli.py::test_a_handed_over_presentmon_that_fails_its_check_is_not_run"
+  ]
+ },
+ {
+  "name": "frame timing off is not said before recording",
+  "file": "lagdoctor/cli.py",
+  "old": "    if not frames:\n        say(f\"Frame timing is off for this recording: {frames_why}\")",
+  "new": "    if False:\n        say(f\"Frame timing is off for this recording: {frames_why}\")",
+  "tests": [
+   "tests/test_cli.py::test_a_watch_without_frame_timing_says_so_before_it_records",
+   "tests/test_cli.py::test_a_declined_prompt_records_here_still_holding_the_lock"
+  ]
+ },
+ {
+  "name": "the parent does not explain EXIT_NOT_READY",
+  "file": "lagdoctor/cli.py",
+  "old": "    if code == EXIT_NOT_READY:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_cli.py::test_a_child_that_saved_nothing_is_explained"
+  ]
+ },
+ {
+  "name": "the parent does not explain EXIT_PRIVATE_COPY",
+  "file": "lagdoctor/cli.py",
+  "old": "    if code == EXIT_PRIVATE_COPY:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_cli.py::test_a_child_that_saved_nothing_is_explained"
+  ]
+ },
+ {
+  "name": "the recording loop never checks frame timing",
+  "file": "lagdoctor/capture/session.py",
+  "old": "                self._check_frames(live, elapsed)",
+  "new": "                pass",
+  "tests": [
+   "tests/test_session.py::test_the_recording_loop_says_it_while_still_recording",
+   "tests/test_session.py::test_presentmon_that_crashes_after_frames_came_is_said_at_once_and_its_rate_not_frozen"
+  ]
+ },
+ {
+  "name": "frame timing not working is said every second",
+  "file": "lagdoctor/capture/session.py",
+  "old": "        self._frames_warned = True",
+  "new": "        pass",
+  "tests": [
+   "tests/test_session.py::test_no_frame_while_the_game_is_in_front_is_said_once_on_its_own_line"
+  ]
+ },
+ {
+  "name": "time behind other windows counts",
+  "file": "lagdoctor/capture/session.py",
+  "old": "            if (live.get(\"system\") or {}).get(\"game_focused\") == 1:",
+  "new": "            if True:",
+  "tests": [
+   "tests/test_session.py::test_a_game_behind_other_windows_or_already_drawing_is_no_warning",
+   "tests/test_session.py::test_only_time_with_the_game_in_front_counts_towards_the_wait"
+  ]
+ },
+ {
+  "name": "PresentMon that failed or ended is never said",
+  "file": "lagdoctor/capture/session.py",
+  "old": "        if st.state in FRAMES_FAILED or (c.ended and st.state != \"ok\"):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_session.py::test_the_recording_loop_says_it_while_still_recording",
+   "tests/test_session.py::test_presentmon_that_ended_mid_recording_is_said_at_once_even_after_frames_came"
+  ]
+ },
+ {
+  "name": "PresentMon that ended after frames came is not said",
+  "file": "lagdoctor/capture/session.py",
+  "old": "        if st.state in FRAMES_FAILED or (c.ended and st.state != \"ok\"):",
+  "new": "        if st.state in FRAMES_FAILED:",
+  "tests": [
+   "tests/test_session.py::test_presentmon_that_ended_mid_recording_is_said_at_once_even_after_frames_came",
+   "tests/test_session.py::test_presentmon_that_crashes_after_frames_came_is_said_at_once_and_its_rate_not_frozen"
+  ]
+ },
+ {
+  "name": "the game's own exit called a fault",
+  "file": "lagdoctor/capture/session.py",
+  "old": "        if st.state in FRAMES_FAILED or (c.ended and st.state != \"ok\"):",
+  "new": "        if st.state in FRAMES_FAILED or c.ended:",
+  "tests": [
+   "tests/test_session.py::test_presentmon_that_ended_in_ok_is_the_games_own_exit_not_a_fault"
+  ]
+ },
+ {
+  "name": "a frame rate frozen after PresentMon ended",
+  "file": "lagdoctor/capture/session.py",
+  "old": "                    live[\"frames\"] = {}             # PresentMon is gone: no frame rate frozen at its last value",
+  "new": "                    pass",
+  "tests": [
+   "tests/test_session.py::test_presentmon_that_crashes_after_frames_came_is_said_at_once_and_its_rate_not_frozen"
+  ]
+ },
+ {
+  "name": "a collector's end never seen",
+  "file": "lagdoctor/capture/base.py",
+  "old": "        return t is not None and not t.is_alive() and not self._stop_event.is_set()",
+  "new": "        return False",
+  "tests": [
+   "tests/test_session.py::test_presentmon_that_ended_mid_recording_is_said_at_once_even_after_frames_came",
+   "tests/test_session.py::test_presentmon_that_crashes_after_frames_came_is_said_at_once_and_its_rate_not_frozen"
+  ]
+ },
+ {
+  "name": "frames that came still warned about",
+  "file": "lagdoctor/capture/session.py",
+  "old": "        elif isinstance(frames, int) and frames > 0:",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_session.py::test_a_game_behind_other_windows_or_already_drawing_is_no_warning"
+  ]
+ },
+ {
+  "name": "a recording without frame timing checks it anyway",
+  "file": "lagdoctor/capture/session.py",
+  "old": "        if c is None or self._frames_warned:",
+  "new": "        if self._frames_warned:",
+  "tests": [
+   "tests/test_session.py::test_without_frame_timing_in_the_recording_there_is_nothing_to_warn_about"
+  ]
+ },
+ {
+  "name": "a source not running shown as a dash (fps off)",
+  "file": "lagdoctor/capture/session.py",
+  "old": "    if \"frames\" not in live:\n        parts.append(\"fps off\")",
+  "new": "    if False:\n        parts.append(\"fps off\")",
+  "tests": [
+   "tests/test_session.py::test_status_line_literal_points"
+  ]
+ },
+ {
+  "name": "a source not running shown as a dash (ping off)",
+  "file": "lagdoctor/capture/session.py",
+  "old": "    if \"network\" not in live:\n        parts.append(\"ping off\")",
+  "new": "    if False:\n        parts.append(\"ping off\")",
+  "tests": [
+   "tests/test_session.py::test_status_line_literal_points"
+  ]
+ },
+ {
+  "name": "--no-network reported as not recorded",
+  "file": "lagdoctor/capture/session.py",
+  "old": "        if not self.opts.network:            # switched off on purpose: say so, not \"not recorded\" as if it failed",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_session.py::test_network_checks_turned_off_are_reported_as_turned_off"
+  ]
+ },
+ {
+  "name": "focus not published live",
+  "file": "lagdoctor/capture/sysmon.py",
+  "old": "                     disk_busy_pct=row[S.DISK_BUSY_PCT], game_alive=alive, game_focused=row.get(S.GAME_FOCUSED),",
+  "new": "                     disk_busy_pct=row[S.DISK_BUSY_PCT], game_alive=alive,",
+  "tests": [
+   "tests/test_sysmon_sampler.py::test_the_live_readout_says_whether_the_game_window_is_in_front"
+  ]
+ },
+ {
+  "name": "the end-to-end run asks for UAC without a preflight",
+  "file": "scripts/e2e.py",
+  "old": "    problem = preflight()\n    if problem:",
+  "new": "    problem = None\n    if problem:",
+  "tests": [
+   "tests/test_session.py::test_e2e_preflight_stops_before_any_prompt_when_presentmon_is_missing"
+  ]
+ },
+ {
+  "name": "the elevated end-to-end child drops its reason",
+  "file": "scripts/e2e.py",
+  "old": "        if args.child and args.out:            # the window that asked waits for a results file: give it the reason",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_session.py::test_e2e_preflight_in_the_elevated_child_hands_its_reason_back"
+  ]
+ },
+ {
+  "name": "the end-to-end preflight skips PresentMon",
+  "file": "scripts/e2e.py",
+  "old": "        pm_setup.ensure_presentmon(allow_download=False)\n    except pm_setup.SetupError as exc:\n        return str(exc)",
+  "new": "        pass\n    except pm_setup.SetupError as exc:\n        return str(exc)",
+  "tests": [
+   "tests/test_session.py::test_e2e_preflight_stops_before_any_prompt_when_presentmon_is_missing"
+  ]
+ }
+]

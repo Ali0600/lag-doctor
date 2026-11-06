@@ -87,6 +87,35 @@ verification log; trust a note's *Corrected* entries over its body.
   prompt is declined.
 - `lagdoctor setup` explains the alternative: join Performance Log Users once (an admin command the user
   runs, then sign out and in), after which no prompt is needed. The tool never changes group membership.
+- **Frame timing is never silently dropped.** If PresentMon is missing or fails its check, `watch` stops before
+  it looks for the game (exit 6) unless `--no-elevate` asked for a recording without it; a recording without
+  frame timing says so before "Recording.", and the elevated child, opened only for frame timing, records
+  nothing when its PresentMon fails its check (exit 6). A 14-minute recording of a real game was once made
+  with every frame missing and the reason only in the report afterwards.
+
+### Where files go: another app's private copy
+
+A program started by a packaged (MSIX) app can have what it writes under `%LOCALAPPDATA%` and `%APPDATA%` kept in
+that app's private folder, `%LOCALAPPDATA%\Packages\<app>\LocalCache\...`: it and its own children see the files
+at the usual path, the user's other windows and an elevated window never do. Measured on 2026-11-05: a shell the
+Claude desktop app started has no package identity (`GetCurrentPackageFullName` answers
+APPMODEL_ERROR_NO_PACKAGE), yet its new files in `%LOCALAPPDATA%` landed in
+`...\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Local`; `%TEMP%` and the user's home were not moved. PresentMon set
+up from there was "not installed" for the user's terminal and the elevated recording window.
+
+- `paths.private_copy(folder)` asks Windows where a new file really lands (`winapi/storage.new_file_path`: a
+  hidden, delete-on-close probe and its `GetFinalPathNameByHandleW`, in drive-letter form, else NT or volume-less
+  form, which RAM disks without a Mount Manager entry still give), never whether the process has a package
+  identity; `paths.redirected()` is the pure reading of that path.
+- `cli.main` runs it once, before anything is written (the journal healing writes), per
+  `cli.PRIVATE_COPY_POLICY`: `setup`, `watch`, `fix` and `undo` save files other windows must find and refuse
+  (exit 5, saying where the files would go and to open PowerShell from the Start menu); `check` and `analyze`
+  only read the PC and print a one-line note, and the journal is not healed under a private copy. A probe that
+  cannot be made refuses the savers too. The elevated child probes the folder it saves the capture in (the
+  nearest existing one), never a home of its own. When lag-doctor's own Python is the packaged app (a Microsoft
+  Store Python: every window has the same private copy), the advice is another Python, not another window
+  (`paths.private_copy_advice`).
+- `scripts/e2e.py` makes the same check, and checks PresentMon, before its UAC prompt (exit 3).
 
 ## Package map and ownership
 
@@ -181,10 +210,17 @@ def slider_mode(on_ac: bool) -> str | None        # "best_efficiency"|"balanced"
 def effective_mode(timeout_s: float = 1.0) -> str | None
 # EFFECTIVE_POWER_MODE V2, hard-coded 0..6: "battery_saver","better_battery","balanced",
 # "high_performance","max_performance","game_mode","mixed_reality"
+def plan_settings(scheme: str) -> dict            # {max_cpu_ac/dc, max_cpu1_ac/dc (P-cores): 0..100 %,
+                                                  #  boost_ac/dc: 0 Disabled .. 6, cooling_ac/dc: 0 Passive,
+                                                  #  1 Active}; None = not readable
 
 # winapi/storage.py (WT 9.5) ---------------------------------------------------------------------------
 def media_type(path: str) -> str                  # "SSD" | "HDD" | "Unknown"  (seek penalty, access 0)
 def free_gb(path: str) -> float | None
+def new_file_path(folder: str) -> str             # "\\?\..." where a new file in folder really lands (probe,
+                                                  # deleted on close); NT form on a volume without drive-letter
+                                                  # paths; OSError if it cannot be made
+def own_package_family() -> str | None            # this process's package family (a Store Python), else None
 
 # winapi/nvml.py (WT 4.4, 4.5) -------------------------------------------------------------------------
 class Nvml:
@@ -430,7 +466,9 @@ laptop    bool                                           a battery is present
 adapters  [ … winapi.dxgi.list_adapters() … ]            software adapters dropped
 displays  [ … winapi.display.list_displays() … ]
 power     {scheme_guid, scheme_name, schemes: [[guid, name], …], slider, effective_mode, on_battery,
-           battery_pct, saver}                           slider = slider_mode() for the current power source
+           battery_pct, saver, plan}                     slider = slider_mode() for the current power source;
+          plan = power.plan_settings() of the active plan: rules judge a plan by these, by its name only when
+          a capture has none (an ASUS plan named "Silent" set the CPU exactly as Balanced does here)
 settings  {game_mode, game_dvr, background_recording, hags, windowed_optimizations, vrr, memory_integrity}
           bools or None; hags = for the game's adapter (else any discrete adapter)
 game      {exe, drive, media, free_gb, gpu_preference, monitor_device, launcher}
@@ -625,7 +663,18 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   the game looks starved; names the top other GPU user on the game's adapter.
 - `gpu_throttle`: `nv_throttle_pct` (heat and power brake only); the power cap is context, the power-limit
   variant only when the enforced limit is below `inventory.nvidia.power_default_w`. A capture from before the
-  split (no `nv_power_cap_pct` column) counts the share only with a thermal or brake reason active.
+  split (no `nv_power_cap_pct` column) counts the share only with a thermal or brake reason active. The text
+  says "heat" when the readings named heat and never the brake or HW slowdown (`attribute.held_by`), else
+  "heat or its power brake".
+- `power_plan`: battery, battery saver, a low power mode, or a plan whose own settings (`inventory.power.plan`)
+  cap the CPU below 100 % (the performance cores too, on a hybrid CPU), turn boost off, or cool passively while
+  plugged in; by its name (whole words of `QUIET_PLAN_WORDS`) only in a capture without those settings. And the
+  maker's quiet mode: Armoury Crate switches the Windows plan to one named for its mode (163 switches in this
+  laptop's System log), so a quiet-named plan while Armoury Crate runs is that mode ("Armoury Crate's quiet mode is
+  holding the laptop back"), with the GPU's power limit held below its default as evidence and Armoury's own
+  setting as the advice. GPU heat is never its evidence (that is `gpu_throttle`'s); the switch to Balanced is
+  offered only for a plan whose own settings hold the PC back. `gpu_throttle` takes the same problems as a hint,
+  but never a CPU-only plan setting (a cap, boost off).
 - `vsync_judder` (real VSync judder) and `dropped_frames` (the game presents faster than a fixed refresh and
   frames are dropped, `rules._dropped_judder`); `uneven_pacing`: pacing events with uneven *presents*
   (present_swing_pct > 10 %) covering ≥ 10 % of the capture, weighed as a steady metric.
@@ -745,7 +794,17 @@ lagdoctor setup                      fetch + verify PresentMon, explain how to g
   the capture, and never changes what `fix` uses. A damaged, foreign or newer-format file gets one plain line.
 - The elevated child (see Privileges and elevation) records into the file the parent chose and exits; it never
   analyses, fixes or touches the journal. `watch` exit codes: 2 bad arguments or game not found, 3 the PID now
-  belongs to another process, 4 another recording is running, 130 stopped waiting.
+  belongs to another process, 4 another recording is running, 5 its files would land in another app's private
+  copy (any command that saves; see Where files go), 6 frame timing was wanted but PresentMon is missing or
+  failed its check, 130 stopped waiting.
+- The live status line shows `-` for a value not in yet and `off` for a source this recording does not run
+  (frame timing off, `--no-network`). With frame timing on, one line on its own says "Frame timing is not
+  working" as soon as PresentMon fails or its run ends mid-recording in anything but "ok" (a crash or a trace
+  session stopped from outside settles "partial"; the game's own exit settles "ok"), or once the game window was
+  in front for `session.NO_FRAMES_WARN_S` (10 s) without a first frame; time behind other windows does not count
+  (a minimised game draws nothing). Frames that stop while PresentMon still runs are a frozen game, not a fault.
+  Once PresentMon has ended the frame rate shows `-`, never its last value. `--no-network` records the network and
+  net_flows sources as "turned off for this recording (--no-network)".
 - Stopping: the first Ctrl+C stops the recording and saves it ("Stopping and saving the capture..."); later
   presses during the stop and the save are only counted. Ctrl+Break stops and saves too. Closing the window
   stops, ends the `lag-doctor-net` session at once, and waits up to 4.5 s for the save (Windows gives a closing

@@ -58,3 +58,11 @@ uv run python -m lagdoctor ...                           # the tool (see README)
 - Windows PowerShell 5.1: `Out-File -Encoding utf8` writes a BOM (breaks commit messages: write with
   `[IO.File]::WriteAllText` and `UTF8Encoding($false)`), and `Get-Process` has no `CommandLine`
   (use `Get-CimInstance Win32_Process`).
+- **Run the tool's real commands in the user's terminal, not the agent's shell.** On this PC the Claude desktop
+  app is an MSIX package, and the agent's shell has its `%LOCALAPPDATA%` and `%APPDATA%` writes moved into
+  `...\Packages\Claude_pzs8sxrjxfjjc\LocalCache` (measured 2026-11-05; `%TEMP%` and the home folder are not
+  moved), where the user's terminal and the elevated recording window never see them: a PresentMon set up from
+  the agent's shell was "not installed" for the user. `setup`, `watch`, `fix` and `undo` refuse there (exit 5,
+  `paths.private_copy`) and `scripts/e2e.py` stops before its UAC prompt (exit 3); run them in the user's
+  Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`).
+- `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.

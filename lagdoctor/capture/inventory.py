@@ -276,10 +276,12 @@ def _power(errors: dict[str, str]) -> dict:
     effective = _section(errors, "power.effective_mode", power.effective_mode)
     if effective is None and "power.effective_mode" not in errors:
         errors["power.effective_mode"] = "Windows sent no effective power mode within the timeout"
+    # What the active plan really sets, so a plan is judged by its settings, never by its name alone.
+    plan = _section(errors, "power.plan", lambda: power.plan_settings(scheme[0])) if scheme else None
     return {"scheme_guid": scheme[0] if scheme else None, "scheme_name": scheme[1] if scheme else None,
             "schemes": [[g, n] for g, n in schemes] if schemes is not None else None, "slider": slider,
             "effective_mode": effective, "on_battery": on_battery, "battery_pct": status.get("battery_pct"),
-            "saver": status.get("saver")}
+            "saver": status.get("saver"), "plan": plan}
 
 
 def _game_dvr(reg: RegistryBackend) -> bool | None:

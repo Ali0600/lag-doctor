@@ -57,8 +57,33 @@ def parse(argv: list[str] | None) -> argparse.Namespace:
     return a
 
 
+def preflight() -> str | None:
+    """Why this run could not measure frame timing, found before any UAC prompt or LagLab window; None when ready.
+    The elevated child asks again: its account may be another one, without the user's PresentMon."""
+    from lagdoctor import setup as pm_setup
+    try:
+        copy = paths.private_copy()
+    except OSError as exc:
+        return f"lag-doctor cannot save files in its folder: {exc}"
+    if copy is not None:
+        return paths.private_copy_advice(copy)
+    try:
+        pm_setup.ensure_presentmon(allow_download=False)
+    except pm_setup.SetupError as exc:
+        return str(exc)
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = parse(argv)
+    problem = preflight()
+    if problem:
+        if args.child and args.out:            # the window that asked waits for a results file: give it the reason
+            args.out.mkdir(parents=True, exist_ok=True)
+            (args.out / "e2e-results.json").write_text(
+                json.dumps([{"mode": "all", "ok": False, "error": problem}], indent=1), encoding="utf-8")
+        print(f"Nothing ran: {problem}")
+        return 3
     from lagdoctor.winapi import elevation
     # Absolute: the elevated run works in the repo folder, and LAGDOCTOR_HOME may be relative.
     out = (args.out or (paths.sessions_dir() / f"e2e-{time.strftime('%Y%m%d-%H%M%S')}")).resolve()

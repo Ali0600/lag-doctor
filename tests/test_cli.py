@@ -356,7 +356,9 @@ def fake_world(monkeypatch):
         seen["find"].append(kw)
         return dict(GAME)
     monkeypatch.setattr(tgt, "find_target", find_target)
-    monkeypatch.setattr(cli, "_presentmon_exe", lambda: (None, "frame timing was skipped: not installed (test)"))
+    monkeypatch.setattr(cli, "_presentmon_exe", lambda: (None, "PresentMon is not installed (test)"))
+    from lagdoctor import setup as pm_setup             # a PresentMon handed to the elevated child passes its check
+    monkeypatch.setattr(pm_setup, "verify", lambda p, **kw: {"signer": "Intel Corporation", "note": ""})
     monkeypatch.setattr(sess, "_collect_inventory", lambda target: {"adapters": [], "who": "the user"})
 
     class QuickSession(sess.Session):
@@ -381,6 +383,28 @@ def test_auto_is_chosen_only_when_no_game_was_named(fake_world, tmp_path):
         code = cli.main(["watch", *argv, "--duration", "0.1", "--no-network", "--hotkey", "none", "--no-elevate",
                          "--out", str(tmp_path / "out")])
         assert code == 0 and fake_world["find"] == [want]
+
+
+@pytest.mark.parametrize("flags", [[], ["--elevate"], ["--game", "Game.exe"]])
+def test_a_watch_without_presentmon_stops_before_it_even_looks_for_the_game(fake_world, capsys, tmp_path, flags):
+    # A 14-minute recording was once made this way, its frames missing, the reason only in the report afterwards.
+    assert cli.main(["watch", *flags, "--no-network", "--hotkey", "none",
+                     "--out", str(tmp_path / "out")]) == cli.EXIT_NOT_READY
+    out = capsys.readouterr().out
+    assert out.startswith("Frame timing is not available: PresentMon is not installed (test)")
+    assert "Nothing was recorded." in out
+    # --elevate and --no-elevate cannot go together: the advice swaps one for the other.
+    assert ("use --no-elevate instead of --elevate" if "--elevate" in flags else "add --no-elevate") in out
+    assert out.count("lagdoctor setup") == 0              # the reason itself says what to run (here: the fake's)
+    assert fake_world["find"] == [] and fake_world["sessions"] == [] and not (tmp_path / "out").exists()
+
+
+def test_a_watch_without_frame_timing_says_so_before_it_records(fake_world, capsys, tmp_path):
+    assert cli.main(["watch", "--pid", "4242", "--no-elevate", "--duration", "0.1", "--no-network",
+                     "--hotkey", "none", "--out", str(tmp_path / "out")]) == 0
+    out = capsys.readouterr().out
+    said = out.find("Frame timing is off for this recording: PresentMon is not installed (test)")
+    assert 0 <= said < out.index("Recording. Play normally")
 
 
 def test_a_zero_pid_that_got_past_the_parser_is_not_turned_into_auto(capsys):
@@ -733,7 +757,10 @@ def test_a_declined_prompt_records_here_still_holding_the_lock(fake_elevation, m
     monkeypatch.setattr(sess.Session, "run", run)
     assert cli.main(["watch", "--pid", "4242", "--duration", "0.1", "--elevate", "--no-network", "--hotkey", "none",
                      "--out", str(tmp_path / "out")]) == 0
-    assert "declined" in capsys.readouterr().out and held_while_recording == [True]
+    out = capsys.readouterr().out
+    assert "declined" in out and held_while_recording == [True]
+    said = out.find("Frame timing is off for this recording: it needs admin rights")
+    assert 0 <= said < out.index("Recording. Play normally")          # said before, not only in the report
     assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
 
 
@@ -759,6 +786,8 @@ def test_the_parent_refuses_a_capture_of_another_process(fake_elevation, tmp_pat
 
 @pytest.mark.parametrize("code,said", [(cli.EXIT_BUSY, "already running"),
                                        (cli.EXIT_TARGET_CHANGED, "exited while the UAC prompt was up"),
+                                       (cli.EXIT_NOT_READY, "could not use PresentMon"),
+                                       (cli.EXIT_PRIVATE_COPY, "private folder"),
                                        (9, "exit code 9")])
 def test_a_child_that_saved_nothing_is_explained(fake_elevation, tmp_path, capsys, code, said):
     fake_elevation["effect"] = lambda argv, cwd: None
@@ -792,8 +821,11 @@ def test_ctrl_c_in_the_first_window_says_where_the_recording_goes(fake_elevation
 # --------------------------------------------------------------- the elevated child itself ---
 
 def child_argv(tmp_path, *extra):
+    # The parent elevates only with a verified PresentMon, and always hands it over (fake_world accepts its
+    # check); a test's own --presentmon-exe comes later and wins.
     return [*WATCH, "--capture-only", "--create-time", str(GAME["create_time"]),
-            "--out-file", str(tmp_path / "s" / cli.CAPTURE_NAME), *extra]
+            "--out-file", str(tmp_path / "s" / cli.CAPTURE_NAME),
+            "--presentmon-exe", str(tmp_path / "handed" / "PresentMon-2.6.0-x64.exe"), *extra]
 
 
 def test_the_elevated_child_refuses_to_record_another_process(fake_world, tmp_path, capsys):
@@ -888,16 +920,16 @@ def test_the_elevated_child_uses_the_presentmon_the_parent_verified(fake_world, 
     assert opts.frames is True and opts.presentmon_exe == exe and checked == [exe]
 
 
-def test_a_handed_over_presentmon_that_fails_its_check_is_not_run(fake_world, monkeypatch, tmp_path):
+def test_a_handed_over_presentmon_that_fails_its_check_is_not_run(fake_world, monkeypatch, tmp_path, capsys):
     from lagdoctor import setup as pm_setup
 
     def bad(p, **kw):
         raise pm_setup.VerifyError("its SHA-256 does not match")
     monkeypatch.setattr(pm_setup, "verify", bad)
-    assert cli.main(child_argv(tmp_path, "--presentmon-exe", str(tmp_path / "pm.exe"))) == 0
-    assert fake_world["sessions"][0]["opts"].frames is False
-    cap = Capture.load(tmp_path / "s" / cli.CAPTURE_NAME)
-    assert cap.sources["frames"].state == "off" and "failed its check" in cap.sources["frames"].detail
+    # That window was opened only for frame timing: it records nothing at all, and its exit code says why.
+    assert cli.main(child_argv(tmp_path, "--presentmon-exe", str(tmp_path / "pm.exe"))) == cli.EXIT_NOT_READY
+    assert fake_world["sessions"] == [] and not (tmp_path / "s" / cli.CAPTURE_NAME).exists()
+    assert "failed its check: its SHA-256 does not match" in capsys.readouterr().out
 
 
 def test_the_elevated_child_uses_the_inventory_read_in_the_users_account(fake_world, tmp_path):

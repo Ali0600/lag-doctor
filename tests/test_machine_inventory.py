@@ -41,6 +41,9 @@ PANEL = {"device": "\\\\.\\DISPLAY1", "name": "Generic PnP Monitor", "adapter_lu
          "internal": True, "primary": True, "width": 1920, "height": 1080, "hz": 144.003, "max_hz": 144,
          "modes_hz": [60, 144]}
 SCHEMES = [("381b4222-f694-41f0-9685-ff5bb260df2e", "Balanced"), ("64a64f24-65b9-4b56-befd-5ec1eaced9b3", "Silent")]
+# This laptop's "Silent" plan, read on 2026-11-05: the CPU set exactly as in Balanced.
+PLAN = {"max_cpu_ac": 100, "max_cpu_dc": 100, "max_cpu1_ac": 100, "max_cpu1_dc": 100, "boost_ac": 2, "boost_dc": 2,
+        "cooling_ac": 1, "cooling_dc": 0}
 
 
 def guard_child(script: str) -> list[str]:
@@ -71,6 +74,7 @@ def machine(monkeypatch, reg_sandbox):
     monkeypatch.setattr(power, "battery_present", lambda: True)
     monkeypatch.setattr(power, "active_scheme", lambda: SCHEMES[1])
     monkeypatch.setattr(power, "list_schemes", lambda: list(SCHEMES))
+    monkeypatch.setattr(power, "plan_settings", lambda guid: state.setdefault("plan_for", []).append(guid) or dict(PLAN))
     monkeypatch.setattr(power, "slider_mode", lambda on_ac: state["slider_calls"].append(on_ac) or "balanced")
     monkeypatch.setattr(power, "effective_mode", lambda timeout_s=1.0: "balanced")
     monkeypatch.setattr(storage, "media_type", lambda path: "SSD")
@@ -97,7 +101,7 @@ DESIGN_KEYS = {
     "os": {"name", "build"},
     "cpu": {"name", "cores", "threads", "hybrid", "p_threads", "e_threads"},
     "power": {"scheme_guid", "scheme_name", "schemes", "slider", "effective_mode", "on_battery", "battery_pct",
-              "saver"},
+              "saver", "plan"},
     "settings": {"game_mode", "game_dvr", "background_recording", "hags", "windowed_optimizations", "vrr",
                  "memory_integrity"},
     "game": {"exe", "drive", "media", "free_gb", "gpu_preference", "monitor_device", "launcher"},
@@ -120,8 +124,10 @@ def test_collect_returns_every_design_key(machine):
     assert (inv["ram_gb"], inv["laptop"]) == (31.6, True)
     assert inv["power"] == {"scheme_guid": SCHEMES[1][0], "scheme_name": "Silent",
                             "schemes": [list(s) for s in SCHEMES], "slider": "balanced",
-                            "effective_mode": "balanced", "on_battery": False, "battery_pct": 100, "saver": False}
+                            "effective_mode": "balanced", "on_battery": False, "battery_pct": 100, "saver": False,
+                            "plan": PLAN}
     assert machine["slider_calls"] == [True]                         # the slider for the source in use: AC
+    assert machine["plan_for"] == [SCHEMES[1][0]]                    # the active plan's own settings
     assert inv["game"] == {"exe": EXE, "drive": "D:", "media": "SSD", "free_gb": 68.81, "gpu_preference": None,
                            "monitor_device": PANEL["device"], "launcher": "steam"}
     assert inv["displays"] == [PANEL]

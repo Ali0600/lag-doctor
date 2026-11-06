@@ -381,6 +381,15 @@ def test_failed_reads_become_none_and_the_first_tick_is_only_a_baseline():
     assert st.state == "ok" and "PDH collect failed in 1" in st.detail and "snapshot failed in 1" in st.detail
 
 
+@pytest.mark.parametrize("front,want", [(GAME, 1), (CHILD, 0)])
+def test_the_live_readout_says_whether_the_game_window_is_in_front(front, want):
+    # The session's "frame timing is not working" line counts only the time the game is in front.
+    s = SystemSampler({"pid": GAME, "create_time": 1100}, period_s=0.05, pdh_factory=lambda paths: FakePdh(paths),
+                      snapshotter=FakeSnap(), foreground=lambda: front, layout_check=lambda snapshotter: None)
+    cols = _run(s, 4, 0.05)["columns"]
+    assert cols[S.GAME_FOCUSED][-1] == want and s.live()["game_focused"] == want
+
+
 class TwoGpuPdh(FakePdh):
     """The game draws on the Intel GPU; other processes load either GPU (WT 2.2 instance names)."""
 

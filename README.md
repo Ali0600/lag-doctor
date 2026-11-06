@@ -49,6 +49,13 @@ uv run python -m lagdoctor analyze CAPTURE              # re-run the analysis on
   recording runs elevated, in a window of its own: stop it there with Ctrl+C, and the first window analyses
   it. `setup` explains the alternative of joining *Performance Log Users* once. Without either, everything
   else is still measured and the report says frame timing was not.
+- **No silent recordings without frame timing.** If PresentMon is missing or fails its check, `watch` stops
+  before it records and says what to run (`--no-elevate` records everything else anyway). If frame timing stops
+  working mid-recording, or the game is in front for 10 s without a frame, it says so on the spot.
+- **Run it from your own PowerShell window.** A shell that a packaged app started (the Claude desktop app is one)
+  can have what it saves under AppData moved into that app's private folder, which your other windows and the
+  admin recording window never see. lag-doctor checks where its files really land, and refuses to set up, record
+  or fix from such a shell.
 - **Closing the recording window** also stops and saves, but Windows allows a closing console about 5
   seconds. A 30-minute recording at 144 FPS saves in 2.6 s; much longer ones may not make it. Signing out or
   shutting down mid-recording loses the recording.
@@ -124,7 +131,7 @@ uv run python scripts/e2e.py                                   # LagLab scenario
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 2,365 tests, plus a mutation harness of 1,260 deliberate sabotages in 22
+- **Testing that proves itself**: 2,439 tests, plus a mutation harness of 1,337 deliberate sabotages in 25
   specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
@@ -132,7 +139,8 @@ uv run python scripts/e2e.py                                   # LagLab scenario
   launched by that handle's resolved path; only the capture runs elevated, behind 1 UAC prompt and a
   machine-wide one-recording lock.
 - **Review to fix**: closed all 49 findings (12 high) of an adversarial code review in 3 verified fix waves,
-  and cut the capture save from 36 s to 2.6 s to fit the 5 s Windows gives a closing console.
+  cut the capture save from 36 s to 2.6 s to fit the 5 s Windows gives a closing console, and traced a 14-minute
+  game recording with no frame timing to Windows keeping a packaged app's AppData files in a private copy.
 
 ## Credits
 

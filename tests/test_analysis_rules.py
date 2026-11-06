@@ -411,6 +411,17 @@ def test_gpu_limit_counts_nvidia_utilisation_at_ninety_five_percent():
         assert is_finding(res, conf), util
 
 
+@pytest.mark.parametrize("reasons,held", [("sw_thermal_slowdown", "heat"),
+                                          ("sw_thermal_slowdown,hw_power_brake_slowdown", "heat or its power brake")])
+def test_gpu_limit_names_only_what_the_readings_named(reasons, held):
+    cap = make(adapter=NV, ok=("frames", "system", "gpu"), system=engine(70.0),
+               gpu=synth.gpu_table(30, nv_util_pct=99.0, nv_throttle_pct=80.0, nv_reasons=reasons))
+    res = run("gpu_limit", cap, stats={"avg_fps": 40.0}, bound={"verdict": "gpu", "r": 0.99, "gpu_ms": 24.8,
+                                                                "ft_ms": 25.0})
+    texts = [e.text for e in res.evidence]
+    assert any(t.startswith(f"The GPU was also held down by {held} 80% of the time") for t in texts), texts
+
+
 def test_gpu_limit_on_a_borderline_split_is_only_worth_checking():
     res = run("gpu_limit", make(system=engine(70.0)), stats={"avg_fps": 40.0}, bound={"verdict": "mixed", "r": 0.82})
     assert is_finding(res, "low") and "borderline" in res.evidence[0].text.lower()
@@ -588,6 +599,22 @@ def test_gpu_throttle_at_the_power_limit_alone_is_normal_not_a_fault(reasons):
     assert isinstance(res, rules.Cleared) and "power brake only 0%" in res.text
 
 
+@pytest.mark.parametrize("reasons,held", [
+    ("sw_thermal_slowdown", "heat"),                                  # this laptop in FF7 Rebirth: 840 of 845 readings
+    ("sw_thermal_slowdown,sw_power_cap", "heat"),
+    ("hw_thermal_slowdown", "heat"),
+    ("sw_thermal_slowdown,hw_power_brake_slowdown", "heat or its power brake"),
+    ("sw_thermal_slowdown,hw_slowdown", "heat or its power brake"),  # HW slowdown may be either
+    ("sw_power_cap", "heat or its power brake"),                      # the share counts heat and brake; neither named
+])
+def test_gpu_throttle_names_only_what_the_readings_named(reasons, held):
+    cap = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=nv(80.0, nv_reasons=reasons))
+    res = run("gpu_throttle", cap, bound={"verdict": "gpu"})
+    assert is_finding(res, "high") and res.evidence[0].text.startswith(f"The NVIDIA GPU was held down by {held} 80%")
+    assert rules.attribute.held_by(make(adapter=NV, gpu=synth.gpu_table(30, nv_throttle_pct=80.0))) \
+        == "heat or its power brake"                                     # no reasons recorded: either
+
+
 @pytest.mark.parametrize("reasons", ["sw_power_cap", "gpu_idle,sw_power_cap", ""])
 def test_gpu_throttle_reads_the_heat_and_brake_share_whatever_the_reason_names_say(reasons):
     # nv_throttle_pct is heat plus the HW power brake only, a direct readout (LC 4.2): no reason-name heuristic
@@ -665,14 +692,108 @@ def test_the_heat_reason_names_cover_the_collectors():
     assert not set(gpumon.POWER_CAP_REASONS) & set(attribute.HEAT_REASONS)
 
 
-def test_power_plan_never_counts_the_gpus_power_cap_as_support():
+def test_power_plan_never_counts_the_gpu_as_support():
+    # Changed on purpose: GPU heat counted here once, and made a plan that set the CPU exactly as Balanced does
+    # the top cause ([likely]). A Windows plan sets no GPU limit; a hot GPU is gpu_throttle's evidence.
     quiet = {"power": dict(POWER)}
-    capped = make(adapter=NV, ok=("frames", "system", "gpu"), inventory=quiet,
-                  gpu=nv(0.0, nv_power_cap_pct=100.0, nv_reasons="sw_power_cap"))
+    for gpu in (nv(0.0, nv_power_cap_pct=100.0, nv_reasons="sw_power_cap"), nv(60.0), nv(100.0)):
+        res = run("power_plan", make(adapter=NV, ok=("frames", "system", "gpu"), inventory=quiet, gpu=gpu))
+        assert is_finding(res, "medium") and not any("GPU" in e.text for e in res.evidence)
+
+
+# This laptop's ASUS "Silent" plan, read on 2026-11-05: the CPU set exactly as Balanced sets it.
+SILENT_SETTINGS = {"max_cpu_ac": 100, "max_cpu_dc": 100, "max_cpu1_ac": 100, "max_cpu1_dc": 100, "boost_ac": 2,
+                   "boost_dc": 2, "cooling_ac": 1, "cooling_dc": 0}
+ARMOURY = {"tools": ["ArmouryCrate.Service.exe", "ArmouryCrate.UserSessionHelper.exe"]}
+
+
+def test_a_plan_is_judged_by_its_settings_not_its_name():
+    res = run("power_plan", make(inventory={"power": dict(POWER, plan=SILENT_SETTINGS)}))
+    assert isinstance(res, rules.Cleared) and 'plan "Silent", whose own settings let the CPU run at full speed' in res.text
+    for change, said in (({"max_cpu_ac": 50}, 'The active power plan "Silent" caps the CPU at 50% of its speed.'),
+                         ({"boost_ac": 0}, 'The active power plan "Silent" turns CPU boost off.'),
+                         ({"cooling_ac": 0}, 'The active power plan "Silent" slows the CPU before it speeds up the fans.')):
+        res = run("power_plan", make(inventory={"power": dict(POWER, plan=dict(SILENT_SETTINGS, **change))}))
+        assert is_finding(res, "medium") and said in res.evidence[0].text, change
+        assert [f.fix_id for f in res.fixes if f.fix_id] == ["power_plan"]          # then the switch is offered
+    named = {"power": dict(POWER, scheme_name="Max power", plan=dict(SILENT_SETTINGS, boost_ac=0, max_cpu_ac=99))}
+    res = run("power_plan", make(inventory=named))
+    assert 'plan "Max power" caps the CPU at 99% of its speed and turns CPU boost off' in res.evidence[0].text
+
+
+def test_armoury_crates_quiet_mode_is_read_through_the_plan_it_switches_to():
+    # This laptop, as its next capture will read it: "Silent" set the CPU as Balanced does, but Armoury Crate switches
+    # the Windows plan to "Silent" in its quiet mode (163 switches in the System log), which lowers the fan speed and
+    # power limits; here the GPU's limit sat at 55 W against an 80 W default.
+    inv = {"power": dict(POWER, plan=SILENT_SETTINGS), "oem": ARMOURY}
+    res = run("power_plan", make(inventory=inv))
+    assert is_finding(res, "medium") and res.title == "Armoury Crate's quiet mode is holding the laptop back"
+    assert res.evidence[0].text.startswith("Armoury Crate's quiet mode looks to be on: the active power plan \"Silent\"")
+    assert [(f.title, f.fix_id) for f in res.fixes] == [("Set Armoury Crate's operating mode to Performance or Turbo",
+                                                         None)]     # no switch of Windows plan: it would not change it
+    capped = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=synth.gpu_table(30, nv_power_limit_w=55.0),
+                  inventory=dict(inv, nvidia={"power_default_w": 80.0}))
     res = run("power_plan", capped)
-    assert is_finding(res, "medium") and not any("GPU" in e.text for e in res.evidence)
-    hot = make(adapter=NV, ok=("frames", "system", "gpu"), inventory=quiet, gpu=nv(60.0))
-    assert is_finding(run("power_plan", hot), "high")                  # heat or the power brake does count
+    assert is_finding(res, "high")
+    assert "The GPU's power limit sat at 55 W for most of the capture, below its 80 W default." in [e.text for e in res.evidence]
+    at_default = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=synth.gpu_table(30, nv_power_limit_w=80.0),
+                      inventory=dict(inv, nvidia={"power_default_w": 80.0}))
+    assert is_finding(run("power_plan", at_default), "medium")
+    # Without Armoury Crate running, the same plan is only a name: its settings hold nothing back.
+    assert isinstance(run("power_plan", make(inventory={"power": dict(POWER, plan=SILENT_SETTINGS)})), rules.Cleared)
+    # An older capture, without the plan's settings: the same quiet mode, still no switch of plan.
+    res = run("power_plan", make(inventory={"power": dict(POWER), "oem": ARMOURY}))
+    assert is_finding(res) and not any(f.fix_id for f in res.fixes) and len(res.fixes) == 1
+
+
+def test_a_plan_that_caps_the_performance_cores_counts_only_on_a_hybrid_cpu():
+    # Windows' own Power saver keeps the maximum state at 100 % and caps efficiency class 1 (the P-cores) at 75 %.
+    plan = dict(SILENT_SETTINGS, max_cpu1_ac=75, max_cpu1_dc=75, cooling_ac=1)
+    hybrid = run("power_plan", make(inventory={"power": dict(POWER, plan=plan), "cpu": {"hybrid": True}}))
+    assert is_finding(hybrid) and "caps the CPU's performance cores at 75% of their speed" in hybrid.evidence[0].text
+    for cpu in ({"hybrid": False}, {}):
+        assert isinstance(run("power_plan", make(inventory={"power": dict(POWER, plan=plan), "cpu": cpu})), rules.Cleared)
+
+
+@pytest.mark.parametrize("change,counts", [({"max_cpu_ac": 50}, False), ({"boost_ac": 0}, False),
+                                           ({"cooling_ac": 0}, True), ({}, False)])
+def test_gpu_throttle_takes_no_cpu_only_plan_setting_as_a_hint(change, counts):
+    # A Windows plan's CPU cap or boost off sets no GPU limit; passive cooling or the maker's quiet mode do touch it.
+    # Borderline on purpose: the target temperature (+2) against a low throttle share (-2), so a hint (+1) tips it.
+    inv = {"nvidia": {"temp_target_c": 75}, "power": dict(POWER, plan=dict(SILENT_SETTINGS, **change))}
+    cap = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=nv(10.0, nv_temp_c=80.0), inventory=inv)
+    res = run("gpu_throttle", cap, bound={"verdict": "gpu"})
+    assert is_finding(res) is counts, change
+    if counts:
+        assert any("fans" in e.text for e in res.evidence)
+
+
+def test_on_battery_the_plans_battery_settings_count_and_passive_cooling_is_windows_own():
+    on_battery = dict(POWER, on_battery=True, battery_pct=60, plan=dict(SILENT_SETTINGS, max_cpu_dc=80))
+    texts = " ".join(e.text for e in run("power_plan", make(inventory={"power": on_battery})).evidence)
+    assert "caps the CPU at 80% of its speed" in texts and "fans" not in texts and "on battery" in texts
+    # On battery with a plan that holds nothing back: plug in, yes; a switch of plan, no (whatever its name).
+    res = run("power_plan", make(inventory={"power": dict(on_battery, plan=SILENT_SETTINGS)}))
+    assert is_finding(res) and "power plan" not in res.evidence[0].text.lower()
+    assert [f.title for f in res.fixes] == ["Plug in the charger while gaming"]
+
+
+@pytest.mark.parametrize("plan", [{}, {"max_cpu_ac": None, "boost_ac": None, "cooling_ac": None},
+                                  {"max_cpu_ac": True, "boost_ac": "0", "cooling_ac": 7, "max_cpu_dc": -1}])
+def test_without_readable_settings_only_the_plans_name_is_to_go_on(plan):
+    # An older capture, or Windows would not say: a quiet-sounding name stays a medium finding, as before.
+    res = run("power_plan", make(inventory={"power": dict(POWER, plan=plan)}))
+    assert is_finding(res, "medium") and "a quiet, power-saving plan" in res.evidence[0].text
+
+
+def test_plan_names_match_whole_words_only():
+    assert rules._has_word("Eco mode", rules.QUIET_PLAN_WORDS) and rules._has_word("SILENT", rules.QUIET_PLAN_WORDS)
+    assert not rules._has_word("ASUS Recommended", rules.QUIET_PLAN_WORDS)          # r-eco-mmended
+    assert rules._has_word("High performance", rules.PERFORMANCE_PLAN_WORDS)
+    assert not rules._has_word("Outperformance", rules.PERFORMANCE_PLAN_WORDS)
+    # This laptop's other ASUS plan, in an older capture without the settings: not taken for a quiet plan.
+    other = dict(POWER, scheme_guid="a5a5a5a5-0000-4000-8000-000000000001", scheme_name="ASUS Recommended")
+    assert isinstance(run("power_plan", make(inventory={"power": other})), rules.Cleared)
 
 
 def test_gpu_throttle_counts_the_target_temperature():
@@ -853,6 +974,12 @@ def test_power_plan_picks_a_performance_plan_when_balanced_is_not_listed_and_nev
     assert next(f for f in res.fixes if f.fix_id).params == {"scheme": "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"}
     power["schemes"] = [["not-a-guid", "Balanced"], ["64a64f24-65b9-4b56-befd-5ec1eaced9b3", "Silent"]]
     assert not any(f.fix_id for f in run("power_plan", make(inventory={"power": power})).fixes)
+    # Whole words: "Outperformance" is not a performance plan, "High performance" is (listed after it on purpose).
+    power["schemes"] = [["11111111-2222-3333-4444-555555555555", "Outperformance"],
+                        ["8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c", "High performance"],
+                        ["64a64f24-65b9-4b56-befd-5ec1eaced9b3", "Silent"]]
+    res = run("power_plan", make(inventory={"power": power}))
+    assert next(f for f in res.fixes if f.fix_id).params == {"scheme": "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"}
 
 
 def test_power_plan_fine_is_cleared_and_unread_is_unchecked():

@@ -49,6 +49,11 @@ FLOW_KEYS = ("server", "talkers", "gaps", "server_rx", "layout", "health")
 # had a status period to start their children (PresentMon, nvidia-smi), and again just before they stop.
 TOOL_SIGHT_S = 0.5
 MAX_TOOL_PIDS = 64                         # bounded: lag-doctor itself starts only a handful
+# Frame timing is on, the game window was in front this long, and not one frame came: say so at once, while
+# the player can still stop and fix it, not in the report afterwards. A minimised game draws nothing, so the
+# time counts only while the game is in front.
+NO_FRAMES_WARN_S = 10.0
+FRAMES_FAILED = ("failed", "unavailable")   # PresentMon's states that mean no more frames will come
 
 
 @dataclass
@@ -171,6 +176,9 @@ class Session:
         self._tools_listed = False
         self._tools_error = ""
         self._first_sighting_done = False
+        self._frames_warned = False                # the "frame timing is not working" line is said once
+        self._front_without_frames = 0.0           # seconds the game was in front with no frame yet
+        self._frames_checked_at: float | None = None
 
     # ------------------------------------------------------------------ run --
     def run(self, stop: threading.Event | None = None, ctrl_c: CtrlC | None = None) -> Capture:
@@ -287,8 +295,12 @@ class Session:
                     self._first_sighting_done = True
                     self._sight_tools()
                 self._route_server()
-                self._print("\r" + status_line(elapsed, {c.name: c.live() for c in self.collectors},
-                                               self.opts.hotkey) + " ")
+                live = {c.name: c.live() for c in self.collectors}
+                self._check_frames(live, elapsed)
+                frames = self._by_name("frames")
+                if frames is not None and frames.ended:
+                    live["frames"] = {}             # PresentMon is gone: no frame rate frozen at its last value
+                self._print("\r" + status_line(elapsed, live, self.opts.hotkey) + " ")
                 wait = STATUS_PERIOD_S
                 if self.opts.duration_s is not None:
                     wait = max(0.0, min(wait, self.opts.duration_s - elapsed))
@@ -297,6 +309,34 @@ class Session:
             self.stop_reason = "Ctrl+C"
         finally:
             self._print("\n")
+
+    def _check_frames(self, live: dict[str, dict[str, Any]], elapsed: float) -> None:
+        """Say once, on its own line, that frame timing is not working: PresentMon failed or ended mid-recording
+        (crashed, or its trace session stopped from outside: "partial" once frames had come), or the game was in
+        front for NO_FRAMES_WARN_S without one frame. An end in "ok" is the game's own exit, not a fault. A game that
+        freezes in front sends no frames either, so frames that stop while PresentMon still runs are never a fault:
+        that is a stutter, measured when it ends. Everything else goes on being recorded."""
+        c = self._by_name("frames")
+        if c is None or self._frames_warned:
+            return
+        step = 0.0 if self._frames_checked_at is None else max(0.0, elapsed - self._frames_checked_at)
+        self._frames_checked_at = elapsed
+        st = c.status()
+        frames = (live.get("frames") or {}).get("frames")
+        if st.state in FRAMES_FAILED or (c.ended and st.state != "ok"):
+            why = (st.detail or "PresentMon stopped").rstrip(". ")       # its reason already names PresentMon
+        elif isinstance(frames, int) and frames > 0:
+            return
+        else:
+            if (live.get("system") or {}).get("game_focused") == 1:
+                self._front_without_frames += step
+            if self._front_without_frames < NO_FRAMES_WARN_S:
+                return
+            why = (f"the game was in front for {self._front_without_frames:.0f} s and PresentMon saw no frame "
+                   "from it")
+        self._frames_warned = True
+        self._print(f"\nFrame timing is not working: {why}. Everything else is still being recorded; stop with "
+                    "Ctrl+C if you need frame timing.\n")
 
     def _route_server(self) -> None:
         """When the flow tracker finds the game server, the network sampler starts pinging it too."""
@@ -342,6 +382,9 @@ class Session:
         if not self.opts.frames and "frames" not in sources:
             sources["frames"] = SourceStatus("off", "frame timing was skipped: it needs admin rights or "
                                                     "Performance Log Users (see `lagdoctor setup`)")
+        if not self.opts.network:            # switched off on purpose: say so, not "not recorded" as if it failed
+            for name in ("network", "net_flows"):
+                sources.setdefault(name, SourceStatus("off", "turned off for this recording (--no-network)"))
 
         target = dict(self.target)
         inventory = dict(self.inventory or {})
@@ -402,19 +445,24 @@ def _stop_quietly(c: Collector, timeout: float) -> None:
 # ------------------------------------------------------------------ status --
 
 def status_line(elapsed: float, live: dict[str, dict[str, Any]], hotkey: str | None) -> str:
-    """One short line, refreshed once a second. Unknown values show as '-'."""
+    """One short line, refreshed once a second. Unknown values show as '-'; a source this recording does not
+    run at all (frame timing off, --no-network) as 'off', so a dash never stands for something never coming."""
     m, s = divmod(int(elapsed), 60)
     parts = [f"{m}:{s:02d}"]
-    fr = live.get("frames") or {}
-    fps = fr.get("fps")
-    parts.append(f"{fps:.0f} fps" if isinstance(fps, (int, float)) else "fps -")
+    fps = (live.get("frames") or {}).get("fps")
+    if "frames" not in live:
+        parts.append("fps off")
+    else:
+        parts.append(f"{fps:.0f} fps" if isinstance(fps, (int, float)) else "fps -")
     sysl = live.get("system") or {}
     cpu, gpu = sysl.get("game_top_thread_pct"), sysl.get("game_gpu_pct")
     parts.append(f"main thread {cpu:.0f}%" if isinstance(cpu, (int, float)) else "main thread -")
     parts.append(f"GPU {gpu:.0f}%" if isinstance(gpu, (int, float)) else "GPU -")
-    net = live.get("network") or {}
-    ping = net.get("inet_rtt_ms")
-    parts.append(f"ping {ping:.0f} ms" if isinstance(ping, (int, float)) else "ping -")
+    ping = (live.get("network") or {}).get("inet_rtt_ms")
+    if "network" not in live:
+        parts.append("ping off")
+    else:
+        parts.append(f"ping {ping:.0f} ms" if isinstance(ping, (int, float)) else "ping -")
     keys = "Ctrl+C stops"
     if hotkey:
         keys = f"{hotkey.title()} = it lagged now, " + keys

@@ -19,8 +19,62 @@
 - **Elevate only code the user cannot write** (an install under Program Files or a signed frozen exe, or the
   elevated relay above). Today `--elevate` runs the checkout's Python as administrator. Revisit hook:
   `cli.elevated_argv`.
+- **Ask before recording without frame timing** ("PresentMon is not ready: record everything else? [y/N]")
+  instead of stopping. Today `watch` stops, and `--no-elevate` records without it. Revisit hook: the
+  not-ready branch at the top of `cli.cmd_watch`.
 
 ---
+
+## 2026-11-05: Find a private copy of AppData by where a new file lands
+
+PresentMon set up from the agent's shell inside the Claude desktop app landed in that app's private folder
+(`...\Packages\Claude_pzs8sxrjxfjjc\LocalCache`), so the user's terminal and the elevated window said "not
+installed", and a 14-minute recording of a real game had no frame timing.
+- **Ask Windows where a new file lands (chosen)**: a hidden, delete-on-close probe and its
+  `GetFinalPathNameByHandleW`; a final path inside `\Packages\<app>\LocalCache\` that was not asked for is a
+  private copy. It caught the measured case and stays silent in the user's own terminal (both checked live).
+- **Package identity (`GetCurrentPackageFullName`)**: rejected; the redirected shell answered
+  APPMODEL_ERROR_NO_PACKAGE.
+- **Keep lag-doctor's files outside AppData**: rejected; every other window would still look in AppData, and
+  `LAGDOCTOR_HOME` already moves them for whoever wants that.
+- **Refuse what saves for other windows, note it for what only reads (chosen)**: `setup`, `watch`, `fix` and
+  `undo` refuse; `check` and `analyze` read the PC correctly and only note it. Refusing everything was rejected
+  (no reason to), and a warning before going on was rejected too: a line in front of a recording is exactly
+  what that recording lacked.
+Revisit hook: `cli.PRIVATE_COPY_POLICY`, `paths.redirected`.
+
+## 2026-11-05: No recording without frame timing unless asked for
+
+- **Stop before looking for the game, exit 6, unless `--no-elevate` (chosen)**; a recording without frame
+  timing says so before "Recording.", and the elevated child, opened only for frame timing, records nothing
+  when its PresentMon fails its check.
+- **Record everything else and say so in the report (the old behaviour)**: rejected; it cost the user a
+  14-minute session of the game they meant to diagnose.
+- **Ask first**: deferred, worth trying (backlog).
+Revisit hook: the not-ready branch at the top of `cli.cmd_watch`.
+
+## 2026-11-05: A power plan is judged by its settings, not its name
+
+The first real report put "Power saving is holding the PC back [likely]" first and offered a switch to
+Balanced. The ASUS plan "Silent" set the CPU exactly as Balanced does (`powercfg /qh`: 180 of 182 settings
+equal, the others screen brightness and the battery hibernate timer), and "likely" came from GPU heat.
+- **The active plan's own processor settings (chosen)**: maximum processor state, boost mode and cooling
+  policy for the power source in use (`inventory.power.plan`); the switch to Balanced is offered only for a plan
+  that holds the CPU back.
+- **Its name**: kept only for captures without the settings, as whole words ("eco" had matched "ASUS
+  Recommended"); rejected as the test itself.
+- **GPU heat as evidence for the plan**: rejected; a Windows plan sets no GPU limit, and heat is
+  `gpu_throttle`'s evidence.
+- **Armoury Crate's quiet mode read through the plan it switches to (chosen, after review)**: the first version
+  said the maker's mode was not readable and dropped its advice, so this laptop's next report would have cleared
+  "Silent" as fine. The System log has 163 switches of the active plan by ArmouryCrate.UserSessionHelper.exe
+  between its Silent, Performance and Turbo plans (the last to Silent on 2026-11-04 14:54), so a quiet-named plan
+  while Armoury Crate runs is its quiet mode: its own cause, the GPU's power limit held below its default as
+  evidence, and Armoury's setting as the fix. Switching the Windows plan instead is not offered, since it would not
+  change the fan and power mode Armoury sets.
+- **The performance-core cap** (`PROCTHROTTLEMAX1`, Windows' Power saver: 75 %) counts on hybrid CPUs (found in
+  review). Energy-performance preference (`PERFEPP`) is not read: a bias, not a cap.
+Revisit hook: `rules._plan_held_back`, `rules._oem_quiet_mode`.
 
 ## 2026-11-04: Stutters on a display that only changes on a refresh
 

@@ -219,6 +219,32 @@ def test_guid_from_str_rejects_anything_but_the_canonical_form(bad):
         power.guid_from_str(bad)
 
 
+def _powercfg_index(scheme: str, alias: str) -> tuple[int, int]:
+    """The plan setting's stored AC and DC index as `powercfg /qh` prints it: the independent readout. Its labels
+    are translated, so this reads only the numbers: the last two "0x" values of the one setting's block are the AC
+    and DC index, in that order (the possible-values lines come before them)."""
+    out = subprocess.run(["powercfg", "/qh", scheme, "SUB_PROCESSOR", alias], capture_output=True, text=True,
+                         timeout=30, check=True).stdout
+    values = re.findall(r":\s*0x([0-9a-fA-F]{8})\s*$", out, flags=re.M)
+    if len(values) < 2:
+        pytest.skip(f"powercfg printed no AC and DC index for {alias} in {scheme}: {out[:200]!r}")
+    return int(values[-2], 16), int(values[-1], 16)
+
+
+def test_plan_settings_match_what_powercfg_reports_for_every_plan():
+    # Read-only. On this laptop cooling differs plugged in and on battery (Active, Passive), so a mix-up of the
+    # two sides shows; every plan is read, the active one included.
+    aliases = {"max_cpu": "PROCTHROTTLEMAX", "max_cpu1": "PROCTHROTTLEMAX1", "boost": "PERFBOOSTMODE",
+               "cooling": "SYSCOOLPOL"}
+    schemes = [g for g, _ in power.list_schemes()]
+    assert power.active_scheme()[0] in schemes
+    for scheme in schemes:
+        got = power.plan_settings(scheme)
+        assert set(got) == {f"{k}_{s}" for k in aliases for s in ("ac", "dc")}
+        for key, alias in aliases.items():
+            assert (got[f"{key}_ac"], got[f"{key}_dc"]) == _powercfg_index(scheme, alias), (scheme, key)
+
+
 def test_set_active_scheme_passes_the_guid_and_raises_on_refusal(monkeypatch):
     calls = []
     answer = {"rc": 0}

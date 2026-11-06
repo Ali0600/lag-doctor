@@ -140,6 +140,26 @@ Microsoft-documented (WT 8)".
 **Takeaway**: keep provenance in comments, and scan string literals on the syntax tree (docstrings excluded);
 a plain text grep would flag every comment too.
 
+### A packaged app's shell can save into that app's private copy of AppData
+A program a packaged (MSIX) app starts can have what it writes in `%LOCALAPPDATA%` and `%APPDATA%` kept in
+`%LOCALAPPDATA%\Packages\<app>\LocalCache\...`. It sees the files at the usual path; other windows never do.
+**Why it came up**: `setup` ran in the agent's shell inside the Claude desktop app, so PresentMon was "not
+installed" for the user's own terminal and the admin window, and a 14-minute game recording had no frame timing.
+That shell even reported no package identity, so asking "am I packaged?" would have missed it.
+**Takeaway**: ask the handle where a file is (`GetFinalPathNameByHandleW`), not the path, and check an install from
+the context that will use it.
+
+### A power plan's name says nothing about its settings, but can say which mode the maker's tool is in
+An ASUS plan called "Silent" set the CPU exactly as Balanced does (same maximum state, boost and cooling), yet
+Armoury Crate switches the Windows plan to "Silent", "Performance" or "Turbo" with its own operating mode, and that
+mode sets the fans and power limits that no plan setting shows.
+**Why it came up**: the first real report blamed "Silent" and offered a switch to Balanced that would only have
+changed the screen brightness; then the review found 163 plan switches by Armoury Crate in the System log, so the
+name is how its quiet mode shows.
+**Takeaway**: read a plan's settings (`PowerReadACValueIndex`, the P-core cap `PROCTHROTTLEMAX1` too) before judging
+it, match names as whole words ("eco" is inside "Recommended"), and look for who switches the plan before deciding
+what its name means.
+
 ### Python's gzip.open compresses at level 9 unless told otherwise
 `gzip.open(path, "wt")` defaults to compresslevel 9. For a 47 MB JSON capture that was 24 s of a 36 s save;
 streaming the JSON column by column at level 1 saves the same capture in 2.6 s, 12 MB instead of 9 MB.

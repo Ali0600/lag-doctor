@@ -1,0 +1,209 @@
+[
+ {
+  "name": "a private copy never recognised",
+  "file": "lagdoctor/paths.py",
+  "old": "    if m is None or _PRIVATE_COPY.search(asked.replace(\"/\", \"\\\\\")):",
+  "new": "    if True:",
+  "tests": [
+   "tests/test_private_copy.py::test_a_probe_that_landed_in_an_apps_local_cache_names_that_app_and_folder"
+  ]
+ },
+ {
+  "name": "a folder asked for inside a private copy is flagged",
+  "file": "lagdoctor/paths.py",
+  "old": "    if m is None or _PRIVATE_COPY.search(asked.replace(\"/\", \"\\\\\")):",
+  "new": "    if m is None:",
+  "tests": [
+   "tests/test_private_copy.py::test_a_probe_that_landed_where_it_was_asked_is_no_private_copy"
+  ]
+ },
+ {
+  "name": "slashes in the asked folder not read",
+  "file": "lagdoctor/paths.py",
+  "old": "    if m is None or _PRIVATE_COPY.search(asked.replace(\"/\", \"\\\\\")):",
+  "new": "    if m is None or _PRIVATE_COPY.search(asked):",
+  "tests": [
+   "tests/test_private_copy.py::test_a_probe_that_landed_where_it_was_asked_is_no_private_copy"
+  ]
+ },
+ {
+  "name": "the \\\\?\\ prefix shown",
+  "file": "lagdoctor/paths.py",
+  "old": "        folder = folder[4:]",
+  "new": "        folder = folder",
+  "tests": [
+   "tests/test_private_copy.py::test_a_probe_that_landed_in_an_apps_local_cache_names_that_app_and_folder"
+  ]
+ },
+ {
+  "name": "a network path shown raw",
+  "file": "lagdoctor/paths.py",
+  "old": "        folder = \"\\\\\\\\\" + folder[8:]",
+  "new": "        folder = folder",
+  "tests": [
+   "tests/test_private_copy.py::test_the_reading_ignores_case_and_shows_plain_paths"
+  ]
+ },
+ {
+  "name": "the reading minds case",
+  "file": "lagdoctor/paths.py",
+  "old": "_PRIVATE_COPY = re.compile(r\"\\\\Packages\\\\([^\\\\]+)\\\\LocalCache\\\\\", re.IGNORECASE)",
+  "new": "_PRIVATE_COPY = re.compile(r\"\\\\Packages\\\\([^\\\\]+)\\\\LocalCache\\\\\", 0)",
+  "tests": [
+   "tests/test_private_copy.py::test_the_reading_ignores_case_and_shows_plain_paths"
+  ]
+ },
+ {
+  "name": "a relative home probed as given",
+  "file": "lagdoctor/paths.py",
+  "old": "    asked = os.path.abspath(str(home() if folder is None else folder))",
+  "new": "    asked = str(home() if folder is None else folder)",
+  "tests": [
+   "tests/test_private_copy.py::test_a_relative_home_is_probed_where_it_really_is"
+  ]
+ },
+ {
+  "name": "a packaged Python told to open another window",
+  "file": "lagdoctor/paths.py",
+  "old": "    if own and own.lower() == copy.app.lower():",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_private_copy.py::test_a_packaged_python_is_named_as_the_cause_with_the_one_remedy_that_works"
+  ]
+ },
+ {
+  "name": "a packaged Python recognised by exact case only",
+  "file": "lagdoctor/paths.py",
+  "old": "    if own and own.lower() == copy.app.lower():",
+  "new": "    if own and own == copy.app:",
+  "tests": [
+   "tests/test_private_copy.py::test_a_packaged_python_is_named_as_the_cause_with_the_one_remedy_that_works"
+  ]
+ },
+ {
+  "name": "the probe left behind",
+  "file": "lagdoctor/winapi/storage.py",
+  "old": "                                   FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,",
+  "new": "                                   FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_TEMPORARY,",
+  "tests": [
+   "tests/test_private_copy.py::test_a_new_file_in_a_temporary_folder_lands_there_and_is_gone_afterwards"
+  ]
+ },
+ {
+  "name": "a probe that could not be made answers with a made-up path",
+  "file": "lagdoctor/winapi/storage.py",
+  "old": "    if handle in (None, INVALID_HANDLE_VALUE):\n        raise ctypes.WinError(ctypes.get_last_error())\n    try:\n        # A RAM disk",
+  "new": "    if handle in (None, INVALID_HANDLE_VALUE):\n        return ntpath.join(folder, \"x\")\n    try:\n        # A RAM disk",
+  "tests": [
+   "tests/test_private_copy.py::test_a_probe_that_cannot_be_made_raises_rather_than_answers"
+  ]
+ },
+ {
+  "name": "a RAM disk's path read only by drive letter",
+  "file": "lagdoctor/winapi/storage.py",
+  "old": "        for volume in (VOLUME_NAME_DOS, VOLUME_NAME_NT, VOLUME_NAME_NONE):",
+  "new": "        for volume in (VOLUME_NAME_DOS,):",
+  "tests": [
+   "tests/test_private_copy.py::test_a_volume_without_drive_letter_paths_is_probed_by_its_nt_path"
+  ]
+ },
+ {
+  "name": "no package identity answered as a made-up one",
+  "file": "lagdoctor/winapi/storage.py",
+  "old": "    if rc == APPMODEL_ERROR_NO_PACKAGE:\n        return None",
+  "new": "    if rc == APPMODEL_ERROR_NO_PACKAGE:\n        return \"x\"",
+  "tests": [
+   "tests/test_private_copy.py::test_this_process_has_no_package_identity_or_a_well_formed_one"
+  ]
+ },
+ {
+  "name": "the gate's answer ignored",
+  "file": "lagdoctor/cli.py",
+  "old": "    if code is not None:\n        return code\n    # Under a private copy",
+  "new": "    if False:\n        return code\n    # Under a private copy",
+  "tests": [
+   "tests/test_private_copy.py::test_commands_that_save_for_other_windows_refuse_and_say_where_and_why"
+  ]
+ },
+ {
+  "name": "the journal healed before the gate",
+  "file": "lagdoctor/cli.py",
+  "old": "    out_file = getattr(args, \"out_file\", None)",
+  "new": "    _settle_journal()\n    out_file = getattr(args, \"out_file\", None)",
+  "tests": [
+   "tests/test_private_copy.py::test_commands_that_save_for_other_windows_refuse_and_say_where_and_why"
+  ]
+ },
+ {
+  "name": "the journal healed in a private copy",
+  "file": "lagdoctor/cli.py",
+  "old": "    if args.cmd in (\"watch\", \"fix\", \"undo\", \"check\") and not getattr(args, \"capture_only\", False) and not private:",
+  "new": "    if args.cmd in (\"watch\", \"fix\", \"undo\", \"check\") and not getattr(args, \"capture_only\", False):",
+  "tests": [
+   "tests/test_private_copy.py::test_commands_that_only_read_say_where_their_files_go_and_carry_on"
+  ]
+ },
+ {
+  "name": "a refusal turned into a note",
+  "file": "lagdoctor/cli.py",
+  "old": "    if policy == \"refuse\":\n        say(f\"Not started:",
+  "new": "    if False:\n        say(f\"Not started:",
+  "tests": [
+   "tests/test_private_copy.py::test_commands_that_save_for_other_windows_refuse_and_say_where_and_why"
+  ]
+ },
+ {
+  "name": "a probe that failed lets saving go on",
+  "file": "lagdoctor/cli.py",
+  "old": "        if policy == \"refuse\":                  # cannot tell where it would be saved: save nothing",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_private_copy.py::test_a_probe_that_fails_refuses_what_saves_and_lets_reading_go_on"
+  ]
+ },
+ {
+  "name": "readers say nothing",
+  "file": "lagdoctor/cli.py",
+  "old": "    say(f\"Note: {paths.private_copy_advice(copy)} What this command saves goes there too.\")",
+  "new": "    pass",
+  "tests": [
+   "tests/test_private_copy.py::test_commands_that_only_read_say_where_their_files_go_and_carry_on"
+  ]
+ },
+ {
+  "name": "the elevated child asks about a home of its own",
+  "file": "lagdoctor/cli.py",
+  "old": "                                       _existing_folder(Path(out_file).resolve().parent) if out_file else None)",
+  "new": "                                       None)",
+  "tests": [
+   "tests/test_private_copy.py::test_the_elevated_child_asks_about_the_users_folder_it_saves_in"
+  ]
+ },
+ {
+  "name": "the nearest existing folder not looked for",
+  "file": "lagdoctor/cli.py",
+  "old": "    while not folder.is_dir() and folder.parent != folder:",
+  "new": "    while False:",
+  "tests": [
+   "tests/test_private_copy.py::test_the_elevated_child_asks_about_the_users_folder_it_saves_in"
+  ]
+ },
+ {
+  "name": "analyze refuses as a saver",
+  "file": "lagdoctor/cli.py",
+  "old": "                       \"check\": \"note\", \"analyze\": \"note\"}",
+  "new": "                       \"check\": \"note\", \"analyze\": \"refuse\"}",
+  "tests": [
+   "tests/test_private_copy.py::test_every_command_has_a_policy_and_only_those_that_save_refuse"
+  ]
+ },
+ {
+  "name": "the end-to-end run ignores a private copy",
+  "file": "scripts/e2e.py",
+  "old": "    if copy is not None:\n        return paths.private_copy_advice(copy)",
+  "new": "    if False:\n        return paths.private_copy_advice(copy)",
+  "tests": [
+   "tests/test_session.py::test_e2e_preflight_refuses_a_private_copy"
+  ]
+ }
+]

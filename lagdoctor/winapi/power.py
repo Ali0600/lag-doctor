@@ -36,6 +36,17 @@ SLIDER_MODES = {
     "ded574b5-45a0-4f42-8737-46345c09c238": "best_performance",
 }
 
+# The processor settings of a plan that can hold the PC back (WT 7.1; GUIDs and value lists re-read with
+# `powercfg /qh SCHEME_CURRENT SUB_PROCESSOR <alias>` on 2026-11-05).
+SUB_PROCESSOR = "54533251-82be-4824-96c1-47b60b740d00"
+PLAN_SETTINGS = {
+    "max_cpu": "bc5038f7-23e0-4960-96da-33abaf5935ec",   # PROCTHROTTLEMAX: maximum processor state, 0..100 %
+    "max_cpu1": "bc5038f7-23e0-4960-96da-33abaf5935ed",  # PROCTHROTTLEMAX1: the same for efficiency class 1, the
+                                                         # performance cores of a hybrid CPU (Power saver: 75 %)
+    "boost": "be337238-0d82-4146-a960-4f3749d470c7",     # PERFBOOSTMODE: 0 Disabled, 1 Enabled, 2 Aggressive, 3..6
+    "cooling": "94d3a615-a899-4ac5-ae2b-e4d8f634367f",   # SYSCOOLPOL: 0 Passive, 1 Active
+}
+
 AC_LINE = {0: True, 1: False}       # ACLineStatus -> on_battery; 255 = unknown (WT 7.4)
 BATTERY_FLAG_NO_BATTERY = 0x80
 BATTERY_FLAG_UNKNOWN = 0xFF
@@ -72,6 +83,10 @@ _powrprof.PowerReadFriendlyName.restype = wintypes.DWORD
 _powrprof.PowerEnumerate.argtypes = [wintypes.HKEY, ctypes.POINTER(GUID), ctypes.POINTER(GUID), ctypes.c_int,
                                      wintypes.ULONG, ctypes.c_void_p, ctypes.POINTER(wintypes.DWORD)]
 _powrprof.PowerEnumerate.restype = wintypes.DWORD
+for _read in (_powrprof.PowerReadACValueIndex, _powrprof.PowerReadDCValueIndex):
+    _read.argtypes = [wintypes.HKEY, ctypes.POINTER(GUID), ctypes.POINTER(GUID), ctypes.POINTER(GUID),
+                      ctypes.POINTER(wintypes.DWORD)]
+    _read.restype = wintypes.DWORD
 _kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
 _kernel32.LocalFree.restype = wintypes.HLOCAL
 _kernel32.GetSystemPowerStatus.argtypes = [ctypes.POINTER(SYSTEM_POWER_STATUS)]
@@ -160,6 +175,20 @@ def list_schemes() -> list[tuple[str, str]]:
             raise ctypes.WinError(rc, f"PowerEnumerate({index}) failed ({rc})")
         copy = GUID.from_buffer_copy(g)
         out.append((guid_str(copy), _friendly_name(copy)))
+    return out
+
+
+def plan_settings(scheme: str) -> dict[str, int | None]:
+    """A plan's processor settings, plugged in and on battery: {"max_cpu_ac", "max_cpu_dc", "boost_ac", ...}, each
+    the stored index (PLAN_SETTINGS says what it means) or None when Windows would not read it. Read-only."""
+    g, sub = guid_from_str(scheme), guid_from_str(SUB_PROCESSOR)
+    out: dict[str, int | None] = {}
+    for key, setting in PLAN_SETTINGS.items():
+        s = guid_from_str(setting)
+        for side, read in (("ac", _powrprof.PowerReadACValueIndex), ("dc", _powrprof.PowerReadDCValueIndex)):
+            value = wintypes.DWORD(0)
+            rc = read(None, ctypes.byref(g), ctypes.byref(sub), ctypes.byref(s), ctypes.byref(value))
+            out[f"{key}_{side}"] = int(value.value) if rc == 0 else None
     return out
 
 

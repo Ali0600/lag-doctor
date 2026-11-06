@@ -606,7 +606,7 @@ class SystemSampler(Collector):
         self.publish(t=t, cpu_total_pct=row[S.CPU_TOTAL_PCT], cpu_max_core_pct=row[S.CPU_MAX_CORE_PCT],
                      game_cpu_pct=row[S.GAME_CPU_PCT], game_top_thread_pct=row[S.GAME_TOP_THREAD_PCT],
                      game_gpu_pct=row[S.GAME_GPU_PCT], gpu_pct=row[S.GPU_PCT], ram_avail_mb=row[S.RAM_AVAIL_MB],
-                     disk_busy_pct=row[S.DISK_BUSY_PCT], game_alive=alive,
+                     disk_busy_pct=row[S.DISK_BUSY_PCT], game_alive=alive, game_focused=row.get(S.GAME_FOCUSED),
                      thermal_zone_c=(max(temps) - 273.15) if temps else None,
                      perf_limit_flags=single(get(P_LIMIT_FLAGS)), adapter_luid=adapter)
 

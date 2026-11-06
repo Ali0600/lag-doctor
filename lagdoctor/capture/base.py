@@ -60,6 +60,12 @@ class Collector:
     def stopping(self) -> bool:
         return self._stop_event.is_set()
 
+    @property
+    def ended(self) -> bool:
+        """Its run is over though nobody asked it to stop: started, its thread finished, no stop() yet."""
+        t = self._thread
+        return t is not None and not t.is_alive() and not self._stop_event.is_set()
+
     # ---- for subclasses -------------------------------------------------
     def run(self) -> None:
         raise NotImplementedError

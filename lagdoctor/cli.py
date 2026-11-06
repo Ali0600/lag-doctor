@@ -42,6 +42,13 @@ MAX_INVENTORY_BYTES = 16 << 20
 EXIT_BAD_ARGS = 2              # also: the game could not be found
 EXIT_TARGET_CHANGED = 3        # the PID now belongs to another process (the game exited during the prompt)
 EXIT_BUSY = 4                  # another recording is running in this Windows session
+EXIT_PRIVATE_COPY = 5          # any command: what it saves would land in another app's private copy (main)
+EXIT_NOT_READY = 6             # frame timing was wanted, but PresentMon is missing or failed its check
+
+# What each command does when Windows keeps this process's files in another app's private copy
+# (paths.private_copy): "refuse" what saves files other windows must find, "note" what only reads.
+PRIVATE_COPY_POLICY = {"setup": "refuse", "watch": "refuse", "fix": "refuse", "undo": "refuse",
+                       "check": "note", "analyze": "note"}
 
 # Console control events (wincon.h). Windows ends the process 5 s after CTRL_CLOSE_EVENT.
 CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT = 0, 1, 2, 5, 6
@@ -201,7 +208,18 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "cmd", None):
         parser.print_help()
         return 2
-    if args.cmd in ("watch", "fix", "undo", "check") and not getattr(args, "capture_only", False):
+    # First, before anything is written (the journal healing below writes): a file saved where the user's
+    # other windows and the elevated recording window cannot see it is worse than none. The elevated child
+    # checks the folder it saves the capture in (the user's), not a home of its own (perhaps another account's);
+    # the nearest one that exists, as it makes its own folder later and Windows moves a whole tree, not a folder.
+    out_file = getattr(args, "out_file", None)
+    code, private = _private_copy_gate(PRIVATE_COPY_POLICY[args.cmd],
+                                       _existing_folder(Path(out_file).resolve().parent) if out_file else None)
+    if code is not None:
+        return code
+    # Under a private copy (a reading command was let through) the journal is not healed: what it writes would
+    # land in that copy, apart from the journal the user's own windows keep.
+    if args.cmd in ("watch", "fix", "undo", "check") and not getattr(args, "capture_only", False) and not private:
         _settle_journal()
     try:
         return args.func(args)
@@ -227,6 +245,16 @@ def cmd_watch(args: argparse.Namespace) -> int:
     if not _take_lock(lock):
         return EXIT_BUSY
     with lock:
+        if not child:
+            exe, frames_why = _presentmon_exe()
+            # Said before the game is looked for and long before the session is spent, not in the report
+            # after it: a 14-minute recording was once made this way, every frame of it missing.
+            if exe is None and not args.no_elevate:
+                say(f"Frame timing is not available: {frames_why}")     # its reason says what to run
+                other = "use --no-elevate instead of --elevate" if args.elevate else "add --no-elevate"
+                say(f"Nothing was recorded. Start the recording again once that is done, or {other} to record "
+                    "everything else without frame timing.")
+                return EXIT_NOT_READY
         auto = args.auto or (args.game is None and args.pid is None)
         try:
             target = tgt.find_target(name=args.game, pid=args.pid, auto=auto)
@@ -244,10 +272,11 @@ def cmd_watch(args: argparse.Namespace) -> int:
         inventory = None
         if child:
             exe, frames_why = _child_presentmon(args)
+            if exe is None:                   # this window was opened only for frame timing: record nothing
+                say(f"Not recording: {frames_why}")
+                return EXIT_NOT_READY
             inventory, inventory_note = _child_inventory(args)
             notes += [n for n in (inventory_note, _account_note(args, exe)) if n]
-        else:
-            exe, frames_why = _presentmon_exe()
         frames = exe is not None
         if frames and not child:
             from lagdoctor.winapi import elevation
@@ -261,8 +290,8 @@ def cmd_watch(args: argparse.Namespace) -> int:
                     if not _take_lock(lock):          # declined: record here after all
                         return EXIT_BUSY
                 frames = False
-                frames_why = ("frame timing was skipped: it needs admin rights or membership of Performance Log "
-                              "Users (see `lagdoctor setup`)")
+                frames_why = ("it needs admin rights or membership of Performance Log Users (see "
+                              "`lagdoctor setup`)")
         return _record(args, target, exe, frames, frames_why, inventory, notes)
 
 
@@ -283,6 +312,8 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     else:
         out_dir = sess.session_dir(args.out or paths.sessions_dir(), target)
         cap_path = out_dir / CAPTURE_NAME
+    if not frames:
+        say(f"Frame timing is off for this recording: {frames_why}")
     say("Recording. Play normally" + (f"; press {hotkey.title()} the moment it lags" if hotkey else "")
         + "; Ctrl+C stops." + (f" Stops by itself after {args.duration:.0f} s." if args.duration else ""))
     stop, saved = threading.Event(), threading.Event()
@@ -529,7 +560,42 @@ def _wait_for_child(child, cap_path: Path) -> int | None:
             return None
 
 
+def _existing_folder(folder: Path) -> Path:
+    """`folder`, or the nearest folder above it that exists."""
+    while not folder.is_dir() and folder.parent != folder:
+        folder = folder.parent
+    return folder
+
+
+def _private_copy_gate(policy: str, folder: Path | None = None) -> tuple[int | None, bool]:
+    """(the exit code or None to go on, whether the files land in a private copy). Windows may keep what this process
+    saves in `folder` (default: lag-doctor's home) in another app's private folder (paths.private_copy), which the
+    user's other windows and the elevated recording window never see: a PresentMon set up, a recording saved or a fix
+    journaled from here would be missing for them."""
+    try:
+        folder = folder if folder is not None else paths.home()
+        copy = paths.private_copy(folder)
+    except OSError as exc:
+        if policy == "refuse":                  # cannot tell where it would be saved: save nothing
+            say(f"lag-doctor cannot save files in {folder or 'its folder'}: {exc}")
+            return 1, False
+        return None, False
+    if copy is None:
+        return None, False
+    if policy == "refuse":
+        say(f"Not started: {paths.private_copy_advice(copy)}")
+        return EXIT_PRIVATE_COPY, True
+    say(f"Note: {paths.private_copy_advice(copy)} What this command saves goes there too.")
+    return None, True
+
+
 def _child_failure(code: int) -> str:
+    if code == EXIT_NOT_READY:
+        return ("The administrator window could not use PresentMon (it failed its check there), so nothing was "
+                "recorded. Run `lagdoctor setup` here, then start the recording again.")
+    if code == EXIT_PRIVATE_COPY:
+        return ("The administrator window saves its files where this window cannot see them (another app's private "
+                "folder), so it did not record. Run lag-doctor from a PowerShell window opened from the Start menu.")
     if code == EXIT_BUSY:
         return ("Another lag-doctor recording was already running, so the administrator window did not record. "
                 "Stop it first, then try again.")
@@ -611,7 +677,7 @@ def _child_presentmon(args: argparse.Namespace) -> tuple[Path | None, str]:
     try:
         pm_setup.verify(exe)
     except pm_setup.SetupError as exc:
-        return None, f"frame timing was skipped: the PresentMon this recording was given failed its check: {exc}"
+        return None, f"the PresentMon this recording was given failed its check: {exc}"
     return exe, ""
 
 
@@ -659,11 +725,12 @@ def _remove_empty_dir(folder: Path) -> None:
 
 
 def _presentmon_exe() -> tuple[Path | None, str]:
+    """The verified PresentMon, or None and why not, in plain words (missing, or failing its check)."""
     from lagdoctor import setup as pm_setup
     try:
         return pm_setup.ensure_presentmon(allow_download=False), ""
-    except pm_setup.SetupError as exc:          # missing or failed verification: record without frames, say why
-        return None, f"frame timing was skipped: {exc}"
+    except pm_setup.SetupError as exc:
+        return None, str(exc)
 
 
 # ---------------------------------------------------------------- analyze --

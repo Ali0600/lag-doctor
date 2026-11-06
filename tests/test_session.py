@@ -228,6 +228,16 @@ def test_skipped_frame_timing_is_reported_not_silent():
     assert cap.sources["frames"].state == "off" and "admin rights" in cap.sources["frames"].detail
 
 
+def test_network_checks_turned_off_are_reported_as_turned_off():
+    opts = SessionOptions(duration_s=0.1, hotkey=None, network=False)
+    _, cap = run_session(full_set()[:3], opts=opts)
+    for name in ("network", "net_flows"):
+        assert cap.sources[name].state == "off" and cap.sources[name].detail == "turned off for this recording " \
+                                                                                 "(--no-network)", name
+    _, cap = run_session(full_set())                                  # on: whatever the collectors said
+    assert cap.sources["network"].state == "ok" and cap.sources["net_flows"].state == "ok"
+
+
 def test_the_capture_survives_a_save_and_load(tmp_path):
     _, cap = run_session(full_set())
     back = Capture.load(cap.save(tmp_path / "c.ldcap.json.gz"))
@@ -239,7 +249,169 @@ def test_status_line_literal_points():
                               "network": {"inet_rtt_ms": 24.4}}, "ctrl+alt+l")
     assert line.startswith("1:15 | 144 fps | main thread 61% | GPU 97% | ping 24 ms")
     assert "Ctrl+Alt+L = it lagged now" in line
-    assert status_line(0, {}, None).startswith("0:00 | fps - | main thread - | GPU - | ping -")
+    # Running but nothing yet: a dash. Not running at all this time (frame timing off, --no-network): "off".
+    assert status_line(0, {"frames": {}, "system": {}, "network": {}}, None).startswith(
+        "0:00 | fps - | main thread - | GPU - | ping -   (")
+    assert status_line(0, {"system": {}}, None).startswith("0:00 | fps off | main thread - | GPU - | ping off   (")
+
+
+class FramesState(Collector):
+    """The frame source as _check_frames sees it: a fixed live readout and state. `finish`: its run ends at once,
+    as PresentMon's does once it exits (Collector.ended)."""
+    name = "frames"
+
+    def __init__(self, live, state="ok", detail="", finish=False):
+        super().__init__()
+        self._fixed, self._state, self._finish = dict(live), (state, detail), finish
+        self.set_status(state, detail)
+        if finish and live:
+            self.publish(**live)
+
+    def run(self):
+        self.set_status(*self._state)
+        if self._finish:
+            return
+        for _ in self.ticks(0.02):
+            if self._fixed:
+                self.publish(**self._fixed)
+
+
+def _ended(src):
+    src.start(0.0)
+    deadline = time.monotonic() + 5.0
+    while not src.ended:
+        assert time.monotonic() < deadline, "the collector's run did not end"
+        time.sleep(0.01)
+    return src
+
+
+class InFront(Collector):
+    """The system sampler as the session sees it live: the game alive and in front the whole time."""
+    name = "system"
+
+    def run(self):
+        self.set_status("ok", tool="stub")
+        for _ in self.ticks(0.05):
+            self.publish(game_focused=1, game_alive=True)
+
+
+def _record_with_presentmon(mode, tmp_path, monkeypatch, seconds):
+    """A real Session over the real PresentMon collector running the repo's stand-in PresentMon (its modes are in
+    tests/fixtures/presentmon/fake_presentmon.py), the game in front throughout. Returns what was printed."""
+    from tests import test_presentmon_source as tps
+    monkeypatch.setattr(sess, "STATUS_PERIOD_S", 0.1)
+    state = tmp_path / f"pm-{mode}"
+    state.mkdir()
+    lines: list[str] = []
+    target = {"pid": tps.PID, "create_time": 1, "name": "PresentBench.exe", "exe": r"C:\x\PresentBench.exe",
+              "adapter_luid": None}
+    s = Session(target, SessionOptions(duration_s=seconds, hotkey=None), collectors=[tps.Fake(mode, state), InFront()],
+                inventory=INVENTORY, alive=lambda: True, printer=lines.append, processes=lambda: {})
+    s.run()
+    return lines
+
+
+def test_presentmon_that_crashes_after_frames_came_is_said_at_once_and_its_rate_not_frozen(tmp_path, monkeypatch):
+    # The real collector settles "partial", never "failed", once rows came: here 10 rows, then 0xC0000005.
+    lines = _record_with_presentmon("crash", tmp_path, monkeypatch, seconds=4.0)
+    said = [line for line in lines if "Frame timing is not working" in line]
+    assert len(said) == 1 and "PresentMon ended with exit code" in said[0], said
+    stop = lines.index(sess.STOPPING_MESSAGE + "\n")
+    after = [line for line in lines[lines.index(said[0]):stop] if line.startswith("\r")]
+    assert after and all(" | fps - | " in line for line in after), after[-3:]       # no frame rate frozen in place
+
+
+def test_presentmon_that_keeps_running_is_no_warning(tmp_path, monkeypatch):
+    lines = _record_with_presentmon("breakable", tmp_path, monkeypatch, seconds=2.0)
+    assert not [line for line in lines if "Frame timing is not working" in line]
+    assert any(" fps | " in line and " fps - " not in line for line in lines if line.startswith("\r"))
+
+
+NOT_WORKING_END = ". Everything else is still being recorded; stop with Ctrl+C if you need frame timing.\n"
+
+
+def _frames_check(frames_live, focused, state="ok", detail=""):
+    lines: list[str] = []
+    s = Session(TARGET, SessionOptions(), collectors=[FramesState(frames_live, state, detail)], printer=lines.append)
+    return s, lines, {"frames": dict(frames_live), "system": {"game_focused": focused}}
+
+
+def test_no_frame_while_the_game_is_in_front_is_said_once_on_its_own_line():
+    s, lines, live = _frames_check({"frames": 0, "fps": None}, focused=1)
+    for t in (0.0, 4.0, 8.0, 9.9):
+        s._check_frames(live, t)
+    assert lines == []
+    s._check_frames(live, 10.1)
+    s._check_frames(live, 30.0)
+    assert lines == ["\nFrame timing is not working: the game was in front for 10 s and PresentMon saw no frame from "
+                     "it" + NOT_WORKING_END]
+
+
+@pytest.mark.parametrize("frames_live,focused", [({"frames": 0}, 0), ({"frames": 0}, None), ({}, 0),
+                                                 ({"frames": 3, "fps": 60.0}, 1)])
+def test_a_game_behind_other_windows_or_already_drawing_is_no_warning(frames_live, focused):
+    s, lines, live = _frames_check(frames_live, focused)
+    for t in range(61):
+        s._check_frames(live, float(t))
+    assert lines == []
+
+
+def test_only_time_with_the_game_in_front_counts_towards_the_wait():
+    # The player alt-tabs to the terminal to start the recording: a minimised game draws nothing.
+    s, lines, front = _frames_check({"frames": 0}, focused=1)
+    behind = {"frames": {"frames": 0}, "system": {"game_focused": 0}}
+    for t in range(9):
+        s._check_frames(front, float(t))            # 8 s in front
+    for t in range(9, 60):
+        s._check_frames(behind, float(t))           # then a long while behind
+    assert lines == []
+    s._check_frames(front, 61.0)                    # 2 s more in front: 10 s in all
+    assert lines == ["\nFrame timing is not working: the game was in front for 10 s and PresentMon saw no frame from "
+                     "it" + NOT_WORKING_END]
+
+
+def test_presentmon_that_ended_mid_recording_is_said_at_once_even_after_frames_came():
+    stopped = ("120 frames from 1 swap chain(s) of PID 1; PresentMon stopped on its own at t=61.0 s while the game kept "
+               "running")
+    lines: list[str] = []
+    s = Session(TARGET, SessionOptions(), printer=lines.append,
+                collectors=[_ended(FramesState({"frames": 120, "fps": 60.0}, "partial", stopped, finish=True))])
+    s._check_frames({"frames": {"frames": 120, "fps": 60.0}, "system": {"game_focused": 1}}, 0.0)
+    assert lines == [f"\nFrame timing is not working: {stopped}" + NOT_WORKING_END]
+
+
+def test_presentmon_that_ended_in_ok_is_the_games_own_exit_not_a_fault():
+    lines: list[str] = []
+    done = "120 frames from 1 swap chain(s) of PID 1; the game exited, so the capture was stopped"
+    s = Session(TARGET, SessionOptions(), printer=lines.append,
+                collectors=[_ended(FramesState({"frames": 120, "fps": 60.0}, "ok", done, finish=True))])
+    for t in range(30):
+        s._check_frames({"frames": {"frames": 120, "fps": 60.0}, "system": {"game_focused": 1}}, float(t))
+    assert lines == []
+
+
+def test_without_frame_timing_in_the_recording_there_is_nothing_to_warn_about():
+    lines: list[str] = []
+    s = Session(TARGET, SessionOptions(frames=False), collectors=[Fake("system")], printer=lines.append)
+    for t in range(30):
+        s._check_frames({"system": {"game_focused": 1}}, float(t))
+    assert lines == []
+
+
+def test_the_recording_loop_says_it_while_still_recording(monkeypatch):
+    monkeypatch.setattr(sess, "STATUS_PERIOD_S", 0.05)
+    lines: list[str] = []
+    s = Session(TARGET, SessionOptions(duration_s=0.5, hotkey=None),
+                collectors=[FramesState({}, "unavailable", "PresentMon needs admin rights (access denied)"),
+                            Fake("system")], inventory=INVENTORY, alive=lambda: True, printer=lines.append)
+    s.run()
+    said = [line for line in lines if "Frame timing is not working" in line]
+    assert said == ["\nFrame timing is not working: PresentMon needs admin rights (access denied)" + NOT_WORKING_END]
+    assert lines.index(said[0]) < lines.index(sess.STOPPING_MESSAGE + "\n")
+
+
+def test_the_no_frames_wait_is_a_few_seconds_of_play():
+    assert 5.0 <= sess.NO_FRAMES_WARN_S <= 30.0
 
 
 INTEL, NVIDIA = "0x00000000_0x00010c49", "0x00000000_0x00010f83"
@@ -717,6 +889,7 @@ class ShellExecuteRecorder:
 def test_the_end_to_end_relaunch_hands_over_an_absolute_folder_and_no_empty_argument(monkeypatch, tmp_path):
     e2e = _e2e()
     from lagdoctor.winapi import elevation
+    monkeypatch.setattr(e2e, "preflight", lambda: None)         # PresentMon ready (test_e2e_preflight_* own it)
     rec = ShellExecuteRecorder()
     monkeypatch.setattr(elevation, "_ShellExecuteExW", rec)
     monkeypatch.setattr(elevation, "can_trace", lambda: False)
@@ -743,7 +916,42 @@ def test_an_end_to_end_relaunch_that_cannot_start_says_so_plainly(monkeypatch, t
         raise AssertionError("a refused command reached ShellExecuteExW")
     monkeypatch.setattr(elevation, "_ShellExecuteExW", never)
     monkeypatch.setattr(elevation, "can_trace", lambda: False)
+    monkeypatch.setattr(e2e, "preflight", lambda: None)
     monkeypatch.setattr(sys, "executable", "")           # Python could not tell its own path
     assert e2e.main(["--modes", "smooth", "--duration", "0.1", "--out", str(tmp_path / "e2e")]) == 3
     out = capsys.readouterr().out
     assert "could not be started" in out and "Traceback" not in out
+
+
+def test_e2e_preflight_stops_before_any_prompt_when_presentmon_is_missing(monkeypatch, tmp_path, capsys):
+    # The first real run asked for UAC, then failed all 8 scenarios on the same missing PresentMon.
+    e2e = _e2e()
+    from lagdoctor.winapi import elevation
+
+    def never(*a, **k):
+        raise AssertionError("asked for elevation without a PresentMon to run")
+    monkeypatch.setattr(elevation, "relaunch_elevated", never)
+    monkeypatch.setattr(elevation, "can_trace", lambda: False)
+    assert e2e.main(["--modes", "smooth", "--out", str(tmp_path / "e2e")]) == 3     # the test home has none
+    assert capsys.readouterr().out.startswith("Nothing ran: PresentMon 2.6.0 is not installed (")
+    assert not (tmp_path / "e2e").exists()
+
+
+def test_e2e_preflight_in_the_elevated_child_hands_its_reason_back(tmp_path, capsys):
+    e2e = _e2e()
+    out = tmp_path / "e2e"
+    assert e2e.main(["--modes", "smooth", "--out", str(out), "--child"]) == 3
+    (result,) = json.loads((out / "e2e-results.json").read_text(encoding="utf-8"))
+    assert result["mode"] == "all" and result["ok"] is False and "is not installed" in result["error"]
+    capsys.readouterr()
+    assert e2e.print_summary(out, 3) == 1                    # the first window shows it, not "no results"
+    assert "ERROR: PresentMon 2.6.0 is not installed" in capsys.readouterr().out
+
+
+def test_e2e_preflight_refuses_a_private_copy(monkeypatch, tmp_path, capsys):
+    e2e = _e2e()
+    from lagdoctor import paths
+    monkeypatch.setattr(paths, "private_copy", lambda folder=None: paths.PrivateCopy("App_1", r"C:\x\LocalCache\ld"))
+    assert e2e.main(["--modes", "smooth", "--out", str(tmp_path / "e2e")]) == 3
+    out = capsys.readouterr().out
+    assert out.startswith("Nothing ran: Windows keeps the files") and "App_1" in out and "Start menu" in out

@@ -1272,10 +1272,10 @@
  {
   "name": "power plan counts the GPU power cap",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    heat = _heat_share(e)                # heat or the power brake; never the power cap",
-  "new": "    heat = (0.0, st.mean(e.gpu(G.POWER_CAP_PCT) or [0.0]), 0, 1)                # heat or the power brake; never the power cap",
+  "old": "    fixes: list[FixSuggestion] = []\n    name = _text(p.get(\"scheme_name\"), 80)\n    # Switch plans only",
+  "new": "    cap = e.gpu(G.POWER_CAP_PCT)\n    if cap and st.mean(cap) >= NV_THROTTLE_PCT:\n        c.support(\"gpu_telemetry\", W_STEADY, \"and the GPU sat at its power cap\", st.mean(cap), \"%\", NV_THROTTLE_PCT)\n    fixes: list[FixSuggestion] = []\n    name = _text(p.get(\"scheme_name\"), 80)\n    # Switch plans only",
   "tests": [
-   "tests/test_analysis_rules.py::test_power_plan_never_counts_the_gpus_power_cap_as_support"
+   "tests/test_analysis_rules.py::test_power_plan_never_counts_the_gpu_as_support"
   ]
  },
  {

@@ -1,20 +1,31 @@
 """The drive a file lives on: SSD or HDD (the seek-penalty property, read with no access rights, so no admin),
-and its free space.
+its free space, and where a new file made in a folder really lands (new_file_path).
 
-Recipe and constants: docs/research/windows-telemetry.md (WT) section 9.5, re-read in winioctl.h 10.0.19041.
+Recipe and constants: docs/research/windows-telemetry.md (WT) section 9.5, re-read in winioctl.h 10.0.19041;
+the probe's flags are from fileapi.h and winnt.h (10.0.19041).
 """
 from __future__ import annotations
 
 import ctypes
 import ntpath
+import os
 import re
 from ctypes import wintypes
+from typing import Any
 
 IOCTL_STORAGE_QUERY_PROPERTY = 0x002D1400       # CTL_CODE(IOCTL_STORAGE_BASE 0x2D, 0x500, METHOD_BUFFERED, ANY)
 STORAGE_DEVICE_SEEK_PENALTY_PROPERTY = 7        # STORAGE_PROPERTY_ID (WT 9.5, verify log #97)
 PROPERTY_STANDARD_QUERY = 0
 FILE_SHARE_READ, FILE_SHARE_WRITE = 0x1, 0x2
 OPEN_EXISTING = 3
+CREATE_NEW = 1
+GENERIC_READ, GENERIC_WRITE, DELETE = 0x80000000, 0x40000000, 0x00010000
+FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_TEMPORARY = 0x2, 0x100
+FILE_FLAG_DELETE_ON_CLOSE = 0x04000000
+FILE_NAME_NORMALIZED = 0x0
+VOLUME_NAME_DOS, VOLUME_NAME_NT, VOLUME_NAME_NONE = 0x0, 0x2, 0x4      # winbase.h 10.0.19041
+ERROR_INSUFFICIENT_BUFFER, APPMODEL_ERROR_NO_PACKAGE = 122, 15700     # winerror.h
+PROBE_PREFIX = ".lagdoctor-probe-"
 DRIVE_REMOVABLE, DRIVE_FIXED = 2, 3              # GetDriveTypeW; network, optical and RAM disks are not judged
 MAX_PATH_CHARS = 32_767
 
@@ -55,6 +66,10 @@ _kernel32.GetDriveTypeW.restype = wintypes.UINT
 _kernel32.GetDiskFreeSpaceExW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_ulonglong),
                                           ctypes.POINTER(ctypes.c_ulonglong), ctypes.POINTER(ctypes.c_ulonglong)]
 _kernel32.GetDiskFreeSpaceExW.restype = wintypes.BOOL
+_kernel32.GetFinalPathNameByHandleW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+_kernel32.GetFinalPathNameByHandleW.restype = wintypes.DWORD
+_kernel32.GetCurrentPackageFamilyName.argtypes = [ctypes.POINTER(ctypes.c_uint32), wintypes.LPWSTR]
+_kernel32.GetCurrentPackageFamilyName.restype = wintypes.LONG
 
 INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
@@ -152,3 +167,62 @@ def free_gb(path: str) -> float | None:
     if not _kernel32.GetDiskFreeSpaceExW(root, ctypes.byref(free), None, None):
         return None
     return free.value / 2**30
+
+
+def new_file_path(folder: str) -> str:
+    r"""Where Windows really puts a new file made in `folder`: the final path of a probe file, "\\?\C:\...".
+
+    It can lie outside `folder`: Windows may keep the AppData files of a program that a packaged app started
+    in that app's private folder (paths.private_copy). The probe is hidden, marked temporary and deleted by
+    Windows when its handle closes, even if this process dies first, so nothing is left behind. Raises OSError
+    when the probe cannot be made or its path read.
+    """
+    name = ntpath.join(check_path(folder), f"{PROBE_PREFIX}{os.getpid()}-{os.urandom(4).hex()}")
+    handle = _kernel32.CreateFileW(name, GENERIC_READ | GENERIC_WRITE | DELETE, 0, None, CREATE_NEW,
+                                   FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE,
+                                   None)
+    if handle in (None, INVALID_HANDLE_VALUE):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        # A RAM disk with no Mount Manager entry (ImDisk, OSFMount) fails the drive-letter form with
+        # ERROR_INVALID_FUNCTION; its NT or volume-less form still shows a private copy's \Packages\<app>\LocalCache\.
+        first: OSError | None = None
+        for volume in (VOLUME_NAME_DOS, VOLUME_NAME_NT, VOLUME_NAME_NONE):
+            try:
+                return _final_path_of(handle, FILE_NAME_NORMALIZED | volume)
+            except OSError as exc:
+                first = first or exc
+        raise first or OSError(f"the path of a new file in {folder} could not be read")
+    finally:
+        _kernel32.CloseHandle(handle)
+
+
+def _final_path_of(handle: Any, flags: int) -> str:
+    """GetFinalPathNameByHandleW in the form `flags` asks for; OSError when Windows will not give it."""
+    size = 512
+    while size <= MAX_PATH_CHARS + 1:
+        buf = ctypes.create_unicode_buffer(size)
+        n = _kernel32.GetFinalPathNameByHandleW(handle, buf, size, flags)
+        if n == 0:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if n < size:              # done: n is the length without the terminating null
+            return buf.value
+        size = n + 1              # too small: n is the size needed (with the null)
+    raise OSError(f"a path longer than {MAX_PATH_CHARS} characters")
+
+
+def own_package_family() -> str | None:
+    """This process's own package family name (e.g. a Microsoft Store Python's
+    "PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0"), or None for a process with no package identity. A shell
+    the Claude desktop app starts has none, though Windows moves its AppData files (paths.private_copy)."""
+    n = ctypes.c_uint32(0)
+    rc = _kernel32.GetCurrentPackageFamilyName(ctypes.byref(n), None)
+    if rc == APPMODEL_ERROR_NO_PACKAGE:
+        return None
+    if rc != ERROR_INSUFFICIENT_BUFFER or not 0 < n.value <= 1024:
+        raise OSError(f"GetCurrentPackageFamilyName failed ({rc})")
+    buf = ctypes.create_unicode_buffer(n.value)
+    rc = _kernel32.GetCurrentPackageFamilyName(ctypes.byref(n), buf)
+    if rc != 0:
+        raise OSError(f"GetCurrentPackageFamilyName failed ({rc})")
+    return buf.value

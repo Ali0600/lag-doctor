@@ -83,6 +83,16 @@ def parts_of(cap=None):
     return {c.name: c for c in at._causes(cap, at._others(cap))}
 
 
+@pytest.mark.parametrize("reasons,held", [("sw_thermal_slowdown", "heat"),
+                                          ("sw_thermal_slowdown,hw_power_brake_slowdown", "heat or its power brake")])
+def test_the_gpu_heat_cause_names_only_what_the_readings_named(reasons, held):
+    from tests import synth
+    cap = lag_cap()
+    cap.gpu = synth.gpu_table(30, nv_throttle_pct=80.0, nv_reasons=reasons)
+    label = parts_of(cap)["gpu_throttle"].parts[0].label
+    assert label.startswith(f"the NVIDIA GPU was held down by {held} {{v}} of the time"), label
+
+
 def test_a_signal_must_clear_a_robust_z_of_35():
     part = at._Part(at._Series([0.0], [0.0]), +1, lambda m: 0.0, "x", str)
     base = at._Baseline(25.0, 2.0)                    # scale = 1.4826 * 2 = 2.9652

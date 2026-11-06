@@ -124,8 +124,13 @@ DOWNLOAD_NEAR_S = 5.0        # [inferred] pings this close to a logged download 
 
 OK_STATES = ("ok", "partial")
 BALANCED_GUID = "381b4222-f694-41f0-9685-ff5bb260df2e"   # WT 7.1: GUID_TYPICAL_POWER_SAVINGS (Balanced)
-QUIET_PLAN_WORDS = ("silent", "quiet", "power saver", "battery saver", "eco", "whisper")   # [inferred]
-PERFORMANCE_PLAN_WORDS = ("performance", "turbo")        # [inferred] plans worth switching to
+QUIET_PLAN_WORDS = ("silent", "quiet", "power saver", "battery saver", "eco", "whisper")   # [inferred] whole words
+PERFORMANCE_PLAN_WORDS = ("performance", "turbo")        # [inferred] plans worth switching to; whole words
+# A plan's processor settings (inventory power.plan, winapi/power.PLAN_SETTINGS). An ASUS plan named "Silent" here
+# set the CPU exactly as Balanced does (powercfg, 2026-11-05), so a plan is judged by these when they were read.
+PLAN_FULL_CPU = 100          # maximum processor state, %
+PLAN_BOOST_OFF = 0           # PERFBOOSTMODE 0 = Disabled
+PLAN_COOLING_PASSIVE = 0     # SYSCOOLPOL 0 = Passive: slow the CPU before speeding up the fans (Windows' battery default)
 LOW_POWER_MODES = ("battery_saver", "better_battery")    # LC 4.12: effective mode 0 / 1
 HARD_DISK = "HDD"            # DESIGN inventory game.media (WT 9.5)
 SOLID_STATE = "SSD"
@@ -740,7 +745,7 @@ def _gpu_limit(cap: Capture, ctx: dict) -> Any:
                       m, "%", NV_UTIL_PCT)
         heat = _heat_share(e)
         if heat is not None and heat[1] >= NV_THROTTLE_PCT:
-            c.neutral("gpu_telemetry", f"the GPU was also held down by heat or its power brake "
+            c.neutral("gpu_telemetry", f"the GPU was also held down by {attribute.held_by(e.cap)} "
                                        f"{heat[1]:.0f}% of the time (see GPU throttling)")
     fps = e.avg_fps
     fixes = [_advice("Lower the render resolution, or use an upscaler (DLSS, FSR or XeSS)"),
@@ -917,7 +922,7 @@ def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
     if heat is not None:
         full, share, named, n = heat
         if share >= NV_THROTTLE_PCT:
-            c.support("gpu_telemetry", W_DIRECT, f"the NVIDIA GPU was held down by heat or its power brake "
+            c.support("gpu_telemetry", W_DIRECT, f"the NVIDIA GPU was held down by {attribute.held_by(cap)} "
                                                  f"{share:.0f}% of the time ({NV_THROTTLE_PCT:.0f}% or more)"
                       + (f", counting only the {named} of {n} readings that named one, since this capture's "
                          "throttle share also held the power cap" if old else ""), share, "%", NV_THROTTLE_PCT)
@@ -944,7 +949,7 @@ def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
             c.support("gpu_telemetry", W_STEADY, f"the GPU reached {hot:.0f} °C, at or above its {target:.0f} °C "
                                                  "target temperature", hot, "°C", target)
     _event_link(c, "gpu_throttle", "gpu_telemetry", "the GPU slowing down")
-    _quiet_power_hint(c)
+    _quiet_power_hint(c, gpu=True)
     fixes = [_advice("Give the laptop more air", "Raise its back, keep the vents clear and clean."),
              _advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
              _advice("Cap the frame rate a little lower", "A capped GPU runs cooler and holds its clock.")]
@@ -979,9 +984,12 @@ def _power_cap_item(c: _Case) -> bool:
     return False
 
 
-def _quiet_power_hint(c: _Case) -> None:
-    """LC 4.2, 4.5, 4.12: a quiet power plan, battery or power saving make throttling more likely (static, +1)."""
-    for why in _power_problems(c.env):
+def _quiet_power_hint(c: _Case, *, gpu: bool) -> None:
+    """LC 4.2, 4.5, 4.12: a quiet power plan, battery or power saving make throttling more likely (static, +1). For
+    the GPU never a CPU-only plan setting (its cap, boost off): a Windows plan sets no GPU limit."""
+    for kind, why in _power_problems(c.env):
+        if gpu and kind == "plan_cpu":
+            continue
         c.support("static", W_STATIC, why)
         return
 
@@ -1024,7 +1032,7 @@ def _cpu_throttle(cap: Capture, ctx: dict) -> Any:
         c.against("cpu_threads", W_STEADY, f"the game's busiest thread used only {100 * busiest:.0f}% of a CPU, so CPU "
                                            "speed is not what holds it back", 100 * busiest, "%", 100 * CPU_BUSY_FOR_THROTTLE)
     _event_link(c, "cpu_throttle", "cpu_limits", "the CPU slowing down")
-    _quiet_power_hint(c)
+    _quiet_power_hint(c, gpu=False)
     fixes = [_advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
              _advice("Give the laptop more air", "Raise its back, keep the vents clear and clean."),
              _advice("Cap the frame rate a little lower", "Less CPU work per second means less heat.")]
@@ -1126,23 +1134,96 @@ def _ram_pressure(cap: Capture, ctx: dict) -> Any:
 
 # ---------------------------------------------------------------------------------- setup ---
 
-def _power_problems(e: _Env) -> list[str]:
+def _power_problems(e: _Env) -> list[tuple[str, str]]:
+    """What in the power settings holds the PC back, as (kind, plain words). Kinds: "battery", "saver", "mode",
+    "plan_cpu" (the plan caps the CPU or turns boost off: CPU only), "plan_cooling", "oem" (the maker's quiet mode,
+    seen through the plan its tool switches to), "plan_name" (a quiet name, in a capture without the plan's
+    settings)."""
     p = e.power
-    out = []
+    out: list[tuple[str, str]] = []
     if p.get("on_battery") is True:
         pct = fa._bounded(p.get("battery_pct"))
-        out.append("the laptop ran on battery" + (f" ({pct:.0f}%)" if pct is not None else ""))
+        out.append(("battery", "the laptop ran on battery" + (f" ({pct:.0f}%)" if pct is not None else "")))
     if p.get("saver") is True:
-        out.append("battery saver is on")
+        out.append(("saver", "battery saver is on"))
     mode = p.get("effective_mode")
     if mode in LOW_POWER_MODES:
-        out.append(f"Windows' effective power mode is {str(mode).replace('_', ' ')}")
+        out.append(("mode", f"Windows' effective power mode is {str(mode).replace('_', ' ')}"))
     if p.get("slider") == "best_efficiency":
-        out.append("the power mode is set to Best power efficiency")
+        out.append(("mode", "the power mode is set to Best power efficiency"))
     name = _text(p.get("scheme_name"), 80)
-    if name and any(w in name.lower() for w in QUIET_PLAN_WORDS):
-        out.append(f"the active power plan is \"{name}\", a quiet, power-saving plan")
+    plan = "the active power plan" + (f" \"{name}\"" if name else "")
+    held = _plan_held_back(e)
+    for kind in ("plan_cpu", "plan_cooling"):
+        said = [text for k, text in held or [] if k == kind]
+        if said:
+            out.append((kind, f"{plan} " + " and ".join(said)))
+    quiet_mode = _oem_quiet_mode(e)
+    if quiet_mode:
+        out.append(("oem", f"Armoury Crate's quiet mode looks to be on: the active power plan \"{quiet_mode}\" is the "
+                           "one it switches to in that mode, which lowers fan speed and power limits outside Windows' "
+                           "own plan settings"))
+    elif held is None and name and _has_word(name, QUIET_PLAN_WORDS):      # its settings unknown: its name only
+        out.append(("plan_name", f"the active power plan is \"{name}\", a quiet, power-saving plan"))
     return out
+
+
+def _plan_held_back(e: _Env) -> list[tuple[str, str]] | None:
+    """What the active plan's own processor settings hold back on the power source in use, as ("plan_cpu" or
+    "plan_cooling", words) ([] = nothing); None when the capture has none of them (saved before lag-doctor read them,
+    or Windows would not say). The performance-core cap counts only on a hybrid CPU, the only kind it limits."""
+    plan = _dict(e.power.get("plan"))
+    battery = e.power.get("on_battery") is True
+    side = "dc" if battery else "ac"
+    max_cpu = _setting_index(plan.get(f"max_cpu_{side}"), PLAN_FULL_CPU)
+    max_p = _setting_index(plan.get(f"max_cpu1_{side}"), PLAN_FULL_CPU)
+    boost = _setting_index(plan.get(f"boost_{side}"), 6)
+    cooling = _setting_index(plan.get(f"cooling_{side}"), 1)
+    if max_cpu is None and max_p is None and boost is None and cooling is None:
+        return None
+    out = []
+    if max_cpu is not None and max_cpu < PLAN_FULL_CPU:
+        out.append(("plan_cpu", f"caps the CPU at {max_cpu}% of its speed"))
+    if max_p is not None and max_p < PLAN_FULL_CPU and _dict(e.inv.get("cpu")).get("hybrid") is True:
+        out.append(("plan_cpu", f"caps the CPU's performance cores at {max_p}% of their speed"))
+    if boost == PLAN_BOOST_OFF:
+        out.append(("plan_cpu", "turns CPU boost off"))
+    if not battery and cooling == PLAN_COOLING_PASSIVE:     # on battery, passive is Windows' own default
+        out.append(("plan_cooling", "slows the CPU before it speeds up the fans"))
+    return out
+
+
+def _oem_quiet_mode(e: _Env) -> str | None:
+    """The active plan's name when the maker's quiet mode looks to be on, else None. Armoury Crate switches the
+    Windows plan to one named for its operating mode (Silent, Performance, Turbo: 163 such switches by
+    ArmouryCrate.UserSessionHelper.exe in this laptop's System log, read 2026-11-05), so a quiet-named active plan
+    while Armoury Crate runs is its quiet mode, whatever the plan's own Windows settings say."""
+    name = _text(e.power.get("scheme_name"), 80)
+    tools = [t for t in _dict(e.inv.get("oem")).get("tools") or [] if isinstance(t, str)]
+    if name and _has_word(name, QUIET_PLAN_WORDS) and any("armoury" in t.lower() for t in tools):
+        return name
+    return None
+
+
+def _gpu_limit_lowered(e: _Env) -> tuple[float, float] | None:
+    """(the GPU's enforced power limit for most of the capture, its default) when the first is below the second
+    (NVML; the default from inventory nvidia.power_default_w), else None."""
+    limits = [w for w in e.gpu(G.POWER_LIMIT_W) if w > 0]
+    default = _fin(_dict(e.inv.get("nvidia")).get("power_default_w"))
+    if not limits or not default:
+        return None
+    limit = st.median(limits)
+    return (limit, default) if limit < default else None
+
+
+def _setting_index(value: Any, top: int) -> int | None:
+    """A power setting's stored index, an int from 0 to `top`; anything else None."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= top else None
+
+
+def _has_word(name: str, words: Iterable[str]) -> bool:
+    """`name` holds one of `words` as a whole word: "eco" is in "Eco mode", never in "ASUS Recommended"."""
+    return any(re.search(rf"\b{re.escape(w)}\b", name, flags=re.IGNORECASE) for w in words)
 
 
 def _better_scheme(e: _Env) -> tuple[str, str] | None:
@@ -1158,7 +1239,7 @@ def _better_scheme(e: _Env) -> tuple[str, str] | None:
         if guid == BALANCED_GUID and guid != active:
             return guid, name
     for guid, name in schemes:
-        if guid != active and any(w in name.lower() for w in PERFORMANCE_PLAN_WORDS):
+        if guid != active and _has_word(name, PERFORMANCE_PLAN_WORDS):
             return guid, name
     return None
 
@@ -1172,31 +1253,44 @@ def _power_plan(cap: Capture, ctx: dict) -> Any:
         c.lack("static", W_DIRECT, "the power settings were not read")
         return c.conclude()
     problems = _power_problems(e)
+    held = _plan_held_back(e)
+    quiet_mode = _oem_quiet_mode(e)
     if not problems:
         name = _text(p.get("scheme_name"), 80)
         parts = ["plugged in" if p.get("on_battery") is False else "power source unknown"]
         if p.get("saver") is False:
             parts.append("battery saver off")
         if name:
-            parts.append(f"power plan \"{name}\"")
+            parts.append(f"power plan \"{name}\"" + (", whose own settings let the CPU run at full speed"
+                                                     if held == [] else ""))
         if isinstance(p.get("slider"), str):
             parts.append(f"power mode {p['slider'].replace('_', ' ')}")
         c.against("static", W_DIRECT, ", ".join(parts))
         return c.conclude()
-    c.support("static", W_DIRECT, "; ".join(problems))
+    c.support("static", W_DIRECT, "; ".join(text for _, text in problems))
     limit = e.sys(S.CPU_PERF_LIMIT_PCT)
     if limit:
         share = sum(1 for x in limit if x < 100.0) / len(limit)
         if share >= CPU_LIMIT_SHARE:
             c.support("cpu_limits", W_STEADY, f"and the CPU was held below full speed in {100 * share:.0f}% of samples",
                       100 * share, "%", 100 * CPU_LIMIT_SHARE)
-    heat = _heat_share(e)                # heat or the power brake; never the power cap, the GPU's design limit
-    if heat is not None and heat[1] >= NV_THROTTLE_PCT:
-        c.support("gpu_telemetry", W_STEADY, f"and the GPU was held down by heat or its power brake "
-                                             f"{heat[1]:.0f}% of the time", heat[1], "%", NV_THROTTLE_PCT)
+    # No GPU heat here: a Windows plan sets no GPU limit, and a hot GPU is gpu_throttle's evidence, not the plan's.
+    # Counting it once made a plan that set the CPU exactly as Balanced does the top cause, with a switch to
+    # Balanced that changed only the screen brightness. The maker's quiet mode does set the GPU's power limit, so a
+    # limit held below the GPU's default counts for it, and for it alone.
+    lowered = _gpu_limit_lowered(e) if quiet_mode else None
+    if lowered:
+        c.support("gpu_telemetry", W_STEADY, f"the GPU's power limit sat at {lowered[0]:.0f} W for most of the "
+                                             f"capture, below its {lowered[1]:.0f} W default", lowered[0], "W",
+                  lowered[1])
     fixes: list[FixSuggestion] = []
     name = _text(p.get("scheme_name"), 80)
-    quiet = name is not None and any(w in name.lower() for w in QUIET_PLAN_WORDS)
+    # Switch plans only for a plan whose own settings hold the PC back. Under Armoury Crate the plan only marks its
+    # mode: switching the Windows plan would not change the fan and power mode it sets.
+    if held is not None:
+        quiet = bool(held)
+    else:
+        quiet = quiet_mode is None and name is not None and _has_word(name, QUIET_PLAN_WORDS)
     better = _better_scheme(e) if quiet else None
     if better:
         fixes.append(FixSuggestion(title=f"Switch the power plan from \"{name}\" to \"{better[1]}\"",
@@ -1209,11 +1303,16 @@ def _power_plan(cap: Capture, ctx: dict) -> Any:
         fixes.append(_advice("Turn off battery saver while gaming"))
     if p.get("slider") == "best_efficiency" or p.get("effective_mode") in LOW_POWER_MODES:
         fixes.append(_advice("Set the power mode to Best performance", "Settings > System > Power & battery."))
-    oem = [t for t in _dict(e.inv.get("oem")).get("tools") or [] if isinstance(t, str)]
-    if quiet and any("armoury" in t.lower() for t in oem):
+    if quiet_mode:
         fixes.append(_advice("Set Armoury Crate's operating mode to Performance or Turbo",
-                             "The maker's fan and power mode can hold the laptop back even under a Windows plan."))
-    return c.conclude("Power saving is holding the PC back", _sentence("; ".join(problems)) +
+                             "Its quiet mode lowers fan speed and power limits, which no Windows plan setting shows."))
+    windows = [text for kind, text in problems if kind != "oem"]
+    if not windows:                           # only the maker's quiet mode
+        return c.conclude("Armoury Crate's quiet mode is holding the laptop back",
+                          f"The active power plan \"{quiet_mode}\" is the one Armoury Crate switches to in its quiet "
+                          "mode, which lowers fan speed and power limits, so the CPU and GPU run slower to stay quiet.",
+                          fixes)
+    return c.conclude("Power saving is holding the PC back", _sentence("; ".join(text for _, text in problems)) +
                       " Power saving lowers how fast the CPU and GPU may run.", fixes)
 
 

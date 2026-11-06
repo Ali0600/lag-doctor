@@ -1,0 +1,264 @@
+[
+ {
+  "name": "a plan judged by its name although its settings were read",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if max_cpu is None and max_p is None and boost is None and cooling is None:\n        return None",
+  "new": "    if True:\n        return None",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_plan_is_judged_by_its_settings_not_its_name"
+  ]
+ },
+ {
+  "name": "a capped CPU not seen",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if max_cpu is not None and max_cpu < PLAN_FULL_CPU:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_plan_is_judged_by_its_settings_not_its_name",
+   "tests/test_analysis_rules.py::test_on_battery_the_plans_battery_settings_count_and_passive_cooling_is_windows_own"
+  ]
+ },
+ {
+  "name": "boost off not seen",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if boost == PLAN_BOOST_OFF:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_plan_is_judged_by_its_settings_not_its_name"
+  ]
+ },
+ {
+  "name": "passive cooling not seen",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if not battery and cooling == PLAN_COOLING_PASSIVE:     # on battery, passive is Windows' own default",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_plan_is_judged_by_its_settings_not_its_name"
+  ]
+ },
+ {
+  "name": "passive cooling on battery blamed",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if not battery and cooling == PLAN_COOLING_PASSIVE:     # on battery, passive is Windows' own default",
+  "new": "    if cooling == PLAN_COOLING_PASSIVE:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_on_battery_the_plans_battery_settings_count_and_passive_cooling_is_windows_own"
+  ]
+ },
+ {
+  "name": "a cap on the performance cores not seen",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if max_p is not None and max_p < PLAN_FULL_CPU and _dict(e.inv.get(\"cpu\")).get(\"hybrid\") is True:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_plan_that_caps_the_performance_cores_counts_only_on_a_hybrid_cpu"
+  ]
+ },
+ {
+  "name": "a cap on the performance cores blamed on a CPU without them",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if max_p is not None and max_p < PLAN_FULL_CPU and _dict(e.inv.get(\"cpu\")).get(\"hybrid\") is True:",
+  "new": "    if max_p is not None and max_p < PLAN_FULL_CPU:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_plan_that_caps_the_performance_cores_counts_only_on_a_hybrid_cpu"
+  ]
+ },
+ {
+  "name": "the battery side never read",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    side = \"dc\" if battery else \"ac\"",
+  "new": "    side = \"ac\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_on_battery_the_plans_battery_settings_count_and_passive_cooling_is_windows_own"
+  ]
+ },
+ {
+  "name": "garbage taken for a setting",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return value if isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= top else None",
+  "new": "    return value",
+  "tests": [
+   "tests/test_analysis_rules.py::test_without_readable_settings_only_the_plans_name_is_to_go_on"
+  ]
+ },
+ {
+  "name": "plan names matched as substrings",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return any(re.search(rf\"\\b{re.escape(w)}\\b\", name, flags=re.IGNORECASE) for w in words)",
+  "new": "    return any(w in name.lower() for w in words)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_plan_names_match_whole_words_only"
+  ]
+ },
+ {
+  "name": "the plan to switch to found by substring",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if guid != active and _has_word(name, PERFORMANCE_PLAN_WORDS):",
+  "new": "        if guid != active and any(w in name.lower() for w in PERFORMANCE_PLAN_WORDS):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_power_plan_picks_a_performance_plan_when_balanced_is_not_listed_and_never_a_junk_guid"
+  ]
+ },
+ {
+  "name": "GPU heat counted for the plan again",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    fixes: list[FixSuggestion] = []\n    name = _text(p.get(\"scheme_name\"), 80)\n    # Switch plans only",
+  "new": "    heat = _heat_share(e)\n    if heat is not None and heat[1] >= NV_THROTTLE_PCT:\n        c.support(\"gpu_telemetry\", W_STEADY, \"and the GPU was held down by heat\", heat[1], \"%\", NV_THROTTLE_PCT)\n    fixes: list[FixSuggestion] = []\n    name = _text(p.get(\"scheme_name\"), 80)\n    # Switch plans only",
+  "tests": [
+   "tests/test_analysis_rules.py::test_power_plan_never_counts_the_gpu_as_support"
+  ]
+ },
+ {
+  "name": "the switch offered for a plan that holds nothing back",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        quiet = bool(held)",
+  "new": "        quiet = True",
+  "tests": [
+   "tests/test_analysis_rules.py::test_on_battery_the_plans_battery_settings_count_and_passive_cooling_is_windows_own"
+  ]
+ },
+ {
+  "name": "a switch of Windows plan offered for Armoury Crate's mode",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        quiet = quiet_mode is None and name is not None and _has_word(name, QUIET_PLAN_WORDS)",
+  "new": "        quiet = name is not None and _has_word(name, QUIET_PLAN_WORDS)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_armoury_crates_quiet_mode_is_read_through_the_plan_it_switches_to"
+  ]
+ },
+ {
+  "name": "a plan that holds nothing back is cleared without saying so",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                                                     if held == [] else \"\"))",
+  "new": "                                                     if False else \"\"))",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_plan_is_judged_by_its_settings_not_its_name"
+  ]
+ },
+ {
+  "name": "Armoury Crate's quiet mode never seen",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if name and _has_word(name, QUIET_PLAN_WORDS) and any(\"armoury\" in t.lower() for t in tools):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_armoury_crates_quiet_mode_is_read_through_the_plan_it_switches_to"
+  ]
+ },
+ {
+  "name": "a quiet name taken for Armoury Crate's mode without Armoury Crate",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if name and _has_word(name, QUIET_PLAN_WORDS) and any(\"armoury\" in t.lower() for t in tools):",
+  "new": "    if name and _has_word(name, QUIET_PLAN_WORDS):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_armoury_crates_quiet_mode_is_read_through_the_plan_it_switches_to"
+  ]
+ },
+ {
+  "name": "a GPU at its default power limit counted as lowered",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return (limit, default) if limit < default else None",
+  "new": "    return (limit, default)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_armoury_crates_quiet_mode_is_read_through_the_plan_it_switches_to"
+  ]
+ },
+ {
+  "name": "Armoury Crate's quiet mode named as power saving",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if not windows:                           # only the maker's quiet mode",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_armoury_crates_quiet_mode_is_read_through_the_plan_it_switches_to"
+  ]
+ },
+ {
+  "name": "a CPU-only plan setting taken as a GPU hint",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if gpu and kind == \"plan_cpu\":\n            continue",
+  "new": "        if False:\n            continue",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_throttle_takes_no_cpu_only_plan_setting_as_a_hint"
+  ]
+ },
+ {
+  "name": "the GPU rule asks for the CPU's hints",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    _quiet_power_hint(c, gpu=True)",
+  "new": "    _quiet_power_hint(c, gpu=False)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_throttle_takes_no_cpu_only_plan_setting_as_a_hint"
+  ]
+ },
+ {
+  "name": "the plan's settings not recorded",
+  "file": "lagdoctor/capture/inventory.py",
+  "old": "            \"saver\": status.get(\"saver\"), \"plan\": plan}",
+  "new": "            \"saver\": status.get(\"saver\"), \"plan\": None}",
+  "tests": [
+   "tests/test_machine_inventory.py::test_collect_returns_every_design_key"
+  ]
+ },
+ {
+  "name": "battery values read from the plugged-in side",
+  "file": "lagdoctor/winapi/power.py",
+  "old": "        for side, read in ((\"ac\", _powrprof.PowerReadACValueIndex), (\"dc\", _powrprof.PowerReadDCValueIndex)):",
+  "new": "        for side, read in ((\"ac\", _powrprof.PowerReadACValueIndex), (\"dc\", _powrprof.PowerReadACValueIndex)):",
+  "tests": [
+   "tests/test_machine_winapi.py::test_plan_settings_match_what_powercfg_reports_for_every_plan"
+  ]
+ },
+ {
+  "name": "the performance-core cap never read",
+  "file": "lagdoctor/winapi/power.py",
+  "old": "    \"max_cpu1\": \"bc5038f7-23e0-4960-96da-33abaf5935ed\",",
+  "new": "   ",
+  "tests": [
+   "tests/test_machine_winapi.py::test_plan_settings_match_what_powercfg_reports_for_every_plan"
+  ]
+ },
+ {
+  "name": "heat named although the brake fired",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if named & set(THERMAL_ONLY) and not named & set(BRAKE_OR_EITHER):",
+  "new": "    if named & set(THERMAL_ONLY):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_throttle_names_only_what_the_readings_named"
+  ]
+ },
+ {
+  "name": "plain heat never named",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if named & set(THERMAL_ONLY) and not named & set(BRAKE_OR_EITHER):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_throttle_names_only_what_the_readings_named"
+  ]
+ },
+ {
+  "name": "the GPU heat finding ignores what the readings named",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            c.support(\"gpu_telemetry\", W_DIRECT, f\"the NVIDIA GPU was held down by {attribute.held_by(cap)} \"",
+  "new": "            c.support(\"gpu_telemetry\", W_DIRECT, f\"the NVIDIA GPU was held down by heat or its power brake \"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_throttle_names_only_what_the_readings_named"
+  ]
+ },
+ {
+  "name": "the GPU-bound finding ignores what the readings named",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            c.neutral(\"gpu_telemetry\", f\"the GPU was also held down by {attribute.held_by(e.cap)} \"",
+  "new": "            c.neutral(\"gpu_telemetry\", f\"the GPU was also held down by heat or its power brake \"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_limit_names_only_what_the_readings_named"
+  ]
+ },
+ {
+  "name": "a stutter's GPU heat cause ignores what the readings named",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "                                      f\"the NVIDIA GPU was held down by {held_by(cap)} {{v}} of the time \"",
+  "new": "                                      f\"the NVIDIA GPU was held down by heat or its power brake {{v}} of the time \"",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_gpu_heat_cause_names_only_what_the_readings_named"
+  ]
+ }
+]
