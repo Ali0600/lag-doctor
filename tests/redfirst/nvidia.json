@@ -295,5 +295,10 @@
    "old": "\"enforced.power.limit\", \"power.default_limit\", \"clocks.current.graphics\",",
    "new": "\"enforced.power.limit\", \"clocks.current.graphics\",",
    "tests": ["tests/test_nvidia.py::test_parse_smi_header_strips_units_and_matches_what_we_ask_for",
-             "tests/test_nvidia.py::test_fallback_streams_rows_and_says_which_source_ran"]}
+             "tests/test_nvidia.py::test_fallback_streams_rows_and_says_which_source_ran"]},
+  {"name": "NVML never opens",
+   "file": "lagdoctor/winapi/nvml.py",
+   "old": "        \"\"\"Load nvml.dll by absolute path and initialise it. None (reason in last_open_error) if that fails.\"\"\"",
+   "new": "        \"\"\"Load nvml.dll by absolute path and initialise it. None (reason in last_open_error) if that fails.\"\"\"\n        return None",
+   "tests": ["tests/test_nvidia_live.py::test_nvml_opens_on_this_machine"]}
 ]

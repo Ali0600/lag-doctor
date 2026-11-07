@@ -79,11 +79,14 @@ every pull request; code and workflow changes go through a pull request and merg
   branches cut from it: the history from before the 2026-11-07 rewrite stays in `refs/backup/`, `refs/original/` and
   the merged `worktree-*` branches, and `.git/hooks/pre-push` (local, not in the repo) refuses any commit that holds
   those details.
-- **CI's runner lacks some of this laptop**: no GPU, thermal sensors or ping replies; an administrator with UAC off;
-  a High performance plan. The workflow declares that in `LAGDOCTOR_ABSENT`, and a test that needs one of those
-  carries `@pytest.mark.needs(name)` (names in `tests/capabilities.py`), so it skips there with the reason. Never make
-  a test skip on a detected absence that a regression could also cause, and add a name only when a CI run shows the
-  runner lacks it. Tests in `tests/test_cli.py` run as an unelevated owner unless they say otherwise.
+- **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies, and a High
+  performance plan. The workflow declares that in `LAGDOCTOR_ABSENT`, and a test that needs one of those carries
+  `@pytest.mark.needs(name)` (names in `tests/capabilities.py`), so it skips there with the reason; undeclared, a
+  missing capability fails. Never make a test skip on a detected absence that a regression could also cause (the NVIDIA
+  fixtures used to), and mark a test only when a CI run shows it failing for that lack: a test that passes on the
+  runner keeps running there, even on another branch (elevated, the ETW tests check the real-time session). A PC
+  without an NVIDIA GPU sets `LAGDOCTOR_ABSENT=nvidia`. The runner's account is an administrator with UAC off, so
+  `tests/test_cli.py` models an unelevated owner unless a test says otherwise.
 - `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
 - `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` is
   timing-sensitive under full-suite load (failed once on 2026-11-05 with 0 delay gaps, then 4/4 alone; on CI once in

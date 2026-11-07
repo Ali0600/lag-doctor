@@ -110,7 +110,6 @@ def test_bad_providers_are_refused(providers):
         etw.RealtimeSession(_name(), providers, lambda e: None)
 
 
-@pytest.mark.needs("unelevated")
 def test_unelevated_real_time_start_is_access_denied_and_leaves_nothing_behind():
     name = _name()
     session = etw.RealtimeSession(name, [(KERNEL_NETWORK, 4, 0x30)], lambda e: None)

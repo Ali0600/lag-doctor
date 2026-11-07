@@ -312,11 +312,12 @@ def test_live_adapters_have_the_contract_keys(adapters):
     assert len({a["luid"] for a in adapters}) == len(adapters)
 
 
+@pytest.mark.needs("nvidia")
 def test_live_nvidia_vram_and_pci_agree_with_nvidia_smi(adapters):
     nv = [a for a in adapters if a["vendor"] == "nvidia"]
     smi = shutil.which("nvidia-smi") or str(SYSTEM32 / "nvidia-smi.exe")
-    if not nv or not Path(smi).is_file():
-        pytest.skip("no NVIDIA adapter or nvidia-smi on this machine")
+    # Declared absent (LAGDOCTOR_ABSENT=nvidia) this test skips before it runs; here an empty list is a failure.
+    assert nv and Path(smi).is_file(), f"no NVIDIA adapter listed {[a['vendor'] for a in adapters]} or no {smi}"
     rows = [r.split(", ") for r in run([smi, "--query-gpu=memory.total,pci.bus_id",
                                         "--format=csv,noheader,nounits"]).strip().splitlines()]
     by_pci = {bus.split(":", 1)[1].upper(): int(total) for total, bus in rows}   # 00000000:01:00.0 -> 01:00.0

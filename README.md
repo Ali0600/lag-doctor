@@ -129,9 +129,10 @@ uv run python scripts/etw_access.py                            # who may trace o
 - PresentMon's parser is tested against its own gold ETW captures replayed through the real exe, and the
   ETW consumer against private in-process sessions, so neither needs admin rights in the test suite.
 - **CI** (`.github/workflows/ci.yml`) runs the suite on GitHub's Windows Server 2025 runners for Python 3.13 and
-  3.11. A runner has no GPU, no thermal sensors and no ping replies, runs as an administrator and uses a High
-  performance plan: the workflow declares that in `LAGDOCTOR_ABSENT`, and the tests marked as needing those skip
-  there with the reason. Tests that need PresentMon's download or an NVIDIA driver skip through their own fixtures.
+  3.11. A runner has no GPU, no NVIDIA driver, no thermal sensors and no ping replies, and uses a High performance
+  plan: the workflow declares that in `LAGDOCTOR_ABSENT`, and the tests marked as needing those skip there with the
+  reason. Tests that need PresentMon's download skip through their own fixtures. On a PC without an NVIDIA GPU, set
+  `$env:LAGDOCTOR_ABSENT = "nvidia"` before running the tests, or the NVIDIA ones fail.
 
 ## Experience Gained
 
@@ -144,10 +145,10 @@ uv run python scripts/etw_access.py                            # who may trace o
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 2,564 tests, run in CI on GitHub's Windows runners for 2 Python versions with
-  SHA-pinned actions, where hardware the runner lacks skips by declaration, never by detection; plus a mutation
-  harness of 1,421 deliberate sabotages in 27 specs that must each turn a test red, run on a throwaway copy of the
-  tree with hash checks.
+- **Testing that proves itself**: 2,565 tests, run in CI on GitHub's Windows runners for 2 Python versions with
+  SHA-pinned actions; the hardware a runner lacks is declared, so those tests skip there by name and still fail on
+  the laptop if a bug hides the hardware; plus a mutation harness of 1,422 deliberate sabotages in 27 specs that
+  must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
 - **Supply chain and least privilege**: PresentMon pinned by SHA-256, checked through a deny-write handle and

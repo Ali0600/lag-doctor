@@ -20,12 +20,18 @@ from lagdoctor.capture.gpumon import NvidiaSampler, throttle_pct
 from lagdoctor.model import G
 from lagdoctor.winapi.nvml import Nvml
 
+# Every test here needs an NVIDIA GPU and driver. A PC without one declares it (LAGDOCTOR_ABSENT=nvidia,
+# tests/capabilities.py) and they skip; without the declaration a missing NVML or nvidia-smi fails, so a regression in
+# Nvml.open() cannot pass as an absent GPU.
+pytestmark = pytest.mark.needs("nvidia")
+NO_NVIDIA = "no NVIDIA GPU here? set LAGDOCTOR_ABSENT=nvidia (tests/capabilities.py)"
+
 
 @pytest.fixture(scope="module")
 def nv():
     session = Nvml.open()
     if session is None:
-        pytest.skip(f"NVML is not available on this machine: {Nvml.last_open_error}")
+        pytest.fail(f"NVML did not open: {Nvml.last_open_error} ({NO_NVIDIA})")
     yield session
     session.close()
 
@@ -34,8 +40,14 @@ def nv():
 def smi() -> str:
     exe = gpumon.smi_path()
     if not os.path.isfile(exe):
-        pytest.skip(f"{exe} not found")
+        pytest.fail(f"{exe} not found ({NO_NVIDIA})")
     return exe
+
+
+def test_nvml_opens_on_this_machine():
+    session = Nvml.open()
+    assert session is not None, f"NVML did not open: {Nvml.last_open_error} ({NO_NVIDIA})"
+    session.close()
 
 
 def smi_query(exe: str, fields: list[str]) -> list[dict[str, str]]:

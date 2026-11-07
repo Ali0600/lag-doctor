@@ -1,7 +1,6 @@
 # The unit tests plus every live test a GitHub Windows runner can run. What the runner lacks is declared in
 # LAGDOCTOR_ABSENT (tests/capabilities.py): a test that needs one of those skips with the reason, and so do the tests
-# whose own fixtures find no PresentMon download or NVIDIA driver. The summary at the end of each test step lists
-# every skip.
+# whose own fixtures find no PresentMon download. The summary at the end of each test step lists every skip.
 name: CI
 
 on:
@@ -13,9 +12,9 @@ permissions:
   contents: read
 
 env:
-  # Measured on the first run (2026-11-07): no GPU, no thermal sensors, no ping replies, a High performance plan,
-  # and an administrator account with UAC off.
-  LAGDOCTOR_ABSENT: internet_icmp,gpu,thermal_zone,power_slider,unelevated
+  # Measured on the first runs (2026-11-07): no GPU, no NVIDIA driver, no thermal sensors, no ping replies, and a
+  # High performance plan. The account is an administrator with UAC off; tests/test_cli.py models an unelevated owner.
+  LAGDOCTOR_ABSENT: internet_icmp,gpu,thermal_zone,power_slider,nvidia
   # Timing-sensitive under full-suite load (CLAUDE.md): it runs on its own after the rest.
   ALONE: tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap
 

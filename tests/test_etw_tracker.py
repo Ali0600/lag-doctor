@@ -123,7 +123,6 @@ def test_the_tracker_asks_for_kernel_network_ipv4_and_ipv6_in_its_fixed_session(
     assert s.stopped
 
 
-@pytest.mark.needs("unelevated")
 def test_unelevated_the_real_session_is_unavailable_with_the_reason():
     name = f"lagdoctor-test-{uuid.uuid4().hex[:12]}"      # never the real lag-doctor-net, even when elevated
     tr = FlowTracker({GAME}, selftest=False,
