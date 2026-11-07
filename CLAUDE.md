@@ -12,12 +12,15 @@ uv sync --extra laglab                                   # set up .venv (Python 
 uv run pytest -q                                         # unit + live read-only tests
 uv run pytest -q tests/test_<area>.py                    # one area (use this while other work is running)
 uv run python scripts/redfirst.py tests/redfirst/<spec>.json   # prove a guard's test can fail
+uv run python -m tests.downloads fetch-gold              # PresentMon's gold captures, for the replay tests
 uv run python -m laglab --list-modes                     # the fake laggy game used by tests
 uv run python -m lagdoctor ...                           # the tool (see README)
 ```
 
 CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 and 3.11 on every push to `main` and
-every pull request; code and workflow changes go through a pull request and merge on green.
+every pull request; code and workflow changes go through a pull request and merge on green. Before the tests it gets
+PresentMon through `lagdoctor setup --download` and the gold captures through `tests.downloads fetch-gold`, checks
+both against the tests' pins and caches them; each job's summary counts the tests that use them.
 
 ## Rules an agent must not guess
 
@@ -31,8 +34,9 @@ every pull request; code and workflow changes go through a pull request and merg
   (`HKCU\Software\LagDoctorTest\<uuid>`, deleted afterwards); power, display and GPU-preference backends
   are faked. Process-priority tests act only on a child process the test spawned. `LAGDOCTOR_HOME` is
   redirected for every test by `tests/conftest.py`; the real PresentMon exe and PresentMon's gold ETL
-  captures come from the `presentmon_exe` and `gold_etl_dir` fixtures (they skip, with the reason, when
-  absent).
+  captures come from the `presentmon_exe` and `gold_etl_dir` fixtures, which check them against the tests' own
+  pins in `tests/downloads.py`. Absent, they skip with the reason, unless `LAGDOCTOR_REQUIRE` names them (CI
+  does): then they fail, because there a missing download means a broken download step.
 - **Red first.** A new guard ships with a mutation in `tests/redfirst/*.json` that turns its test red;
   `scripts/redfirst.py` must report every mutation `CAUGHT`. Never weaken a test to make it pass. The runner
   mutates a temp copy of the tree, never the working tree; so tests must not read the real repo by an

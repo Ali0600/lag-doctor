@@ -45,10 +45,13 @@ not help.
 2. Done (2026-11-07): public at https://github.com/Ali0600/lag-doctor; `.github/SECURITY.md` asks for reports through
    GitHub's private vulnerability reporting.
 3. Done (2026-11-07): CI on `windows-2025` for Python 3.13 and 3.11, SHA-pinned actions, a read-only token. Tests
-   that need what the runner lacks skip by declaration (`LAGDOCTOR_ABSENT`, `tests/capabilities.py`); the ones that
-   need PresentMon's download or its gold captures skip through their fixtures (32 skips name the missing download),
-   so a CI step that fetches the pinned release and the gold captures would let them run there. Standard runners
-   are free for public repositories [verified: GitHub Actions billing page, 2026-11-06].
+   that need what the runner lacks skip by declaration (`LAGDOCTOR_ABSENT`, `tests/capabilities.py`). Standard
+   runners are free for public repositories [verified: GitHub Actions billing page, 2026-11-06].
+4. Done (2026-11-07): of the 32 tests that skipped there for want of PresentMon's download or its gold captures, 31
+   run in CI; the 32nd needs a token without ETW rights, and the runner's can trace. CI gets PresentMon through
+   `lagdoctor setup --download` and the captures at the pinned commit
+   (`tests/downloads.py`), checks both against the tests' own pins and caches them; `LAGDOCTOR_REQUIRE` makes a
+   missing one fail those tests rather than skip them.
 
 ## Stage 2: the service experiments, on CI
 
