@@ -1,0 +1,35 @@
+# The unit tests plus every live test a GitHub Windows runner can run. Tests that need what a runner
+# lacks (an NVIDIA GPU, a real display, PresentMon and its gold captures, Wi-Fi, ...) skip with their reason;
+# the summary at the end of the test step lists every skip.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: windows-2025
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.13 is what lag-doctor runs on; 3.11 is the oldest pyproject.toml promises.
+        python: ["3.13", "3.11"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.10.4"
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: uv sync --locked --extra laglab
+      - name: Tests
+        run: uv run --no-sync pytest -v --durations=25
