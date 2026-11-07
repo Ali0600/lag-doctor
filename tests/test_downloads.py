@@ -156,11 +156,20 @@ def run_probes(tmp_path: Path, **env: str) -> tuple[int, dict[str, tuple[str, st
     local.mkdir(exist_ok=True)
     (probe_dir / "test_probe.py").write_text(PROBES, encoding="utf-8")
     summary, report = tmp_path / "summary.md", tmp_path / "report.xml"
+    # The child's own temp folders stay in tmp_path, as test_redfirst.py does for its runs. In the shared
+    # %TEMP%\pytest-of-<user>, each child run adds a numbered folder and pushes this suite's out of the three pytest
+    # keeps, so the next pytest run deletes the suite's whole folder. Measured on CI (2026-11-07): with the child
+    # folders there, the timing-sensitive ETW test that runs after the suite was about 2 s slower and failed 3 times
+    # in 16 runs; with them here, 12 of 12 passed at its usual 3.3 s.
+    temp = tmp_path / "temp"
+    temp.mkdir()
     child_env = {k: v for k, v in os.environ.items() if k not in CLEARED}
-    child_env.update({"PYTHONPATH": str(ROOT), "LOCALAPPDATA": str(local), "GITHUB_STEP_SUMMARY": str(summary)}, **env)
+    child_env.update({"PYTHONPATH": str(ROOT), "LOCALAPPDATA": str(local), "GITHUB_STEP_SUMMARY": str(summary),
+                      "TEMP": str(temp), "TMP": str(temp), "TMPDIR": str(temp)}, **env)
     done = subprocess.run([sys.executable, "-m", "pytest", "-p", "tests.conftest", "-p", "no:cacheprovider", "-q",
                            f"--junitxml={report}", str(probe_dir)], cwd=probe_dir, env=child_env,
                           capture_output=True, encoding="utf-8", errors="replace", timeout=120)
+    assert done.returncode == 4 or list(temp.glob("pytest-of-*")), "the child run kept its temp folders elsewhere"
     outcomes = {}
     if report.is_file():
         for case in ET.parse(report).getroot().iter("testcase"):

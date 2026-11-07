@@ -95,7 +95,10 @@ both against the tests' pins and caches them; each job's summary counts the test
 - `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
 - `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` is
   timing-sensitive under full-suite load (failed once on 2026-11-05 with 0 delay gaps, then 4/4 alone; on CI once in
-  two full runs): rerun it alone before blaming a change for it, as CI does. `tests/test_nvidia_live.py::test_sampler_
+  two full runs): rerun it alone before blaming a change for it, as CI does. A test that starts a child pytest gives it
+  its own `TEMP` (as `tests/test_redfirst.py` and `tests/test_downloads.py` do): child runs in the shared pytest temp
+  folder made this test about 2 s slower on CI and failed it 3 times in 16 runs (2026-11-07).
+  `tests/test_nvidia_live.py::test_sampler_
   reads_each_row_just_after_a_driver_refresh` failed on 2026-11-07, alone too, with the NVIDIA GPU idle in P8 (no
   training job) and the screen locked; it had passed with the GPU busy. Two more depend on the PC's state: `tests/test_cli.py::test_a_real_console_event_
   while_recording_still_saves_the_capture` (its child hit the 60 s timeout once under full-suite load, then 3/3
