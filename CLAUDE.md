@@ -69,6 +69,13 @@ uv run python -m lagdoctor ...                           # the tool (see README)
   `paths.private_copy`) and `scripts/e2e.py` stops before its UAC prompt (exit 3). `scripts/etw_access.py`
   (E1) has no such check and raises its UAC prompt at once, so an agent never runs it either. Run them all in the
   user's Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`).
+- **The repo is public** (https://github.com/Ali0600/lag-doctor). Never commit the owner's personal details: write
+  user-folder paths as `%LOCALAPPDATA%`, `%TEMP%` or `<repo>`, and leave out this PC's name and SID, its adapter and
+  power-plan GUIDs, its public IP and MAC addresses (tests use documentation ranges, `192.168.0.x` for a home network,
+  and made-up MACs and GUIDs), what else runs on it, and when its owner played or downloaded what. Push only `main` and
+  branches cut from it: the history from before the 2026-11-07 rewrite stays in `refs/backup/`, `refs/original/` and
+  the merged `worktree-*` branches, and `.git/hooks/pre-push` (local, not in the repo) refuses any commit that holds
+  those details.
 - `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
 - `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` is
   timing-sensitive under full-suite load (failed once on 2026-11-05 with 0 delay gaps, then 4/4 alone): rerun it alone

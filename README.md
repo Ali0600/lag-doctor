@@ -2,7 +2,9 @@
 
 Finds out **why a PC game lags** (low FPS, stutter, uneven pacing or network lag) by watching it from
 outside while you play, explains the cause with the numbers behind it, and fixes what can be fixed safely.
-It never injects into, hooks or even opens the game process, so anti-cheat has nothing to object to.
+Its own code never injects into, hooks or opens the game process. The one exception is PresentMon, which it
+runs for frame timing: PresentMon holds a query-only handle to the game, the kind Task Manager uses. No tool
+can promise what a given anti-cheat accepts.
 
 Status: a working command-line tool for Windows 10/11, built and tested on one hybrid-GPU laptop. The parts
 that need admin rights (live frame timing and the game-server tracker) are tested against recorded traces
@@ -29,9 +31,11 @@ generated, the analysis and the page are the real ones.*
 
 ## Run it
 
-From the repo folder, in PowerShell (Python 3.11 or newer, managed by [uv](https://docs.astral.sh/uv/)):
+In PowerShell (Python 3.11 or newer, managed by [uv](https://docs.astral.sh/uv/)):
 
 ```powershell
+git clone https://github.com/Ali0600/lag-doctor         # get the code
+cd lag-doctor
 uv sync                                                 # create .venv
 uv run python -m lagdoctor setup                        # download + verify PresentMon 2.6.0 (asks first)
 uv run python -m lagdoctor check                        # settings check-up, no game needed
@@ -67,9 +71,10 @@ uv run python -m lagdoctor analyze CAPTURE              # re-run the analysis on
 
 - **GPU heat, clocks and throttling are NVIDIA-only** (NVML). On other GPUs the load and video memory still
   come from Windows counters.
-- **`--elevate` runs this checkout's Python code as administrator.** A program already running as you could
-  edit that code and ride along on the prompt you approve. Approve it only for a checkout you trust, or join
-  Performance Log Users and skip elevation (frame timing then works without it; the game-server tracker does not).
+- **`--elevate`, `scripts/e2e.py` and `scripts/etw_access.py` run this checkout's Python code as administrator.**
+  A program already running as you could edit that code and ride along on the prompt you approve. Approve them
+  only for a checkout you trust. For recordings, joining Performance Log Users skips elevation (frame timing then
+  works without it; the game-server tracker does not).
 - **Frame caps a hair under the refresh rate** (about 143.3–144 FPS on a 144 Hz screen) can still count a
   frame held one refresh longer than usual as a stutter.
 - **The low-frame-rate threshold** (80 % of the refresh rate) comes from a study of 60–120 Hz screens and is
@@ -147,7 +152,10 @@ uv run python scripts/etw_access.py                            # who may trace o
 ## Credits
 
 Frame timing comes from [Intel PresentMon](https://github.com/GameTechDev/PresentMon) 2.6.0 (MIT licence),
-downloaded and hash-verified at setup. The tests replay PresentMon's own gold ETW captures.
+downloaded and hash-verified at setup. The tests replay PresentMon's own gold ETW captures. The repo carries
+some of PresentMon's own output, Copyright Intel Corporation under the MIT licence: its `--help` text
+(`docs/research/presentmon-2.6.0-help.txt`) and trimmed captures in `tests/fixtures/presentmon/`, whose README
+holds the licence text.
 
 ## Licence
 

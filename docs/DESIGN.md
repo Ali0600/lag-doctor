@@ -11,8 +11,8 @@ verification log; trust a note's *Corrected* entries over its body.
 
 1. **Never touch the game.** No DLL injection, no hooks, no memory reads, no handles to the game process.
    Everything comes from OS telemetry: ETW (via PresentMon and our own Kernel-Network session),
-   performance counters (PDH), the system-wide `NtQuerySystemInformation` snapshot, NVML. Anti-cheat
-   cannot object to what never touches the game.
+   performance counters (PDH), the system-wide `NtQuerySystemInformation` snapshot, NVML. Nothing is
+   injected or hooked for anti-cheat to object to, though no tool can promise what a given anti-cheat accepts.
    - **The one exception is PresentMon itself**: its child process opens the game with
      `PROCESS_QUERY_LIMITED_INFORMATION` (the access Task Manager uses) and holds it until the game exits
      (PM 8.1). lag-doctor's own process never opens the game.

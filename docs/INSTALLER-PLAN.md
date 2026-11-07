@@ -18,7 +18,7 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
 - [x] After E1, done: setup says the group covers frame timing only; the tracker's not-measured reason names
   `--elevate` and, for a member, the group's limit; an explicit `--elevate` elevates a group member.
 - [ ] E2, the group fallback's sign-in test (below). Nothing in the service depends on it.
-- [ ] Stage 1: public repo and CI. The tree is scrubbed; it waits on the owner's choice for the history.
+- [ ] Stage 1: public repo and CI. Public since 2026-11-07, after a history rewrite (DECISIONS 2026-11-07); CI next.
 - [ ] Stage 2: the service experiments on CI's throwaway Windows machines.
 - [ ] Stage 3: the MSI.
 - [ ] Stage 4: the capture service.
@@ -39,11 +39,10 @@ not help.
 
 ## Stage 1: public repo and CI
 
-1. The tree is scrubbed (2026-11-07; research note section 7). 60 old commits still show the user name and the
-   owner's machine-learning job, so the owner decides how the history goes public: rewritten (commit ids change; no
-   file quotes one, one commit message does), as it is, one fresh commit with the history kept here, or private
-   first. Nothing is pushed before that.
-2. Create the GitHub repository (owner's go), push, and add a `SECURITY.md`.
+1. Done (2026-11-07): personal details scrubbed from the tree and, by the history rewrite the owner chose, from
+   every commit (research note section 7; DECISIONS 2026-11-07).
+2. Done (2026-11-07): public at https://github.com/Ali0600/lag-doctor; `.github/SECURITY.md` asks for reports through
+   GitHub's private vulnerability reporting.
 3. CI on GitHub-hosted Windows runners: the unit tests (the live tests that need this laptop's GPU or PresentMon
    skip with their reason), SHA-pinned actions, least-privilege `permissions:`. Standard runners are free for public
    repositories [verified: GitHub Actions billing page, 2026-11-06]; a private repository on GitHub Free gets

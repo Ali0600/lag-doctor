@@ -159,15 +159,17 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
 | E7 | winget install, upgrade, uninstall from elevated, unelevated and standard-account shells, and on Windows 10; uninstall removes the service | the public release |
 | E8 | Red-first tests of each service guard: another session refused, a squatted pipe fails loudly, a PID in another session refused, no other process's network events relayed, nothing loaded from a user-writable path | shipping the service |
 
-## 7. Before anything is public
+## 7. Going public
 
-- The repo has no git remote [verified: `git remote`, 2026-11-06]. It is MIT-licensed, as PresentMon is: `LICENSE`
+- Public at https://github.com/Ali0600/lag-doctor since 2026-11-07. It is MIT-licensed, as PresentMon is: `LICENSE`
   and `license` in `pyproject.toml` were added on 2026-11-06.
-- Scrubbed from the tree on 2026-11-07: this PC's user name in paths (16 lines in 4 research notes) and the owner's
-  machine-learning job (2 lines). No commit ever held a SID, the PC name, a public IP, a real MAC address, a Wi-Fi
-  name or a serial, and the only binary is the synthetic report picture [verified: `git grep` over every commit;
-  the picture viewed]. The history still holds the two details in 60 commits. Commits are authored with a GitHub
-  noreply address [verified: `git log`].
+- Scrubbed on 2026-11-07, before the first push, from the tree and, by a history rewrite the owner chose, from
+  every commit (DECISIONS 2026-11-07): this PC's user name in paths, the owner's machine-learning job, this PC's
+  adapter and power-plan GUIDs, the home network's addresses, other software named as installed here, and the
+  Steam log's dates, times and AppIDs. No commit holds a SID, the PC name, a public IP, a real MAC address, a Wi-Fi
+  name or a serial, and the only binary is the synthetic report picture [verified: a scan of every blob, message,
+  author field and path; a five-angle review and a recheck that searched for this PC's own identifiers; the picture
+  viewed]. Commits are authored with a GitHub noreply address [verified: `git log`].
 
 ## Decided (2026-11-06) and still open
 

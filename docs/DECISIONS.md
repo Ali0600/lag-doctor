@@ -23,6 +23,36 @@
 
 ---
 
+## 2026-11-07: How the history went public
+
+Before the first push, 60 of the 70 commits carried the owner's Windows user name (folder paths in 4 research
+notes) and the name of the owner's machine-learning job (research note `install-and-rights.md`, section 7).
+- **Rewrite the old commits, then publish (chosen by the owner)**: every commit kept with its author and dates;
+  only the commit ids changed, before anyone outside had them.
+- **Publish the history as it is**: rejected. No work, but the details public for good.
+- **One fresh commit of today's files**: rejected. Simplest and leak-proof, but the public repo would lose the
+  history of how lag-doctor was built.
+- **Private first**: rejected. CI on limited minutes, and signing and winget need a public repo, so the question
+  only comes back.
+
+How it was done: three passes of git's own `filter-branch`, each swapping the affected file versions for scrubbed
+ones. The first removed the user name and the job's name, and dropped the scrub commit, which had nothing left to
+change. A five-angle pre-publish review (personal data, secrets, what the push sends, the rewrite, licensing) then
+found what the first pass had not looked for, and further passes, the agent's call within the owner's choice,
+removed it too: the job's script name; this PC's adapter and power-plan GUIDs; the home network's addresses (now
+`192.168.0.x`) and a virtual adapter's; other software named as installed here, and test fixtures that listed
+exactly this PC's adapters; the Steam log's dates, times and AppIDs; the time in the first capture's folder name;
+and the owner's first name as an example account in old tests. A fresh-eyes recheck after the second pass found
+the last of these. Three commit messages that cited old commit ids now cite the new ones. A script checked the
+result against the original commit by commit: author, dates and parents unchanged, messages unchanged apart from
+those ids, only the swapped files differ, and nothing personal is left in any file, path, message or author field.
+Kept on purpose: game names where they are the tool's subject (the first capture's game, the README's example),
+stock launchers and OEM software, download rates, a generic mention that a machine-learning job sometimes uses the
+GPU, clock times that tie to nothing personal, the internal panel's model-level device path, the time zone in the
+commit dates, and the author's name.
+Revisit hook: none. The pre-rewrite history stays in local refs (`refs/backup/`, `refs/original/`, the merged
+`worktree-*` branches), so a local `.git/hooks/pre-push` refuses any commit that holds those details.
+
 ## 2026-11-06: How other people get frame timing without prompts
 
 Windows lets only administrators, members of Performance Log Users and the LocalSystem, LocalService and
@@ -254,7 +284,8 @@ Revisit hook: `setup.REVOCATION_UNKNOWN` and `verify()`.
 ## 2026-11-04: Watch the game from outside, never inject
 
 - **Observe from outside (chosen)**: ETW via PresentMon for frames, performance counters and system-wide
-  snapshots for the rest. Anti-cheat cannot object to what it cannot see.
+  snapshots for the rest. Nothing is injected or hooked; PresentMon's query-only handle to the game is the one
+  thing anti-cheat can see (DESIGN, Principles).
 - **Inject an overlay DLL / hook Present** (how RTSS-style overlays work): exact per-frame CPU/GPU timing,
   but a ban risk with Easy Anti-Cheat, BattlEye or Vanguard, and a crash risk. Rejected: the risk lands
   on the user's game account.

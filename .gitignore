@@ -10,3 +10,5 @@ reports/
 
 # agent worktrees created by the build workflow
 .claude/worktrees/
+# Claude Code's personal settings (a shared .claude/settings.json may be committed)
+.claude/settings.local.json

@@ -1,7 +1,7 @@
 [project]
 name = "lag-doctor"
 version = "0.1.0"
-description = "Finds out why a PC game is lagging, and fixes what can be fixed, without touching the game process."
+description = "Finds out why a PC game is lagging by watching it from outside, and fixes what can be fixed safely."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
