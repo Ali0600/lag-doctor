@@ -48,8 +48,9 @@ uv run python -m lagdoctor ...                           # the tool (see README)
 - **Fixes go through `lagdoctor/fixes/base.py`** (journal first, readback, undo). Never offered: disabling
   security features, killing or suspending processes, HKLM or policy tweaks, anything on the game process.
 - **ETW needs rights.** PresentMon (session `lagdoctor`) and the network tracker (session `lag-doctor-net`)
-  need an elevated token or Performance Log Users; that the group covers the tracker's provider (Kernel-Network)
-  is unverified until E1 (`docs/research/install-and-rights.md`), so never state it as fact. Tests use private
+  need ETW rights: PresentMon an elevated token or Performance Log Users, the tracker an elevated token only
+  (measured, E1 in `docs/research/install-and-rights.md`: Kernel-Network's own descriptor lets only SYSTEM,
+  LocalService and Administrators enable it). Tests use private
   in-process sessions with unique names instead. The end-to-end run (`scripts/e2e.py`) is on demand. The venv's
   `python.exe` is a launcher: the real process is the base interpreter, so target LagLab by the PID it writes to
   `--pid-file`.
@@ -71,4 +72,9 @@ uv run python -m lagdoctor ...                           # the tool (see README)
 - `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
 - `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` is
   timing-sensitive under full-suite load (failed once on 2026-11-05 with 0 delay gaps, then 4/4 alone): rerun it alone
-  before blaming a change for it.
+  before blaming a change for it. Two more depend on the PC's state: `tests/test_cli.py::test_a_real_console_event_
+  while_recording_still_saves_the_capture` (its child hit the 60 s timeout once under full-suite load, then 3/3
+  alone), and `tests/test_sysmon_target.py::test_auto_picks_a_windowed_renderer_and_never_a_windowless_gpu_job`, which
+  needs LagLab to render where Windows counts it: on 2026-11-07 at 00:30 (Silent mode, display asleep) it failed on
+  unchanged code too, in a worktree of the previous commit. Rerun them alone, with the display awake, and run that
+  control before blaming a change.

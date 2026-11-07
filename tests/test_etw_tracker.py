@@ -134,8 +134,10 @@ def test_unelevated_the_real_session_is_unavailable_with_the_reason():
         if st.state == "ok":                                # elevated: the real path ran; nothing more to judge here
             return
         assert st.state == "unavailable", st
-        assert "needs admin rights or Performance Log Users" in st.detail
-        assert st.tool == "ETW Microsoft-Windows-Kernel-Network"
+        # A group member gets the group's own reason: the group may not enable Kernel-Network (measured, E1).
+        from lagdoctor.winapi import elevation
+        assert st.detail == (nf.GROUP_REFUSED if elevation.in_performance_log_users() else nf.NEEDS_RIGHTS)
+        assert "--elevate" in st.detail and st.tool == "ETW Microsoft-Windows-Kernel-Network"
     finally:
         started = time.monotonic()
         tr.stop()
@@ -167,6 +169,28 @@ def test_result_and_stop_are_safe_before_start():
     r = tr.result()
     assert set(r) == RESULT_KEYS and r["server"] is None and r["layout"] == "unverified"
     assert r["talkers"] is None and r["gaps"] is None and r["server_rx"] is None
+
+
+def _not_member():
+    raise PermissionError(5, "Access is denied")
+
+
+@pytest.mark.parametrize("member,expect", [(lambda: True, nf.GROUP_REFUSED), (lambda: False, nf.NEEDS_RIGHTS),
+                                           (_not_member, nf.NEEDS_RIGHTS)])
+def test_a_refused_start_says_what_would_help(monkeypatch, member, expect):
+    # A member of Performance Log Users may start the session but not enable Kernel-Network (E1): the reason must
+    # not send them back to join the group they are in.
+    from lagdoctor.winapi import elevation
+    monkeypatch.setattr(elevation, "in_performance_log_users", member)
+    tr = _tracker([], start_error=OSError(None, "EnableTraceEx2: Access is denied.", None, 5))
+    tr.start(clock.now())
+    try:
+        assert _wait(lambda: tr.status().state != "off")
+    finally:
+        tr.stop()
+    st = tr.status()
+    assert st.state == "unavailable" and st.detail == expect
+    assert "--elevate" in st.detail
 
 
 def test_a_session_that_could_not_start_reports_its_lists_as_not_measured():

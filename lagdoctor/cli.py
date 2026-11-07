@@ -50,6 +50,11 @@ EXIT_NOT_READY = 6             # frame timing was wanted, but PresentMon is miss
 PRIVATE_COPY_POLICY = {"setup": "refuse", "watch": "refuse", "fix": "refuse", "undo": "refuse",
                        "check": "note", "analyze": "note"}
 
+# Performance Log Users may trace frames but not enable Kernel-Network, the game-server tracker's provider
+# (measured with scripts/etw_access.py on 2026-11-06; docs/research/install-and-rights.md, E1).
+TRACKER_NOT_IN_GROUP = ("The game-server tracker still needs one UAC prompt: Windows does not let the Performance "
+                        "Log Users group start it, so add `--elevate` to a recording to include it.")
+
 # Console control events (wincon.h). Windows ends the process 5 s after CTRL_CLOSE_EVENT.
 CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT = 0, 1, 2, 5, 6
 CLOSE_SAVE_WAIT_S = 4.5
@@ -280,7 +285,10 @@ def cmd_watch(args: argparse.Namespace) -> int:
         frames = exe is not None
         if frames and not child:
             from lagdoctor.winapi import elevation
-            if not elevation.can_trace():
+            may_trace = elevation.can_trace()
+            # An explicit --elevate also elevates an account that may trace only through Performance Log Users:
+            # Windows lets that group start frame timing but not the game-server tracker (E1, 2026-11-06).
+            if not may_trace or (args.elevate and not _elevated()):
                 choice = elevation_choice(args.elevate, args.no_elevate, sys.stdin.isatty(), _ask)
                 if choice == "elevate":
                     lock.release()                    # the elevated child records, so it holds the lock
@@ -289,9 +297,10 @@ def cmd_watch(args: argparse.Namespace) -> int:
                         return code
                     if not _take_lock(lock):          # declined: record here after all
                         return EXIT_BUSY
-                frames = False
-                frames_why = ("it needs admin rights or membership of Performance Log Users (see "
-                              "`lagdoctor setup`)")
+                if not may_trace:                     # a group member who declined still records frames here
+                    frames = False
+                    frames_why = ("it needs admin rights or membership of Performance Log Users (see "
+                                  "`lagdoctor setup`)")
         return _record(args, target, exe, frames, frames_why, inventory, notes)
 
 
@@ -1006,6 +1015,8 @@ def cmd_setup(args: argparse.Namespace) -> int:
     rights = elevation.trace_rights()
     if rights == "now":
         say("Frame timing: ready (this account may start ETW traces).")
+        if not _elevated():                         # the right comes from Performance Log Users
+            say(TRACKER_NOT_IN_GROUP)
     elif rights == "filtered":
         say("Frame timing: your account is in the Performance Log Users group, but Windows keeps that group")
         say("switched off in normal windows here, so `lagdoctor watch` asks for one UAC prompt each recording.")
@@ -1013,12 +1024,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
         say("Frame timing: your account is in the Performance Log Users group, but this sign-in began before it")
         say("joined. Sign out of Windows and back in once; after that, frame timing needs no admin prompt.")
         say("Until then, `lagdoctor watch` asks for one UAC prompt each recording.")
+        say(TRACKER_NOT_IN_GROUP)
     else:
         say("Frame timing and the game-server tracker need admin rights. Two ways:")
         say("  1. Let `lagdoctor watch` ask for one UAC prompt each recording (nothing to set up).")
         say("  2. Join the Performance Log Users group once (an administrator does it), then sign out and back in.")
-        say("     After that, frame timing needs no prompt. Not checked yet: whether the game-server tracker")
-        say("     works this way too; if it does not, the report says it was not measured.")
+        say("     After that, frame timing needs no prompt. The game-server tracker still does: Windows does not")
+        say("     let this group start it, so add `--elevate` to a recording to include it.")
         say("")
         for line in pm_setup.performance_log_users_howto().rstrip().splitlines():
             say("     " + line if line else "")

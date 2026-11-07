@@ -764,6 +764,45 @@ def test_a_declined_prompt_records_here_still_holding_the_lock(fake_elevation, m
     assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
 
 
+# A member of Performance Log Users may trace frames unelevated, but Windows does not let the group enable the
+# game-server tracker's provider (measured, docs/research/install-and-rights.md E1): only --elevate brings it.
+
+@pytest.fixture
+def group_member(fake_elevation, monkeypatch):
+    monkeypatch.setattr(elevation, "can_trace", lambda: True)
+    monkeypatch.setattr(elevation, "is_elevated", lambda: False)
+    return fake_elevation
+
+
+def test_a_group_member_records_frames_here_without_a_prompt(group_member, tmp_path, capsys):
+    assert cli.main([*WATCH, "--out", str(tmp_path / "out")]) == 0
+    out = capsys.readouterr().out
+    assert group_member["launches"] == [] and "Frame timing is off" not in out
+    assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
+
+
+def test_elevate_still_elevates_a_group_member_for_the_game_server_tracker(group_member, tmp_path):
+    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == 0
+    assert len(group_member["launches"]) == 1
+
+
+def test_an_administrator_window_is_never_elevated_again(group_member, monkeypatch, tmp_path):
+    monkeypatch.setattr(elevation, "is_elevated", lambda: True)
+    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == 0
+    assert group_member["launches"] == []
+
+
+def test_a_group_member_who_declines_still_records_frames_here(group_member, monkeypatch, tmp_path, capsys):
+    def declined(argv, cwd):
+        raise PermissionError(13, "the administrator prompt was declined", None, 1223)
+    monkeypatch.setattr(elevation, "launch_elevated", declined, raising=False)
+    monkeypatch.setattr(elevation, "relaunch_elevated", declined)
+    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == 0
+    out = capsys.readouterr().out
+    assert "declined" in out and "Frame timing is off" not in out    # the group still gives frame timing
+    assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
+
+
 def test_a_relative_lagdoctor_home_still_hands_the_child_absolute_paths(fake_elevation, monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("LAGDOCTOR_HOME", "relative-home")

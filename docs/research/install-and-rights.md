@@ -24,21 +24,26 @@ observed. `[unverified]` = could not be checked.
   Notification, CreateRealtime, CreateOndisk, Enable, LogEvent, AccessRealtime, RegisterGuids [verified: Sergey
   Babkin's Microsoft blog, "Security descriptors, part3"]. A 2025 dump shows `0x1800` for WD and AC on newer builds
   [research: Jonathan Johnson's dump, via the etw-rights sweep].
-- Microsoft-Windows-Kernel-Process (and Kernel-File) carry their own descriptor granting only SYSTEM, LOCAL SERVICE
-  and Administrators [research: github.com/CrankyAnt/SharedWorkflows/issues/30, a third party, measured on build
-  26300; re-read, still secondhand]. PresentMon 2.6.0 tolerates ERROR_ACCESS_DENIED on Kernel-Process only (no
-  process start/stop events then); any other provider failing aborts the session [research:
-  `PresentData/PresentMonTraceSession.cpp` at v2.6.0]. So a Performance Log Users member most likely loses
-  Kernel-Process, and a LocalService service most likely keeps it [inferred; E1 settles it].
-- Microsoft-Windows-Kernel-Network's descriptor (lag-doctor's network tracker) is unknown: `EventAccessQuery` answers
-  5 unelevated for every GUID [verified: run in the sweep and in `network-and-etw.md` 5.7]. Whether Performance Log
-  Users can enable it decides whether the group covers the network half [unverified; E1].
+- **E1, measured on this PC (build 26200, 2026-11-06, `scripts/etw_access.py`, run by the owner; the elevated copy
+  read the descriptors, the normal window judged them with Windows' Authz access check).** Microsoft-Windows-
+  Kernel-Network (the game-server tracker) and Microsoft-Windows-Kernel-Process each have a descriptor of their own:
+  `O:BAG:BAD:(A;;0x120fff;;;SY)(A;;LO;;;LS)(A;;0x1207ff;;;BA)`. SYSTEM and Administrators get full rights,
+  LocalService exactly TRACELOG_GUID_ENABLE (`LO` = 0x80), and Performance Log Users nothing. Every other provider
+  PresentMon needs has none, so the default applies, read here as
+  `O:BAG:BAD:(A;;0x1800;;;WD)(A;;0x120fff;;;SY)(A;;0x120fff;;;LS)(A;;0x120fff;;;NS)(A;;0x120fff;;;BA)(A;;0xee5;;;LU)(A;;LC;;;MU)(A;;0x1800;;;AC)(A;;0x1800;;;<a capability SID>)`
+  (the 0x1800 of the 2025 dump above). The verdicts: as a member of Performance Log Users the owner would get frame
+  timing, without process start and stop events, and **not** the game-server tracker; a LocalService service would
+  get both, frame timing and the tracker [verified: the probe's output and its saved descriptors; the LocalService
+  verdict uses a modelled token, so E3 confirms it with a real one]. This agrees with the third-party reading of
+  Kernel-Process on build 26300 [research: github.com/CrankyAnt/SharedWorkflows/issues/30]. PresentMon 2.6.0
+  tolerates ERROR_ACCESS_DENIED on Kernel-Process only; any other provider failing aborts the session [research:
+  `PresentData/PresentMonTraceSession.cpp` at v2.6.0].
 - Group membership is in the logon token, so a new member needs a new sign-in [research: Microsoft "Access tokens"];
   `klist purge` only drops Kerberos tickets and does not help [research: Microsoft klist doc].
 - Performance Log Users is not on the list of groups UAC filters out of an administrator's standard token, so it
   should stay enabled unelevated [research: 2007 MSDN Magazine and TechNet Magazine UAC articles; inferred for
   Windows 11; E2]. setup's "After that, frame timing needs no prompt" rests on this and on E1 (no provider
-  PresentMon needs may refuse the group); for the game-server tracker setup says "Not checked yet". If this
+  PresentMon needs refuses the group); for the game-server tracker setup says it still needs `--elevate`. If this
   premise fails, `elevation.trace_rights()` reads a group that is in the token but not enabled (deny-only) as
   `filtered`, and setup says each recording asks for one UAC prompt instead of asking for a sign-out, which would
   not help there [inferred: a new sign-in gets the same filtered token].
@@ -65,7 +70,7 @@ group join plus a restart.
 |---|---|---|---|---|---|
 | A. Signed per-machine MSI with a capture service | 1 | no | nothing | an interactive user can ask the service, over a locked pipe, to trace a process in their own session | recommended end state |
 | B. Signed per-machine MSI alone (code and PresentMon under Program Files) | 1 | no | 1 UAC | none | build first: the vehicle A needs |
-| C. Performance Log Users from setup's printed steps (today) | 1 admin command | yes | nothing, if E1 and E2 pass | the account, and all it runs, controls every default-descriptor ETW session | keep as the explained opt-in |
+| C. Performance Log Users from setup's printed steps (today) | 1 admin command | yes | nothing for frame timing, if E2 passes; the game-server tracker still needs 1 UAC (E1) | the account, and all it runs, controls every default-descriptor ETW session | keep as the explained opt-in |
 | D. lag-doctor runs the group join itself (Game Bar style) | 1 UAC | yes | nothing after the sign-out | as C | only if the "never changes group membership" decision is reversed |
 | E. Per-recording UAC (today's `--elevate`) | none | no | 1 UAC, forever | none between runs; elevates user-writable code from a checkout | keep as the fallback for git checkouts |
 | F. Intel's service through PresentMonAPI2 | 1 (Intel's MSI) | no | frames: nothing; network: still needs rights | Intel's resident LocalSystem service, its pipe open to all authenticated users at v2.6.0 | reject: frames only, API coupling, a 169,672,704-byte MSI [research] |
@@ -144,7 +149,7 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
 
 | Id | What | Gates |
 |---|---|---|
-| E1 | Elevated `EventAccessQuery` dump as SDDL: Kernel-Network `{7DD42A49-5329-4832-8DFD-43D979153A88}`, Kernel-Process `{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}`, PresentMon's other providers, the default GUID. Read-only, one UAC. Written as `scripts/etw_access.py`: the elevated copy reads the descriptors, and the unelevated window judges them with Windows' own access check (Authz) for "you, after joining Performance Log Users", a modelled LocalService token and a modelled SYSTEM token | setup's wording; the service account |
+| E1 | Elevated `EventAccessQuery` dump as SDDL: Kernel-Network `{7DD42A49-5329-4832-8DFD-43D979153A88}`, Kernel-Process `{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}`, PresentMon's other providers, the default GUID. Read-only, one UAC. Written as `scripts/etw_access.py`: the elevated copy reads the descriptors, and the unelevated window judges them with Windows' own access check (Authz) for "you, after joining Performance Log Users", a modelled LocalService token and a modelled SYSTEM token. **Done 2026-11-06 (section 1): the group gets frame timing, not the tracker; LocalService gets both** | setup's wording (now measured); the service account |
 | E2 | Join Performance Log Users, sign out and in: `whoami /groups` shows it enabled unelevated, and an unelevated `watch` records frames and network flows. If it shows deny-only instead, setup already handles it (`trace_rights()` answers `filtered`: one UAC prompt per recording, no sign-out asked for) | option C's "no prompts" |
 | E3 | Throwaway LocalService service with privileges trimmed to SeChangeNotifyPrivilege and a restricted service SID (both read back from the running token) on a VM: every PresentMon provider enables, rows arrive for the game's PID, Kernel-Network events arrive, the capture ends when the game exits | option A's account |
 | E3b | Named-pipe trigger on Windows 11 Home 25H2 and Windows 10 22H2: start, idle self-stop, restart, start latency | option A's start mode |
@@ -201,3 +206,4 @@ Each claim below was re-read from its source by a reader separate from the sweep
 | WiX v7 and the US$10,000 OSMF threshold | confirmed only in the page's summary; the EULA switch name not stated there | docs.firegiant.com/wix/whatsnew |
 | NVIDIA `FvSvc`: LocalSystem, demand start | confirmed | `sc.exe qc FvSvc` here |
 | Performance Log Users has 0 members here | confirmed | `Get-LocalGroupMember -SID S-1-5-32-559` |
+| E1: Kernel-Network and Kernel-Process grant SYSTEM, LocalService (enable only) and Administrators; the default descriptor admits Performance Log Users; the group would get frame timing but not the tracker, LocalService both | measured on this PC, build 26200 | `scripts/etw_access.py` run by the owner, 2026-11-06 23:31; its saved descriptors re-read |

@@ -47,7 +47,22 @@ KW_IPV4, KW_IPV6 = 0x10, 0x20
 LEVEL_INFORMATIONAL = 4
 SESSION_NAME = "lag-doctor-net"                 # DESIGN.md net_flows; CLAUDE.md
 TOOL = "ETW Microsoft-Windows-Kernel-Network"
-NEEDS_RIGHTS = "needs admin rights or Performance Log Users"
+# Measured on this PC (docs/research/install-and-rights.md, E1, 2026-11-06): Kernel-Network has a descriptor of its
+# own that lets only SYSTEM, LocalService and Administrators enable it. So Performance Log Users, enough for frame
+# timing, may start this session but not enable its provider: only an elevated recording traces it.
+NEEDS_RIGHTS = "needs admin rights: record with --elevate"
+GROUP_REFUSED = "Windows does not let the Performance Log Users group start it: record with --elevate to include it"
+
+
+def _refused_why() -> str:
+    """The not-measured reason for a refused start: a member of Performance Log Users, whom setup sent there, is
+    told what the group cannot do instead of being told to join it."""
+    try:
+        from lagdoctor.winapi import elevation
+        member = elevation.in_performance_log_users()
+    except OSError:
+        member = False
+    return GROUP_REFUSED if member else NEEDS_RIGHTS
 
 # NE 4.2: the events decoded here -> (protocol, kind, address family). All are version 0.
 EVENTS: dict[int, tuple[str, str, int]] = {
@@ -794,7 +809,7 @@ class FlowTracker(Collector):
             session.start()
         except OSError as exc:
             if getattr(exc, "winerror", None) == etw.ERROR_ACCESS_DENIED:
-                self.set_status("unavailable", f"{NEEDS_RIGHTS} (StartTraceW: access denied)", TOOL)
+                self.set_status("unavailable", _refused_why(), TOOL)
             else:
                 self.set_status("failed", f"could not start the ETW session {SESSION_NAME}: {exc}", TOOL)
             self._session_health = _safe_health(session)

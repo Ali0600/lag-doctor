@@ -47,8 +47,9 @@ uv run python -m lagdoctor analyze CAPTURE              # re-run the analysis on
 - **Frame timing uses Windows event tracing (ETW), which needs admin rights.** `watch` offers one UAC prompt
   per recording (`--elevate` skips the question, `--no-elevate` records without frame timing). Only the
   recording runs elevated, in a window of its own: stop it there with Ctrl+C, and the first window analyses
-  it. `setup` explains the alternative of joining *Performance Log Users* once. Without either, everything
-  else is still measured and the report says frame timing was not.
+  it. `setup` explains the alternative of joining *Performance Log Users* once, which covers frame timing
+  but not the game-server tracker (Windows does not let that group start it; `--elevate` still does).
+  Without either, everything else is still measured and the report says frame timing was not.
 - **No silent recordings without frame timing.** If PresentMon is missing or fails its check, `watch` stops
   before it records and says what to run (`--no-elevate` records everything else anyway). If frame timing stops
   working mid-recording, or the game is in front for 10 s without a frame, it says so on the spot.
@@ -68,7 +69,7 @@ uv run python -m lagdoctor analyze CAPTURE              # re-run the analysis on
   come from Windows counters.
 - **`--elevate` runs this checkout's Python code as administrator.** A program already running as you could
   edit that code and ride along on the prompt you approve. Approve it only for a checkout you trust, or join
-  Performance Log Users and skip elevation.
+  Performance Log Users and skip elevation (frame timing then works without it; the game-server tracker does not).
 - **Frame caps a hair under the refresh rate** (about 143.3–144 FPS on a 144 Hz screen) can still count a
   frame held one refresh longer than usual as a stutter.
 - **The low-frame-rate threshold** (80 % of the refresh rate) comes from a study of 60–120 Hz screens and is
@@ -132,7 +133,7 @@ uv run python scripts/etw_access.py                            # who may trace o
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 2,547 tests, plus a mutation harness of 1,406 deliberate sabotages in 26
+- **Testing that proves itself**: 2,555 tests, plus a mutation harness of 1,415 deliberate sabotages in 26
   specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.

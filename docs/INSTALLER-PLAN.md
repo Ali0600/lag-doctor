@@ -8,29 +8,21 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
 ## Status (2026-11-06)
 
 - [x] Decisions recorded; MIT `LICENSE`; `license` in `pyproject.toml`.
-- [x] Stage 0: `setup` names the account by its SID in the group command, tells "joined, sign out once" and "in
-  the group but not enabled in this token" apart (`elevation.trace_rights`: `after_sign_in`, `filtered`), and says
-  that the group's reach over the game-server tracker is not yet checked.
-- [x] E1 probe written: `scripts/etw_access.py` (read-only, one UAC prompt). The elevated copy only reads the
-  descriptors; the unelevated window judges them with Windows' own access check (Authz) for "you, after joining
-  Performance Log Users", a modelled LocalService token and a modelled SYSTEM token. **Waiting on the owner to run
-  it.**
+- [x] Stage 0: `setup` names the account by its SID in the group command and tells "joined, sign out once" and "in
+  the group but not enabled in this token" apart (`elevation.trace_rights`: `after_sign_in`, `filtered`).
+- [x] E1, run by the owner on 2026-11-06 (`scripts/etw_access.py`: the elevated copy reads the descriptors, the
+  normal window judges them with Windows' own Authz check). Performance Log Users would get frame timing (without
+  process start and stop events) but **not** the game-server tracker: Kernel-Network and Kernel-Process let only
+  SYSTEM, LocalService and Administrators enable them. A LocalService service would get both (a modelled token,
+  so E3 confirms it with a real one). Details in the research note, section 1.
+- [x] After E1, done: setup says the group covers frame timing only; the tracker's not-measured reason names
+  `--elevate` and, for a member, the group's limit; an explicit `--elevate` elevates a group member.
 - [ ] E2, the group fallback's sign-in test (below). Nothing in the service depends on it.
 - [ ] Stage 1: public repo and CI.
 - [ ] Stage 2: the service experiments on CI's throwaway Windows machines.
 - [ ] Stage 3: the MSI.
 - [ ] Stage 4: the capture service.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.
-
-## After E1
-
-If Kernel-Network refuses Performance Log Users, a group member's recordings never have the game-server traffic:
-- fix the tracker's not-measured reason (`capture/netflows.py`): it names StartTraceW although EnableTraceEx2
-  refused, and it tells someone already in the group to join it;
-- let an explicit `--elevate` elevate a group member: `cli.cmd_watch` offers elevation only when `can_trace()` is
-  False, so today `--elevate` does nothing for a member.
-
-Either way, setup's "Not checked yet" line about the tracker becomes the measured answer.
 
 ## E2: the group fallback
 

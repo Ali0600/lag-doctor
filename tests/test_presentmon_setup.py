@@ -561,22 +561,33 @@ def setup_output(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(setup, "verify", lambda path: {"signer": "Intel Corporation"})
     monkeypatch.setattr(setup, "_user_sid", lambda: SID)
 
-    def run(rights: str) -> str:
+    def run(rights: str, elevated: bool = False) -> str:
         monkeypatch.setattr(elevation, "trace_rights", lambda: rights)
+        monkeypatch.setattr(elevation, "is_elevated", lambda: elevated)
         assert cli.cmd_setup(argparse.Namespace(download=False)) == 0
         return capsys.readouterr().out
     return run
 
 
+# Measured with scripts/etw_access.py (E1): the group may trace frames but not the game-server tracker's provider.
+TRACKER_NOTE = "The game-server tracker still needs one UAC prompt: Windows does not let the Performance Log Users"
+
+
 def test_setup_says_ready_when_this_token_may_trace(setup_output):
-    out = setup_output("now")
+    out = setup_output("now", elevated=True)                 # an administrator window: everything is traced
     assert "Frame timing: ready" in out and "Two ways" not in out and "Add-LocalGroupMember" not in out
+    assert TRACKER_NOTE not in out
+
+
+def test_a_member_of_the_group_is_told_the_tracker_still_needs_elevate(setup_output):
+    out = setup_output("now", elevated=False)                # the right comes from Performance Log Users
+    assert "Frame timing: ready" in out and TRACKER_NOTE in out and "add `--elevate` to a recording" in out
 
 
 def test_setup_asks_only_for_a_sign_out_when_the_account_already_joined(setup_output):
     out = setup_output("after_sign_in")
     assert "in the Performance Log Users group, but this sign-in began before it" in out
-    assert "Sign out of Windows and back in once" in out
+    assert "Sign out of Windows and back in once" in out and TRACKER_NOTE in out
     assert "Two ways" not in out and "Add-LocalGroupMember" not in out
 
 
@@ -586,6 +597,7 @@ def test_setup_never_asks_for_a_sign_out_while_windows_keeps_the_group_switched_
     assert "switched off in normal windows here, so `lagdoctor watch` asks for one UAC prompt each recording" in out
     assert "Sign out" not in out and "sign-in began before" not in out
     assert "Two ways" not in out and "Add-LocalGroupMember" not in out
+    assert TRACKER_NOTE not in out                           # every recording is elevated anyway
 
 
 def test_setup_prints_a_placeholder_for_a_name_the_console_cannot_show(setup_output, monkeypatch):
@@ -597,10 +609,11 @@ def test_setup_prints_a_placeholder_for_a_name_the_console_cannot_show(setup_out
 
 
 @pytest.mark.parametrize("rights", ["no", "unknown"])
-def test_setup_explains_both_ways_and_what_is_not_checked_yet(setup_output, rights):
+def test_setup_explains_both_ways_and_that_the_group_leaves_out_the_tracker(setup_output, rights):
     out = setup_output(rights)
     assert "Two ways" in out and "one UAC prompt each recording" in out
     assert f"Add-LocalGroupMember -SID S-1-5-32-559 -Member '{SID}'" in out
-    # The group's reach over the game-server tracker's provider is unmeasured (docs/research/install-and-rights.md, E1).
-    assert "Not checked yet: whether the game-server tracker" in out
-    assert "sign-in began before" not in out
+    # Measured (docs/research/install-and-rights.md, E1): the group may not enable Kernel-Network.
+    assert "The game-server tracker still does: Windows does not" in out
+    assert "add `--elevate` to a recording to include it" in out
+    assert "Not checked yet" not in out and "sign-in began before" not in out

@@ -55,16 +55,26 @@ verification log; trust a note's *Corrected* entries over its body.
 
 ## Privileges and elevation
 
-| Needs | Works unelevated | Needs ETW rights (an elevated token, or membership of Performance Log Users) |
+| Needs | Works unelevated | Needs ETW rights |
 |---|---|---|
-| Capture | system sampler, NVML, pings, Wi-Fi, inventory, hotkey | PresentMon frame timing (exit 6 "access denied" otherwise, PM 6.2), ETW network flows |
+| Capture | system sampler, NVML, pings, Wi-Fi, inventory, hotkey | PresentMon frame timing: an elevated token or membership of Performance Log Users (exit 6 "access denied" otherwise, PM 6.2); ETW network flows: an elevated token only (E1) |
 | Fixes | everything in the catalogue (HKCU, power scheme, display mode, priority of the user's own processes) | nothing: fixes never run elevated |
+
+- E1 (`scripts/etw_access.py`, measured 2026-11-06 on build 26200; `docs/research/install-and-rights.md`):
+  Microsoft-Windows-Kernel-Network and Kernel-Process have descriptors of their own that let only SYSTEM,
+  LocalService and Administrators enable them. Every other provider PresentMon needs falls under the default
+  descriptor, which Performance Log Users may use. So a member records frame timing unelevated (without process
+  start and stop events, which PresentMon tolerates losing) but not the game-server tracker.
 
 - `winapi/elevation.can_trace()` = `CheckTokenMembership(Administrators S-1-5-32-544)` OR
   `CheckTokenMembership(Performance Log Users S-1-5-32-559)`; both count enabled SIDs only, so a UAC-filtered
   admin token answers False (PM 6.3, verify log).
 - `lagdoctor watch` without ETW rights asks: relaunch the capture elevated (one UAC prompt), or continue
-  without frame timing (frames reported *not measured*). `--elevate` / `--no-elevate` answer it up front.
+  without frame timing (frames reported *not measured*). `--elevate` / `--no-elevate` answer it up front. A
+  member of Performance Log Users is not asked (frame timing works unelevated), but an explicit `--elevate`
+  still elevates them, for the game-server tracker; a member who declines records frame timing here. An
+  administrator window is never elevated again. Without rights, the tracker's not-measured reason names what
+  helps: `--elevate`, and for a member, that the group cannot start it (`netflows._refused_why`).
   The elevated child runs **only the capture** in its own console window, writes the capture file and
   exits; the unelevated parent waits, loads it, analyses, reports and offers fixes. So fixes and the journal
   stay in the user's own context.
@@ -96,9 +106,9 @@ verification log; trust a note's *Corrected* entries over its body.
     never told to join again: `after_sign_in` (it joined after this sign-in began) asks for one sign-out;
     `filtered` (the group is in this token but not enabled, e.g. deny-only, which a sign-out does not change)
     says each recording asks for one UAC prompt.
-  - Performance Log Users is documented for starting trace sessions (NE 5.7), but its reach over the
-    tracker's provider, Kernel-Network, is unverified until E1 (`scripts/etw_access.py`, described in
-    `docs/research/install-and-rights.md`), so setup says the game-server tracker is not checked yet.
+  - The group covers frame timing only (E1, above): setup says so in the join steps, and tells a member
+    (`now` without elevation) and a pending member (`after_sign_in`) that the game-server tracker still needs
+    one UAC prompt, through `--elevate` (`cli.TRACKER_NOT_IN_GROUP`).
 - **Frame timing is never silently dropped.** If PresentMon is missing or fails its check, `watch` stops before
   it looks for the game (exit 6) unless `--no-elevate` asked for a recording without it; a recording without
   frame timing says so before "Recording.", and the elevated child, opened only for frame timing, records

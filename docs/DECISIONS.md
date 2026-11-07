@@ -209,7 +209,9 @@ PresentMon exits with code 6 ("access denied") unless the token is elevated or i
   elevated child captures and writes the file, the unelevated parent analyses and fixes, so HKCU fixes and
   the journal stay with the real user.
 - **Join Performance Log Users once (offered by `setup` as instructions)**: no prompt afterwards, but it is a
-  security-group change the user makes themselves; untested for the kernel network provider.
+  security-group change the user makes themselves; untested for the kernel network provider. Measured on
+  2026-11-06 (E1): the group may not enable Kernel-Network, so it covers frame timing only, and the game-server
+  tracker still needs `--elevate`.
 - **Elevated helper relaying rows**: deferred, worth trying; taken up on 2026-11-06 as the capture service
   ("How other people get frame timing without prompts").
 - **Elevated `--output_file` run, analysed afterwards**: rejected. Same prompt as the chosen option, but no

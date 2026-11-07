@@ -74,15 +74,6 @@
   ]
  },
  {
-  "name": "setup promises the unmeasured tracker",
-  "file": "lagdoctor/cli.py",
-  "old": "        say(\"     After that, frame timing needs no prompt. Not checked yet: whether the game-server tracker\")",
-  "new": "        say(\"     After that, no prompts.\")",
-  "tests": [
-   "tests/test_presentmon_setup.py::test_setup_explains_both_ways_and_what_is_not_checked_yet"
-  ]
- },
- {
   "name": "the account itself is not looked for among the members",
   "file": "lagdoctor/winapi/elevation.py",
   "old": "    return any(sid == me or _is_member(sid) for sid in group_member_sids(group_sid))",
@@ -631,6 +622,96 @@
   "new": "    (DEFAULT, ENABLE), (DEFAULT, REALTIME), (SERVICES_ONLY, ENABLE),\n    ('O:BAG:BAD:(XD;;0x80;;;WD;(@User.lagdoctor == \"x\"))(A;;0x80;;;WD)', ENABLE),",
   "tests": [
    "tests/test_etw_access_probe.py::test_the_check_for_you_without_the_group_agrees_with_access_check_on_this_token"
+  ]
+ },
+ {
+  "name": "setup forgets the tracker when it explains the group",
+  "file": "lagdoctor/cli.py",
+  "old": "        say(\"     After that, frame timing needs no prompt. The game-server tracker still does: Windows does not\")",
+  "new": "        say(\"     After that, no prompts.\")",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_setup_explains_both_ways_and_that_the_group_leaves_out_the_tracker"
+  ]
+ },
+ {
+  "name": "a group member is not told the tracker needs --elevate",
+  "file": "lagdoctor/cli.py",
+  "old": "        if not _elevated():                         # the right comes from Performance Log Users",
+  "new": "        if False:                         # the right comes from Performance Log Users",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_a_member_of_the_group_is_told_the_tracker_still_needs_elevate"
+  ]
+ },
+ {
+  "name": "an administrator window is told the tracker needs --elevate",
+  "file": "lagdoctor/cli.py",
+  "old": "        if not _elevated():                         # the right comes from Performance Log Users",
+  "new": "        if True:                         # the right comes from Performance Log Users",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_setup_says_ready_when_this_token_may_trace"
+  ]
+ },
+ {
+  "name": "a pending sign-out hides that the tracker needs --elevate",
+  "file": "lagdoctor/cli.py",
+  "old": "        say(\"Until then, `lagdoctor watch` asks for one UAC prompt each recording.\")\n        say(TRACKER_NOT_IN_GROUP)",
+  "new": "        say(\"Until then, `lagdoctor watch` asks for one UAC prompt each recording.\")",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_setup_asks_only_for_a_sign_out_when_the_account_already_joined"
+  ]
+ },
+ {
+  "name": "--elevate does nothing for a group member",
+  "file": "lagdoctor/cli.py",
+  "old": "            if not may_trace or (args.elevate and not _elevated()):",
+  "new": "            if not may_trace:",
+  "tests": [
+   "tests/test_cli.py::test_elevate_still_elevates_a_group_member_for_the_game_server_tracker"
+  ]
+ },
+ {
+  "name": "an administrator window is elevated again",
+  "file": "lagdoctor/cli.py",
+  "old": "            if not may_trace or (args.elevate and not _elevated()):",
+  "new": "            if not may_trace or args.elevate:",
+  "tests": [
+   "tests/test_cli.py::test_an_administrator_window_is_never_elevated_again"
+  ]
+ },
+ {
+  "name": "a group member who declines loses frame timing",
+  "file": "lagdoctor/cli.py",
+  "old": "                if not may_trace:                     # a group member who declined still records frames here",
+  "new": "                if True:                     # a group member who declined still records frames here",
+  "tests": [
+   "tests/test_cli.py::test_a_group_member_who_declines_still_records_frames_here"
+  ]
+ },
+ {
+  "name": "a group member is sent back to join the group",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    return GROUP_REFUSED if member else NEEDS_RIGHTS",
+  "new": "    return NEEDS_RIGHTS",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_refused_start_says_what_would_help"
+  ]
+ },
+ {
+  "name": "everyone refused is told it is the group's limit",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    return GROUP_REFUSED if member else NEEDS_RIGHTS",
+  "new": "    return GROUP_REFUSED",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_refused_start_says_what_would_help"
+  ]
+ },
+ {
+  "name": "an unreadable membership breaks the tracker's start",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "    except OSError:\n        member = False",
+  "new": "    except ValueError:\n        member = False",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_refused_start_says_what_would_help"
   ]
  }
 ]
