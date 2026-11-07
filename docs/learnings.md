@@ -1,5 +1,44 @@
 # Learnings
 
+### A write-restricted service token is checked twice, and ETW's descriptors fail the second check
+`sc sidtype <service> restricted` puts the service SID, Everyone, the logon SID and WRITE RESTRICTED on the token's
+restricted-SID list, and a write access must then be granted by that list as well as by the token's groups. ETW's
+descriptors grant Everyone only RegisterGuids and JoinGroup, so `StartTraceW` answers access denied, and creating
+even a message-only window fails (PresentMon exit 4).
+**Why it came up**: the installer plan hoped a restricted service SID would narrow the capture service; E3 on a
+GitHub runner showed it stops every ETW session and PresentMon, while the unrestricted SID with one privilege was
+refused nothing.
+**Takeaway**: a restricted service SID suits a service that only touches objects it owns; measure every system
+object the service must write with a real token before planning on it.
+
+### A trigger-started service's client must retry its first open
+With `sc triggerinfo <service> start/namedpipe/<name>` (the bare pipe name), a client's first `CreateFileW` on the
+pipe fails with ERROR_PIPE_BUSY (231); the SCM starts the service, whose ServiceMain receives `TriggerStarted 6`
+(the trigger type) and no arguments of its own; a retry about 0.1 s later connects.
+**Why it came up**: E3b expected file-not-found and a retry loop; the measured first error was "busy", from
+Windows' own trigger plumbing, in nine cycles out of nine.
+**Takeaway**: treat 231 and 2 alike on the first open and retry with a deadline; a trigger-started service reads its
+settings from its command line, since the start arguments are Windows' own.
+
+### PresentMon on a GPU-less VM writes rows only without display tracking
+On a `windows-2025` runner (Basic Render and Basic Display drivers) a WARP Direct3D 11 window presented 60 times a
+second, and PresentMon with lag-doctor's flags wrote no row for any process in 8 s, administrator or service; with
+`--no_track_display --no_track_gpu` it wrote 801 rows, 401 for the window.
+**Why it came up**: E3's "rows arrive for the game's PID" read as a service problem until the control run by the
+administrator got the same nothing.
+**Takeaway**: on a machine with no real display adapter, judge "PresentMon sees the presents" with display tracking
+off and leave display timing to a PC with a GPU; and run the control as the account known to work before reading a
+zero as the experiment's answer.
+
+### Windows PowerShell 5.1 started from PowerShell 7 inherits a module path it cannot use
+A `powershell.exe` child of a pwsh 7 job shell got pwsh's `PSModulePath`, so `Get-AuthenticodeSignature` failed
+with "the module could not be loaded" (Microsoft.PowerShell.Security), and a silent JSON parse turned that into
+"every binary unsigned".
+**Why it came up**: the first Stage 2 run reported python.org's signed runtime as unsigned; WinVerifyTrust, the
+reading lag-doctor itself uses, said signed all along.
+**Takeaway**: from pwsh, run pwsh; if 5.1 is needed, drop `PSModulePath` from its environment; and a cross-check
+that could not run is reported as such, never counted as a verdict.
+
 ### A venv's python.exe on Windows is only a launcher
 `.venv\Scripts\python.exe` starts the base interpreter (`C:\Python313\python.exe`) as a child process.
 **Why it came up**: LagLab's frames come from the child, so a tool targeting the launcher's PID or exe

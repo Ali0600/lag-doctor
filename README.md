@@ -160,7 +160,9 @@ uv run python scripts/etw_access.py                            # who may trace o
   verification, undo and crash healing, with a handle-free identity check before touching any process.
 - **Supply chain and least privilege**: PresentMon pinned by SHA-256, checked through a deny-write handle and
   launched by that handle's resolved path; only the capture runs elevated, behind 1 UAC prompt and a
-  machine-wide one-recording lock.
+  machine-wide one-recording lock; the planned capture service measured on GitHub's throwaway runners before a
+  line of it ships: a 1-privilege LocalService service enabling all 13 ETW providers, a named-pipe trigger starting
+  it in 0.08 s, and a 30-binary signed Python runtime, all read back from the running token.
 - **Review to fix**: closed all 49 findings (12 high) of an adversarial code review in 3 verified fix waves,
   cut the capture save from 36 s to 2.6 s to fit the 5 s Windows gives a closing console, and traced a 14-minute
   game recording with no frame timing to Windows keeping a packaged app's AppData files in a private copy.
