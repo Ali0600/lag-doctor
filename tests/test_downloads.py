@@ -157,9 +157,10 @@ def run_probes(tmp_path: Path, **env: str) -> tuple[int, dict[str, tuple[str, st
     (probe_dir / "test_probe.py").write_text(PROBES, encoding="utf-8")
     summary, report = tmp_path / "summary.md", tmp_path / "report.xml"
     # The child's own temp folders stay in tmp_path, as test_redfirst.py does for its runs. In the shared
-    # %TEMP%\pytest-of-<user>, each child run adds a numbered folder, which pushes this suite's out of the three
-    # pytest keeps; the next pytest run then deletes the whole suite's folder, and in CI the timing-sensitive ETW
-    # test that runs next went about 2 s slower and failed (2026-11-07).
+    # %TEMP%\pytest-of-<user>, each child run adds a numbered folder and pushes this suite's out of the three pytest
+    # keeps, so the next pytest run deletes the suite's whole folder. Measured on CI (2026-11-07): with the child
+    # folders there, the timing-sensitive ETW test that runs after the suite was about 2 s slower and failed 3 times
+    # in 16 runs; with them here, 12 of 12 passed at its usual 3.3 s.
     temp = tmp_path / "temp"
     temp.mkdir()
     child_env = {k: v for k, v in os.environ.items() if k not in CLEARED}
