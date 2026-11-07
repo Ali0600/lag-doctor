@@ -8,7 +8,7 @@ counter paths, struct offsets, event layouts, registry values) are in the fact-c
 ## Commands
 
 ```powershell
-uv sync --extra laglab                                   # set up .venv (Python 3.13)
+uv sync --extra laglab --python 3.13                     # set up .venv (Python 3.13: unpinned, uv takes 3.12)
 uv run pytest -q                                         # unit + live read-only tests
 uv run pytest -q tests/test_<area>.py                    # one area (use this while other work is running)
 uv run python scripts/redfirst.py tests/redfirst/<spec>.json   # prove a guard's test can fail
@@ -97,6 +97,9 @@ both against the tests' pins and caches them; each job's summary counts the test
   without an NVIDIA GPU sets `LAGDOCTOR_ABSENT=nvidia`. The runner's account is an administrator with UAC off, so
   `tests/test_cli.py` models an unelevated owner unless a test says otherwise.
 - `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
+- A new worktree has no `.venv`, and the first `uv run` builds one on uv's own managed Python 3.12 (pyproject asks
+  only for 3.11 or later; seen 2026-11-07). Run the `uv sync ... --python 3.13` line first: it resolves to
+  `C:\Python313`, the interpreter of the main checkout's venv.
 - Git Bash rewrites an argument that looks like a POSIX path before starting a native program: `git sparse-checkout
   set --no-cone /Tests/Gold/` stored `C:/Program Files/Git/Tests/Gold/` (the checkout then wrote nothing), and `git
   show origin/main:.github/workflows/ci.yml` became `origin\main;.github\...`. Prefix such commands with
