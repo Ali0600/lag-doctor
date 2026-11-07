@@ -252,9 +252,9 @@ counts, not only its CAUGHT verdict.
 pytest keeps each run's temp folder in `%TEMP%\pytest-of-<user>\pytest-N` and, as a run ends, deletes all but the
 newest three. A test that starts a child pytest with the inherited `TEMP` adds numbered folders there, so the suite's
 own folder drops out of those three and the next pytest run deletes it, thousands of test folders at once.
-**Why it came up**: after `tests/test_downloads.py` started five child runs, the timing-sensitive ETW tracker test that CI
-runs after the suite took about 2 s longer and failed 3 times in 16 runs, while runs without the change in the same hour
-were normal. A diagnostic branch showed it only right after the full suite, never after a minute idle, and gone once the
-child runs got their own `TEMP` (12 of 12 normal).
+**Why it came up**: after `tests/test_downloads.py` started five child runs, the timing-sensitive ETW tracker test
+that CI runs after the suite took about 2 s longer and failed 3 times in 16 runs, while runs without the change in the
+same hour were normal. A diagnostic branch showed it only right after the full suite, never after a minute idle, and
+gone once the child runs got their own `TEMP` (12 of 12 normal).
 **Takeaway**: give every child run of a tool that keeps shared state (temp roots, caches, locks) a private root, and
 compare a suspicious slowdown with runs from the same hour without your change before calling it noise.
