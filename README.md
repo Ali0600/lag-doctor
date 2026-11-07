@@ -129,10 +129,15 @@ uv run python scripts/etw_access.py                            # who may trace o
 - PresentMon's parser is tested against its own gold ETW captures replayed through the real exe, and the
   ETW consumer against private in-process sessions, so neither needs admin rights in the test suite.
 - **CI** (`.github/workflows/ci.yml`) runs the suite on GitHub's Windows Server 2025 runners for Python 3.13 and
-  3.11. A runner has no GPU, no NVIDIA driver, no thermal sensors and no ping replies, and uses a High performance
-  plan: the workflow declares that in `LAGDOCTOR_ABSENT`, and the tests marked as needing those skip there with the
-  reason. Tests that need PresentMon's download skip through their own fixtures. On a PC without an NVIDIA GPU, set
+  3.11. A runner has no GPU, no NVIDIA driver, no thermal sensors and no ping replies: the workflow declares that in
+  `LAGDOCTOR_ABSENT`, and the tests marked as needing those skip there with the reason. Its High performance plan
+  needs no declaring: the power tests hold on any plan. On a PC without an NVIDIA GPU, set
   `$env:LAGDOCTOR_ABSENT = "nvidia"` before running the tests, or the NVIDIA ones fail.
+- **Downloaded test data**: the tests that replay or verify the real PresentMon need its pinned release and its gold
+  captures. `uv run python -m lagdoctor setup` gets the first, `uv run python -m tests.downloads fetch-gold` the
+  second; without them those tests skip with the reason. CI gets both the same way before the tests, checks them
+  against the tests' own pins, caches them, and sets `LAGDOCTOR_REQUIRE` so a missing one fails those tests
+  instead; each job's summary counts them.
 
 ## Experience Gained
 
@@ -145,10 +150,12 @@ uv run python scripts/etw_access.py                            # who may trace o
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 2,565 tests, run in CI on GitHub's Windows runners for 2 Python versions with
+- **Testing that proves itself**: 2,632 tests, run in CI on GitHub's Windows runners for 2 Python versions with
   SHA-pinned actions; the hardware a runner lacks is declared, so those tests skip there by name and still fail on
-  the laptop if a bug hides the hardware; plus a mutation harness of 1,422 deliberate sabotages in 27 specs that
-  must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  the laptop if a bug hides the hardware, and the 32 tests on the real PresentMon get its release and gold captures
+  fetched, pinned and cached there, failing rather than skipping if they go missing; plus a mutation harness of
+  1,467 deliberate sabotages in 28 specs that must each turn a test red, run on a throwaway copy of the tree with
+  hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
 - **Supply chain and least privilege**: PresentMon pinned by SHA-256, checked through a deny-write handle and

@@ -1,6 +1,8 @@
 # The unit tests plus every live test a GitHub Windows runner can run. What the runner lacks is declared in
-# LAGDOCTOR_ABSENT (tests/capabilities.py): a test that needs one of those skips with the reason, and so do the tests
-# whose own fixtures find no PresentMon download. The summary at the end of each test step lists every skip.
+# LAGDOCTOR_ABSENT (tests/capabilities.py): a test that needs one of those skips with the reason. What the tests
+# download, PresentMon's pinned release and its gold ETW captures (tests/downloads.py), is fetched, checked against the
+# tests' own pins and cached below, and LAGDOCTOR_REQUIRE makes a test that finds one missing fail instead of skip.
+# The summary at the end of each test step lists every skip; each job's summary counts the tests that use a download.
 name: CI
 
 on:
@@ -12,9 +14,12 @@ permissions:
   contents: read
 
 env:
-  # Measured on the first runs (2026-11-07): no GPU, no NVIDIA driver, no thermal sensors, no ping replies, and a
-  # High performance plan. The account is an administrator with UAC off; tests/test_cli.py models an unelevated owner.
-  LAGDOCTOR_ABSENT: internet_icmp,gpu,thermal_zone,power_slider,nvidia
+  # Measured on the first runs (2026-11-07): no GPU, no NVIDIA driver, no thermal sensors and no ping replies. The
+  # runner's High performance plan has no power-mode slider; the power tests hold on it, so it is not declared. The
+  # account is an administrator with UAC off; tests/test_cli.py models an unelevated owner.
+  LAGDOCTOR_ABSENT: internet_icmp,gpu,thermal_zone,nvidia
+  # Downloaded by the steps below, so a test that finds one missing fails rather than skips (tests/downloads.py).
+  LAGDOCTOR_REQUIRE: presentmon,presentmon_gold
   # Timing-sensitive under full-suite load (CLAUDE.md): it runs on its own after the rest.
   ALONE: tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap
 
@@ -38,6 +43,58 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install
         run: uv sync --locked --extra laglab
+      - name: Where the downloads go
+        id: downloads
+        run: uv run --no-sync python -m tests.downloads ci-outputs
+      # PresentMon comes through lag-doctor's own setup. After a cache hit, setup only checks the restored exe (size,
+      # SHA-256, Intel's signature); after a miss it runs the real download. The key hashes the download code, so a
+      # change to that code misses the cache and the real download runs again.
+      - name: Restore PresentMon from the cache
+        id: presentmon-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.downloads.outputs.presentmon_dir }}
+          key: ${{ steps.downloads.outputs.presentmon_key }}
+      - name: Set up PresentMon with lagdoctor setup
+        run: |
+          foreach ($wait in 0, 20, 60) {
+            Start-Sleep -Seconds $wait
+            uv run --no-sync python -m lagdoctor setup --download
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Output "::warning::lagdoctor setup failed with exit code $LASTEXITCODE"
+          }
+          exit 1
+      - name: Restore the gold captures from the cache
+        id: gold-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.downloads.outputs.gold_dir }}
+          key: ${{ steps.downloads.outputs.gold_key }}
+      - name: Fetch the gold captures at the pinned commit
+        if: steps.gold-cache.outputs.cache-hit != 'true'
+        run: |
+          foreach ($wait in 0, 20, 60) {
+            Start-Sleep -Seconds $wait
+            uv run --no-sync python -m tests.downloads fetch-gold
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Output "::warning::fetch-gold failed with exit code $LASTEXITCODE"
+          }
+          exit 1
+      - name: Check the downloads against the tests' pins
+        run: uv run --no-sync python -m tests.downloads check presentmon presentmon_gold
+      # Saved only once checked: a failed step above ends the job before these.
+      - name: Save PresentMon to the cache
+        if: steps.presentmon-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.downloads.outputs.presentmon_dir }}
+          key: ${{ steps.downloads.outputs.presentmon_key }}
+      - name: Save the gold captures to the cache
+        if: steps.gold-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.downloads.outputs.gold_dir }}
+          key: ${{ steps.downloads.outputs.gold_key }}
       - name: Tests
         run: uv run --no-sync pytest -v --durations=25 --deselect "$env:ALONE"
       - name: Timing-sensitive test, alone

@@ -1,7 +1,8 @@
 """What the machine running the tests lacks: declared by whoever runs the suite, never detected.
 
-GitHub's Windows runners lack some of the owner's laptop: no GPU, no NVIDIA driver, no thermal sensors, no ping
-replies from the network, and a High performance power plan (measured on the first CI runs, 2026-11-07). The CI
+GitHub's Windows runners lack some of the owner's laptop: no GPU, no NVIDIA driver, no thermal sensors and no ping
+replies from the network (measured on the first CI runs, 2026-11-07). Their High performance power plan, which has no
+power-mode slider, needs no entry: the power tests hold on any plan. The CI
 workflow lists what is absent in LAGDOCTOR_ABSENT (comma-separated names from CAPABILITIES), and
 a test marked ``@pytest.mark.needs(name)`` then skips with the reason. Unset, as on the laptop, nothing skips this
 way. Detecting the absence instead (a failed ping, an empty adapter list) would also skip the test when a regression
@@ -16,7 +17,6 @@ CAPABILITIES = {
     "internet_icmp": "router or internet host that answers ping",
     "gpu": "hardware GPU with 3D engines",
     "thermal_zone": "ACPI thermal-zone sensors",
-    "power_slider": "Windows power-mode slider (a Balanced-type power plan)",
     "nvidia": "NVIDIA GPU and driver (NVML and nvidia-smi)",
 }
 

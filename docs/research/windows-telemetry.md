@@ -1010,7 +1010,43 @@ seen in §4 [inferred].
   code [verified: page text]. The provisioning table adds: *"If no default is configured, Better Performance will be
   the default slider mode for both AC and DC"* [verified: customize-power-slider page]. The same page says *"The slider will appear on a
   device only when the Balanced power plan, or any plan that is derived from Balanced, is selected"*
-  [verified]. Whether ASUS "Silent" is derived from Balanced is unknown [unverified].
+  [verified]. ASUS "Silent" and "ASUS Recommended" are both derived from Balanced: see the personality, next
+  [verified, 2026-11-07].
+- **Which plans have the slider: the plan's personality.** `winnt.h` (10.0.19041, lines 14111–14145) defines
+  `GUID_POWERSCHEME_PERSONALITY 245d8541-3943-4422-b025-13a784f679b7`: *"each power scheme will have this key
+  indicating "I'm most like this base power scheme""* (the header stresses *this*), holding one of
+  `GUID_MAX_POWER_SAVINGS`, `GUID_MIN_POWER_SAVINGS` or `GUID_TYPICAL_POWER_SAVINGS`. Its worked example calls a
+  user's scheme *"some custom scheme that was derived from the GUID_TYPICAL_POWER_SAVINGS"*, whose personality the
+  power manager then reads as `GUID_TYPICAL_POWER_SAVINGS` [verified: header text]. It sits under `NO_SUBGROUP_GUID
+  fea3413e-7e05-4911-9a71-700331f1c294`, which *"should be used when querying for power settings that may not fall
+  into a subgroup"* (winnt.h 14094–14100) [verified]. Microsoft's pages agree that *"All power plans have a
+  personality attribute"* [verified: https://learn.microsoft.com/en-us/windows/win32/power/power-policy-settings] and
+  that *"Every power scheme, including custom schemes, have a personality"* [verified:
+  https://learn.microsoft.com/en-us/windows-hardware/drivers/kernel/managing-device-performance-states]. No page says
+  in so many words that the slider checks the personality, so "derived from Balanced = personality Balanced" is
+  [inferred], from the header's own wording and two measurements: CI (the getters, below), and this laptop, which
+  supports Modern Standby (`powercfg /a`: *Standby (S0 Low Power Idle) Network Connected*), where *"Devices that
+  support Modern Standby mode only allow the Balanced power plan, or power plans derived from Balanced"*
+  [verified: power-policy-settings page]; the plans Windows lists here are exactly those whose personality reads
+  Balanced, while High performance and Power saver exist but are not listed.
+- **Its values.** The setting stores an index: powercfg names it "Power plan type" (alias `PERSONALITY`) with
+  possible indexes 000 Power saver, 001 High performance, 002 Balanced [verified: `powercfg /qh SCHEME_CURRENT
+  SUB_NONE PERSONALITY`, 2026-11-07]. `PowerReadPossibleValue` (powrprof.h 488–496) gives each index's value as
+  `REG_BINARY` (type 3), 16 bytes: index 0 `a1841308-…` (`GUID_MAX_POWER_SAVINGS`), 1 `8c5e7fda-…`
+  (`GUID_MIN_POWER_SAVINGS`), 2 `381b4222-…` (`GUID_TYPICAL_POWER_SAVINGS`); index 3 and up return 2
+  (`ERROR_FILE_NOT_FOUND`) [verified: `<scratch>\probe_personality.py`]. So read the plan's index with
+  `PowerRead{AC,DC}ValueIndex(NULL, scheme, NO_SUBGROUP_GUID, GUID_POWERSCHEME_PERSONALITY, &i)` (NULL for the
+  subgroup gave the same) and look it up in that list, never in a table of indexes. Here Balanced, Silent and ASUS
+  Recommended read 2 on AC and on DC; the unlisted High performance and Power saver plans read 1 and 0; a plan that
+  is not there returns 2 [verified: the probe, re-run through `power.scheme_personality`].
+- **The getters answer on a plan without the slider.** On CI's runner (its High performance plan; effective mode
+  `high_performance`), `slider_mode()` said "balanced" on AC with battery saver off, so the live test that compares
+  the two failed with `AssertionError: high_performance` [verified: GitHub Actions run 42374947710, 2026-11-07].
+  Which GUID the AC getter returned there is not in the log; GUID_NULL and both "Better performance" GUIDs read as
+  "balanced" [unverified]. So a position from the getters means nothing until the personality says the plan has
+  the slider. The page's upgrade note fits: devices on *"High Performance, Power Saver, or any "OEM Recommended"
+  power plans"* keep them, and *"These users will not see the slider UX"* [verified: customize-power-slider page];
+  so an OEM plan has the slider only if it was derived from Balanced [inferred], as ASUS's are here.
 - **Fix.** Save the current overlay GUID, call `PowerSetActiveOverlayScheme(ded574b5-…)`, check the
   result with `PowerGetEffectiveOverlayScheme` and the effective-mode callback, and on restore set the
   saved GUID [unverified: never called].
@@ -1584,3 +1620,8 @@ it could not be checked here.
 | 103 | `GetIfEntry2` 0.08 ms; `GetIfTable2` 6.1 ms / 69 rows; `net_io_counters` 67.6 ms | confirmed (0.11 ms; 3.88 ms / 69 rows; 57.6 ms); `MIB_IF_ROW2` 1,352 B | `v_net_svc.py` |
 | 104 | Sampler cost 13.89 / 19.08 ms per poll, 5.3 % of one CPU | confirmed (12.52 / 19.93 ms, 5.8 %) | `v_sampler.py` |
 | 105 | "One GPU Engine read came back empty after warm-up" | not reproduced for GPU Engine (0 failures in 110+ reads); the empty reads seen were `% Processor Time` failures | `v_pdh3.py` |
+| 106 | `GUID_POWERSCHEME_PERSONALITY`, `NO_SUBGROUP_GUID`, the "most like this base power scheme" and "derived from" wording (§7.2, added 2026-11-07) | confirmed | `winnt.h` 14094–14145 (10.0.19041) |
+| 107 | Personality indexes 0/1/2 hold `GUID_MAX/MIN/TYPICAL_POWER_SAVINGS` as `REG_BINARY`; powercfg names them Power saver / High performance / Balanced | confirmed | `PowerReadPossibleValue`; `powercfg /qh SCHEME_CURRENT SUB_NONE PERSONALITY` |
+| 108 | Balanced, Silent and ASUS Recommended read index 2 on AC and DC; unlisted High performance 1, Power saver 0; a missing plan rc 2 | confirmed | `PowerReadACValueIndex` / `PowerReadDCValueIndex`; `power.scheme_personality` |
+| 109 | The slider getters answer on a plan without the slider ("balanced" against effective `high_performance` on CI) | confirmed; which GUID they returned there unverified | GitHub Actions run 42374947710 log |
+| 110 | Every plan, custom ones included, has a personality; Modern Standby allows only Balanced or Balanced-derived plans; this laptop is Modern Standby | confirmed; "slider ⇔ personality Balanced" stays inferred | power-policy-settings and managing-device-performance-states pages; `powercfg /a` |

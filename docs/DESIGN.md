@@ -228,7 +228,11 @@ def list_schemes() -> list[tuple[str, str]]
 def set_active_scheme(guid: str) -> None
 def power_status() -> dict                        # {on_battery: bool|None, battery_pct: int|None, saver: bool|None}
 def battery_present() -> bool | None              # inventory.laptop
-def slider_mode(on_ac: bool) -> str | None        # "best_efficiency"|"balanced"|"best_performance"|None
+def slider_mode(on_ac: bool) -> str | None        # "best_efficiency"|"balanced"|"best_performance"|None;
+                                                  # None also on a plan without the slider (personality not Balanced)
+def scheme_personality(scheme: str, on_ac: bool) -> str | None   # "balanced"|"high_performance"|"power_saver"|None:
+                                                  # the base plan it is most like (Balanced-derived = "balanced"),
+                                                  # its index looked up in Windows' list of possible values
 def effective_mode(timeout_s: float = 1.0) -> str | None
 # EFFECTIVE_POWER_MODE V2, hard-coded 0..6: "battery_saver","better_battery","balanced",
 # "high_performance","max_performance","game_mode","mixed_reality"
@@ -494,8 +498,10 @@ ram_gb    float
 laptop    bool                                           a battery is present
 adapters  [ … winapi.dxgi.list_adapters() … ]            software adapters dropped
 displays  [ … winapi.display.list_displays() … ]
-power     {scheme_guid, scheme_name, schemes: [[guid, name], …], slider, effective_mode, on_battery,
+power     {scheme_guid, scheme_name, schemes: [[guid, name], …], slider, personality, effective_mode, on_battery,
            battery_pct, saver, plan}                     slider = slider_mode() for the current power source;
+          personality = scheme_personality() of the active plan for that source: only "balanced" has the slider,
+          so on the others slider is None and the report says the plan has no power mode (None = not read);
           plan = power.plan_settings() of the active plan: rules judge a plan by these, by its name only when
           a capture has none (an ASUS plan named "Silent" set the CPU exactly as Balanced does here)
 settings  {game_mode, game_dvr, background_recording, hags, windowed_optimizations, vrr, memory_integrity}
@@ -703,7 +709,9 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   holding the laptop back"), with the GPU's power limit held below its default as evidence and Armoury's own
   setting as the advice. GPU heat is never its evidence (that is `gpu_throttle`'s); the switch to Balanced is
   offered only for a plan whose own settings hold the PC back. `gpu_throttle` takes the same problems as a hint,
-  but never a CPU-only plan setting (a cap, boost off).
+  but never a CPU-only plan setting (a cap, boost off). The power mode (the slider) is cited and advised only where
+  the plan has one: never on a High performance or Power saver type plan (`inventory.power.personality`;
+  `labels.plan_has_power_mode`), whatever slider position the capture holds.
 - `vsync_judder` (real VSync judder) and `dropped_frames` (the game presents faster than a fixed refresh and
   frames are dropped, `rules._dropped_judder`); `uneven_pacing`: pacing events with uneven *presents*
   (present_swing_pct > 10 %) covering ≥ 10 % of the capture, weighed as a steady metric.
@@ -854,6 +862,10 @@ lagdoctor setup                      fetch + verify PresentMon, explain how to g
   (psutil on our own process, typeperf, `powercfg`, `nvidia-smi`, `Get-NetRoute`).
 - **ETW without rights**: a private in-process session (allowed for standard users) proves the consumer
   path (NE 5.6); PresentMon's `--etl_file` replay proves the frames path.
+- **Downloaded test data** (`tests/downloads.py`): the PresentMon release and its gold captures are not in the
+  repo. `lagdoctor setup` and `python -m tests.downloads fetch-gold` fetch them; the fixtures check the exe
+  against the tests' own pin, independent of `setup.py`'s. Without them those tests skip, except where
+  `LAGDOCTOR_REQUIRE` names them (CI, which fetches and caches both): there they fail.
 - **Red first**: every guard is sabotaged once and must turn its test red (`scripts/redfirst.py`). The runner
   copies the tree to a temp folder and mutates only the copy, so a killed run can never leave a sabotaged guard
   in the working tree; a test that reads the real repo by absolute path is reported UNISOLATED, and one that

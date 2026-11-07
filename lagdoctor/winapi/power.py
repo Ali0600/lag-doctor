@@ -1,9 +1,10 @@
-"""Power: the active plan and the installed plans, switching plans, AC/battery/saver, the Windows 11 power-mode
-slider, and the effective power mode (which includes "Game Mode is engaged").
+"""Power: the active plan and the installed plans, each plan's personality (the base plan it is most like),
+switching plans, AC/battery/saver, the Windows 11 power-mode slider, and the effective power mode (which includes
+"Game Mode is engaged").
 
-Sources: docs/research/windows-telemetry.md (WT) section 7 and its verification log #66-#78, with signatures
-re-read in the 10.0.19041 SDK (powersetting.h, powrprof.h, WinBase.h). The slider getters are not in that SDK;
-they are guarded and answer None on any doubt.
+Sources: docs/research/windows-telemetry.md (WT) section 7 and its verification log #66-#78 and #106-#110, with
+signatures re-read in the 10.0.19041 SDK (powersetting.h, powrprof.h, WinBase.h, winnt.h). The slider getters are
+not in that SDK; they are guarded and answer None on any doubt.
 """
 from __future__ import annotations
 
@@ -35,6 +36,22 @@ SLIDER_MODES = {
     "381b4222-f694-41f0-9685-ff5bb260df2e": "balanced",
     "ded574b5-45a0-4f42-8737-46345c09c238": "best_performance",
 }
+
+# A plan's personality ("Power plan type" in powercfg): the base plan it is "most like". Every plan has one, and a
+# plan derived from Balanced has Balanced's (winnt.h 14111-14145, 10.0.19041 SDK). The slider shows only on Balanced
+# and plans derived from it (WT 7.2), so this decides whether the slider exists. The setting stores an index, and
+# each possible index holds a base plan's GUID as REG_BINARY (PowerReadPossibleValue, WT 7.2), so the index is looked
+# up in Windows' own list, never in a table of ours.
+NO_SUBGROUP = "fea3413e-7e05-4911-9a71-700331f1c294"     # NO_SUBGROUP_GUID (winnt.h 14100)
+PERSONALITY = "245d8541-3943-4422-b025-13a784f679b7"     # GUID_POWERSCHEME_PERSONALITY (winnt.h 14145)
+PERSONALITIES = {
+    "a1841308-3541-4fab-bc81-f71556f20b4a": "power_saver",        # GUID_MAX_POWER_SAVINGS (winnt.h 14078)
+    "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c": "high_performance",   # GUID_MIN_POWER_SAVINGS (winnt.h 14085)
+    "381b4222-f694-41f0-9685-ff5bb260df2e": "balanced",           # GUID_TYPICAL_POWER_SAVINGS (winnt.h 14092)
+}
+SLIDER_PERSONALITY = "balanced"
+REG_BINARY = 3                      # winnt.h 21821
+MAX_VALUE_BYTES = 64                # a possible value read here is a 16-byte GUID
 
 # The processor settings of a plan that can hold the PC back (WT 7.1; GUIDs and value lists re-read with
 # `powercfg /qh SCHEME_CURRENT SUB_PROCESSOR <alias>` on 2026-11-05).
@@ -87,6 +104,10 @@ for _read in (_powrprof.PowerReadACValueIndex, _powrprof.PowerReadDCValueIndex):
     _read.argtypes = [wintypes.HKEY, ctypes.POINTER(GUID), ctypes.POINTER(GUID), ctypes.POINTER(GUID),
                       ctypes.POINTER(wintypes.DWORD)]
     _read.restype = wintypes.DWORD
+_powrprof.PowerReadPossibleValue.argtypes = [wintypes.HKEY, ctypes.POINTER(GUID), ctypes.POINTER(GUID),
+                                             ctypes.POINTER(wintypes.ULONG), wintypes.ULONG, ctypes.c_void_p,
+                                             ctypes.POINTER(wintypes.DWORD)]
+_powrprof.PowerReadPossibleValue.restype = wintypes.DWORD
 _kernel32.LocalFree.argtypes = [wintypes.HLOCAL]
 _kernel32.LocalFree.restype = wintypes.HLOCAL
 _kernel32.GetSystemPowerStatus.argtypes = [ctypes.POINTER(SYSTEM_POWER_STATUS)]
@@ -121,6 +142,14 @@ def mode_name(mode: int) -> str | None:
 
 def slider_name(guid: str) -> str | None:
     return SLIDER_MODES.get(guid.lower())
+
+
+def decode_personality(kind: int, data: bytes) -> str | None:
+    """A possible value of the personality setting -> "balanced" | "high_performance" | "power_saver": a REG_BINARY
+    holding one of the three base plans' GUIDs; anything else None."""
+    if kind != REG_BINARY or len(data) != ctypes.sizeof(GUID):
+        return None
+    return PERSONALITIES.get(str(uuid.UUID(bytes_le=bytes(data))))
 
 
 def decode_status(ac_line: int, battery_flag: int, percent: int, system_flag: int) -> dict:
@@ -192,6 +221,33 @@ def plan_settings(scheme: str) -> dict[str, int | None]:
     return out
 
 
+def _personality_value(index: int) -> tuple[int, bytes] | None:
+    """(registry type, bytes) of the personality setting's possible value number `index`, from Windows' own list."""
+    sub, setting = guid_from_str(NO_SUBGROUP), guid_from_str(PERSONALITY)
+    kind, size = wintypes.ULONG(0), wintypes.DWORD(MAX_VALUE_BYTES)
+    buf = ctypes.create_string_buffer(MAX_VALUE_BYTES)
+    rc = _powrprof.PowerReadPossibleValue(None, ctypes.byref(sub), ctypes.byref(setting), ctypes.byref(kind), index,
+                                          buf, ctypes.byref(size))
+    if rc != 0:                     # ERROR_MORE_DATA for a value longer than the buffer: refused, never cut
+        return None
+    return int(kind.value), buf.raw[:size.value]
+
+
+def scheme_personality(scheme: str, on_ac: bool) -> str | None:
+    """A plan's personality for AC (True) or battery (False), the base plan it is most like: "balanced" (Balanced and
+    every plan derived from it, the only ones with the power-mode slider), "high_performance" or "power_saver"; None
+    when Windows would not say. Read-only."""
+    if not isinstance(on_ac, bool):
+        raise TypeError(f"on_ac must be True or False, not {on_ac!r}")
+    g, sub, setting = guid_from_str(scheme), guid_from_str(NO_SUBGROUP), guid_from_str(PERSONALITY)
+    read = _powrprof.PowerReadACValueIndex if on_ac else _powrprof.PowerReadDCValueIndex
+    index = wintypes.DWORD(0)
+    if read(None, ctypes.byref(g), ctypes.byref(sub), ctypes.byref(setting), ctypes.byref(index)) != 0:
+        return None
+    value = _personality_value(index.value)
+    return decode_personality(*value) if value is not None else None
+
+
 def set_active_scheme(guid: str) -> None:
     """PowerSetActiveScheme: allowed for standard users (WT 7.5). Raises OSError if Windows refuses."""
     g = guid_from_str(guid)
@@ -235,13 +291,22 @@ def _optional_export(name: str, argtypes: list, restype):
 
 
 def slider_mode(on_ac: bool) -> str | None:
-    """The power-mode slider the user set for AC (True) or battery (False), or None on any doubt.
+    """The power-mode slider the user set for AC (True) or battery (False), or None on any doubt; None as well on a
+    plan without the slider. It shows only on a plan whose personality is Balanced, but the getters answer on any
+    plan: on CI's High performance plan the AC one gave a position read as "balanced" while Windows' effective mode
+    was high_performance (2026-11-07). So the active plan's personality, for the same power source, is read first.
 
     PowerGetUserConfigured{AC,DC}PowerMode are exported but not in the 19041 SDK; the signature
     DWORD f(GUID*) is the one that ran here (WT 7.2, verify log #68-#72).
     """
     if not isinstance(on_ac, bool):
         raise TypeError(f"on_ac must be True or False, not {on_ac!r}")
+    try:
+        scheme = active_scheme()[0]
+    except OSError:
+        return None
+    if scheme_personality(scheme, on_ac) != SLIDER_PERSONALITY:
+        return None
     name = "PowerGetUserConfiguredACPowerMode" if on_ac else "PowerGetUserConfiguredDCPowerMode"
     fn = _optional_export(name, [ctypes.POINTER(GUID)], wintypes.DWORD)
     if fn is None:

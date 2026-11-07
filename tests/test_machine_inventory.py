@@ -67,7 +67,8 @@ def _fresh_device_guard_cache(monkeypatch):
 @pytest.fixture
 def machine(monkeypatch, reg_sandbox):
     """A fake machine with this laptop's answers; tests change single facts on it."""
-    state = {"adapters": [INTEL, NVIDIA, BASIC], "displays": [PANEL], "slider_calls": []}
+    state = {"adapters": [INTEL, NVIDIA, BASIC], "displays": [PANEL], "slider_calls": [], "personality_calls": [],
+             "personality": "balanced"}
     monkeypatch.setattr(dxgi, "list_adapters", lambda: [dict(a) for a in state["adapters"]])
     monkeypatch.setattr(display, "list_displays", lambda: [dict(d) for d in state["displays"]])
     monkeypatch.setattr(power, "power_status", lambda: {"on_battery": False, "battery_pct": 100, "saver": False})
@@ -76,6 +77,8 @@ def machine(monkeypatch, reg_sandbox):
     monkeypatch.setattr(power, "list_schemes", lambda: list(SCHEMES))
     monkeypatch.setattr(power, "plan_settings", lambda guid: state.setdefault("plan_for", []).append(guid) or dict(PLAN))
     monkeypatch.setattr(power, "slider_mode", lambda on_ac: state["slider_calls"].append(on_ac) or "balanced")
+    monkeypatch.setattr(power, "scheme_personality", lambda scheme, on_ac: state["personality_calls"].append(
+        (scheme, on_ac)) or state["personality"])
     monkeypatch.setattr(power, "effective_mode", lambda timeout_s=1.0: "balanced")
     monkeypatch.setattr(storage, "media_type", lambda path: "SSD")
     monkeypatch.setattr(storage, "free_gb", lambda path: 68.8149)
@@ -100,8 +103,8 @@ def collect(machine, target=None, process_names=None):
 DESIGN_KEYS = {
     "os": {"name", "build"},
     "cpu": {"name", "cores", "threads", "hybrid", "p_threads", "e_threads"},
-    "power": {"scheme_guid", "scheme_name", "schemes", "slider", "effective_mode", "on_battery", "battery_pct",
-              "saver", "plan"},
+    "power": {"scheme_guid", "scheme_name", "schemes", "slider", "personality", "effective_mode", "on_battery",
+              "battery_pct", "saver", "plan"},
     "settings": {"game_mode", "game_dvr", "background_recording", "hags", "windowed_optimizations", "vrr",
                  "memory_integrity"},
     "game": {"exe", "drive", "media", "free_gb", "gpu_preference", "monitor_device", "launcher"},
@@ -123,10 +126,11 @@ def test_collect_returns_every_design_key(machine):
                           "hybrid": True, "p_threads": 12, "e_threads": 4}
     assert (inv["ram_gb"], inv["laptop"]) == (31.6, True)
     assert inv["power"] == {"scheme_guid": SCHEMES[1][0], "scheme_name": "Silent",
-                            "schemes": [list(s) for s in SCHEMES], "slider": "balanced",
+                            "schemes": [list(s) for s in SCHEMES], "slider": "balanced", "personality": "balanced",
                             "effective_mode": "balanced", "on_battery": False, "battery_pct": 100, "saver": False,
                             "plan": PLAN}
     assert machine["slider_calls"] == [True]                         # the slider for the source in use: AC
+    assert machine["personality_calls"] == [(SCHEMES[1][0], True)]   # the active plan's type, for that source
     assert machine["plan_for"] == [SCHEMES[1][0]]                    # the active plan's own settings
     assert inv["game"] == {"exe": EXE, "drive": "D:", "media": "SSD", "free_gb": 68.81, "gpu_preference": None,
                            "monitor_device": PANEL["device"], "launcher": "steam"}
@@ -173,6 +177,32 @@ def test_on_battery_reads_the_battery_slider_and_unknown_power_reads_none(machin
     monkeypatch.setattr(power, "power_status", lambda: {"on_battery": None, "battery_pct": None, "saver": None})
     inv = collect(machine)
     assert machine["slider_calls"] == [False] and inv["power"]["slider"] is None
+    assert machine["personality_calls"] == [(SCHEMES[1][0], False)] and inv["power"]["personality"] is None
+    assert "power.personality" not in inv["errors"]                  # not asked for, which is not a failure
+
+
+def test_a_plan_without_the_slider_is_recorded_as_its_type(machine, monkeypatch):
+    # A High performance type plan: slider_mode says None, and the type says why, so it is no failure.
+    machine["personality"] = "high_performance"
+    monkeypatch.setattr(power, "slider_mode", lambda on_ac: None)
+    inv = collect(machine)
+    assert (inv["power"]["slider"], inv["power"]["personality"]) == (None, "high_performance")
+    assert inv["errors"] == {}
+
+
+def test_without_the_active_plan_its_type_is_not_asked_for(machine, monkeypatch):
+    def broken():
+        raise OSError("PowerGetActiveScheme failed (5)")
+    monkeypatch.setattr(power, "active_scheme", broken)
+    inv = collect(machine)
+    assert inv["power"]["personality"] is None and machine["personality_calls"] == []
+    assert "power.scheme" in inv["errors"] and "power.personality" not in inv["errors"]
+
+
+def test_an_unread_plan_type_is_reported(machine):
+    machine["personality"] = None
+    inv = collect(machine)
+    assert inv["power"]["personality"] is None and "plan" in inv["errors"]["power.personality"]
 
 
 # ======================================================================== settings and the game

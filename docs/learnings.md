@@ -219,3 +219,31 @@ survived on main. CI's runner lacks a GPU, so its workflow now declares what is 
 tests that need it skip there by name, and an undeclared absence fails.
 **Takeaway**: let whoever runs the suite say what the machine lacks; when a capability is not declared absent, its
 absence is a failure.
+
+### A setting's getter still answers where the setting does not exist
+Windows shows the power-mode slider only on Balanced and plans derived from it, yet its getters
+(`PowerGetUserConfigured{AC,DC}PowerMode`) answer on every plan, with a position nobody can see or set. Whether a plan
+has the slider is its personality (`GUID_POWERSCHEME_PERSONALITY`, "the base plan I am most like"): an index whose
+possible values Windows lists as the three base plans' GUIDs (`PowerReadPossibleValue`).
+**Why it came up**: on CI's High performance plan lag-doctor reported "power mode balanced" while Windows' effective
+mode said high performance. The first fix declared the slider absent on CI, which hid a wrong answer any player on
+such a plan would also have got.
+**Takeaway**: before reporting a setting, check the condition under which it applies; and before declaring a
+capability absent to quiet a test on a new machine, ask what the product would tell a user of that machine.
+
+### Git Bash rewrites arguments that look like POSIX paths
+Before Git Bash (MSYS) starts a native program, it turns any argument that begins with `/` into a Windows path.
+`git sparse-checkout set --no-cone /Tests/Gold/` stored `C:/Program Files/Git/Tests/Gold/`, and the checkout after it
+wrote no files and reported no error.
+**Why it came up**: trying the gold-capture fetch for CI from the agent's Git Bash shell. From Python's `subprocess`
+or PowerShell, the same command stores the pattern as typed.
+**Takeaway**: from Git Bash, set `MSYS_NO_PATHCONV=1` for a native program's slash-led argument, and read back what a
+silent tool stored (here `.git/info/sparse-checkout`) before trusting an empty result.
+
+### `pytest.raises(pytest.fail.Exception)` lets a skip through
+`pytest.skip` and `pytest.fail` raise different exceptions. A test that expects the failure but gets the skip does not
+fail: the skip escapes `pytest.raises` and the test is reported as skipped, which reads as fine.
+**Why it came up**: red-first on `tests/redfirst/downloads.json`. Turning "fail when the run requires the download"
+into "skip" left the unit test skipped, not red ("1 failed, 1 skipped"); only its twin through pytest itself caught it.
+**Takeaway**: when a test checks which outcome a helper raises, catch both and assert the kind; and read red-first's
+counts, not only its CAUGHT verdict.
