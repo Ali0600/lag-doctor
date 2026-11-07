@@ -183,5 +183,14 @@
   "tests": [
    "tests/test_downloads.py::test_ci_fetches_checks_and_requires_every_download_and_uses_only_real_outputs"
   ]
+ },
+ {
+  "name": "the child runs share the suite's pytest temp folder",
+  "file": "tests/test_downloads.py",
+  "old": "                      \"TEMP\": str(temp), \"TMP\": str(temp), \"TMPDIR\": str(temp)}, **env)",
+  "new": "                      }, **env)",
+  "tests": [
+   "tests/test_downloads.py::test_on_a_pc_without_the_downloads_their_tests_skip_and_are_counted"
+  ]
  }
 ]
