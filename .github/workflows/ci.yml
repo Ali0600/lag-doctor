@@ -39,10 +39,6 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install
         run: uv sync --locked --extra laglab
-      - name: Token groups (temporary diagnostic)
-        run: |
-          whoami /all
-          uv run --no-sync python -c "from lagdoctor.winapi import elevation as e; [print(s, hex(a)) for s, a in sorted(e._token_groups().items())]"
       - name: Tests
         run: uv run --no-sync pytest -v --durations=25 --deselect "$env:ALONE"
       - name: Timing-sensitive test, alone
