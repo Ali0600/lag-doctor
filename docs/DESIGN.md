@@ -854,6 +854,10 @@ lagdoctor setup                      fetch + verify PresentMon, explain how to g
   (psutil on our own process, typeperf, `powercfg`, `nvidia-smi`, `Get-NetRoute`).
 - **ETW without rights**: a private in-process session (allowed for standard users) proves the consumer
   path (NE 5.6); PresentMon's `--etl_file` replay proves the frames path.
+- **Downloaded test data** (`tests/downloads.py`): the PresentMon release and its gold captures are not in the
+  repo. `lagdoctor setup` and `python -m tests.downloads fetch-gold` fetch them; the fixtures check the exe
+  against the tests' own pin, independent of `setup.py`'s. Without them those tests skip, except where
+  `LAGDOCTOR_REQUIRE` names them (CI, which fetches and caches both): there they fail.
 - **Red first**: every guard is sabotaged once and must turn its test red (`scripts/redfirst.py`). The runner
   copies the tree to a temp folder and mutates only the copy, so a killed run can never leave a sabotaged guard
   in the working tree; a test that reads the real repo by absolute path is reported UNISOLATED, and one that

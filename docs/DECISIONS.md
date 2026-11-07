@@ -2,6 +2,9 @@
 
 ## Backlog: alternatives worth trying later
 
+- **A weekly CI run that skips the PresentMon cache**, so the real download also runs when nothing in the repo
+  changed (GitHub moving its download hosts, say). Revisit hook: an `on: schedule` trigger in `ci.yml` and a
+  condition on its "Restore PresentMon from the cache" step.
 - **Own ETW frame tracer instead of PresentMon**: no download, but no GPU-busy timing and a lot of
   present-mode state to get right. Revisit hook: a second `Collector` named `frames` in `capture/`.
 - **A live dashboard on a second monitor** (local web page fed by the session's `live()` snapshots).
@@ -22,6 +25,19 @@
   not-ready branch at the top of `cli.cmd_watch`.
 
 ---
+
+## 2026-11-07: CI caches the PresentMon download, keyed on the code that downloads it
+
+CI was to get PresentMon through `lagdoctor setup --download`, because no test runs the real download (they replace
+the fetcher), and to cache it; a cache hit skips the download, so the two pull apart. The implementing session chose;
+the owner has not weighed in.
+- **Cache the exe under a key that hashes `setup.py`, `paths.py` and `cli.py` (chosen)**: a change to the download
+  code misses the cache, so that pull request's CI runs the real download; otherwise setup re-checks the restored exe
+  (size, SHA-256, Intel's signature). It also misses on a new pin and after 7 days without a run.
+- **Download on every run**: rejected. Each run would depend on GitHub's release servers for 1 MB that never changes.
+- **Key on the pin alone**: rejected. The real download would run once, then not again while the cache lasts.
+- **A weekly run without the cache**: deferred, worth trying (Backlog).
+Revisit hook: `DOWNLOAD_CODE` and `ci_outputs` in `tests/downloads.py`.
 
 ## 2026-11-07: How the history went public
 

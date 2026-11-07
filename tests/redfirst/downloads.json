@@ -1,0 +1,187 @@
+[
+ {
+  "name": "a missing download that the run requires only skips",
+  "file": "tests/downloads.py",
+  "old": "        if name in required(environ):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_downloads.py::test_a_missing_download_skips_unless_required_then_fails",
+   "tests/test_downloads.py::test_when_the_run_requires_them_a_missing_download_fails_its_tests"
+  ]
+ },
+ {
+  "name": "a broken download only skips",
+  "file": "tests/downloads.py",
+  "old": "        pytest.fail(str(exc), pytrace=False)",
+  "new": "        pytest.skip(str(exc))",
+  "tests": [
+   "tests/test_downloads.py::test_a_broken_download_fails_even_when_not_required",
+   "tests/test_downloads.py::test_an_exe_that_is_not_the_pinned_release_fails_its_tests_even_when_not_required"
+  ]
+ },
+ {
+  "name": "the exe's bytes are never compared with the pin",
+  "file": "tests/downloads.py",
+  "old": "    if digest != PRESENTMON_SHA256:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_downloads.py::test_an_exe_with_other_bytes_is_broken_and_one_with_the_pinned_bytes_is_returned",
+   "tests/test_downloads.py::test_an_exe_that_is_not_the_pinned_release_fails_its_tests_even_when_not_required"
+  ]
+ },
+ {
+  "name": "a partial gold folder passes",
+  "file": "tests/downloads.py",
+  "old": "    if absent:\n        raise Broken(",
+  "new": "    if False:\n        raise Broken(",
+  "tests": [
+   "tests/test_downloads.py::test_gold_is_missing_with_none_of_its_files_broken_with_some_and_found_with_all"
+  ]
+ },
+ {
+  "name": "a partial gold folder counts as never downloaded",
+  "file": "tests/downloads.py",
+  "old": "    if len(absent) == len(GOLD_FILES):",
+  "new": "    if absent:",
+  "tests": [
+   "tests/test_downloads.py::test_gold_is_missing_with_none_of_its_files_broken_with_some_and_found_with_all"
+  ]
+ },
+ {
+  "name": "a misspelt requirement is ignored",
+  "file": "tests/downloads.py",
+  "old": "    if unknown:\n        raise pytest.UsageError(f\"{REQUIRE_ENV}",
+  "new": "    if False:\n        raise pytest.UsageError(f\"{REQUIRE_ENV}",
+  "tests": [
+   "tests/test_downloads.py::test_a_misspelt_requirement_is_a_usage_error",
+   "tests/test_downloads.py::test_a_misspelt_requirement_stops_the_run_before_any_test"
+  ]
+ },
+ {
+  "name": "conftest no longer checks the requirement before the run",
+  "file": "tests/conftest.py",
+  "old": "    downloads.required(os.environ)                  # a misspelt LAGDOCTOR_REQUIRE stops the run before it starts",
+  "new": "    pass",
+  "tests": [
+   "tests/test_downloads.py::test_a_misspelt_requirement_stops_the_run_before_any_test"
+  ]
+ },
+ {
+  "name": "the exe fixture reads no requirement",
+  "file": "tests/conftest.py",
+  "old": "    return downloads.for_fixture(\"presentmon\")",
+  "new": "    return downloads.for_fixture(\"presentmon\", {\"LOCALAPPDATA\": os.environ[\"LOCALAPPDATA\"]})",
+  "tests": [
+   "tests/test_downloads.py::test_when_the_run_requires_them_a_missing_download_fails_its_tests"
+  ]
+ },
+ {
+  "name": "the tally is never registered",
+  "file": "tests/conftest.py",
+  "old": "    config.pluginmanager.register(downloads.Tally(os.environ), \"lagdoctor-download-tally\")",
+  "new": "    pass",
+  "tests": [
+   "tests/test_downloads.py::test_on_a_pc_without_the_downloads_their_tests_skip_and_are_counted"
+  ]
+ },
+ {
+  "name": "the tally counts only the exe's tests",
+  "file": "tests/downloads.py",
+  "old": "                        if FIXTURES.keys() & set(getattr(item, \"fixturenames\", ()))}",
+  "new": "                        if {\"presentmon_exe\"} & set(getattr(item, \"fixturenames\", ()))}",
+  "tests": [
+   "tests/test_downloads.py::test_on_a_pc_without_the_downloads_their_tests_skip_and_are_counted"
+  ]
+ },
+ {
+  "name": "the tally loses the skips",
+  "file": "tests/downloads.py",
+  "old": "        if report.skipped:\n            self.outcomes[report.nodeid] = (\"skipped\"",
+  "new": "        if False:\n            self.outcomes[report.nodeid] = (\"skipped\"",
+  "tests": [
+   "tests/test_downloads.py::test_on_a_pc_without_the_downloads_their_tests_skip_and_are_counted"
+  ]
+ },
+ {
+  "name": "the job summary is never written",
+  "file": "tests/downloads.py",
+  "old": "        if summary:\n            with open(summary, \"a\"",
+  "new": "        if False:\n            with open(summary, \"a\"",
+  "tests": [
+   "tests/test_downloads.py::test_on_a_pc_without_the_downloads_their_tests_skip_and_are_counted",
+   "tests/test_downloads.py::test_when_the_run_requires_them_a_missing_download_fails_its_tests"
+  ]
+ },
+ {
+  "name": "fetch-gold lets git convert line endings",
+  "file": "tests/downloads.py",
+  "old": "        run(\"config\", \"core.autocrlf\", \"false\")",
+  "new": "        run(\"config\", \"core.filemode\", \"false\")",
+  "tests": [
+   "tests/test_downloads.py::test_fetch_gold_takes_the_pinned_commits_gold_folder_byte_for_byte"
+  ]
+ },
+ {
+  "name": "fetch-gold publishes a folder the commit left incomplete",
+  "file": "tests/downloads.py",
+  "old": "        if absent:\n            raise RuntimeError(",
+  "new": "        if False:\n            raise RuntimeError(",
+  "tests": [
+   "tests/test_downloads.py::test_fetch_gold_leaves_nothing_when_the_commit_lacks_a_capture"
+  ]
+ },
+ {
+  "name": "fetch-gold refuses an existing folder only after fetching",
+  "file": "tests/downloads.py",
+  "old": "    if dest.exists():\n        raise FileExistsError(",
+  "new": "    if False:\n        raise FileExistsError(",
+  "tests": [
+   "tests/test_downloads.py::test_fetch_gold_refuses_a_folder_that_is_there_before_fetching_anything"
+  ]
+ },
+ {
+  "name": "a failed copy leaves its staging folder behind",
+  "file": "tests/downloads.py",
+  "old": "            shutil.rmtree(staging, ignore_errors=True)",
+  "new": "            pass",
+  "tests": [
+   "tests/test_downloads.py::test_fetch_gold_leaves_nothing_when_the_copy_fails_halfway"
+  ]
+ },
+ {
+  "name": "the exe's cache key ignores the download code's contents",
+  "file": "tests/downloads.py",
+  "old": "        code.update(rel.encode(\"utf-8\") + b\"\\0\" + (ROOT / rel).read_bytes() + b\"\\0\")",
+  "new": "        code.update(rel.encode(\"utf-8\") + b\"\\0\")",
+  "tests": [
+   "tests/test_downloads.py::test_a_change_to_any_of_the_download_code_misses_the_exe_cache"
+  ]
+ },
+ {
+  "name": "the download code leaves out the setup command",
+  "file": "tests/downloads.py",
+  "old": "DOWNLOAD_CODE = (\"lagdoctor/setup.py\", \"lagdoctor/paths.py\", \"lagdoctor/cli.py\")",
+  "new": "DOWNLOAD_CODE = (\"lagdoctor/setup.py\", \"lagdoctor/paths.py\")",
+  "tests": [
+   "tests/test_downloads.py::test_ci_outputs_name_the_folders_the_fixtures_read"
+  ]
+ },
+ {
+  "name": "a new download that CI does not fetch",
+  "file": "tests/downloads.py",
+  "old": "DOWNLOADS = {\"presentmon\": \"PresentMon's pinned release\", \"presentmon_gold\": \"PresentMon's gold ETW captures\"}",
+  "new": "DOWNLOADS = {\"presentmon\": \"PresentMon's pinned release\", \"presentmon_gold\": \"PresentMon's gold ETW captures\", \"presentmon_src\": \"PresentMon's source\"}",
+  "tests": [
+   "tests/test_downloads.py::test_ci_fetches_checks_and_requires_every_download_and_uses_only_real_outputs"
+  ]
+ },
+ {
+  "name": "an output CI never reads",
+  "file": "tests/downloads.py",
+  "old": "        \"gold_key\": f\"presentmon-gold-",
+  "new": "        \"gold_src\": \"unused\",\n        \"gold_key\": f\"presentmon-gold-",
+  "tests": [
+   "tests/test_downloads.py::test_ci_fetches_checks_and_requires_every_download_and_uses_only_real_outputs"
+  ]
+ }
+]

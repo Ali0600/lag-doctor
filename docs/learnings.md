@@ -219,3 +219,20 @@ survived on main. CI's runner lacks a GPU, so its workflow now declares what is 
 tests that need it skip there by name, and an undeclared absence fails.
 **Takeaway**: let whoever runs the suite say what the machine lacks; when a capability is not declared absent, its
 absence is a failure.
+
+### Git Bash rewrites arguments that look like POSIX paths
+Before Git Bash (MSYS) starts a native program, it turns any argument that begins with `/` into a Windows path.
+`git sparse-checkout set --no-cone /Tests/Gold/` stored `C:/Program Files/Git/Tests/Gold/`, and the checkout after it
+wrote no files and reported no error.
+**Why it came up**: trying the gold-capture fetch for CI from the agent's Git Bash shell. From Python's `subprocess`
+or PowerShell, the same command stores the pattern as typed.
+**Takeaway**: from Git Bash, set `MSYS_NO_PATHCONV=1` for a native program's slash-led argument, and read back what a
+silent tool stored (here `.git/info/sparse-checkout`) before trusting an empty result.
+
+### `pytest.raises(pytest.fail.Exception)` lets a skip through
+`pytest.skip` and `pytest.fail` raise different exceptions. A test that expects the failure but gets the skip does not
+fail: the skip escapes `pytest.raises` and the test is reported as skipped, which reads as fine.
+**Why it came up**: red-first on `tests/redfirst/downloads.json`. Turning "fail when the run requires the download"
+into "skip" left the unit test skipped, not red ("1 failed, 1 skipped"); only its twin through pytest itself caught it.
+**Takeaway**: when a test checks which outcome a helper raises, catch both and assert the kind; and read red-first's
+counts, not only its CAUGHT verdict.

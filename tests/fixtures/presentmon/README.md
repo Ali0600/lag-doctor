@@ -7,7 +7,9 @@ Real PresentMon 2.6.0 output, used by `tests/test_presentmon_*.py`.
 - **Captures**: the gold ETW captures of Intel PresentMon v2.6.0,
   <https://github.com/GameTechDev/PresentMon/tree/v2.6.0/Tests/Gold>, tag `v2.6.0` =
   commit `e13fce6acdb55a808fd8318175a56863e532d95f`. The tests find them through the `gold_etl_dir`
-  fixture (`%LOCALAPPDATA%\lag-doctor\testdata\presentmon-gold`).
+  fixture (`%LOCALAPPDATA%\lag-doctor\testdata\presentmon-gold`), and `uv run python -m tests.downloads
+  fetch-gold` puts them there: a blobless, sparse fetch of that one commit, every byte as committed (the
+  expected CSVs keep their LF line endings; a Windows `git clone` would turn them into CRLF).
 - **Tool**: the PresentMon 2.6.0 release exe (`PresentMon-2.6.0-x64.exe`, 980,320 bytes,
   SHA-256 `b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af`, signed by Intel Corporation).
 - **Replay flags**: lag-doctor's live flags minus the live-only ones (`docs/research/presentmon.md` section 10):
