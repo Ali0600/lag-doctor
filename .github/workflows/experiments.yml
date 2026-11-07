@@ -1,0 +1,59 @@
+# The Stage 2 experiments (docs/INSTALLER-PLAN.md): a throwaway capture service on GitHub's disposable Windows
+# runners, never on a PC someone uses (scripts/stage2/drive.py refuses to run anywhere else). Started by hand
+# (Actions -> "Service experiments" -> Run workflow) and on pull requests that change it or scripts/stage2, because a
+# workflow can only be started by hand once its file is on the default branch. Each step records what it measured;
+# a step fails only when its instrument broke, so the later steps still run. The results are the job summary and the
+# stage2-results artifact (one JSON file per experiment, plus what the services and the stand-in game wrote).
+name: Service experiments
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/experiments.yml"
+      - "scripts/stage2/**"
+
+permissions:
+  contents: read
+
+jobs:
+  experiments:
+    name: E1, E3c, E3 and E3b on a throwaway runner
+    runs-on: windows-2025
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.10.4"
+          python-version: "3.13"
+      - name: Install
+        run: uv sync --locked --extra laglab
+      - name: The runner as found
+        run: uv run --no-sync python scripts/stage2/drive.py facts
+      - name: The service layout under Program Files
+        run: uv run --no-sync python scripts/stage2/drive.py layout
+      - name: E1 on the runner
+        if: ${{ !cancelled() }}
+        run: uv run --no-sync python scripts/stage2/drive.py e1
+      - name: E3c, the embeddable runtime as a service
+        if: ${{ !cancelled() }}
+        run: uv run --no-sync python scripts/stage2/drive.py e3c
+      - name: E3, frame timing and the tracker as LocalService
+        if: ${{ !cancelled() }}
+        run: uv run --no-sync python scripts/stage2/drive.py e3
+      - name: E3b, the named-pipe trigger
+        if: ${{ !cancelled() }}
+        run: uv run --no-sync python scripts/stage2/drive.py e3b
+      - name: Summary
+        if: ${{ !cancelled() }}
+        run: uv run --no-sync python scripts/stage2/drive.py summary
+      - name: Keep every result
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: stage2-results
+          path: C:\lagdoctor-stage2-results
+          if-no-files-found: warn

@@ -65,6 +65,9 @@ verification log; trust a note's *Corrected* entries over its body.
   LocalService and Administrators enable them. Every other provider PresentMon needs falls under the default
   descriptor, which Performance Log Users may use. So a member records frame timing unelevated (without process
   start and stop events, which PresentMon tolerates losing) but not the game-server tracker.
+- E3 (2026-11-07, on a GitHub runner; research note section 8): a real LocalService token with its privileges
+  trimmed to SeChangeNotifyPrivilege enables every provider and runs the tracker and PresentMon; with a restricted
+  service SID it can start no session at all. The capture service (`docs/INSTALLER-PLAN.md`) is built on that.
 
 - `winapi/elevation.can_trace()` = `CheckTokenMembership(Administrators S-1-5-32-544)` OR
   `CheckTokenMembership(Performance Log Users S-1-5-32-559)`; both count enabled SIDs only, so a UAC-filtered
@@ -162,6 +165,7 @@ lagdoctor/
   cli.py __main__.py
 laglab/     the fake laggy game used by tests (done)
 scripts/    redfirst.py e2e_truth.py (done) e2e.py etw_access.py (E1: who may enable the trace providers)
+            stage2/ (the capture-service experiments E3, E3b, E3c: GitHub's runners only, never this PC)
 ```
 
 `winapi/` modules are thin ctypes wrappers with no policy: plain Python values in and out, `OSError`

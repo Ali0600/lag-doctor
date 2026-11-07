@@ -26,6 +26,21 @@
 
 ---
 
+## 2026-11-07: The capture service gets an unrestricted service SID
+
+The plan wanted a restricted service SID on the LocalService capture service if E3 passed with it. E3 ran the
+throwaway service both ways on a GitHub runner (`docs/research/install-and-rights.md`, section 8). The implementing
+session chose from the measurement; the owner has not weighed in.
+- **Unrestricted service SID, privileges trimmed to SeChangeNotifyPrivilege (chosen)**: every provider enables, the
+  tracker and PresentMon run, and the service SID still names the service in ACLs (its pipe, its folder).
+- **Restricted service SID**: rejected. The write-restricted token's second SID list (the service SID, Everyone, the
+  logon SID, WRITE RESTRICTED) grants nothing on the ETW descriptors, so `StartTraceW` refuses every session, and
+  PresentMon cannot create its message-only window (exit 4).
+- **Restricted SID plus trace GUIDs of our own whose descriptors name the service SID**: rejected. lag-doctor's own
+  session could be granted that way at install time, but PresentMon's session, its window and the providers' own
+  descriptors could not.
+Revisit hook: `create_service` in `scripts/stage2/drive.py` (`sidtype`) and the WiX `ServiceInstall` of Stage 4.
+
 ## 2026-11-07: CI caches the PresentMon download, keyed on the code that downloads it
 
 CI was to get PresentMon through `lagdoctor setup --download`, because no test runs the real download (they replace

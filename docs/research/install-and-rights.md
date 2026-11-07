@@ -34,7 +34,9 @@ observed. `[unverified]` = could not be checked.
   (the 0x1800 of the 2025 dump above). The verdicts: as a member of Performance Log Users the owner would get frame
   timing, without process start and stop events, and **not** the game-server tracker; a LocalService service would
   get both, frame timing and the tracker [verified: the probe's output and its saved descriptors; the LocalService
-  verdict uses a modelled token, so E3 confirms it with a real one]. This agrees with the third-party reading of
+  verdict uses a modelled token, so E3 confirms it with a real one]. E3 did, on a GitHub runner (section 8): a real
+  LocalService token enables every one of them, and E1 on that runner (Windows Server 2025, build 26100) read the
+  same descriptors [verified: section 8]. This agrees with the third-party reading of
   Kernel-Process on build 26300 [research: github.com/CrankyAnt/SharedWorkflows/issues/30]. PresentMon 2.6.0
   tolerates ERROR_ACCESS_DENIED on Kernel-Process only; any other provider failing aborts the session [research:
   `PresentData/PresentMonTraceSession.cpp` at v2.6.0].
@@ -91,11 +93,15 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
   not stop it [research: etw-rights sweep; E3]. Add a restricted service SID, but it is untested with ETW until E3
   runs with it: it puts the service SID, World, the service logon SID and the write-restricted SID S-1-5-33 on the
   token's restricted SID list [verified: SERVICE_SID_INFO], and the default descriptor above grants World only
-  RegisterGuids (`0x800`; `0x1800` adds JoinGroup) [verified: SDK `wmistr.h`], so whether trace control passes
-  that second list is unknown [inferred].
+  RegisterGuids (`0x800`; `0x1800` adds JoinGroup) [verified: SDK `wmistr.h`]. Measured (E3, section 8): trace
+  control does not pass that second list. A write-restricted service token gets ERROR_ACCESS_DENIED from
+  `StartTraceW` for every session and cannot create PresentMon's message-only window, so the service gets an
+  unrestricted service SID (DECISIONS 2026-11-07); its privileges are still trimmed.
 - **Start on demand**: trigger type SERVICE_TRIGGER_TYPE_NETWORK_ENDPOINT with subtype NAMED_PIPE_EVENT_GUID
   `1F81D131-3FAC-4537-9E0C-7E7B0C2F4B55` starts the service "when a request is made to open the named pipe", and is
   "commonly used to start a service that has stopped itself after an idle time-out" [verified: SERVICE_TRIGGER].
+  Measured (E3b, section 8): the trigger takes the bare pipe name, starts the service in about 0.1 s, and the
+  client's first open fails with ERROR_PIPE_BUSY meanwhile, so the CLI retries with a deadline.
   Fallback: grant interactive users SERVICE_START (`RP` for `IU` in the service's SDDL); by default local users can
   query a service but not start it [research: Microsoft service security and access rights]. Never grant users
   change-config or stop.
@@ -110,7 +116,9 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
 - **No user-writable code**: only Program Files binaries, the bundled PresentMon (never `%LOCALAPPDATA%` or a winget
   portable folder), DLLs by absolute path, no file writes.
 - **The game is another account's process to LocalService**: its name shows as `<unknown>`; targeting by PID works
-  [research: PresentMon `Privilege.cpp`]; whether the capture still ends cleanly when the game exits is untested (E3).
+  [verified: `IsTargetProcess` in `PresentMon/OutputThread.cpp` at v2.6.0 compares the PID alone; measured in E3,
+  section 8]. The capture ends about 0.6 s after the game exits, stopped by lag-doctor's own watch: PresentMon's
+  `--terminate_on_proc_exit` cannot fire without the handle it could not get [verified: E3, section 8].
 
 ## 5. Shipping
 
@@ -137,8 +145,9 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
   a clean install, except when optional diagnostic data is off [verified: support FAQ]. It is off on this PC
   [research: `VerifiedAndReputablePolicyState` = 0]. Signed: python.org's `python.exe` and stdlib `.pyd` files (PSF),
   PresentMon (Intel). Unsigned: uv-managed `python.exe`, `uv.exe`, psutil's `.pyd` [research: Get-AuthenticodeSignature
-  here]. Whether python.org's embeddable ZIP binaries are signed is open. Python scripts run by a trusted `python.exe`
-  are not checked; native `.pyd` and `.dll` files are [research: App Control script enforcement].
+  here]. python.org's embeddable ZIP (3.13.17): every one of its 30 `.exe`, `.dll` and `.pyd` files is signed, 28
+  by the PSF and the two `vcruntime140` DLLs by Microsoft [verified: E3c, section 8]. Python scripts run by a
+  trusted `python.exe` are not checked; native `.pyd` and `.dll` files are [research: App Control script enforcement].
 - **Administrator protection** is off by default and available with KB5120998; where an organisation uses the Windows
   security baselines it is on by default from the October 2026 update. Elevated processes then run under "a hidden,
   system-generated, profile-separated user account", and every admin operation needs Windows Hello [verified:
@@ -151,9 +160,9 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
 |---|---|---|
 | E1 | Elevated `EventAccessQuery` dump as SDDL: Kernel-Network `{7DD42A49-5329-4832-8DFD-43D979153A88}`, Kernel-Process `{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}`, PresentMon's other providers, the default GUID. Read-only, one UAC. Written as `scripts/etw_access.py`: the elevated copy reads the descriptors, and the unelevated window judges them with Windows' own access check (Authz) for "you, after joining Performance Log Users", a modelled LocalService token and a modelled SYSTEM token. **Done 2026-11-06 (section 1): the group gets frame timing, not the tracker; LocalService gets both** | setup's wording (now measured); the service account |
 | E2 | Join Performance Log Users, sign out and in: `whoami /groups` shows it enabled unelevated, and an unelevated `watch` records frames and network flows. If it shows deny-only instead, setup already handles it (`trace_rights()` answers `filtered`: one UAC prompt per recording, no sign-out asked for) | option C's "no prompts" |
-| E3 | Throwaway LocalService service with privileges trimmed to SeChangeNotifyPrivilege and a restricted service SID (both read back from the running token) on a VM: every PresentMon provider enables, rows arrive for the game's PID, Kernel-Network events arrive, the capture ends when the game exits | option A's account |
-| E3b | Named-pipe trigger on Windows 11 Home 25H2 and Windows 10 22H2: start, idle self-stop, restart, start latency | option A's start mode |
-| E3c | python.org's embeddable runtime as an SCM service from Program Files: `sys.path` holds only Program Files entries, every `.exe`/`.pyd`/`.dll` signed | Python vs a small native helper |
+| E3 | Throwaway LocalService service with privileges trimmed to SeChangeNotifyPrivilege and a restricted service SID (both read back from the running token) on a VM: every PresentMon provider enables, rows arrive for the game's PID, Kernel-Network events arrive, the capture ends when the game exits. **Done 2026-11-07 on a GitHub runner (section 8): with a restricted service SID no session starts at all; unrestricted, every provider enables, Kernel-Network events arrive, presents are seen by PID and the capture ends 0.55 s after the game exits. Rows with display tracking need a PC with a GPU, which the runner is not** | option A's account |
+| E3b | Named-pipe trigger on Windows 11 Home 25H2 and Windows 10 22H2: start, idle self-stop, restart, start latency. **Done 2026-11-07 on Windows Server 2025 (section 8): start in 0.08 to 0.12 s, idle self-stop, restart, three cycles; Home 25H2 and Windows 10 22H2 not measured** | option A's start mode |
+| E3c | python.org's embeddable runtime as an SCM service from Program Files: `sys.path` holds only Program Files entries, every `.exe`/`.pyd`/`.dll` signed. **Done 2026-11-07 (section 8): it runs as a service through ctypes, `sys.path` holds its own folder and ZIP only, all 30 binaries signed** | Python vs a small native helper |
 | E5 | Administrator protection on: `--elevate`'s waitable child, the shared capture mutex, the capture landing in the user's folder | the public `--elevate` fallback |
 | E6 | Smart App Control enforcing VM: the MSI layout runs, inventory's PowerShell child returns JSON in Constrained Language Mode, Defender scan clean | the public release |
 | E7 | winget install, upgrade, uninstall from elevated, unelevated and standard-account shells, and on Windows 10; uninstall removes the service | the public release |
@@ -171,6 +180,81 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
   author field and path; a five-angle review and a recheck that searched for this PC's own identifiers; the picture
   viewed]. Commits are authored with a GitHub noreply address [verified: `git log`].
 
+## 8. The service experiments on GitHub's runners (E1, E3, E3b, E3c; 2026-11-07)
+
+Run by `.github/workflows/experiments.yml` on `windows-2025` runners (`scripts/stage2`; three runs, 42398897435,
+42399952827 and 42400758567; the numbers below are the last run's unless said otherwise, and every result file is
+in each run's `stage2-results` artifact). The runner: Windows Server 2025 Datacenter 24H2, build 26100.33674 (image
+`win25-vs2026` 20261103.298.1), no GPU; the job runs as the built-in Administrator (`runneradmin`, RID 500),
+elevated, with UAC on (`EnableLUA` 1) but never prompting (`ConsentPromptBehaviorAdmin` 0), in session 2, where
+`dwm.exe` runs [verified: `facts.json`]. The folder the MSI would install was built under
+`C:\Program Files\lagdoctor-stage2`: python.org's embeddable 3.13.17 (`python-3.13.17-embed-amd64.zip`, SHA-256
+`9e35319bffedab8b36ad44d8f377cb4f1733bcec257a0b6d04d94f01486ddb38`, 11,441,267 bytes; 3.13.18 is source-only),
+lag-doctor's code, psutil 7.2.2 and the pinned PresentMon, verified again there [verified: `layout.json`]. Each
+service was created with `sc.exe` (`type= own start= demand obj= NT AUTHORITY\LocalService`,
+`privs SeChangeNotifyPrivilege`, `sidtype restricted` or `unrestricted`) and read back with `sc qc`, `qprivs`,
+`qsidtype` and `showsid`; the token facts below come from the running service's own token (`GetTokenInformation`
+in `scripts/stage2/tokeninfo.py`), never from its configuration. A WARP-rendered Direct3D 11 window
+(`scripts/stage2/standin.py`: 640x480, flip-model swap chain, about 60 presents a second on the Microsoft Basic
+Render Driver, one DNS query a second over UDP) stood in for the game, in the job's own session.
+
+- **E1 on the runner.** Kernel-Network and Kernel-Process carry the laptop's descriptor byte for byte
+  (`O:BAG:BAD:(A;;0x120fff;;;SY)(A;;LO;;;LS)(A;;0x1207ff;;;BA)`), the default descriptor is the laptop's too
+  (its last entry a capability SID, which differs by machine), the same three rows have descriptors of their own,
+  and the modelled verdicts are the laptop's [verified: `e1.json`, `e1-descriptors.json`; build 26100 against the
+  laptop's 26200].
+- **E3c, the runtime.** The SCM ran `python.exe service_host.py` as a service through `StartServiceCtrlDispatcherW`,
+  `RegisterServiceCtrlHandlerExW` and `SetServiceStatus` from ctypes (`scripts/stage2/service_host.py`); it reported
+  running and stopped with its own exit code. Read inside the service: `sys.path` at start was exactly
+  `<install>\python313.zip` and `<install>`, the script's own folder not among them, `site` not imported, and
+  `sys.flags` had `isolated`, `ignore_environment`, `no_site` and `safe_path` set, from the shipped `python313._pth`
+  (`python313.zip`, `.`, `#import site`) alone; the working folder was `C:\Windows\system32` [verified:
+  `e3c-service.json`]. Every one of the ZIP's 30 `.exe`, `.dll` and `.pyd` files passes WinVerifyTrust: Python
+  Software Foundation on 28, Microsoft Windows Software Compatibility Publisher on `vcruntime140.dll` and
+  `vcruntime140_1.dll`; `python.cat` is PSF-signed too; PowerShell 7's `Get-AuthenticodeSignature` agrees on each
+  (`Valid`, `Authenticode`) [verified: `layout.json`, run 42400758567]. The token: user `S-1-5-19`, the one
+  privilege `SeChangeNotifyPrivilege` (enabled by default), session 0, System integrity, groups Everyone, Users,
+  SERVICE, CONSOLE LOGON, Authenticated Users, This Organization, LOCAL, the logon SID and `NT SERVICE\<name>`
+  [verified: `e3c-service.json`].
+- **E3, the restricted service SID.** With `sidtype restricted` the token is write-restricted (`IsTokenRestricted`
+  true; restricted SIDs: the service's own `NT SERVICE\lagdoctor-e3-restricted`, Everyone, the logon SID and
+  `WRITE RESTRICTED`, as SERVICE_SID_INFO says). `StartTraceW` then returns ERROR_ACCESS_DENIED for every real-time
+  session (13 probe sessions, one per provider, and `lag-doctor-net`), before any provider is reached; Windows' own
+  access check on that real token (E1's method, authz) agrees on every row, the default row's real-time session
+  included; and PresentMon exits with code 4, `error: failed to create hotkey window.` (a message-only window it
+  creates unconditionally: `wmain` in `PresentMon/MainThread.cpp` at v2.6.0). The restricted SID is the cause: the
+  same service with `sidtype unrestricted` was refused nothing [verified: `e3.json`, three runs].
+- **E3, unrestricted LocalService**, privileges still trimmed to SeChangeNotifyPrivilege. Every one of the 13
+  providers enabled (`EnableTraceEx2`), Kernel-Network and Kernel-Process included, and authz on the real token
+  agreed on each. lag-doctor's own collectors then ran as in a capture: the tracker's session started, 151
+  Kernel-Network events arrived, its self-test verified the address layout (UDP and TCP, both ways), the stand-in's
+  56 UDP events were counted under its PID, and process names came from the handle-free snapshot (the top talkers
+  were named). PresentMon saw the stand-in's presents by PID: 401 rows in 8 s for the stand-in, named `<unknown>`
+  since LocalService cannot open another account's process, and 400 for `dwm.exe`, with
+  `--no_track_display --no_track_gpu`. With lag-doctor's own flags (display tracking on) it wrote no row for any
+  process, and the control, the same capture run by the job's administrator account in the desktop session, got
+  the same: 0 rows with display tracking, 726 without (369 for the stand-in), so that is the GPU-less runner, whose
+  Basic Display driver gives a present no display event [inferred from the two probes], not the service. The capture
+  ended 0.55 s after the stand-in exited (0.6 and 0.81 s in the earlier runs), stopped by lag-doctor's own watch of
+  the PID (`terminate_session` path): PresentMon's `--terminate_on_proc_exit` did not fire, as it needs the handle
+  it could not get. ETW delivered the tracker's packets up to 2.2 s late on the VM (2.7 s in the control), so 6 to
+  9 of them fell outside the 2 s reorder window [verified: `e3.json`].
+- **E3b, the named-pipe trigger.** `sc triggerinfo lagdoctor-e3b start/namedpipe/lagdoctor-e3b` (the bare name, as
+  Windows' own `srvsvc` and `winreg` triggers carry it) read back as `NETWORK EVENT 1f81d131-… [NAMED PIPE EVENT]
+  DATA lagdoctor-e3b`. Three cycles, each from `stopped`: the client's first `CreateFileW` on
+  `\\.\pipe\lagdoctor-e3b` failed with ERROR_PIPE_BUSY (231), not file-not-found; its second attempt connected
+  0.080 to 0.088 s after the first (0.11 to 0.12 s in the earlier runs); the service's `ServiceMain` received the
+  arguments `TriggerStarted 6` (6 = SERVICE_TRIGGER_TYPE_NETWORK_ENDPOINT), had its pipe ready 2 ms later, served
+  the request, stopped itself 10.1 s after its last client (a 10 s idle limit polled every 0.25 s) with exit code 0,
+  and the next connect started a new process, three distinct PIDs in all. The pipe was created under the
+  write-restricted token with `D:P(A;;GA;;;SY)(A;;GA;;;<service SID>)(A;;GRGW;;;BA)(A;;GRGW;;;IU)`,
+  `PIPE_REJECT_REMOTE_CLIENTS` and `FILE_FLAG_FIRST_PIPE_INSTANCE`, and the client connected at identification level
+  [verified: `e3b.json`, `e3b/e3b-<pid>.json`, three runs].
+
+What a runner cannot show: PresentMon rows with display tracking, so frame timing under LocalService is confirmed up
+to the presents being seen by PID; the first install on a PC with a GPU (Stage 4) shows the rest. E2 did not run
+there either: the job is the built-in Administrator, elevated, so a filtered token would need an account of its own.
+
 ## Decided (2026-11-06) and still open
 
 Decided by the owner (DECISIONS 2026-11-06; the work is tracked in `docs/INSTALLER-PLAN.md`):
@@ -185,7 +269,9 @@ Decided by the owner (DECISIONS 2026-11-06; the work is tracked in `docs/INSTALL
    decision by the owner: it follows from the "already released" condition and the plan's order
    (`docs/INSTALLER-PLAN.md`, Stage 5).
 
-Still open: Python on the embeddable runtime or a small native helper for the service (after E3c and E6).
+Still open: a small native helper instead of the embeddable runtime only if E6 (Smart App Control) objects; E3c
+found the runtime isolated and every binary signed (section 8). Decided 2026-11-07 from E3: an unrestricted service
+SID (DECISIONS 2026-11-07).
 
 ## Verification log (2026-11-06)
 
@@ -212,3 +298,7 @@ Each claim below was re-read from its source by a reader separate from the sweep
 | NVIDIA `FvSvc`: LocalSystem, demand start | confirmed | `sc.exe qc FvSvc` here |
 | Performance Log Users has 0 members here | confirmed | `Get-LocalGroupMember -SID S-1-5-32-559` |
 | E1: Kernel-Network and Kernel-Process grant SYSTEM, LocalService (enable only) and Administrators; the default descriptor admits Performance Log Users; the group would get frame timing but not the tracker, LocalService both | measured on this PC, build 26200 | `scripts/etw_access.py` run by the owner, 2026-11-06 23:31; its saved descriptors re-read |
+| E1 on a GitHub runner: Kernel-Network, Kernel-Process and the default descriptor are the laptop's | measured on `windows-2025`, build 26100, in three runs | `scripts/stage2/drive.py e1`, runs 42398897435, 42399952827, 42400758567 (2026-11-07); `e1.json` compares the SDDL text |
+| E3c: the embeddable 3.13.17 runs as a LocalService service from Program Files; `sys.path` is its ZIP and folder only; all 30 binaries signed | measured, three runs; the PowerShell cross-check agreed in the last run (Windows PowerShell 5.1 could not load its security module under the job's PowerShell 7 module path in the first two) | `e3c.json`, `e3c-service.json`, `layout.json` of run 42400758567 |
+| E3: a restricted service SID gets ERROR_ACCESS_DENIED from StartTraceW for every session and PresentMon exit 4; unrestricted, 13 of 13 providers enable, the tracker records (151 events, self-test verified), PresentMon writes 401 rows by PID without display tracking and none with it, the capture ends 0.55 s after the game exits | measured, three runs, with an administrator control that got the same PresentMon result | `e3.json`, `e3-*-service.json`, `standin-*.json` of run 42400758567; `IsTargetProcess` and the lazy CSV header re-read in `OutputThread.cpp` and `CsvOutput.cpp` at v2.6.0 |
+| E3b: the named-pipe trigger starts the service in 0.08 to 0.12 s (the client's first open gets ERROR_PIPE_BUSY), ServiceMain gets `TriggerStarted 6`, idle self-stop after 10 s, the next connect starts it again | measured, three cycles in each of three runs | `e3b.json`, `e3b/e3b-<pid>.json` of run 42400758567; `sc qtriggerinfo` read back |

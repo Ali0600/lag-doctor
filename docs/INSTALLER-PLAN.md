@@ -20,7 +20,9 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
 - [ ] E2, the group fallback's sign-in test (below). Nothing in the service depends on it.
 - [x] Stage 1: public repo and CI (2026-11-07). Public after a history rewrite (DECISIONS 2026-11-07); CI on
   GitHub's Windows runners.
-- [ ] Stage 2: the service experiments on CI's throwaway Windows machines.
+- [x] Stage 2 (2026-11-07): E1, E3, E3b and E3c on GitHub's throwaway runners (`.github/workflows/experiments.yml`,
+  `scripts/stage2`; research note section 8). The account is LocalService with an unrestricted service SID: a
+  restricted one refuses every ETW session (DECISIONS 2026-11-07).
 - [ ] Stage 3: the MSI.
 - [ ] Stage 4: the capture service.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.
@@ -31,9 +33,10 @@ Only setup's promise to a Performance Log Users member ("After that, frame timin
 the service does not. It needs a fresh sign-in after joining, so it runs in one of two places:
 - the owner's PC, with one sign-out, only with the owner's go (the group is broad: research note section 1);
   `Remove-LocalGroupMember` and another sign-out undo it;
-- a CI runner (Stage 2) with a throwaway administrator account and UAC's token filtering on, read back first: the
-  premise is about an administrator's filtered token, so a runner with UAC off would pass without testing it.
-  Frames there need the same stand-in for a game as E3.
+- a CI runner with a throwaway administrator account and UAC's token filtering on, read back first: the
+  premise is about an administrator's filtered token, so a runner with UAC off would pass without testing it. The
+  job itself runs as the built-in Administrator, elevated (Stage 2 measured it), so the account must be a new one.
+  Frames there need the same stand-in for a game as E3, with display tracking off.
 
 Should the premise fail, `trace_rights()` answers `filtered`, which keeps setup from asking for a sign-out that would
 not help.
@@ -53,19 +56,28 @@ not help.
    (`tests/downloads.py`), checks both against the tests' own pins and caches them; `LAGDOCTOR_REQUIRE` makes a
    missing one fail those tests rather than skip them.
 
-## Stage 2: the service experiments, on CI
+## Stage 2: the service experiments, on CI (done 2026-11-07)
 
 GitHub's Windows runners are disposable virtual machines with administrator rights, so the experiments that need a
-throwaway service never touch the owner's PC.
-- **E3**: a throwaway service as `NT AUTHORITY\LocalService`, privileges trimmed to SeChangeNotifyPrivilege and a
-  restricted service SID (both read back from the running token), runs the pinned PresentMon and `lag-doctor-net`:
-  every provider enables, the session starts, Kernel-Network events arrive. If something is refused, a second run
-  without the restricted SID tells whether that SID is the cause. Open: a runner has no GPU, so getting real
-  presents needs a WARP-rendered D3D11 app or similar.
-- **E3b**: the named-pipe trigger starts the service, it stops itself when idle, and the next connect starts it again.
-- **E3c**: python.org's embeddable runtime runs as an SCM service through ctypes, with `sys.path` holding only its
-  own folder, and every `.exe`, `.pyd` and `.dll` in it signed (or the service becomes a small native helper).
-- **E1 on the runner** too, for comparison with the owner's Windows 11 Home result.
+throwaway service never touch the owner's PC. `.github/workflows/experiments.yml` runs them by hand and on pull
+requests that change it or `scripts/stage2`; `scripts/stage2/drive.py` builds the folder the MSI would install
+under Program Files (the embeddable runtime, lag-doctor's code, the pinned PresentMon) and refuses to run anywhere
+but a GitHub-hosted runner. Measured (research note section 8):
+- **E3**: a throwaway `NT AUTHORITY\LocalService` service, privileges trimmed to SeChangeNotifyPrivilege, read back
+  from the running token. With a restricted service SID nothing starts: `StartTraceW` refuses every session and
+  PresentMon cannot create its window. Unrestricted, every one of the 13 providers enables, `lag-doctor-net` records
+  (self-test verified, the stand-in's UDP events counted by PID), PresentMon sees the stand-in's presents by PID
+  (`<unknown>` name), and the capture ends 0.55 s after the stand-in exits, by lag-doctor's own watch. The runner
+  question is answered: a WARP-rendered Direct3D 11 window (`scripts/stage2/standin.py`) gives PresentMon presents,
+  but only with display tracking off; with lag-doctor's flags no process yields a row there, administrator or
+  service, so frame timing with display tracking is checked on the first install on a PC with a GPU (Stage 4).
+- **E3b**: the trigger starts the service in 0.08 to 0.12 s of the client's first open (which fails with
+  ERROR_PIPE_BUSY and is retried), the service stops itself after 10 s idle, and the next connect starts it again;
+  three cycles, three processes.
+- **E3c**: python.org's embeddable 3.13.17 runs as an SCM service through ctypes with `sys.path` holding only its
+  own ZIP and folder (`._pth` sets isolated, no site, safe path), and all 30 of its `.exe`, `.pyd` and `.dll` files
+  are signed, so the service stays Python unless E6 objects.
+- **E1 on the runner**: the same descriptors as on the owner's Windows 11 Home (build 26100 against 26200).
 
 ## Stage 3: the MSI
 
@@ -85,10 +97,13 @@ throwaway service never touch the owner's PC.
 ## Stage 4: the capture service
 
 - WiX `ServiceInstall` with `Account="NT AUTHORITY\LocalService"`, a quoted Program Files path, required privileges
-  trimmed, a restricted service SID (if E3 passed with it), the named-pipe trigger and idle self-stop; users never
-  get change-config or stop.
+  trimmed to SeChangeNotifyPrivilege, an unrestricted service SID (E3: a restricted one cannot start an ETW session
+  or PresentMon's window), the named-pipe trigger and idle self-stop; users never get change-config or stop.
 - The pipe: explicit DACL, PIPE_REJECT_REMOTE_CLIENTS, FILE_FLAG_FIRST_PIPE_INSTANCE; the CLI connects at
-  identification level; one recording at a time; a protocol version handshake.
+  identification level and retries its first open, which fails with ERROR_PIPE_BUSY while the trigger starts the
+  service (E3b); one recording at a time; a protocol version handshake.
+- Frame timing's first real check: PresentMon under the service with display tracking, on the owner's PC at the
+  first install (a runner has no GPU, E3).
 - The target must be in the caller's own session, checked with the session id from `winapi/ntquery.py`'s
   handle-free snapshot (ProcessIdToSessionId would open the game). Only that process's frame rows and network
   events are relayed. No file writes; nothing loaded from a user-writable folder.

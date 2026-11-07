@@ -76,6 +76,10 @@ both against the tests' pins and caches them; each job's summary counts the test
   `paths.private_copy`) and `scripts/e2e.py` stops before its UAC prompt (exit 3). `scripts/etw_access.py`
   (E1) has no such check and raises its UAC prompt at once, so an agent never runs it either. Run them all in the
   user's Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`).
+- **`scripts/stage2` creates throwaway Windows services** (the capture-service experiments, `docs/INSTALLER-PLAN.md`
+  Stage 2). It runs only on GitHub's hosted runners, from `.github/workflows/experiments.yml` (started by hand, or by
+  a pull request that changes it or `scripts/stage2`); `scripts/stage2/guard.py` refuses anywhere else (exit 2).
+  Never run it on this PC. Its instruments are checked by `tests/test_stage2.py` without any service.
 - **The repo is public** (https://github.com/Ali0600/lag-doctor). Never commit the owner's personal details: write
   user-folder paths as `%LOCALAPPDATA%`, `%TEMP%` or `<repo>`, and leave out this PC's name and SID, its adapter and
   power-plan GUIDs, its public IP and MAC addresses (tests use documentation ranges, `192.168.0.x` for a home network,
