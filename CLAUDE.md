@@ -78,8 +78,10 @@ both against the tests' pins and caches them; each job's summary counts the test
   user's Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`).
 - **`scripts/stage2` creates throwaway Windows services** (the capture-service experiments, `docs/INSTALLER-PLAN.md`
   Stage 2). It runs only on GitHub's hosted runners, from `.github/workflows/experiments.yml` (started by hand, or by
-  a pull request that changes it or `scripts/stage2`); `scripts/stage2/guard.py` refuses anywhere else (exit 2).
-  Never run it on this PC. Its instruments are checked by `tests/test_stage2.py` without any service.
+  a pull request that changes it or `scripts/stage2`, and then on every push to that pull request, about 4 minutes a
+  run); `scripts/stage2/guard.py` refuses anywhere else (exit 2). Never run it on this PC. Its instruments are
+  checked by `tests/test_stage2.py` without any service; its results are read from the run's `stage2-results`
+  artifact and the job summary (`docs/research/install-and-rights.md`, section 8, has the measured ones).
 - **The repo is public** (https://github.com/Ali0600/lag-doctor). Never commit the owner's personal details: write
   user-folder paths as `%LOCALAPPDATA%`, `%TEMP%` or `<repo>`, and leave out this PC's name and SID, its adapter and
   power-plan GUIDs, its public IP and MAC addresses (tests use documentation ranges, `192.168.0.x` for a home network,
@@ -119,3 +121,6 @@ both against the tests' pins and caches them; each job's summary counts the test
   control before blaming a change. On a CI runner, the self-test cases of `tests/test_etw_flows.py` and
   `tests/test_etw_tracker.py` (4 at once) failed once with "no free port for both UDP and TCP" (2026-11-07): their
   loopback DNS stand-ins try 10 ephemeral ports for one number free for both; rerun before blaming a change.
+  `tests/test_machine_inventory.py::test_live_collect_agrees_with_independent_readouts` failed once on a runner
+  (2026-11-07, a docs-only change) with "the Win32_DeviceGuard query took over 10 s and was stopped": WMI was slow
+  on that VM, not the code; rerun before blaming a change, and look at the inventory's own timeout if it repeats.
