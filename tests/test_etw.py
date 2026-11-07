@@ -212,7 +212,10 @@ def _own_handle_count() -> int:
 
 def test_stopping_closes_the_consumer_handle(provider):
     # Measured: skipping CloseTrace leaks 2 OS handles per session (20 over 10), and the .etl file is
-    # still deletable, so only our own process's handle count shows it.
+    # still deletable, so only our own process's handle count shows it. Both counts follow a garbage
+    # collection: on Python 3.11 a stopped session leaves 4 handles in cyclic garbage until the collector
+    # runs (a sawtooth over 40 sessions, flat with a collection before each count; 3.13 shows none,
+    # 2026-11-07), and a leak is what stays open after it.
     def one_session():
         s = etw.RealtimeSession(_name(), [(provider.guid, 4, 0)], lambda e: None, private=True)
         try:
@@ -222,9 +225,11 @@ def test_stopping_closes_the_consumer_handle(provider):
             s.stop()
 
     one_session()                                                  # warm-up: DLLs and caches load once
+    gc.collect()
     before = _own_handle_count()
     for _ in range(10):
         one_session()
+    gc.collect()
     assert _own_handle_count() - before < 10
 
 

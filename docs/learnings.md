@@ -184,3 +184,20 @@ the adversarial review measured them against AccessCheck and found them wrong in
 entries counted; Authenticated Users, Users and INTERACTIVE, which every real token carries, missed).
 **Takeaway**: build an Authz client context holding the groups to model and let AuthzAccessCheck answer; cross-check
 it once against AccessCheck on a real token.
+
+### A handle-count leak test must collect garbage before it counts
+On Python 3.11 each stopped ETW session left 4 handles in cyclic garbage until the collector ran: over 40 sessions the
+count climbed in steps of 4 and fell back every 18 or so, stayed flat with a `gc.collect()` before each count, and
+never moved on 3.13.
+**Why it came up**: `test_stopping_closes_the_consumer_handle` failed on CI's Python 3.11 job with 40 extra handles,
+and every time when run alone on 3.11 here, while the real leak it guards (no CloseTrace) costs 2 a session.
+**Takeaway**: collect before both counts; a sawtooth is garbage waiting for the collector, and a leak is what still
+stands after a collection.
+
+### whoami does not list every group in a token
+On a built-in Administrator's token (CI's runner), `whoami /groups` left out the machine's "None" group (RID 513)
+as well as the logon SID, though the token held both as enabled groups: 14 groups against whoami's 12.
+**Why it came up**: the test that checks lag-doctor's token reader against whoami failed only on the runner; a
+temporary CI step printed both lists, and this laptop's token holds no such group.
+**Takeaway**: before trusting a tool's output as a test's oracle, compare it with the raw source once on every kind
+of machine the test runs on, and name each known gap in the test.

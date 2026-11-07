@@ -18,7 +18,8 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
 - [x] After E1, done: setup says the group covers frame timing only; the tracker's not-measured reason names
   `--elevate` and, for a member, the group's limit; an explicit `--elevate` elevates a group member.
 - [ ] E2, the group fallback's sign-in test (below). Nothing in the service depends on it.
-- [ ] Stage 1: public repo and CI. Public since 2026-11-07, after a history rewrite (DECISIONS 2026-11-07); CI next.
+- [x] Stage 1: public repo and CI (2026-11-07). Public after a history rewrite (DECISIONS 2026-11-07); CI on
+  GitHub's Windows runners.
 - [ ] Stage 2: the service experiments on CI's throwaway Windows machines.
 - [ ] Stage 3: the MSI.
 - [ ] Stage 4: the capture service.
@@ -43,10 +44,11 @@ not help.
    every commit (research note section 7; DECISIONS 2026-11-07).
 2. Done (2026-11-07): public at https://github.com/Ali0600/lag-doctor; `.github/SECURITY.md` asks for reports through
    GitHub's private vulnerability reporting.
-3. CI on GitHub-hosted Windows runners: the unit tests (the live tests that need this laptop's GPU or PresentMon
-   skip with their reason), SHA-pinned actions, least-privilege `permissions:`. Standard runners are free for public
-   repositories [verified: GitHub Actions billing page, 2026-11-06]; a private repository on GitHub Free gets
-   US$12 a month of compute, about 1,200 Windows minutes.
+3. Done (2026-11-07): CI on `windows-2025` for Python 3.13 and 3.11, SHA-pinned actions, a read-only token. Tests
+   that need what the runner lacks skip by declaration (`LAGDOCTOR_ABSENT`, `tests/capabilities.py`); the ones that
+   need PresentMon's download or its gold captures skip through their fixtures (32 skips name the missing download),
+   so a CI step that fetches the pinned release and the gold captures would let them run there. Standard runners
+   are free for public repositories [verified: GitHub Actions billing page, 2026-11-06].
 
 ## Stage 2: the service experiments, on CI
 
