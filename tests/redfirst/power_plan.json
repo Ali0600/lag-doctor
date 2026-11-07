@@ -1,5 +1,51 @@
 [
  {
+  "name": "a power mode cited on a plan without one",
+  "file": "lagdoctor/report/labels.py",
+  "old": "    if not isinstance(power, dict) or plan_has_power_mode(power) is False:\n        return None",
+  "new": "    if not isinstance(power, dict):\n        return None",
+  "tests": [
+   "tests/test_analysis_rules.py::test_power_plan_never_cites_a_power_mode_on_a_plan_without_one",
+   "tests/test_report.py::test_power_mode_and_whether_the_plan_has_one_from_a_capture"
+  ]
+ },
+ {
+  "name": "a stale slider position taken as a problem on a plan without one",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if labels.power_mode(p) == \"best_efficiency\":\n        out.append((\"mode\",",
+  "new": "    if p.get(\"slider\") == \"best_efficiency\":\n        out.append((\"mode\",",
+  "tests": [
+   "tests/test_analysis_rules.py::test_power_plan_never_cites_a_power_mode_on_a_plan_without_one"
+  ]
+ },
+ {
+  "name": "a stale slider position cited as fine on a plan without one",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        mode = labels.power_mode(p)          # a plan type without the slider has no power mode to cite",
+  "new": "        mode = p.get(\"slider\")          # a plan type without the slider has no power mode to cite",
+  "tests": [
+   "tests/test_analysis_rules.py::test_power_plan_never_cites_a_power_mode_on_a_plan_without_one"
+  ]
+ },
+ {
+  "name": "the power mode advised on a plan without one",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if labels.plan_has_power_mode(p) is not False and (labels.power_mode(p) == \"best_efficiency\"",
+  "new": "    if (labels.power_mode(p) == \"best_efficiency\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_power_plan_never_advises_the_power_mode_on_a_plan_without_one"
+  ]
+ },
+ {
+  "name": "the power mode not advised when the plan's type is unknown",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if labels.plan_has_power_mode(p) is not False and (",
+  "new": "    if labels.plan_has_power_mode(p) is True and (",
+  "tests": [
+   "tests/test_analysis_rules.py::test_power_plan_never_advises_the_power_mode_on_a_plan_without_one"
+  ]
+ },
+ {
   "name": "a plan judged by its name although its settings were read",
   "file": "lagdoctor/analysis/rules.py",
   "old": "    if max_cpu is None and max_p is None and boost is None and cooling is None:\n        return None",

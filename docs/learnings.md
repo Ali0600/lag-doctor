@@ -219,3 +219,14 @@ survived on main. CI's runner lacks a GPU, so its workflow now declares what is 
 tests that need it skip there by name, and an undeclared absence fails.
 **Takeaway**: let whoever runs the suite say what the machine lacks; when a capability is not declared absent, its
 absence is a failure.
+
+### A setting's getter still answers where the setting does not exist
+Windows shows the power-mode slider only on Balanced and plans derived from it, yet its getters
+(`PowerGetUserConfigured{AC,DC}PowerMode`) answer on every plan, with a position nobody can see or set. Whether a plan
+has the slider is its personality (`GUID_POWERSCHEME_PERSONALITY`, "the base plan I am most like"): an index whose
+possible values Windows lists as the three base plans' GUIDs (`PowerReadPossibleValue`).
+**Why it came up**: on CI's High performance plan lag-doctor reported "power mode balanced" while Windows' effective
+mode said high performance. The first fix declared the slider absent on CI, which hid a wrong answer any player on
+such a plan would also have got.
+**Takeaway**: before reporting a setting, check the condition under which it applies; and before declaring a
+capability absent to quiet a test on a new machine, ask what the product would tell a user of that machine.

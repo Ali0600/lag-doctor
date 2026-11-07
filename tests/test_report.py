@@ -8,7 +8,8 @@ import pytest
 
 from lagdoctor.model import (F, N, S, Capture, Diagnosis, Evidence, Finding, FixSuggestion, LagEvent,
                              SeriesBuilder, SourceStatus)
-from lagdoctor.report import charts, console, html as html_report
+from lagdoctor.report import charts, console, html as html_report, labels
+from lagdoctor.winapi import power as winapi_power
 
 EVIL = '<script>alert(1)</script>'
 EVIL_ATTR = '"><img src=x onerror=alert(1)>'
@@ -445,6 +446,51 @@ def test_odd_values_in_the_stats_events_and_capture_read_as_not_measured_never_c
     p = TagBalance()
     p.feed(page)
     assert p.errors == [] and p.stack == []
+
+
+@pytest.mark.parametrize("power, text", [
+    ({"scheme_name": "Silent", "personality": "balanced", "slider": "best_performance", "on_battery": False},
+     "plan Silent; power mode best performance; plugged in"),
+    ({"scheme_name": "High performance", "personality": "high_performance", "slider": None, "on_battery": False},
+     "plan High performance; no power mode on this plan; plugged in"),
+    # The plan's type wins over a position the capture still holds: that plan has no slider to set
+    ({"scheme_name": "Power saver", "personality": "power_saver", "slider": "balanced", "on_battery": True},
+     "plan Power saver; no power mode on this plan; on battery"),
+    # Saved before the plan's type was read
+    ({"scheme_name": "Silent", "slider": "balanced", "on_battery": False},
+     "plan Silent; power mode balanced; plugged in"),
+    ({"scheme_name": "Silent", "personality": "balanced", "slider": None, "on_battery": None},
+     "plan Silent; power mode ?; power source unknown"),
+])
+def test_the_pc_details_name_a_power_mode_only_where_the_plan_has_one(power, text):
+    cap = make_capture()
+    cap.inventory["power"] = power
+    assert f"<tr><th>Power</th><td>{text}</td></tr>" in html_report.render(make_diagnosis(), cap)
+
+
+@pytest.mark.parametrize("power, has, mode", [
+    ({"personality": "balanced", "slider": "best_efficiency"}, True, "best_efficiency"),
+    ({"personality": "high_performance", "slider": "best_efficiency"}, False, None),
+    ({"personality": "power_saver", "slider": "balanced"}, False, None),
+    ({"slider": "best_efficiency"}, None, "best_efficiency"),            # saved before the type was read
+    ({"personality": "turbo", "slider": "balanced"}, None, "balanced"),   # an unknown type is not "no slider"
+    ({"personality": ["balanced"], "slider": 5}, None, None),
+    ({"slider": "fast"}, None, None),
+    ("power", None, None),
+])
+def test_power_mode_and_whether_the_plan_has_one_from_a_capture(power, has, mode):
+    assert labels.plan_has_power_mode(power) is has
+    assert labels.power_mode(power) == mode
+
+
+def test_the_reports_plan_types_and_slider_positions_are_the_ones_lag_doctor_reads():
+    # The report side and winapi/power.py each list the plan types and slider positions: pinned together, so a type
+    # added to one is not silently "unknown" to the other.
+    p = winapi_power
+    assert set(labels.PLAN_TYPES_WITHOUT_POWER_MODE) | {p.SLIDER_PERSONALITY} == set(p.PERSONALITIES.values())
+    for kind in p.PERSONALITIES.values():
+        assert labels.plan_has_power_mode({"personality": kind}) is (kind == p.SLIDER_PERSONALITY), kind
+    assert set(labels.POWER_MODES) == set(p.SLIDER_MODES.values())
 
 
 def test_a_part_that_still_breaks_is_announced_and_the_rest_of_the_report_is_written(monkeypatch):

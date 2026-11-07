@@ -79,8 +79,9 @@ every pull request; code and workflow changes go through a pull request and merg
   branches cut from it: the history from before the 2026-11-07 rewrite stays in `refs/backup/`, `refs/original/` and
   the merged `worktree-*` branches, and `.git/hooks/pre-push` (local, not in the repo) refuses any commit that holds
   those details.
-- **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies, and a High
-  performance plan. The workflow declares that in `LAGDOCTOR_ABSENT`, and a test that needs one of those carries
+- **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies. (Its High
+  performance plan has no power-mode slider; `slider_mode()` reads the plan's personality, so the power tests hold
+  there undeclared.) The workflow declares that in `LAGDOCTOR_ABSENT`, and a test that needs one of those carries
   `@pytest.mark.needs(name)` (names in `tests/capabilities.py`), so it skips there with the reason; undeclared, a
   missing capability fails. Never make a test skip on a detected absence that a regression could also cause (the NVIDIA
   fixtures used to), and mark a test only when a CI run shows it failing for that lack: a test that passes on the

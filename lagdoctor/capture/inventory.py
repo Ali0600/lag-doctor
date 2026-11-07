@@ -270,9 +270,16 @@ def _power(errors: dict[str, str]) -> dict:
     scheme = _section(errors, "power.scheme", power.active_scheme)
     schemes = _section(errors, "power.schemes", power.list_schemes)
     on_battery = status.get("on_battery")
-    slider = None
+    slider = personality = None
     if on_battery is not None:
         slider = _section(errors, "power.slider", lambda: power.slider_mode(not on_battery))
+        # The plan's type says whether it has the slider at all, so a missing slider reads as "no power mode on this
+        # plan", never as "not read".
+        if scheme:
+            personality = _section(errors, "power.personality",
+                                   lambda: power.scheme_personality(scheme[0], not on_battery))
+            if personality is None and "power.personality" not in errors:
+                errors["power.personality"] = "Windows did not say which type of plan the active power plan is"
     effective = _section(errors, "power.effective_mode", power.effective_mode)
     if effective is None and "power.effective_mode" not in errors:
         errors["power.effective_mode"] = "Windows sent no effective power mode within the timeout"
@@ -280,8 +287,8 @@ def _power(errors: dict[str, str]) -> dict:
     plan = _section(errors, "power.plan", lambda: power.plan_settings(scheme[0])) if scheme else None
     return {"scheme_guid": scheme[0] if scheme else None, "scheme_name": scheme[1] if scheme else None,
             "schemes": [[g, n] for g, n in schemes] if schemes is not None else None, "slider": slider,
-            "effective_mode": effective, "on_battery": on_battery, "battery_pct": status.get("battery_pct"),
-            "saver": status.get("saver"), "plan": plan}
+            "personality": personality, "effective_mode": effective, "on_battery": on_battery,
+            "battery_pct": status.get("battery_pct"), "saver": status.get("saver"), "plan": plan}
 
 
 def _game_dvr(reg: RegistryBackend) -> bool | None:
