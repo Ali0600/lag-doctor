@@ -188,15 +188,19 @@ def _signatures(folder: Path, names: list[str]) -> tuple[list[dict], dict]:
               "signer = $(if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { $null }) } } catch { "
               "[pscustomobject]@{ name = $_.TargetObject; status = 'error'; type = ''; signer = $_.Exception.Message } } } "
               "| ConvertTo-Json -Compress")
-    ps = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True,
-                        text=True, timeout=120, env={**os.environ, "STAGE2_DIR": str(folder)})
+    # PowerShell 7 where the runner has it; Windows PowerShell 5.1 otherwise, without the module path a PowerShell 7
+    # job shell hands down (5.1 then cannot load its own Microsoft.PowerShell.Security: measured on the first run).
+    env = {k: v for k, v in os.environ.items() if k.upper() != "PSMODULEPATH"}
+    shell = shutil.which("pwsh.exe") or "powershell.exe"
+    ps = subprocess.run([shell, "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True,
+                        text=True, timeout=120, env={**env, "STAGE2_DIR": str(folder)})
     by_name, parse_error = {}, None
     try:
         listed = json.loads(ps.stdout)
         by_name = {r["name"]: r for r in (listed if isinstance(listed, list) else [listed])}
     except (ValueError, TypeError, KeyError) as exc:
         parse_error = f"{type(exc).__name__}: {exc}"
-    readout = {"returncode": ps.returncode, "parsed": len(by_name), "parse_error": parse_error,
+    readout = {"shell": shell, "returncode": ps.returncode, "parsed": len(by_name), "parse_error": parse_error,
                "stdout_head": ps.stdout[:300], "stderr_tail": ps.stderr[-500:]}
     rows = []
     for n in names:
@@ -358,9 +362,16 @@ def _judge_e3(rec: dict, name: str) -> dict:
     frames, flows = cap.get("frames") or {}, cap.get("net_flows") or {}
     pm, health = frames.get("presentmon") or {}, flows.get("health") or {}
     standin = rec.get("standin") or {}
-    everyone = res.get("all_presents") if isinstance(res.get("all_presents"), dict) else {}
     game_pid = str(res.get("game_pid") or standin.get("pid"))
     probe_rows = {n: r for n, r in providers.items() if isinstance(r, dict) and "enabled" in r}
+
+    def presents_summary(key: str) -> dict:
+        """PresentMon on every process (one probe): what this token saw at all, and for the game's PID."""
+        everyone = res.get(key) if isinstance(res.get(key), dict) else {}
+        per_pid = everyone.get("rows_per_pid") or {}
+        return {"exit_code": everyone.get("exit_code"), "rows": everyone.get("rows"), "pids": len(per_pid),
+                "game_rows": per_pid.get(game_pid, {}).get("rows", 0), "first_rows": everyone.get("first_rows"),
+                "stderr_tail": everyone.get("stderr_tail"), "error": everyone.get("error")}
     # Windows' own check with this token (authz, E1's method) against what enabling really did.
     disagree = sorted(n for n, r in probe_rows.items()
                       if isinstance(authz.get(n), dict) and authz[n].get("enable") is not r["enabled"])
@@ -376,12 +387,10 @@ def _judge_e3(rec: dict, name: str) -> dict:
         "providers_refused": {n: r.get("error") for n, r in probe_rows.items() if not r["enabled"]},
         "authz_disagrees_on": disagree,
         "standin": {k: standin.get(k) for k in ("pid", "session_id", "presents", "swap_effect", "adapter")},
-        # PresentMon on every process, before the targeted capture: what this token sees at all
-        "all_presents": {"exit_code": everyone.get("exit_code"), "rows": everyone.get("rows"),
-                         "pids": len(everyone.get("rows_per_pid") or {}),
-                         "game_rows": (everyone.get("rows_per_pid") or {}).get(game_pid, {}).get("rows", 0),
-                         "first_rows": everyone.get("first_rows"), "stderr_tail": everyone.get("stderr_tail"),
-                         "error": everyone.get("error")},
+        # PresentMon on every process, before the targeted capture: what this token sees at all, with frames
+        # tracked to the display (lag-doctor's flags) and without
+        "all_presents": presents_summary("all_presents"),
+        "all_presents_no_display": presents_summary("all_presents_no_display"),
         "frames_status": frames.get("status"), "frame_rows": pm.get("rows"), "presentmon_exit": pm.get("exit_code"),
         "stop_path": pm.get("stop_path"), "stderr_tail": pm.get("stderr_tail"),
         "capture_ended_by_itself": cap.get("ended_by_itself"), "ended_s_after_game_exit": ended_after,
@@ -415,7 +424,8 @@ def _e3_config(sid_type: str) -> dict:
     finally:
         if game.poll() is None:
             game.kill()
-        sessions = ["lagdoctor", "lag-doctor-net", *(f"lagdoctor-e3-probe-{i}" for i in range(len(etw_access.PROVIDERS)))]
+        sessions = ["lagdoctor", "lag-doctor-net", "lagdoctor-e3-all", "lagdoctor-e3-all2",
+                    *(f"lagdoctor-e3-probe-{i}" for i in range(len(etw_access.PROVIDERS)))]
         rec["leftover_sessions"] = {s: etw.query_session(s) for s in sessions}
         rec["delete"] = delete_service(name)
     rec["standin"] = _read_json(status_file)
@@ -448,13 +458,17 @@ def _e3_control() -> dict:
             return rec
         rec["result"] = {"game_pid": first["pid"], "token": service_host._part(tokeninfo.snapshot),
                          "all_presents": service_host._part(service_host.all_presents, service_host.ALL_PRESENTS_S, exe),
+                         "all_presents_no_display": service_host._part(service_host.all_presents,
+                                                                       service_host.ALL_PRESENTS_S, exe,
+                                                                       "lagdoctor-e3-all2", False),
                          "capture": service_host._part(service_host.capture, first["pid"], CAPTURE_SECONDS,
                                                        threading.Event(), exe)}
         game.wait(GAME_SECONDS + 60)
     finally:
         if game.poll() is None:
             game.kill()
-        rec["leftover_sessions"] = {s: etw.query_session(s) for s in ("lagdoctor", "lag-doctor-net", "lagdoctor-e3-all")}
+        rec["leftover_sessions"] = {s: etw.query_session(s) for s in ("lagdoctor", "lag-doctor-net", "lagdoctor-e3-all",
+                                                                       "lagdoctor-e3-all2")}
     rec["standin"] = _read_json(status_file)
     rec["measured"] = True
     rec["verdict"] = _judge_e3(rec, "control")

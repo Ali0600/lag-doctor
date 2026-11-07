@@ -141,13 +141,26 @@ def authz_with_own_token(descriptors: Path) -> dict:
     return rows
 
 
-def all_presents(seconds: float, exe: Path | None = None, session: str = "lagdoctor-e3-all") -> dict:
+NO_DISPLAY_FLAGS = ("--output_stdout", "--no_console_stats", "--qpc_time", "--no_track_display", "--no_track_gpu")
+
+
+def all_presents_argv(exe: Path, seconds: float, session: str, track_display: bool = True) -> list[str]:
+    """PresentMon on every process, stopping itself after `seconds`. With track_display=False a frame needs no
+    display event to be written (PresentMon ignores --no_track_display unless --no_track_gpu comes with it, and
+    --track_pc_latency would then shift the columns: docs/research/presentmon.md, 1.2)."""
+    from lagdoctor.capture import presentmon
+    return [str(exe), "--timed", str(int(seconds)), "--terminate_after_timed",
+            *(presentmon.FLAGS if track_display else NO_DISPLAY_FLAGS), "--session_name", session,
+            "--stop_existing_session"]
+
+
+def all_presents(seconds: float, exe: Path | None = None, session: str = "lagdoctor-e3-all",
+                 track_display: bool = True) -> dict:
     """PresentMon on every process for `seconds` (it stops itself): how many rows each PID produced, the header
     and the first rows. Tells "no presents visible to this token at all" from "none for the game's PID"."""
     from lagdoctor import setup
     from lagdoctor.capture import presentmon
-    argv = [str(exe or INSTALL / setup.EXE_NAME), "--timed", str(int(seconds)), "--terminate_after_timed",
-            *presentmon.FLAGS, "--session_name", session, "--stop_existing_session"]
+    argv = all_presents_argv(exe or INSTALL / setup.EXE_NAME, seconds, session, track_display)
     proc = presentmon.spawn(argv, console=False)
     try:
         out, err = proc.communicate(timeout=seconds + 30)
@@ -156,7 +169,7 @@ def all_presents(seconds: float, exe: Path | None = None, session: str = "lagdoc
         out, err = proc.communicate()
     parser = presentmon.CsvParser()
     rows = list(presentmon.parse([out], parser))
-    return {"exit_code": proc.returncode, "stdout_bytes": len(out), "headers": parser.headers,
+    return {"args": argv[1:], "exit_code": proc.returncode, "stdout_bytes": len(out), "headers": parser.headers,
             "rows": len(rows), "malformed": parser.malformed, "rows_per_pid": tally(rows),
             "first_rows": [{k: r.get(k) for k in ("Application", "ProcessID", "SwapChainAddress", "PresentRuntime",
                                                   "PresentMode", "MsBetweenPresents", "MsUntilDisplayed")}
@@ -223,6 +236,7 @@ def mode_e3(name: str, args: list[str], stop: threading.Event) -> dict:
     return {"game_pid": int(game_pid), "runtime": _runtime(), "token": _part(tokeninfo.snapshot),
             "providers": _part(provider_probe), "authz": _part(authz_with_own_token, Path(descriptors)),
             "all_presents": _part(all_presents, ALL_PRESENTS_S),
+            "all_presents_no_display": _part(all_presents, ALL_PRESENTS_S, None, "lagdoctor-e3-all2", False),
             "capture": _part(capture, int(game_pid), float(seconds), stop)}
 
 

@@ -86,6 +86,19 @@ def test_the_signature_verdict_decides_by_winverifytrust_and_reports_the_cross_c
     assert v["unsigned"] == ["mystery.pyd"] and v["cross_check"].startswith("PowerShell's reading could not be read")
 
 
+def test_the_all_process_probe_stops_itself_and_drops_display_tracking_only_with_gpu_tracking():
+    from lagdoctor.capture import presentmon
+    exe = Path(r"C:\Program Files\lagdoctor-stage2\PresentMon-2.6.0-x64.exe")
+    argv = service_host.all_presents_argv(exe, 8, "lagdoctor-e3-all")
+    assert argv[:4] == [str(exe), "--timed", "8", "--terminate_after_timed"]
+    assert list(presentmon.FLAGS) == argv[4:4 + len(presentmon.FLAGS)] and "--process_id" not in argv
+    assert argv[-3:] == ["--session_name", "lagdoctor-e3-all", "--stop_existing_session"]
+    bare = service_host.all_presents_argv(exe, 8, "lagdoctor-e3-all2", track_display=False)
+    assert "--no_track_display" in bare and "--no_track_gpu" in bare       # the first is ignored without the second
+    assert "--track_pc_latency" not in bare and "--track_frame_type" not in bare   # they would shift the columns
+    assert "--output_stdout" in bare and "--qpc_time" in bare and "--no_console_stats" in bare
+
+
 def test_presentmon_rows_are_tallied_per_process():
     from lagdoctor.capture import presentmon
     header = "Application,ProcessID,SwapChainAddress,PresentRuntime,SyncInterval,PresentFlags,AllowsTearing,PresentMode,FrameType,TimeInQPC,MsBetweenPresents,MsUntilDisplayed\n"
@@ -123,6 +136,8 @@ def test_e3_judges_refusals_and_disagreements_from_the_service_record():
     assert v["leftover_sessions"] == ["lag-doctor-net"]
     assert v["frame_rows"] == 7 and v["tracker_events"] == 3 and v["tracker_selftest"] is True
     assert v["all_presents"]["rows"] == 5 and v["all_presents"]["pids"] == 2 and v["all_presents"]["game_rows"] == 4
+    assert v["all_presents_no_display"] == {"exit_code": None, "rows": None, "pids": 0, "game_rows": 0,
+                                            "first_rows": None, "stderr_tail": None, "error": None}
 
 
 # ------------------------------------------------------------------------------- live, read-only ---
