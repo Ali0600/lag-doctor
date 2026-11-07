@@ -97,6 +97,10 @@ both against the tests' pins and caches them; each job's summary counts the test
   without an NVIDIA GPU sets `LAGDOCTOR_ABSENT=nvidia`. The runner's account is an administrator with UAC off, so
   `tests/test_cli.py` models an unelevated owner unless a test says otherwise.
 - `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
+- Git Bash rewrites an argument that looks like a POSIX path before starting a native program: `git sparse-checkout
+  set --no-cone /Tests/Gold/` stored `C:/Program Files/Git/Tests/Gold/` (the checkout then wrote nothing), and `git
+  show origin/main:.github/workflows/ci.yml` became `origin\main;.github\...`. Prefix such commands with
+  `MSYS_NO_PATHCONV=1`, or run them from PowerShell or Python's `subprocess`, which pass arguments as typed.
 - `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` is
   timing-sensitive under full-suite load (failed once on 2026-11-05 with 0 delay gaps, then 4/4 alone; on CI once in
   two full runs): rerun it alone before blaming a change for it, as CI does. A test that starts a child pytest gives it
@@ -109,4 +113,6 @@ both against the tests' pins and caches them; each job's summary counts the test
   alone), and `tests/test_sysmon_target.py::test_auto_picks_a_windowed_renderer_and_never_a_windowless_gpu_job`, which
   needs LagLab to render where Windows counts it: on 2026-11-07 at 00:30 (Silent mode, display asleep) it failed on
   unchanged code too, in a worktree of the previous commit. Rerun them alone, with the display awake, and run that
-  control before blaming a change.
+  control before blaming a change. On a CI runner, the self-test cases of `tests/test_etw_flows.py` and
+  `tests/test_etw_tracker.py` (4 at once) failed once with "no free port for both UDP and TCP" (2026-11-07): their
+  loopback DNS stand-ins try 10 ephemeral ports for one number free for both; rerun before blaming a change.
