@@ -166,3 +166,21 @@ streaming the JSON column by column at level 1 saves the same capture in 2.6 s, 
 **Why it came up**: closing the recording window gives a console 5 s to finish, and long captures were lost.
 **Takeaway**: when a save sits on a deadline, measure each level; level 1 is usually most of the size win at a
 tenth of the time.
+
+### A group that may start trace sessions can still be refused a provider
+Windows checks an ETW recording twice: who may start and read a session (the default descriptor), and who may
+enable each provider into it (that provider's own descriptor, when it has one).
+**Why it came up**: Performance Log Users may start sessions and enable every provider PresentMon needs, but
+Kernel-Network and Kernel-Process carry their own descriptor (SYSTEM, LocalService and Administrators only). So a
+member gets frame timing but never the game-server tracker, measured with `scripts/etw_access.py` (E1).
+**Takeaway**: before promising that an account or group can trace something, read each provider's own descriptor,
+not only the session rights.
+
+### Ask Windows for a permission verdict instead of re-implementing it
+AuthzAccessCheck evaluates a security descriptor for a chosen set of SIDs as Windows does: entry order, denies,
+inherit-only entries, integrity labels and conditional entries included.
+**Why it came up**: the probe's first verdicts walked the entries by hand, with each account's own SID plus Everyone;
+the adversarial review measured them against AccessCheck and found them wrong in both directions (inherit-only
+entries counted; Authenticated Users, Users and INTERACTIVE, which every real token carries, missed).
+**Takeaway**: build an Authz client context holding the groups to model and let AuthzAccessCheck answer; cross-check
+it once against AccessCheck on a real token.
