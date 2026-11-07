@@ -5,7 +5,7 @@ no sign-out. The route is a signed per-machine MSI that installs a small capture
 SignPath Foundation; the licence is MIT. Facts, sources and the experiments' details are in
 [research/install-and-rights.md](research/install-and-rights.md); the experiment ids (E1 to E8) are defined there.
 
-## Status (2026-11-06)
+## Status (2026-11-07)
 
 - [x] Decisions recorded; MIT `LICENSE`; `license` in `pyproject.toml`.
 - [x] Stage 0: `setup` names the account by its SID in the group command and tells "joined, sign out once" and "in
@@ -18,7 +18,7 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
 - [x] After E1, done: setup says the group covers frame timing only; the tracker's not-measured reason names
   `--elevate` and, for a member, the group's limit; an explicit `--elevate` elevates a group member.
 - [ ] E2, the group fallback's sign-in test (below). Nothing in the service depends on it.
-- [ ] Stage 1: public repo and CI.
+- [ ] Stage 1: public repo and CI. The tree is scrubbed; it waits on the owner's choice for the history.
 - [ ] Stage 2: the service experiments on CI's throwaway Windows machines.
 - [ ] Stage 3: the MSI.
 - [ ] Stage 4: the capture service.
@@ -39,9 +39,10 @@ not help.
 
 ## Stage 1: public repo and CI
 
-1. Scrub personal identifiers from the tree (16 lines in 4 research notes carry this PC's user name in paths) and
-   decide how the history goes public: rewritten to drop them (commit ids change; the docs quote some), or one fresh
-   commit with the full history kept locally. The owner decides; nothing is pushed before that.
+1. The tree is scrubbed (2026-11-07; research note section 7). 60 old commits still show the user name and the
+   owner's machine-learning job, so the owner decides how the history goes public: rewritten (commit ids change; no
+   file quotes one, one commit message does), as it is, one fresh commit with the history kept here, or private
+   first. Nothing is pushed before that.
 2. Create the GitHub repository (owner's go), push, and add a `SECURITY.md`.
 3. CI on GitHub-hosted Windows runners: the unit tests (the live tests that need this laptop's GPU or PresentMon
    skip with their reason), SHA-pinned actions, least-privilege `permissions:`. Standard runners are free for public

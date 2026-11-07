@@ -163,8 +163,11 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
 
 - The repo has no git remote [verified: `git remote`, 2026-11-06]. It is MIT-licensed, as PresentMon is: `LICENSE`
   and `license` in `pyproject.toml` were added on 2026-11-06.
-- 16 lines in 4 research notes carry this PC's user name in paths [verified: `git grep`]; scrub them, and the history,
-  before publishing. Commits are authored with a GitHub noreply address [verified: `git log`].
+- Scrubbed from the tree on 2026-11-07: this PC's user name in paths (16 lines in 4 research notes) and the owner's
+  machine-learning job (2 lines). No commit ever held a SID, the PC name, a public IP, a real MAC address, a Wi-Fi
+  name or a serial, and the only binary is the synthetic report picture [verified: `git grep` over every commit;
+  the picture viewed]. The history still holds the two details in 60 commits. Commits are authored with a GitHub
+  noreply address [verified: `git log`].
 
 ## Decided (2026-11-06) and still open
 
