@@ -7,12 +7,14 @@ reaches Windows uses CDS_TEST, and the setters are exercised through recorders.
 """
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import re
 import shutil
 import string
 import subprocess
+import uuid
 import winreg
 from pathlib import Path
 
@@ -185,6 +187,68 @@ def test_effective_mode_names_are_the_header_values(value, name):
 ])
 def test_slider_names(guid, name):
     assert power.slider_name(guid) == name
+
+
+def _le(guid: str) -> bytes:
+    return uuid.UUID(guid).bytes_le
+
+
+@pytest.mark.parametrize("kind, data, name", [
+    # What PowerReadPossibleValue gave for the personality's indexes 0, 1 and 2 here (WT 7.2, 2026-11-07)
+    (3, bytes.fromhex("081384a14135ab4fbc81f71556f20b4a"), "power_saver"),
+    (3, bytes.fromhex("da7f5e8cbfe8964a9a85a6e23a8c635c"), "high_performance"),
+    (3, bytes.fromhex("22421b3894f6f0419685ff5bb260df2e"), "balanced"),
+    (4, _le("381b4222-f694-41f0-9685-ff5bb260df2e"), None),            # REG_DWORD, not a GUID
+    (3, _le("381b4222-f694-41f0-9685-ff5bb260df2e") + b"\0", None),    # 17 bytes
+    (3, _le("381b4222-f694-41f0-9685-ff5bb260df2e")[:15], None),
+    (3, b"", None),
+    (3, _le("ded574b5-45a0-4f42-8737-46345c09c238"), None),            # a slider position, not a base plan
+    (3, _le("00000000-0000-0000-0000-000000000000"), None),
+])
+def test_personality_from_its_possible_value(kind, data, name):
+    assert power.decode_personality(kind, data) == name
+
+
+# ======================================================================== power: the slider over fakes
+
+SILENT = "64a64f24-65b9-4b56-befd-5ec1eaced9b3"
+
+
+@pytest.fixture
+def slider_on(monkeypatch):
+    """slider_mode over fakes: the active plan, its personality (set per test), and getters that answer GUID_NULL
+    ("balanced") with rc 0 on any plan, as the AC one answered "balanced" on CI's High performance plan (2026-11-07)."""
+    state = {"personality": "balanced", "asked": []}
+
+    def personality(scheme, on_ac):
+        state["asked"].append((scheme, on_ac))
+        return state["personality"]
+
+    monkeypatch.setattr(power, "active_scheme", lambda: (SILENT, "Silent"))
+    monkeypatch.setattr(power, "scheme_personality", personality)
+    monkeypatch.setattr(power, "_optional_export", lambda name, argtypes, restype: lambda guid_ptr: 0)
+    return state
+
+
+@pytest.mark.parametrize("personality, mode", [("balanced", "balanced"), ("high_performance", None),
+                                               ("power_saver", None), (None, None)])
+def test_slider_mode_answers_only_on_a_plan_whose_personality_is_balanced(slider_on, personality, mode):
+    slider_on["personality"] = personality
+    assert power.slider_mode(True) == mode
+    assert power.slider_mode(False) == mode
+
+
+def test_slider_mode_asks_the_active_plans_personality_for_the_same_power_source(slider_on):
+    power.slider_mode(True)
+    power.slider_mode(False)
+    assert slider_on["asked"] == [(SILENT, True), (SILENT, False)]
+
+
+def test_slider_mode_without_the_active_plan_is_none(slider_on, monkeypatch):
+    def broken():
+        raise OSError("PowerGetActiveScheme failed (5)")
+    monkeypatch.setattr(power, "active_scheme", broken)
+    assert power.slider_mode(True) is None and slider_on["asked"] == []
 
 
 @pytest.mark.parametrize("raw, decoded", [
@@ -432,15 +496,78 @@ def test_live_effective_mode_is_a_known_mode():
     assert slider in (None, "best_efficiency", "balanced", "best_performance")
 
 
-@pytest.mark.needs("power_slider")
 def test_live_effective_mode_fits_the_slider():
-    # AC at the middle slider position gives balanced (or game mode) on a Balanced-type plan (WT 7.3). CI's runner
-    # uses High performance, which reported high_performance there (2026-11-07), so this needs the slider's plan.
+    # AC at the middle slider position gives balanced (or game mode) on a Balanced-type plan (WT 7.3). On any other
+    # plan there is no slider: on CI's High performance plan the effective mode was high_performance while slider_mode
+    # still said "balanced" (2026-11-07), which this test caught before slider_mode read the plan's personality.
     mode = power.effective_mode(timeout_s=2.0)
     status = power.power_status()
     slider = power.slider_mode(not status["on_battery"]) if status["on_battery"] is not None else None
     if status["on_battery"] is False and status["saver"] is False and slider == "balanced":
         assert mode in ("balanced", "game_mode"), mode
+
+
+@pytest.mark.parametrize("scheme, personality", [
+    ("381b4222-f694-41f0-9685-ff5bb260df2e", "balanced"),           # Balanced
+    ("8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c", "high_performance"),   # High performance (hidden on this laptop)
+    ("a1841308-3541-4fab-bc81-f71556f20b4a", "power_saver"),        # Power saver (hidden on this laptop)
+])
+def test_live_each_base_plan_is_most_like_itself(scheme, personality):
+    # Each base plan's index, looked up in Windows' own list of possible values, must give that plan's own GUID.
+    assert power.scheme_personality(scheme, True) == personality
+    assert power.scheme_personality(scheme, False) == personality
+
+
+def test_live_the_personality_of_a_plan_that_is_not_there_is_none():
+    assert power.scheme_personality(str(uuid.uuid4()), True) is None
+
+
+@pytest.mark.parametrize("rc, personality", [(0, "balanced"), (234, None)])   # 234 = ERROR_MORE_DATA
+def test_a_possible_value_counts_only_when_windows_says_it_read_it(rc, personality, monkeypatch):
+    # The fake leaves a well-formed Balanced GUID in the buffer either way, so the return code alone decides.
+    def index_of(root, scheme_ref, sub_ref, setting_ref, index_ref):
+        index_ref._obj.value = 2                                # the DWORD behind ctypes.byref()
+        return 0
+
+    def possible_value(root, sub_ref, setting_ref, kind_ref, index, buf, size_ref):
+        assert index == 2
+        kind_ref._obj.value = power.REG_BINARY
+        ctypes.memmove(buf, _le("381b4222-f694-41f0-9685-ff5bb260df2e"), 16)
+        size_ref._obj.value = 16
+        return rc
+    monkeypatch.setattr(power._powrprof, "PowerReadACValueIndex", index_of)
+    monkeypatch.setattr(power._powrprof, "PowerReadPossibleValue", possible_value)
+    assert power.scheme_personality(SILENT, True) == personality
+
+
+@pytest.mark.parametrize("on_ac, reader", [(True, "PowerReadACValueIndex"), (False, "PowerReadDCValueIndex")])
+def test_live_the_personality_is_read_for_the_power_source_asked_for(on_ac, reader, monkeypatch):
+    # Every plan here has the same personality on AC and battery, so only the call itself can show the side.
+    called = []
+    for name in ("PowerReadACValueIndex", "PowerReadDCValueIndex"):
+        real = getattr(power._powrprof, name)
+        monkeypatch.setattr(power._powrprof, name, lambda *a, _n=name, _r=real: called.append(_n) or _r(*a))
+    assert power.scheme_personality("381b4222-f694-41f0-9685-ff5bb260df2e", on_ac) == "balanced"
+    assert called == [reader]
+
+
+def _plan_type_index(scheme: str, on_ac: bool) -> int:
+    """The personality ("Power plan type") index powercfg prints for a plan. Its labels are translated, so the two
+    values that end their lines are read: AC first, then DC."""
+    found = re.findall(r":\s*0x([0-9a-fA-F]{8})\s*$", _powercfg("/qh", scheme, "SUB_NONE", "PERSONALITY"), flags=re.M)
+    assert len(found) == 2, found
+    return int(found[0 if on_ac else 1], 16)
+
+
+@pytest.mark.parametrize("on_ac", [True, False])
+def test_live_the_slider_answers_exactly_on_a_plan_of_balanceds_type(on_ac):
+    # powercfg's readout, not ours: the active plan has the slider when its type index is the Balanced plan's own.
+    has_slider = _plan_type_index("SCHEME_CURRENT", on_ac) == _plan_type_index("SCHEME_BALANCED", on_ac)
+    slider = power.slider_mode(on_ac)
+    if has_slider:
+        assert slider in ("best_efficiency", "balanced", "best_performance"), slider
+    else:
+        assert slider is None, slider
 
 
 def test_live_media_type_matches_get_physicaldisk():

@@ -1149,7 +1149,7 @@ def _power_problems(e: _Env) -> list[tuple[str, str]]:
     mode = p.get("effective_mode")
     if mode in LOW_POWER_MODES:
         out.append(("mode", f"Windows' effective power mode is {str(mode).replace('_', ' ')}"))
-    if p.get("slider") == "best_efficiency":
+    if labels.power_mode(p) == "best_efficiency":
         out.append(("mode", "the power mode is set to Best power efficiency"))
     name = _text(p.get("scheme_name"), 80)
     plan = "the active power plan" + (f" \"{name}\"" if name else "")
@@ -1263,8 +1263,9 @@ def _power_plan(cap: Capture, ctx: dict) -> Any:
         if name:
             parts.append(f"power plan \"{name}\"" + (", whose own settings let the CPU run at full speed"
                                                      if held == [] else ""))
-        if isinstance(p.get("slider"), str):
-            parts.append(f"power mode {p['slider'].replace('_', ' ')}")
+        mode = labels.power_mode(p)          # a plan type without the slider has no power mode to cite
+        if mode:
+            parts.append(f"power mode {mode.replace('_', ' ')}")
         c.against("static", W_DIRECT, ", ".join(parts))
         return c.conclude()
     c.support("static", W_DIRECT, "; ".join(text for _, text in problems))
@@ -1301,7 +1302,9 @@ def _power_plan(cap: Capture, ctx: dict) -> Any:
         fixes.append(_advice("Plug in the charger while gaming", "Windows and the GPU driver cap power on battery."))
     if p.get("saver") is True:
         fixes.append(_advice("Turn off battery saver while gaming"))
-    if p.get("slider") == "best_efficiency" or p.get("effective_mode") in LOW_POWER_MODES:
+    # Never point at a control the plan does not have: a High performance or Power saver type plan has no power mode.
+    if labels.plan_has_power_mode(p) is not False and (labels.power_mode(p) == "best_efficiency"
+                                                         or p.get("effective_mode") in LOW_POWER_MODES):
         fixes.append(_advice("Set the power mode to Best performance", "Settings > System > Power & battery."))
     if quiet_mode:
         fixes.append(_advice("Set Armoury Crate's operating mode to Performance or Turbo",
