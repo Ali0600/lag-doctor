@@ -71,6 +71,7 @@ def test_reply_layout_self_check_on_loopback():
     icmp.self_check(6)
 
 
+@pytest.mark.needs("internet_icmp")
 def test_the_router_and_the_internet_anchor_answer(defaults):
     gw = iphlp.default_gateway()
     with icmp.Pinger() as p:
@@ -272,6 +273,7 @@ def _per_round(values: list, structural: int, failed: int, late: bool) -> None:
         assert sum(v is None for v in values) == structural + failed, (structural, failed, values)
 
 
+@pytest.mark.needs("internet_icmp")
 def test_a_ten_second_capture_of_this_machine(defaults):
     s = NetworkSampler()
     s.start(clock.now())

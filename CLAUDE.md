@@ -16,6 +16,9 @@ uv run python -m laglab --list-modes                     # the fake laggy game u
 uv run python -m lagdoctor ...                           # the tool (see README)
 ```
 
+CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 and 3.11 on every push to `main` and
+every pull request; code and workflow changes go through a pull request and merge on green.
+
 ## Rules an agent must not guess
 
 - **Never touch the game process.** No injection, hooks, memory reads, or `OpenProcess` on the game.
@@ -76,10 +79,20 @@ uv run python -m lagdoctor ...                           # the tool (see README)
   branches cut from it: the history from before the 2026-11-07 rewrite stays in `refs/backup/`, `refs/original/` and
   the merged `worktree-*` branches, and `.git/hooks/pre-push` (local, not in the repo) refuses any commit that holds
   those details.
+- **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies, and a High
+  performance plan. The workflow declares that in `LAGDOCTOR_ABSENT`, and a test that needs one of those carries
+  `@pytest.mark.needs(name)` (names in `tests/capabilities.py`), so it skips there with the reason; undeclared, a
+  missing capability fails. Never make a test skip on a detected absence that a regression could also cause (the NVIDIA
+  fixtures used to), and mark a test only when a CI run shows it failing for that lack: a test that passes on the
+  runner keeps running there, even on another branch (elevated, the ETW tests check the real-time session). A PC
+  without an NVIDIA GPU sets `LAGDOCTOR_ABSENT=nvidia`. The runner's account is an administrator with UAC off, so
+  `tests/test_cli.py` models an unelevated owner unless a test says otherwise.
 - `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
 - `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` is
-  timing-sensitive under full-suite load (failed once on 2026-11-05 with 0 delay gaps, then 4/4 alone): rerun it alone
-  before blaming a change for it. Two more depend on the PC's state: `tests/test_cli.py::test_a_real_console_event_
+  timing-sensitive under full-suite load (failed once on 2026-11-05 with 0 delay gaps, then 4/4 alone; on CI once in
+  two full runs): rerun it alone before blaming a change for it, as CI does. `tests/test_nvidia_live.py::test_sampler_
+  reads_each_row_just_after_a_driver_refresh` failed on 2026-11-07, alone too, with the NVIDIA GPU idle in P8 (no
+  training job) and the screen locked; it had passed with the GPU busy. Two more depend on the PC's state: `tests/test_cli.py::test_a_real_console_event_
   while_recording_still_saves_the_capture` (its child hit the 60 s timeout once under full-suite load, then 3/3
   alone), and `tests/test_sysmon_target.py::test_auto_picks_a_windowed_renderer_and_never_a_windowless_gpu_job`, which
   needs LagLab to render where Windows counts it: on 2026-11-07 at 00:30 (Silent mode, display asleep) it failed on

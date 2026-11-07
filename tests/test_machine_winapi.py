@@ -312,11 +312,12 @@ def test_live_adapters_have_the_contract_keys(adapters):
     assert len({a["luid"] for a in adapters}) == len(adapters)
 
 
+@pytest.mark.needs("nvidia")
 def test_live_nvidia_vram_and_pci_agree_with_nvidia_smi(adapters):
     nv = [a for a in adapters if a["vendor"] == "nvidia"]
     smi = shutil.which("nvidia-smi") or str(SYSTEM32 / "nvidia-smi.exe")
-    if not nv or not Path(smi).is_file():
-        pytest.skip("no NVIDIA adapter or nvidia-smi on this machine")
+    # Declared absent (LAGDOCTOR_ABSENT=nvidia) this test skips before it runs; here an empty list is a failure.
+    assert nv and Path(smi).is_file(), f"no NVIDIA adapter listed {[a['vendor'] for a in adapters]} or no {smi}"
     rows = [r.split(", ") for r in run([smi, "--query-gpu=memory.total,pci.bus_id",
                                         "--format=csv,noheader,nounits"]).strip().splitlines()]
     by_pci = {bus.split(":", 1)[1].upper(): int(total) for total, bus in rows}   # 00000000:01:00.0 -> 01:00.0
@@ -326,6 +327,7 @@ def test_live_nvidia_vram_and_pci_agree_with_nvidia_smi(adapters):
         assert 0.9 * total <= a["vram_mb"] <= total, (a["vram_mb"], total)
 
 
+@pytest.mark.needs("gpu")
 def test_live_every_pdh_gpu_engine_luid_is_a_listed_adapter(adapters):
     out = run([SYSTEM32 / "typeperf.exe", "-qx", "GPU Engine"])
     pdh = {m.lower() for m in re.findall(r"luid_(0x[0-9a-fA-F]{8}_0x[0-9a-fA-F]{8})_phys", out)}
@@ -422,14 +424,23 @@ def test_live_power_status_matches_psutil():
     assert status["battery_pct"] == battery.percent
 
 
-def test_live_effective_mode_is_a_known_mode_and_fits_the_slider():
+def test_live_effective_mode_is_a_known_mode():
     mode = power.effective_mode(timeout_s=2.0)
     assert mode in power.EFFECTIVE_MODES
     status = power.power_status()
     slider = power.slider_mode(not status["on_battery"]) if status["on_battery"] is not None else None
     assert slider in (None, "best_efficiency", "balanced", "best_performance")
+
+
+@pytest.mark.needs("power_slider")
+def test_live_effective_mode_fits_the_slider():
+    # AC at the middle slider position gives balanced (or game mode) on a Balanced-type plan (WT 7.3). CI's runner
+    # uses High performance, which reported high_performance there (2026-11-07), so this needs the slider's plan.
+    mode = power.effective_mode(timeout_s=2.0)
+    status = power.power_status()
+    slider = power.slider_mode(not status["on_battery"]) if status["on_battery"] is not None else None
     if status["on_battery"] is False and status["saver"] is False and slider == "balanced":
-        assert mode in ("balanced", "game_mode"), mode     # AC at the middle slider position (WT 7.3)
+        assert mode in ("balanced", "game_mode"), mode
 
 
 def test_live_media_type_matches_get_physicaldisk():

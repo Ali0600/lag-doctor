@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from lagdoctor.fixes.registry import RegistryBackend
+from tests import capabilities
 
 SANDBOX_PARENT = r"Software\LagDoctorTest"
 
@@ -68,3 +69,12 @@ def reg_sandbox():
 def _isolated_home(tmp_path, monkeypatch):
     """No test may touch the real %LOCALAPPDATA%\\lag-doctor (journal, captures)."""
     monkeypatch.setenv("LAGDOCTOR_HOME", str(tmp_path / "lagdoctor-home"))
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "needs(*names): what the test needs from the machine; it skips when "
+                            f"{capabilities.ABSENT_ENV} lists one of them (tests/capabilities.py)")
+
+
+def pytest_collection_modifyitems(config, items):
+    capabilities.apply_absent(items, os.environ)

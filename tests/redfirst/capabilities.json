@@ -1,0 +1,59 @@
+[
+ {
+  "name": "the gate skips tests whose needs are all present",
+  "file": "tests/capabilities.py",
+  "old": "    missing = [n for n in needs if n in absent]",
+  "new": "    missing = list(needs)",
+  "tests": [
+   "tests/test_capabilities.py::test_a_test_needing_only_what_is_there_runs",
+   "tests/test_capabilities.py::test_the_conftest_hook_skips_exactly_the_tests_that_need_what_ci_lacks"
+  ]
+ },
+ {
+  "name": "the gate never skips",
+  "file": "tests/capabilities.py",
+  "old": "    if not missing:\n        return None",
+  "new": "    if True:\n        return None",
+  "tests": [
+   "tests/test_capabilities.py::test_a_test_needing_an_absent_capability_skips_with_what_is_missing",
+   "tests/test_capabilities.py::test_the_conftest_hook_skips_exactly_the_tests_that_need_what_ci_lacks"
+  ]
+ },
+ {
+  "name": "an unknown declared name passes silently",
+  "file": "tests/capabilities.py",
+  "old": "    if unknown:\n        raise pytest.UsageError(f\"{ABSENT_ENV} names",
+  "new": "    if False:\n        raise pytest.UsageError(f\"{ABSENT_ENV} names",
+  "tests": [
+   "tests/test_capabilities.py::test_an_unknown_declared_name_is_a_usage_error"
+  ]
+ },
+ {
+  "name": "an unknown marker name passes silently",
+  "file": "tests/capabilities.py",
+  "old": "    if unknown:\n        raise pytest.UsageError(f\"@pytest.mark.needs",
+  "new": "    if False:\n        raise pytest.UsageError(f\"@pytest.mark.needs",
+  "tests": [
+   "tests/test_capabilities.py::test_an_unknown_marker_name_fails_even_when_nothing_is_absent"
+  ]
+ },
+ {
+  "name": "everything counts as absent whatever is declared",
+  "file": "tests/capabilities.py",
+  "old": "    return names",
+  "new": "    return set(CAPABILITIES)",
+  "tests": [
+   "tests/test_capabilities.py::test_nothing_declared_means_nothing_is_absent",
+   "tests/test_capabilities.py::test_the_conftest_hook_skips_nothing_on_the_laptop"
+  ]
+ },
+ {
+  "name": "the conftest hook ignores the declared list",
+  "file": "tests/conftest.py",
+  "old": "    capabilities.apply_absent(items, os.environ)",
+  "new": "    capabilities.apply_absent(items, {})",
+  "tests": [
+   "tests/test_capabilities.py::test_the_conftest_hook_skips_exactly_the_tests_that_need_what_ci_lacks"
+  ]
+ }
+]

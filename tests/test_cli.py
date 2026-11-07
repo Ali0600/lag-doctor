@@ -59,6 +59,13 @@ def _no_real_uac(monkeypatch):
     monkeypatch.setattr(elevation, "_ShellExecuteExW", refuse)
 
 
+@pytest.fixture(autouse=True)
+def _unelevated_owner(monkeypatch):
+    """Every test here runs as the owner's unelevated terminal unless it says otherwise. CI's runner is an
+    administrator with UAC off, and `fix` refuses to run elevated (test_fix_refuses_to_run_elevated covers that)."""
+    monkeypatch.setattr(elevation, "is_elevated", lambda: False)
+
+
 class FakeFix(Fix):
     id = "test_cli_fake"
     title = "Turn the fake setting up"

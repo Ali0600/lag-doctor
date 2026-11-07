@@ -110,13 +110,18 @@ WHOAMI_BITS = {"Mandatory group": elevation.SE_GROUP_MANDATORY,
 
 
 def test_token_groups_match_whoami():
-    # Live, read-only: whoami enumerates this token's groups itself. It leaves out only the logon session's SID,
-    # which /logonid prints. Every attribute name it shows must match its bit, and every bit its name.
+    # Live, read-only: whoami enumerates this token's groups itself. It leaves out the logon session's SID, which
+    # /logonid prints, and the machine's "None" group (RID 513), which a built-in Administrator's token carries:
+    # measured on CI's runner (2026-11-07), where the token held 14 groups and whoami listed the other 12. Every
+    # attribute name whoami shows must match its bit, and every bit its name.
     listed = whoami_groups()
     english_whoami(listed)
     assert {EVERYONE, AUTHENTICATED} <= set(listed), f"whoami listed too little to compare: {listed}"
     groups = elevation._token_groups()
-    assert set(groups) == set(listed) | {whoami_logon_sid()}
+    logon = whoami_logon_sid()
+    machine_none = whoami_user_sid().rsplit("-", 1)[0] + "-513"
+    assert set(listed) | {logon} <= set(groups), f"missing from the token read: {(set(listed) | {logon}) - set(groups)}"
+    assert set(groups) - set(listed) - {logon} <= {machine_none}, f"unlisted: {set(groups) - set(listed) - {logon}}"
     for sid, attrs in listed.items():
         for name, bit in WHOAMI_BITS.items():
             assert (name in attrs) == bool(groups[sid] & bit), f"{sid} {attrs!r}: {name!r} against 0x{groups[sid]:x}"

@@ -1,0 +1,44 @@
+# The unit tests plus every live test a GitHub Windows runner can run. What the runner lacks is declared in
+# LAGDOCTOR_ABSENT (tests/capabilities.py): a test that needs one of those skips with the reason, and so do the tests
+# whose own fixtures find no PresentMon download. The summary at the end of each test step lists every skip.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  # Measured on the first runs (2026-11-07): no GPU, no NVIDIA driver, no thermal sensors, no ping replies, and a
+  # High performance plan. The account is an administrator with UAC off; tests/test_cli.py models an unelevated owner.
+  LAGDOCTOR_ABSENT: internet_icmp,gpu,thermal_zone,power_slider,nvidia
+  # Timing-sensitive under full-suite load (CLAUDE.md): it runs on its own after the rest.
+  ALONE: tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap
+
+jobs:
+  test:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: windows-2025
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.13 is what lag-doctor runs on; 3.11 is the oldest pyproject.toml promises.
+        python: ["3.13", "3.11"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.10.4"
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: uv sync --locked --extra laglab
+      - name: Tests
+        run: uv run --no-sync pytest -v --durations=25 --deselect "$env:ALONE"
+      - name: Timing-sensitive test, alone
+        run: uv run --no-sync pytest -v "$env:ALONE"
