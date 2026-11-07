@@ -303,6 +303,7 @@ def test_is_alive_and_game_pids_refuse_junk(bad):
         tgt.game_pids(*bad)
 
 
+@pytest.mark.needs("gpu")
 def test_auto_picks_a_windowed_renderer_and_never_a_windowless_gpu_job(tmp_path):
     """Live: LagLab (a small window, light load on the Intel GPU) must win over any windowless 3D user,
     such as this machine's ML training job, however much busier that job is."""

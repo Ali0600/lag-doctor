@@ -516,6 +516,7 @@ def _windows_of_4(values):
     return [statistics.mean(values[i:i + 4]) for i in range(len(values) - 3)]
 
 
+@pytest.mark.needs("thermal_zone")
 def test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild():
     child = subprocess.Popen([BASE_PYTHON, "-I", "-c", SPINNER, "1.0", "3.0", "1", SPINNER],
                              stdout=subprocess.PIPE, text=True)

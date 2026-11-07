@@ -154,7 +154,7 @@
    "old": "EFFECTIVE_MODES = (\"battery_saver\", \"better_battery\", \"balanced\", \"high_performance\",",
    "new": "EFFECTIVE_MODES = (\"battery_saver\", \"balanced\", \"better_battery\", \"high_performance\",",
    "tests": ["tests/test_machine_winapi.py::test_effective_mode_names_are_the_header_values",
-             "tests/test_machine_winapi.py::test_live_effective_mode_is_a_known_mode_and_fits_the_slider"]},
+             "tests/test_machine_winapi.py::test_live_effective_mode_fits_the_slider"]},
   {"name": "power: negative mode indexes from the end",
    "file": "lagdoctor/winapi/power.py",
    "old": "if 0 <= mode < len(EFFECTIVE_MODES) else None",

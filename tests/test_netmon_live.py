@@ -71,6 +71,7 @@ def test_reply_layout_self_check_on_loopback():
     icmp.self_check(6)
 
 
+@pytest.mark.needs("internet_icmp")
 def test_the_router_and_the_internet_anchor_answer(defaults):
     gw = iphlp.default_gateway()
     with icmp.Pinger() as p:
@@ -81,6 +82,7 @@ def test_the_router_and_the_internet_anchor_answer(defaults):
                 assert frm == ip and 0 < rtt < 500, (ip, rtt, frm)
 
 
+@pytest.mark.needs("internet_icmp")
 def test_a_ttl_limited_probe_gets_a_reply_that_is_not_success(defaults):
     status, rtt, frm = icmp.ping("1.1.1.1", ttl=1)       # hop 1 = the router answers "TTL expired" (NE 1.3)
     assert status != icmp.IP_SUCCESS                      # IcmpSendEcho2 returned one reply, yet not an echo
@@ -272,6 +274,7 @@ def _per_round(values: list, structural: int, failed: int, late: bool) -> None:
         assert sum(v is None for v in values) == structural + failed, (structural, failed, values)
 
 
+@pytest.mark.needs("internet_icmp")
 def test_a_ten_second_capture_of_this_machine(defaults):
     s = NetworkSampler()
     s.start(clock.now())

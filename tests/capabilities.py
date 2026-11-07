@@ -1,7 +1,8 @@
 """What the machine running the tests lacks: declared by whoever runs the suite, never detected.
 
-GitHub's Windows runners lack some of the owner's laptop: no GPU, no monitor, no Wi-Fi, no ping replies from the
-internet. The CI workflow lists what is absent in LAGDOCTOR_ABSENT (comma-separated names from CAPABILITIES), and
+GitHub's Windows runners lack some of the owner's laptop: no GPU, no thermal sensors, no ping replies from the
+network, a High performance power plan and an elevated account (measured on the first CI run, 2026-11-07). The CI
+workflow lists what is absent in LAGDOCTOR_ABSENT (comma-separated names from CAPABILITIES), and
 a test marked ``@pytest.mark.needs(name)`` then skips with the reason. Unset, as on the laptop, nothing skips this
 way. Detecting the absence instead (a failed ping, an empty adapter list) would also skip the test when a regression
 causes the same symptom, so the list is declared, and an unknown name is an error rather than a silent no-op.
@@ -14,9 +15,9 @@ ABSENT_ENV = "LAGDOCTOR_ABSENT"
 CAPABILITIES = {
     "internet_icmp": "router or internet host that answers ping",
     "gpu": "hardware GPU with 3D engines",
-    "display": "real monitor",
-    "wlan": "Wi-Fi service (wlanapi.dll)",
-    "unelevated": "unelevated token (the runner's account is an administrator with UAC off)",
+    "thermal_zone": "ACPI thermal-zone sensors",
+    "power_slider": "Windows power-mode slider (a Balanced-type power plan)",
+    "unelevated": "unelevated token (the account is an administrator with UAC off)",
 }
 
 

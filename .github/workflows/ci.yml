@@ -1,6 +1,7 @@
-# The unit tests plus every live test a GitHub Windows runner can run. Tests that need what a runner
-# lacks (an NVIDIA GPU, a real display, PresentMon and its gold captures, Wi-Fi, ...) skip with their reason;
-# the summary at the end of the test step lists every skip.
+# The unit tests plus every live test a GitHub Windows runner can run. What the runner lacks is declared in
+# LAGDOCTOR_ABSENT (tests/capabilities.py): a test that needs one of those skips with the reason, and so do the tests
+# whose own fixtures find no PresentMon download or NVIDIA driver. The summary at the end of each test step lists
+# every skip.
 name: CI
 
 on:
@@ -10,6 +11,13 @@ on:
 
 permissions:
   contents: read
+
+env:
+  # Measured on the first run (2026-11-07): no GPU, no thermal sensors, no ping replies, a High performance plan,
+  # and an administrator account with UAC off.
+  LAGDOCTOR_ABSENT: internet_icmp,gpu,thermal_zone,power_slider,unelevated
+  # Timing-sensitive under full-suite load (CLAUDE.md): it runs on its own after the rest.
+  ALONE: tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap
 
 jobs:
   test:
@@ -31,5 +39,11 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install
         run: uv sync --locked --extra laglab
+      - name: Token groups (temporary diagnostic)
+        run: |
+          whoami /all
+          uv run --no-sync python -c "from lagdoctor.winapi import elevation as e; [print(s, hex(a)) for s, a in sorted(e._token_groups().items())]"
       - name: Tests
-        run: uv run --no-sync pytest -v --durations=25
+        run: uv run --no-sync pytest -v --durations=25 --deselect "$env:ALONE"
+      - name: Timing-sensitive test, alone
+        run: uv run --no-sync pytest -v "$env:ALONE"

@@ -40,12 +40,12 @@ def test_an_unknown_declared_name_is_a_usage_error():
 
 
 def test_a_test_needing_an_absent_capability_skips_with_what_is_missing():
-    reason = cap.skip_reason(["display", "gpu"], {"gpu"})
+    reason = cap.skip_reason(["thermal_zone", "gpu"], {"gpu"})
     assert reason == f"this machine has no {cap.CAPABILITIES['gpu']} ({cap.ABSENT_ENV})"
 
 
 def test_a_test_needing_only_what_is_there_runs():
-    assert cap.skip_reason(["gpu"], {"display"}) is None
+    assert cap.skip_reason(["gpu"], {"thermal_zone"}) is None
     assert cap.skip_reason([], set(cap.CAPABILITIES)) is None
 
 
@@ -55,11 +55,11 @@ def test_an_unknown_marker_name_fails_even_when_nothing_is_absent():
 
 
 def test_the_conftest_hook_skips_exactly_the_tests_that_need_what_ci_lacks(monkeypatch):
-    gpu, both, plain, display = FakeItem(("gpu",)), FakeItem(("display",), ("gpu",)), FakeItem(), FakeItem(("display",))
+    gpu, both, plain, thermal = FakeItem(("gpu",)), FakeItem(("thermal_zone",), ("gpu",)), FakeItem(), FakeItem(("thermal_zone",))
     monkeypatch.setenv(cap.ABSENT_ENV, "gpu")
-    conftest.pytest_collection_modifyitems(None, [gpu, both, plain, display])
+    conftest.pytest_collection_modifyitems(None, [gpu, both, plain, thermal])
     assert reasons(gpu) == reasons(both) == [f"this machine has no {cap.CAPABILITIES['gpu']} ({cap.ABSENT_ENV})"]
-    assert reasons(plain) == reasons(display) == []
+    assert reasons(plain) == reasons(thermal) == []
 
 
 def test_the_conftest_hook_skips_nothing_on_the_laptop(monkeypatch):
