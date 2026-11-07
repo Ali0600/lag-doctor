@@ -79,14 +79,26 @@ verification log; trust a note's *Corrected* entries over its body.
   the prompt), and the parent refuses to analyse a capture of another process.
 - `-E -s` keep the user's PYTHON* variables and user site-packages out of the elevated interpreter. It still
   runs the checkout's own code, which the user can write: UAC shows the signed Python launcher, not the code
-  it runs, and is not a security boundary for same-user code (see DECISIONS backlog for elevating only
-  admin-writable code).
+  it runs, and is not a security boundary for same-user code. Elevating only admin-writable code was taken up
+  as the installer and capture service (DECISIONS 2026-11-06, `docs/INSTALLER-PLAN.md`).
 - One recording at a time: whichever process records holds the named mutex `Local\lag-doctor-capture`
   (`session.CaptureLock`); a second `watch` refuses before starting PresentMon or any ETW session. The parent
   releases the lock just before the UAC launch, the child takes it, and the parent takes it back if the
   prompt is declined.
 - `lagdoctor setup` explains the alternative: join Performance Log Users once (an admin command the user
-  runs, then sign out and in), after which no prompt is needed. The tool never changes group membership.
+  runs, then sign out and in), after which frame timing needs no prompt. The tool never changes group
+  membership.
+  - The printed `Add-LocalGroupMember` command names the account by its SID: it runs in an administrator's
+    window, which may belong to another account. Only a well-formed SID goes in; without one the command
+    names the account when the name is printable ASCII, else it holds a placeholder and says what to put
+    there (`cli.say` prints other characters as `?`).
+  - It prints one of four texts, picked by `elevation.trace_rights()`, so an account that already joined is
+    never told to join again: `after_sign_in` (it joined after this sign-in began) asks for one sign-out;
+    `filtered` (the group is in this token but not enabled, e.g. deny-only, which a sign-out does not change)
+    says each recording asks for one UAC prompt.
+  - Performance Log Users is documented for starting trace sessions (NE 5.7), but its reach over the
+    tracker's provider, Kernel-Network, is unverified until E1 (`scripts/etw_access.py`, described in
+    `docs/research/install-and-rights.md`), so setup says the game-server tracker is not checked yet.
 - **Frame timing is never silently dropped.** If PresentMon is missing or fails its check, `watch` stops before
   it looks for the game (exit 6) unless `--no-elevate` asked for a recording without it; a recording without
   frame timing says so before "Recording.", and the elevated child, opened only for frame timing, records
@@ -139,7 +151,7 @@ lagdoctor/
   setup.py  fetch + verify PresentMon
   cli.py __main__.py
 laglab/     the fake laggy game used by tests (done)
-scripts/    redfirst.py e2e_truth.py (done) e2e.py
+scripts/    redfirst.py e2e_truth.py (done) e2e.py etw_access.py (E1: who may enable the trace providers)
 ```
 
 `winapi/` modules are thin ctypes wrappers with no policy: plain Python values in and out, `OSError`
@@ -280,6 +292,13 @@ def is_elevated() -> bool
 def in_performance_log_users() -> bool
 def can_trace() -> bool
 def token_user_sid() -> str
+def group_member_sids(group_sid: str) -> list[str]   # SIDs of a local group's direct members (its translated name
+                                                     # is looked up from the SID); OSError when Windows cannot say
+def trace_rights() -> str                         # "now" this token may trace; "filtered" Performance Log Users is
+                                                  # in this token but not enabled (deny-only); "after_sign_in" the
+                                                  # account, or a group enabled in its token, joined after this
+                                                  # sign-in began; "no"; "unknown" Windows could not say (the
+                                                  # token, its groups or the group's members unreadable)
 def launch_elevated(argv: list[str], cwd: str) -> ElevatedChild   # ShellExecuteExW "runas", new console;
                                                                   # PermissionError when declined (1223);
                                                                   # ValueError for a relative program or folder

@@ -48,9 +48,11 @@ uv run python -m lagdoctor ...                           # the tool (see README)
 - **Fixes go through `lagdoctor/fixes/base.py`** (journal first, readback, undo). Never offered: disabling
   security features, killing or suspending processes, HKLM or policy tweaks, anything on the game process.
 - **ETW needs rights.** PresentMon (session `lagdoctor`) and the network tracker (session `lag-doctor-net`)
-  need an elevated token or Performance Log Users; tests use private in-process sessions with unique names
-  instead. The end-to-end run (`scripts/e2e.py`) is on demand. The venv's `python.exe` is a launcher: the
-  real process is the base interpreter, so target LagLab by the PID it writes to `--pid-file`.
+  need an elevated token or Performance Log Users; that the group covers the tracker's provider (Kernel-Network)
+  is unverified until E1 (`docs/research/install-and-rights.md`), so never state it as fact. Tests use private
+  in-process sessions with unique names instead. The end-to-end run (`scripts/e2e.py`) is on demand. The venv's
+  `python.exe` is a launcher: the real process is the base interpreter, so target LagLab by the PID it writes to
+  `--pid-file`.
 - **This laptop is hybrid** (RTX 3070 Laptop + Intel UHD; the internal panel is driven by the Intel GPU).
   OpenGL apps such as LagLab run on the Intel GPU by default; `SHIM_MCCOMPAT=0x800000001` in LagLab's
   environment moves it to the NVIDIA GPU. A long-running ML training job may be using the NVIDIA GPU: never
@@ -63,8 +65,9 @@ uv run python -m lagdoctor ...                           # the tool (see README)
   `...\Packages\Claude_pzs8sxrjxfjjc\LocalCache` (measured 2026-11-05; `%TEMP%` and the home folder are not
   moved), where the user's terminal and the elevated recording window never see them: a PresentMon set up from
   the agent's shell was "not installed" for the user. `setup`, `watch`, `fix` and `undo` refuse there (exit 5,
-  `paths.private_copy`) and `scripts/e2e.py` stops before its UAC prompt (exit 3); run them in the user's
-  Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`).
+  `paths.private_copy`) and `scripts/e2e.py` stops before its UAC prompt (exit 3). `scripts/etw_access.py`
+  (E1) has no such check and raises its UAC prompt at once, so an agent never runs it either. Run them all in the
+  user's Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`).
 - `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
 - `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` is
   timing-sensitive under full-suite load (failed once on 2026-11-05 with 0 delay gaps, then 4/4 alone): rerun it alone

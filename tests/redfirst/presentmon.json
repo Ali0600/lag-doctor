@@ -644,10 +644,11 @@
  {
   "name": "user name not quoted for PowerShell",
   "file": "lagdoctor/setup.py",
-  "old": "quoted = \"'\" + who.replace(\"'\", \"''\") + \"'\"",
-  "new": "quoted = \"'\" + who + \"'\"",
+  "old": "        member = \"'\" + who.replace(\"'\", \"''\") + \"'\"         # a PowerShell single-quoted literal",
+  "new": "        member = \"'\" + who + \"'\"         # a PowerShell single-quoted literal",
   "tests": [
-   "tests/test_presentmon_setup.py::test_the_howto_quotes_the_name_for_powershell"
+   "tests/test_presentmon_setup.py::test_the_howto_quotes_the_name_for_powershell",
+   "tests/test_presentmon_setup.py::test_powershell_reads_every_printed_member_as_one_string"
   ]
  },
  {

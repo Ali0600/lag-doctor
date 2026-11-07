@@ -1003,14 +1003,25 @@ def cmd_setup(args: argparse.Namespace) -> int:
     say(f"PresentMon: ready and verified at {exe} (SHA-256 pinned, signed by {info['signer']})")
     if info.get("note"):
         say(f"  note: {info['note']}")
-    if elevation.can_trace():
+    rights = elevation.trace_rights()
+    if rights == "now":
         say("Frame timing: ready (this account may start ETW traces).")
+    elif rights == "filtered":
+        say("Frame timing: your account is in the Performance Log Users group, but Windows keeps that group")
+        say("switched off in normal windows here, so `lagdoctor watch` asks for one UAC prompt each recording.")
+    elif rights == "after_sign_in":
+        say("Frame timing: your account is in the Performance Log Users group, but this sign-in began before it")
+        say("joined. Sign out of Windows and back in once; after that, frame timing needs no admin prompt.")
+        say("Until then, `lagdoctor watch` asks for one UAC prompt each recording.")
     else:
-        say("Frame timing needs admin rights. Two ways:")
-        say("  1. Let `lagdoctor watch` ask for one UAC prompt each time (nothing to set up).")
-        say("  2. Join the Performance Log Users group once, then sign out and in. No prompts after that:")
+        say("Frame timing and the game-server tracker need admin rights. Two ways:")
+        say("  1. Let `lagdoctor watch` ask for one UAC prompt each recording (nothing to set up).")
+        say("  2. Join the Performance Log Users group once (an administrator does it), then sign out and back in.")
+        say("     After that, frame timing needs no prompt. Not checked yet: whether the game-server tracker")
+        say("     works this way too; if it does not, the report says it was not measured.")
+        say("")
         for line in pm_setup.performance_log_users_howto().rstrip().splitlines():
-            say("     " + line)
+            say("     " + line if line else "")
     return 0
 
 

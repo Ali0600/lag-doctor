@@ -9,6 +9,12 @@ only a proxy for that rule, which is why can_trace() does not use it.
 Also here, because both must work across the elevation boundary: the user SID of this token (an
 over-the-shoulder elevation runs as another account), and a named mutex that an unelevated watch and an
 elevated capture child both see (a lock file would not do: the elevated child may have another profile).
+
+Group membership is copied into a token at sign-in, so an account that joins Performance Log Users gets the
+right only from its next sign-in on; trace_rights() tells that state apart by reading the group's members
+(NetLocalGroupGetMembers, which any local user may call) beside this token's own groups. It also reads the
+token's whole group list (TokenGroups), which shows a group that is present but not enabled: one that a new
+sign-in would not switch on either.
 """
 from __future__ import annotations
 
@@ -23,10 +29,19 @@ ADMINISTRATORS_SID = "S-1-5-32-544"
 PERFORMANCE_LOG_USERS_SID = "S-1-5-32-559"
 
 TOKEN_USER_CLASS = 1                     # TokenUser in TOKEN_INFORMATION_CLASS (SDK 10.0.19041 winnt.h)
+TOKEN_GROUPS_CLASS = 2                   # TokenGroups in TOKEN_INFORMATION_CLASS (SDK 10.0.19041 winnt.h)
 TOKEN_ELEVATION_CLASS = 20               # TokenElevation in TOKEN_INFORMATION_CLASS (SDK 10.0.19041 winnt.h)
+SE_GROUP_MANDATORY = 0x01                # winnt.h: SID_AND_ATTRIBUTES.Attributes bits of a token's group
+SE_GROUP_ENABLED_BY_DEFAULT = 0x02
+SE_GROUP_ENABLED = 0x04
+SE_GROUP_USE_FOR_DENY_ONLY = 0x10        # present, but only ever matched by deny entries (UAC's filtered admin)
 CURRENT_PROCESS_TOKEN = -4               # GetCurrentProcessToken(): pseudo-handle, never closed (processthreadsapi.h)
 ERROR_ACCESS_DENIED = 5                  # winerror.h
 ERROR_ALREADY_EXISTS = 183               # winerror.h
+ERROR_MORE_DATA = 234                    # winerror.h
+NERR_SUCCESS = 0                         # lmerr.h
+MAX_PREFERRED_LENGTH = 0xFFFFFFFF        # lmcons.h: (DWORD)-1, "allocate whatever the whole list needs"
+MAX_MEMBER_PAGES = 1000                  # NetLocalGroupGetMembers pages read before giving up (a bounded loop)
 
 SEE_MASK_NOCLOSEPROCESS = 0x00000040     # shellapi.h: hand back hProcess
 SEE_MASK_NOASYNC = 0x00000100            # finish the launch before returning (no message loop here)
@@ -49,6 +64,12 @@ class SID_AND_ATTRIBUTES(ctypes.Structure):
     _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", wintypes.DWORD)]
 
 
+class TOKEN_GROUPS(ctypes.Structure):
+    # winnt.h: GroupCount, then Groups[ANYSIZE_ARRAY]; the real array holds GroupCount entries, and the SIDs
+    # they point at follow it in the same buffer.
+    _fields_ = [("GroupCount", wintypes.DWORD), ("Groups", SID_AND_ATTRIBUTES * 1)]
+
+
 class SHELLEXECUTEINFOW(ctypes.Structure):
     # shellapi.h; the union of hIcon/hMonitor is one HANDLE.
     _fields_ = [("cbSize", wintypes.DWORD), ("fMask", wintypes.ULONG), ("hwnd", wintypes.HWND),
@@ -58,14 +79,22 @@ class SHELLEXECUTEINFOW(ctypes.Structure):
                 ("dwHotKey", wintypes.DWORD), ("hIconOrMonitor", wintypes.HANDLE), ("hProcess", wintypes.HANDLE)]
 
 
-# The research notes give no sizes for these two; these are the x64 sizes from the SDK headers above.
+class LOCALGROUP_MEMBERS_INFO_0(ctypes.Structure):
+    # lmaccess.h: one PSID per member.
+    _fields_ = [("lgrmi0_sid", ctypes.c_void_p)]
+
+
+# The research notes give no sizes for these; these are the x64 sizes from the SDK headers above.
 assert ctypes.sizeof(TOKEN_ELEVATION) == 4
 assert ctypes.sizeof(SID_AND_ATTRIBUTES) == 16
+assert ctypes.sizeof(TOKEN_GROUPS) == 24 and TOKEN_GROUPS.Groups.offset == 8     # the array is pointer-aligned
 assert ctypes.sizeof(SHELLEXECUTEINFOW) == 112
+assert ctypes.sizeof(LOCALGROUP_MEMBERS_INFO_0) == 8
 
 _advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+_netapi32 = ctypes.WinDLL("netapi32", use_last_error=True)
 
 _advapi32.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
                                           ctypes.POINTER(wintypes.DWORD)]
@@ -88,6 +117,17 @@ _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 _kernel32.CloseHandle.restype = wintypes.BOOL
 _shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
 _shell32.ShellExecuteExW.restype = wintypes.BOOL
+_advapi32.LookupAccountSidW.argtypes = [wintypes.LPCWSTR, ctypes.c_void_p, wintypes.LPWSTR,
+                                        ctypes.POINTER(wintypes.DWORD), wintypes.LPWSTR,
+                                        ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(ctypes.c_int)]
+_advapi32.LookupAccountSidW.restype = wintypes.BOOL
+_netapi32.NetLocalGroupGetMembers.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+                                              ctypes.POINTER(ctypes.c_void_p), wintypes.DWORD,
+                                              ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(wintypes.DWORD),
+                                              ctypes.POINTER(ctypes.c_size_t)]
+_netapi32.NetLocalGroupGetMembers.restype = wintypes.DWORD        # NET_API_STATUS
+_netapi32.NetApiBufferFree.argtypes = [ctypes.c_void_p]
+_netapi32.NetApiBufferFree.restype = wintypes.DWORD
 
 # Indirection so tests can replace the call; nothing in the test suite may raise a real UAC prompt.
 _ShellExecuteExW = _shell32.ShellExecuteExW
@@ -131,23 +171,141 @@ def can_trace() -> bool:
     return _is_member(ADMINISTRATORS_SID) or _is_member(PERFORMANCE_LOG_USERS_SID)
 
 
-def token_user_sid() -> str:
-    """The user SID of this process's token, e.g. "S-1-5-21-...-1001" (TokenUser)."""
+def _token_information(info_class: int) -> ctypes.Array:
+    """One variable-size TOKEN_INFORMATION_CLASS of this process's token, in a buffer of the size Windows asks."""
     token = wintypes.HANDLE(CURRENT_PROCESS_TOKEN)
     size = wintypes.DWORD()
-    _advapi32.GetTokenInformation(token, TOKEN_USER_CLASS, None, 0, ctypes.byref(size))   # asks for the size
+    _advapi32.GetTokenInformation(token, info_class, None, 0, ctypes.byref(size))   # asks for the size
     if not size.value:
         raise _winerror()
     buf = ctypes.create_string_buffer(size.value)
-    if not _advapi32.GetTokenInformation(token, TOKEN_USER_CLASS, buf, size, ctypes.byref(size)):
+    if not _advapi32.GetTokenInformation(token, info_class, buf, size, ctypes.byref(size)):
         raise _winerror()
+    return buf
+
+
+def token_user_sid() -> str:
+    """The user SID of this process's token, e.g. "S-1-5-21-...-1001" (TokenUser)."""
+    return _sid_text(SID_AND_ATTRIBUTES.from_buffer(_token_information(TOKEN_USER_CLASS)).Sid)
+
+
+def _token_groups() -> dict[str, int]:
+    """Every group in this process's token (TokenGroups): SID text -> its SE_GROUP_* attribute bits.
+
+    Unlike CheckTokenMembership, this also lists a group that is present but not enabled (deny-only). A SID
+    listed twice (never seen) keeps the bits of both entries. OSError when Windows cannot say."""
+    buf = _token_information(TOKEN_GROUPS_CLASS)
+    start = TOKEN_GROUPS.Groups.offset
+    count = wintypes.DWORD.from_buffer(buf).value if len(buf) >= start else None      # TOKEN_GROUPS.GroupCount
+    if count is None or start + count * ctypes.sizeof(SID_AND_ATTRIBUTES) > len(buf):
+        raise OSError(f"this token's group list ({count} groups) does not fit the {len(buf)} bytes Windows returned")
+    groups: dict[str, int] = {}
+    for entry in (SID_AND_ATTRIBUTES * count).from_buffer(buf, start):
+        sid = _sid_text(entry.Sid)
+        groups[sid] = groups.get(sid, 0) | entry.Attributes
+    return groups
+
+
+def _enabled(attributes: int) -> bool:
+    """A token group that counts for CheckTokenMembership: enabled, and not deny-only."""
+    return bool(attributes & SE_GROUP_ENABLED) and not attributes & SE_GROUP_USE_FOR_DENY_ONLY
+
+
+def _sid_text(psid: int | None) -> str:
     text = ctypes.c_void_p()
-    if not _advapi32.ConvertSidToStringSidW(SID_AND_ATTRIBUTES.from_buffer(buf).Sid, ctypes.byref(text)):
+    if not _advapi32.ConvertSidToStringSidW(psid, ctypes.byref(text)):
         raise _winerror()
     try:
         return ctypes.wstring_at(text.value)
     finally:
         _kernel32.LocalFree(text)
+
+
+def _account_name(psid: int) -> str:
+    """The account name of a SID on this PC (LookupAccountSidW), e.g. the local, translated group name."""
+    name_len, domain_len, use = wintypes.DWORD(0), wintypes.DWORD(0), ctypes.c_int()
+    _advapi32.LookupAccountSidW(None, psid, None, ctypes.byref(name_len), None, ctypes.byref(domain_len),
+                                ctypes.byref(use))                               # asks for the sizes
+    if not name_len.value:
+        raise _winerror()
+    name = ctypes.create_unicode_buffer(name_len.value)
+    domain = ctypes.create_unicode_buffer(max(domain_len.value, 1))
+    if not _advapi32.LookupAccountSidW(None, psid, name, ctypes.byref(name_len), domain, ctypes.byref(domain_len),
+                                       ctypes.byref(use)):
+        raise _winerror()
+    return name.value
+
+
+_NetLocalGroupGetMembers = _netapi32.NetLocalGroupGetMembers      # tests replace it to stage paging and errors,
+_NetApiBufferFree = _netapi32.NetApiBufferFree                    # and this, since a staged buffer is not Windows'
+
+
+def group_member_sids(group_sid: str) -> list[str]:
+    """The SIDs of the direct members of the local group with this SID, as text. The group's name is translated
+    on non-English Windows, so it is looked up from the SID first. Members that are themselves groups
+    (INTERACTIVE, a domain group) are listed as such, not expanded. OSError when Windows cannot say."""
+    psid = ctypes.c_void_p()
+    if not _advapi32.ConvertStringSidToSidW(group_sid, ctypes.byref(psid)):
+        raise _winerror()
+    try:
+        name = _account_name(psid.value)
+    finally:
+        _kernel32.LocalFree(psid)
+    members: list[str] = []
+    resume = ctypes.c_size_t(0)
+    for _page in range(MAX_MEMBER_PAGES):
+        buf = ctypes.c_void_p()
+        read, total = wintypes.DWORD(0), wintypes.DWORD(0)
+        status = _NetLocalGroupGetMembers(None, name, 0, ctypes.byref(buf), MAX_PREFERRED_LENGTH, ctypes.byref(read),
+                                          ctypes.byref(total), ctypes.byref(resume))
+        try:
+            if status not in (NERR_SUCCESS, ERROR_MORE_DATA):
+                raise ctypes.WinError(status)
+            if read.value:
+                entries = (LOCALGROUP_MEMBERS_INFO_0 * read.value).from_address(buf.value)
+                members.extend(_sid_text(e.lgrmi0_sid) for e in entries)
+        finally:
+            if buf.value:
+                _NetApiBufferFree(buf)
+        if status == NERR_SUCCESS:
+            return members
+        if not read.value:                       # "more data" yet nothing read: it would never finish
+            break
+    raise OSError(f"the members of {group_sid} did not finish listing")
+
+
+def _joined(group_sid: str) -> bool:
+    """Whether the local group lists this account, or a group enabled in this token, among its direct members.
+    A member group that is deny-only in this token does not count. OSError when either cannot be read."""
+    me = token_user_sid()
+    return any(sid == me or _is_member(sid) for sid in group_member_sids(group_sid))
+
+
+def trace_rights() -> str:
+    """Whether this account may start ETW sessions, for what setup says. Decided in this order:
+
+    'now'           this token may (an elevated administrator, or a member of Performance Log Users);
+    'filtered'      Performance Log Users is in this token but not enabled (deny-only, as UAC leaves
+                    Administrators in a normal window): the next sign-in gets the same kind of token, so
+                    signing out would not help, and only an elevated recording may trace;
+    'after_sign_in' the account, or a group enabled in this token, is a member of Performance Log Users, but
+                    this sign-in began before it joined: the token gets the group at the next sign-in;
+    'no'            neither;
+    'unknown'       Windows could not say (this token, its groups or the group's members could not be read).
+
+    A member reached only through a group that is deny-only in this token (Administrators, nested into
+    Performance Log Users) reads as 'no'.
+    """
+    try:
+        if can_trace():
+            return "now"
+        attributes = _token_groups().get(PERFORMANCE_LOG_USERS_SID)
+        if attributes is not None and not _enabled(attributes):
+            return "filtered"
+        joined = _joined(PERFORMANCE_LOG_USERS_SID)
+    except OSError:
+        return "unknown"
+    return "after_sign_in" if joined else "no"
 
 
 def hold_named_mutex(name: str) -> int | None:

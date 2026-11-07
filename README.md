@@ -105,6 +105,7 @@ uv sync --extra laglab                                         # adds pyglet, fo
 uv run pytest -q                                               # unit + live read-only tests
 uv run python scripts/redfirst.py tests/redfirst/<area>.json   # prove each guard's test can fail
 uv run python scripts/e2e.py                                   # LagLab scenarios, judged end to end (UAC prompt)
+uv run python scripts/etw_access.py                            # who may trace on this PC (read-only, UAC prompt)
 ```
 
 - **LagLab** produces one known cause per scenario (GPU-bound, CPU-bound, CPU hitch, disk hitch, wait hitch,
@@ -122,7 +123,7 @@ uv run python scripts/e2e.py                                   # LagLab scenario
 
 ## Experience Gained
 
-- **Windows systems programming from Python**: 15 ctypes modules over 16 Windows DLLs plus NVIDIA's NVML
+- **Windows systems programming from Python**: 15 ctypes modules over 17 Windows DLLs plus NVIDIA's NVML
   (real-time and private ETW sessions, PDH, NtQuerySystemInformation, DXGI/DXCore, ICMP, WLAN), with zero
   handles opened to the game, enforced by a syntax-tree scan of the code.
 - **Telemetry on one clock**: 5 collectors (per-frame timing, a 4 Hz system sampler, 1 Hz NVIDIA telemetry,
@@ -131,7 +132,7 @@ uv run python scripts/e2e.py                                   # LagLab scenario
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 2,439 tests, plus a mutation harness of 1,337 deliberate sabotages in 25
+- **Testing that proves itself**: 2,547 tests, plus a mutation harness of 1,406 deliberate sabotages in 26
   specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
@@ -146,3 +147,7 @@ uv run python scripts/e2e.py                                   # LagLab scenario
 
 Frame timing comes from [Intel PresentMon](https://github.com/GameTechDev/PresentMon) 2.6.0 (MIT licence),
 downloaded and hash-verified at setup. The tests replay PresentMon's own gold ETW captures.
+
+## Licence
+
+lag-doctor is released under the [MIT licence](LICENSE).

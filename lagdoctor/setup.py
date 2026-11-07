@@ -24,6 +24,7 @@ import ctypes
 import hashlib
 import msvcrt
 import os
+import re
 import ssl
 import urllib.request
 from contextlib import contextmanager
@@ -373,20 +374,49 @@ def _user_name() -> str:
     return f"{os.environ.get('USERDOMAIN', '.')}\\{os.environ.get('USERNAME', 'YOUR-USER-NAME')}"
 
 
-def performance_log_users_howto(user: str | None = None) -> str:
-    """Plain-English steps for joining Performance Log Users once. Text only: nothing is changed here."""
+SID_FORMAT = re.compile(r"S-1-\d{1,10}(?:-\d{1,10}){1,15}")      # a SID's text form, the only member text trusted
+# A name goes into the command only when it is printable ASCII: the console prints anything else as '?', and
+# PowerShell also ends a single-quoted string at the curly quotes U+2018 to U+201B, which doubling ' misses
+# (measured here on 2026-11-06 with Windows PowerShell 5.1's own parser; U+201C and ` do not end it).
+PLAIN_NAME = re.compile(r"[\x20-\x7e]+")
+NAME_PLACEHOLDER = "YOUR-ACCOUNT-NAME"
+
+
+def _user_sid() -> str | None:
+    from lagdoctor.winapi import elevation
+    try:
+        return elevation.token_user_sid()
+    except OSError:
+        return None
+
+
+def performance_log_users_howto(user: str | None = None, sid: str | None = None) -> str:
+    """Plain-English steps for joining Performance Log Users once. Text only: nothing is changed here.
+
+    The command names the account by its SID (this account's unless `sid` is given): it runs in an
+    administrator's window, which may belong to another account, and a SID names exactly one account. Only a
+    well-formed SID goes into the command; without one, the account's name does, quoted for PowerShell, when
+    it is printable ASCII (PLAIN_NAME); otherwise a placeholder does, with a line saying what to put there.
+    """
     who = user or _user_name()
-    quoted = "'" + who.replace("'", "''") + "'"            # a PowerShell single-quoted literal
+    sid = sid if sid is not None else _user_sid()
+    if sid and SID_FORMAT.fullmatch(sid):
+        member = f"'{sid}'"
+        whose = f"     ({sid} is your account, {who}, by its security ID.)\n"
+    elif PLAIN_NAME.fullmatch(who):
+        member = "'" + who.replace("'", "''") + "'"         # a PowerShell single-quoted literal
+        whose = ""
+    else:
+        member = f"'{NAME_PLACEHOLDER}'"
+        whose = (f"     (Put your account name in place of {NAME_PLACEHOLDER}, keeping the quotes. The command\n"
+                 "     whoami shows your account name.)\n")
     return (
-        "Frame timing needs the right to start an event trace. Instead of approving an administrator\n"
-        "prompt for every capture, you can add your account to the built-in \"Performance Log Users\"\n"
-        "group once. An administrator has to do it, and it takes effect after you sign in again:\n"
-        "\n"
         "  1. Open Windows PowerShell as administrator (Start, type PowerShell, choose Run as administrator).\n"
-        f"  2. Run:  Add-LocalGroupMember -SID S-1-5-32-559 -Member {quoted}\n"
+        f"  2. Run:  Add-LocalGroupMember -SID S-1-5-32-559 -Member {member}\n"
+        f"{whose}"
         "  3. Sign out of Windows and sign back in.\n"
         "\n"
-        f"To undo it later:  Remove-LocalGroupMember -SID S-1-5-32-559 -Member {quoted}\n"
+        f"To undo it later:  Remove-LocalGroupMember -SID S-1-5-32-559 -Member {member}\n"
         "\n"
         "Members of this group can record system-wide performance traces (activity of every process on\n"
         "this PC), so only do this on your own computer. lag-doctor never changes group membership itself.\n"

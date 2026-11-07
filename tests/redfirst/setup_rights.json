@@ -1,0 +1,636 @@
+[
+ {
+  "name": "the howto names the account by name although it has a SID",
+  "file": "lagdoctor/setup.py",
+  "old": "    if sid and SID_FORMAT.fullmatch(sid):\n        member = f\"'{sid}'\"",
+  "new": "    if sid and SID_FORMAT.fullmatch(sid):\n        member = \"'\" + who.replace(\"'\", \"''\") + \"'\"",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_the_howto_joins_the_account_by_its_sid_and_says_how_to_undo_it",
+   "tests/test_presentmon_setup.py::test_the_howto_names_this_account_by_its_sid"
+  ]
+ },
+ {
+  "name": "any text goes into the command as the SID",
+  "file": "lagdoctor/setup.py",
+  "old": "    if sid and SID_FORMAT.fullmatch(sid):",
+  "new": "    if sid:",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_only_a_well_formed_sid_goes_into_the_command"
+  ]
+ },
+ {
+  "name": "the reader is not told whose number it is",
+  "file": "lagdoctor/setup.py",
+  "old": "        whose = f\"     ({sid} is your account, {who}, by its security ID.)\\n\"",
+  "new": "        whose = \"\"",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_the_howto_joins_the_account_by_its_sid_and_says_how_to_undo_it"
+  ]
+ },
+ {
+  "name": "a failed SID lookup is not caught",
+  "file": "lagdoctor/setup.py",
+  "old": "        return elevation.token_user_sid()\n    except OSError:",
+  "new": "        return elevation.token_user_sid()\n    except ValueError:",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_without_this_accounts_sid_the_howto_names_the_account"
+  ]
+ },
+ {
+  "name": "an unreadable group reads as no",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    except OSError:\n        return \"unknown\"",
+  "new": "    except OSError:\n        return \"no\"",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_trace_rights_that_cannot_be_read_are_unknown_not_no"
+  ]
+ },
+ {
+  "name": "the members read are dropped",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "                members.extend(_sid_text(e.lgrmi0_sid) for e in entries)",
+  "new": "                pass",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_group_members_match_powershell_for_groups_that_have_members",
+   "tests/test_presentmon_elevation.py::test_members_that_are_groups_are_listed_not_expanded"
+  ]
+ },
+ {
+  "name": "a member list that never finishes is retried",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "        if not read.value:                       # \"more data\" yet nothing read: it would never finish\n            break",
+  "new": "        if False:\n            break",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_a_member_list_that_never_finishes_raises_instead_of_looping"
+  ]
+ },
+ {
+  "name": "setup does not tell a pending sign-out apart",
+  "file": "lagdoctor/cli.py",
+  "old": "    elif rights == \"after_sign_in\":",
+  "new": "    elif False:",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_setup_asks_only_for_a_sign_out_when_the_account_already_joined"
+  ]
+ },
+ {
+  "name": "setup promises the unmeasured tracker",
+  "file": "lagdoctor/cli.py",
+  "old": "        say(\"     After that, frame timing needs no prompt. Not checked yet: whether the game-server tracker\")",
+  "new": "        say(\"     After that, no prompts.\")",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_setup_explains_both_ways_and_what_is_not_checked_yet"
+  ]
+ },
+ {
+  "name": "the account itself is not looked for among the members",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    return any(sid == me or _is_member(sid) for sid in group_member_sids(group_sid))",
+  "new": "    return any(_is_member(sid) for sid in group_member_sids(group_sid))",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_trace_rights_tells_a_pending_sign_in_apart"
+  ]
+ },
+ {
+  "name": "groups this token has are not counted",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    return any(sid == me or _is_member(sid) for sid in group_member_sids(group_sid))",
+  "new": "    return any(sid == me for sid in group_member_sids(group_sid))",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_trace_rights_tells_a_pending_sign_in_apart",
+   "tests/test_presentmon_elevation.py::test_joined_counts_a_member_group_that_is_enabled_in_this_token"
+  ]
+ },
+ {
+  "name": "a token that may trace is not recognised first",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "        if can_trace():\n            return \"now\"",
+  "new": "        if False:\n            return \"now\"",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_trace_rights_tells_a_pending_sign_in_apart"
+  ]
+ },
+ {
+  "name": "a switched-off group is never told apart",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "        if attributes is not None and not _enabled(attributes):\n            return \"filtered\"",
+  "new": "        if False:\n            return \"filtered\"",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_trace_rights_tells_a_pending_sign_in_apart",
+   "tests/test_presentmon_elevation.py::test_a_switched_off_group_is_told_without_reading_the_member_list"
+  ]
+ },
+ {
+  "name": "an enabled group reads as switched off",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "        if attributes is not None and not _enabled(attributes):",
+  "new": "        if attributes is not None:",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_trace_rights_tells_a_pending_sign_in_apart"
+  ]
+ },
+ {
+  "name": "a deny-only group with an enabled bit counts as on",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    return bool(attributes & SE_GROUP_ENABLED) and not attributes & SE_GROUP_USE_FOR_DENY_ONLY",
+  "new": "    return bool(attributes & SE_GROUP_ENABLED)",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_trace_rights_tells_a_pending_sign_in_apart"
+  ]
+ },
+ {
+  "name": "the member list is read before the token's own groups",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "        attributes = _token_groups().get(PERFORMANCE_LOG_USERS_SID)\n        if attributes is not None and not _enabled(attributes):\n            return \"filtered\"\n        joined = _joined(PERFORMANCE_LOG_USERS_SID)",
+  "new": "        joined = _joined(PERFORMANCE_LOG_USERS_SID)\n        attributes = _token_groups().get(PERFORMANCE_LOG_USERS_SID)\n        if attributes is not None and not _enabled(attributes):\n            return \"filtered\"",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_a_switched_off_group_is_told_without_reading_the_member_list"
+  ]
+ },
+ {
+  "name": "a failing can_trace escapes as an error",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    try:\n        if can_trace():\n            return \"now\"\n        attributes = _token_groups()",
+  "new": "    if can_trace():\n        return \"now\"\n    try:\n        attributes = _token_groups()",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_trace_rights_that_cannot_be_read_are_unknown_not_no"
+  ]
+ },
+ {
+  "name": "setup does not tell a switched-off group apart",
+  "file": "lagdoctor/cli.py",
+  "old": "    elif rights == \"filtered\":",
+  "new": "    elif False:",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_setup_never_asks_for_a_sign_out_while_windows_keeps_the_group_switched_off"
+  ]
+ },
+ {
+  "name": "the token's groups are read from another class",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    buf = _token_information(TOKEN_GROUPS_CLASS)",
+  "new": "    buf = _token_information(TOKEN_USER_CLASS)",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_token_groups_match_whoami",
+   "tests/test_presentmon_elevation.py::test_token_groups_reads_every_entry_with_its_bits"
+  ]
+ },
+ {
+  "name": "a group count past the buffer is read anyway",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    if count is None or start + count * ctypes.sizeof(SID_AND_ATTRIBUTES) > len(buf):",
+  "new": "    if count is None:",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_a_group_count_the_buffer_cannot_hold_is_an_error_not_a_read_past_it"
+  ]
+ },
+ {
+  "name": "the last group is dropped",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    for entry in (SID_AND_ATTRIBUTES * count).from_buffer(buf, start):",
+  "new": "    for entry in (SID_AND_ATTRIBUTES * max(count - 1, 0)).from_buffer(buf, start):",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_token_groups_match_whoami",
+   "tests/test_presentmon_elevation.py::test_token_groups_reads_every_entry_with_its_bits"
+  ]
+ },
+ {
+  "name": "a deny-only bit is lost",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "        groups[sid] = groups.get(sid, 0) | entry.Attributes",
+  "new": "        groups[sid] = groups.get(sid, 0) | entry.Attributes & ~SE_GROUP_USE_FOR_DENY_ONLY",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_token_groups_match_whoami"
+  ]
+ },
+ {
+  "name": "a repeated SID loses the first entry's bits",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "        groups[sid] = groups.get(sid, 0) | entry.Attributes",
+  "new": "        groups[sid] = entry.Attributes",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_token_groups_reads_every_entry_with_its_bits"
+  ]
+ },
+ {
+  "name": "an error from the member list loses its code",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "            if status not in (NERR_SUCCESS, ERROR_MORE_DATA):\n                raise ctypes.WinError(status)",
+  "new": "            if False:\n                raise ctypes.WinError(status)",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_an_error_from_the_member_list_raises"
+  ]
+ },
+ {
+  "name": "more data is taken for an error",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "            if status not in (NERR_SUCCESS, ERROR_MORE_DATA):",
+  "new": "            if status != NERR_SUCCESS:",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_a_member_list_in_two_pages_is_read_whole_and_in_order"
+  ]
+ },
+ {
+  "name": "the resume point is not handed back",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    resume = ctypes.c_size_t(0)\n    for _page in range(MAX_MEMBER_PAGES):\n",
+  "new": "    for _page in range(MAX_MEMBER_PAGES):\n        resume = ctypes.c_size_t(0)\n",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_a_member_list_in_two_pages_is_read_whole_and_in_order"
+  ]
+ },
+ {
+  "name": "earlier pages are dropped",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "                members.extend(_sid_text(e.lgrmi0_sid) for e in entries)",
+  "new": "                members[:] = [_sid_text(e.lgrmi0_sid) for e in entries]",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_a_member_list_in_two_pages_is_read_whole_and_in_order"
+  ]
+ },
+ {
+  "name": "a page's buffer is never freed",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "                _NetApiBufferFree(buf)",
+  "new": "                pass",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_a_member_list_in_two_pages_is_read_whole_and_in_order",
+   "tests/test_presentmon_elevation.py::test_a_member_list_that_keeps_saying_more_stops_after_max_member_pages"
+  ]
+ },
+ {
+  "name": "the page cap is not kept",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    for _page in range(MAX_MEMBER_PAGES):",
+  "new": "    for _page in range(MAX_MEMBER_PAGES + 1):",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_a_member_list_that_keeps_saying_more_stops_after_max_member_pages"
+  ]
+ },
+ {
+  "name": "a curly quote or non-ASCII name goes into the command",
+  "file": "lagdoctor/setup.py",
+  "old": "PLAIN_NAME = re.compile(r\"[\\x20-\\x7e]+\")",
+  "new": "PLAIN_NAME = re.compile(r\".+\")",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_a_name_powershell_or_the_console_would_change_becomes_a_placeholder",
+   "tests/test_presentmon_setup.py::test_setup_prints_a_placeholder_for_a_name_the_console_cannot_show",
+   "tests/test_presentmon_setup.py::test_powershell_reads_every_printed_member_as_one_string"
+  ]
+ },
+ {
+  "name": "a control character goes into the command",
+  "file": "lagdoctor/setup.py",
+  "old": "PLAIN_NAME = re.compile(r\"[\\x20-\\x7e]+\")",
+  "new": "PLAIN_NAME = re.compile(r\"[\\x00-\\x7e]+\")",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_a_name_powershell_or_the_console_would_change_becomes_a_placeholder"
+  ]
+ },
+ {
+  "name": "DEL goes into the command",
+  "file": "lagdoctor/setup.py",
+  "old": "PLAIN_NAME = re.compile(r\"[\\x20-\\x7e]+\")",
+  "new": "PLAIN_NAME = re.compile(r\"[\\x20-\\x7f]+\")",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_a_name_powershell_or_the_console_would_change_becomes_a_placeholder"
+  ]
+ },
+ {
+  "name": "a name with a space becomes the placeholder",
+  "file": "lagdoctor/setup.py",
+  "old": "PLAIN_NAME = re.compile(r\"[\\x20-\\x7e]+\")",
+  "new": "PLAIN_NAME = re.compile(r\"[\\x21-\\x7e]+\")",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_the_howto_quotes_the_name_for_powershell"
+  ]
+ },
+ {
+  "name": "the reader is not told what goes in place of the placeholder",
+  "file": "lagdoctor/setup.py",
+  "old": "        whose = (f\"     (Put your account name in place of {NAME_PLACEHOLDER}, keeping the quotes. The command\\n\"\n                 \"     whoami shows your account name.)\\n\")",
+  "new": "        whose = \"\"",
+  "tests": [
+   "tests/test_presentmon_setup.py::test_a_name_powershell_or_the_console_would_change_becomes_a_placeholder",
+   "tests/test_presentmon_setup.py::test_setup_prints_a_placeholder_for_a_name_the_console_cannot_show"
+  ]
+ },
+ {
+  "name": "the check for you leaves out the group you would join",
+  "file": "scripts/etw_access.py",
+  "old": "    YOU: (None, (elevation.PERFORMANCE_LOG_USERS_SID,)),",
+  "new": "    YOU: (None, ()),",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_verdict_follows_windows_rules"
+  ]
+ },
+ {
+  "name": "groups are never added to a context",
+  "file": "scripts/etw_access.py",
+  "old": "        if not groups:\n            return base.value",
+  "new": "        if True:\n            return base.value",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_check_for_you_adds_the_group_whatever_this_account_already_holds",
+   "tests/test_etw_access_probe.py::test_the_local_service_model"
+  ]
+ },
+ {
+  "name": "the LocalService model is made for NetworkService",
+  "file": "scripts/etw_access.py",
+  "old": "    LOCAL_SERVICE: (\"S-1-5-19\", ",
+  "new": "    LOCAL_SERVICE: (\"S-1-5-20\", ",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_local_service_model"
+  ]
+ },
+ {
+  "name": "the LocalService model loses LOCAL",
+  "file": "scripts/etw_access.py",
+  "old": "\"S-1-5-32-545\", \"S-1-2-0\")),",
+  "new": "\"S-1-5-32-545\")),",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_local_service_model"
+  ]
+ },
+ {
+  "name": "the SYSTEM model is made for LocalService",
+  "file": "scripts/etw_access.py",
+  "old": "    SYSTEM: (\"S-1-5-18\", ",
+  "new": "    SYSTEM: (\"S-1-5-19\", ",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_system_model"
+  ]
+ },
+ {
+  "name": "a real-time session counts with only the right to start one",
+  "file": "scripts/etw_access.py",
+  "old": "REALTIME_SESSION = TRACELOG_CREATE_REALTIME | TRACELOG_ACCESS_REALTIME",
+  "new": "REALTIME_SESSION = TRACELOG_CREATE_REALTIME",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_a_real_time_session_needs_both_starting_and_reading_it"
+  ]
+ },
+ {
+  "name": "the verdict ignores what Windows answered",
+  "file": "scripts/etw_access.py",
+  "old": "        return error.value == ERROR_SUCCESS and (mask.value & desired) == desired",
+  "new": "        return True",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_verdict_follows_windows_rules",
+   "tests/test_etw_access_probe.py::test_the_check_for_you_without_the_group_agrees_with_access_check_on_this_token"
+  ]
+ },
+ {
+  "name": "an integrity label is judged as if it were not there",
+  "file": "scripts/etw_access.py",
+  "old": "        return \"it carries an integrity label, which this check does not weigh as Windows' trace check does\"",
+  "new": "        pass",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_a_descriptor_this_check_does_not_weigh_as_the_kernel_does_reads_as_unknown"
+  ]
+ },
+ {
+  "name": "a conditional entry is judged",
+  "file": "scripts/etw_access.py",
+  "old": "            return \"it has conditional entries, which this check does not weigh as Windows' trace check does\"",
+  "new": "            continue",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_a_descriptor_this_check_does_not_weigh_as_the_kernel_does_reads_as_unknown"
+  ]
+ },
+ {
+  "name": "a deny for an object type is judged",
+  "file": "scripts/etw_access.py",
+  "old": "            return \"it has entries for an object type, which this check does not weigh as Windows' trace check does\"",
+  "new": "            continue",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_a_descriptor_this_check_does_not_weigh_as_the_kernel_does_reads_as_unknown"
+  ]
+ },
+ {
+  "name": "a row that could not be read counts as allowed",
+  "file": "scripts/etw_access.py",
+  "old": "    if any(v is None for v in values):\n        return None\n",
+  "new": "",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_a_row_that_could_not_be_read_leaves_its_verdicts_open"
+  ]
+ },
+ {
+  "name": "an unreadable row hides a refusal",
+  "file": "scripts/etw_access.py",
+  "old": "    if any(v is False for v in values):\n        return False\n    if any(v is None for v in values):\n        return None",
+  "new": "    if any(v is None for v in values):\n        return None\n    if any(v is False for v in values):\n        return False",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_one_refusal_settles_a_verdict_an_unreadable_row_leaves_open"
+  ]
+ },
+ {
+  "name": "the game-server tracker does not need the session right",
+  "file": "scripts/etw_access.py",
+  "old": "TRACKER: _all([session, *enables(TRACKER)]),",
+  "new": "TRACKER: _all(enables(TRACKER)),",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_without_the_session_right_neither_recording_works"
+  ]
+ },
+ {
+  "name": "the default row shows the enable right instead of the session right",
+  "file": "scripts/etw_access.py",
+  "old": "            key = \"realtime_session\" if name == DEFAULT_ROW else \"enable\"",
+  "new": "            key = \"enable\"",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_without_the_session_right_neither_recording_works"
+  ]
+ },
+ {
+  "name": "Kernel-Process counts as a provider frame timing cannot do without",
+  "file": "scripts/etw_access.py",
+  "old": "    \"Microsoft-Windows-Kernel-Process\": (\"22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716\", MAY_BE_REFUSED),",
+  "new": "    \"Microsoft-Windows-Kernel-Process\": (\"22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716\", FRAME_TIMING),",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_summary_says_what_each_row_is_needed_for_and_who_gets_it"
+  ]
+ },
+ {
+  "name": "the note about process start and stop events is dropped",
+  "file": "scripts/etw_access.py",
+  "old": "    if got[FRAME_TIMING] and got[\"process events\"] is False:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_summary_says_what_each_row_is_needed_for_and_who_gets_it"
+  ]
+ },
+ {
+  "name": "Nvidia_PCL is marked unused although lag-doctor passes --track_pc_latency",
+  "file": "scripts/etw_access.py",
+  "old": "    \"Nvidia_PCL\": (\"0d216f06-82a6-4d49-bc4f-8f38ae56efab\", FRAME_TIMING),",
+  "new": "    \"Nvidia_PCL\": (\"0d216f06-82a6-4d49-bc4f-8f38ae56efab\", UNUSED),",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_needed_for_column_rests_on_the_flags_lag_doctor_starts_presentmon_with"
+  ]
+ },
+ {
+  "name": "an administrator window is not refused",
+  "file": "scripts/etw_access.py",
+  "old": "    if elevation.is_elevated():\n        print(\"This window runs as administrator.",
+  "new": "    if False:\n        print(\"This window runs as administrator.",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_an_administrator_window_is_refused_before_anything_is_read"
+  ]
+ },
+ {
+  "name": "an elevated copy that is not elevated reads anyway",
+  "file": "scripts/etw_access.py",
+  "old": "    if not elevation.is_elevated():\n        print(\"The elevated copy is not elevated; nothing was read.\")",
+  "new": "    if False:\n        print(\"The elevated copy is not elevated; nothing was read.\")",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_an_elevated_copy_that_is_not_elevated_reads_nothing_and_never_relaunches"
+  ]
+ },
+ {
+  "name": "a relative --out reaches the elevated copy as it was typed",
+  "file": "scripts/etw_access.py",
+  "old": "    out = out.resolve()                           # absolute: the elevated copy works in another folder",
+  "new": "    out = out",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_a_relative_out_reaches_the_elevated_copy_as_a_full_path"
+  ]
+ },
+ {
+  "name": "a missing folder is not refused for what it is",
+  "file": "scripts/etw_access.py",
+  "old": "    if not folder.is_dir():",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_a_folder_that_does_not_exist_is_refused_before_the_prompt"
+  ]
+ },
+ {
+  "name": "the create test is skipped",
+  "file": "scripts/etw_access.py",
+  "old": "        _prove_creatable(folder)",
+  "new": "        pass",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_a_folder_this_account_cannot_create_files_in_is_refused_before_the_prompt"
+  ]
+ },
+ {
+  "name": "the create test leaves its file behind",
+  "file": "scripts/etw_access.py",
+  "old": "    os.unlink(probe)",
+  "new": "    pass",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_create_test_leaves_nothing_behind_and_fails_where_it_cannot_create"
+  ]
+ },
+ {
+  "name": "a failed save exits like any failure",
+  "file": "scripts/etw_access.py",
+  "old": "        return CHILD_COULD_NOT_SAVE",
+  "new": "        return 1",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_an_elevated_copy_that_cannot_save_says_so_with_its_own_code",
+   "tests/test_etw_access_probe.py::test_an_existing_file_is_never_overwritten"
+  ]
+ },
+ {
+  "name": "the first window does not say the save failed",
+  "file": "scripts/etw_access.py",
+  "old": "    if code == CHILD_COULD_NOT_SAVE:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_first_window_says_when_the_elevated_copy_could_not_save"
+  ]
+ },
+ {
+  "name": "the base Authz context is not freed",
+  "file": "scripts/etw_access.py",
+  "old": "            _authz.AuthzFreeContext(base)          # the new context is a copy: the base one is no longer needed",
+  "new": "            pass",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_every_authz_handle_is_freed_also_when_making_one_fails"
+  ]
+ },
+ {
+  "name": "a failed Authz setup keeps what it made",
+  "file": "scripts/etw_access.py",
+  "old": "        except BaseException:\n            self.close()\n            raise",
+  "new": "        except BaseException:\n            raise",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_every_authz_handle_is_freed_also_when_making_one_fails"
+  ]
+ },
+ {
+  "name": "a list of own descriptors cut short reads as no",
+  "file": "scripts/etw_access.py",
+  "old": "        except OSError:                           # a list cut short would call a GUID's own descriptor \"no\"\n            return None",
+  "new": "        except OSError:                           # a list cut short would call a GUID's own descriptor \"no\"\n            return set()",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_a_list_of_own_descriptors_cut_short_is_unknown_not_a_no"
+  ]
+ },
+ {
+  "name": "an unknown own descriptor is saved as no",
+  "file": "scripts/etw_access.py",
+  "old": "        row: dict = {\"guid\": guid, \"own_descriptor\": None if own is None else guid in own}",
+  "new": "        row: dict = {\"guid\": guid, \"own_descriptor\": guid in (own or ())}",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_elevated_copy_saves_what_it_read_and_no_verdicts"
+  ]
+ },
+ {
+  "name": "the integrity label is not saved",
+  "file": "scripts/etw_access.py",
+  "old": "SDDL_PARTS = 0x1 | 0x2 | 0x4 | 0x10",
+  "new": "SDDL_PARTS = 0x1 | 0x2 | 0x4",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_saved_sddl_reads_back_with_any_integrity_label"
+  ]
+ },
+ {
+  "name": "the SID behind an object type is read at the wrong place",
+  "file": "scripts/etw_access.py",
+  "old": "        sid_at = (12 + (16 if present & ACE_OBJECT_TYPE_PRESENT else 0)",
+  "new": "        sid_at = (12 + (0 if present & ACE_OBJECT_TYPE_PRESENT else 0)",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_listing_keeps_the_flags_and_finds_the_sid_behind_object_types"
+  ]
+ },
+ {
+  "name": "the elevated copy overwrites an existing file",
+  "file": "scripts/etw_access.py",
+  "old": "    with open(out, \"x\", encoding=\"utf-8\") as f:",
+  "new": "    with open(out, \"w\", encoding=\"utf-8\") as f:",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_an_existing_file_is_never_overwritten"
+  ]
+ },
+ {
+  "name": "a taken file is not refused before the prompt",
+  "file": "scripts/etw_access.py",
+  "old": "    if os.path.lexists(out):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_an_existing_file_is_never_overwritten"
+  ]
+ },
+ {
+  "name": "the elevated copy's failure reason is dropped",
+  "file": "scripts/etw_access.py",
+  "old": "        if result and isinstance(result.get(\"failed\"), str):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_a_failure_in_the_elevated_copy_comes_back_with_its_reason"
+  ]
+ },
+ {
+  "name": "the cross-check is given a case the two checks answer differently",
+  "file": "tests/test_etw_access_probe.py",
+  "old": "    (DEFAULT, ENABLE), (DEFAULT, REALTIME), (SERVICES_ONLY, ENABLE),",
+  "new": "    (DEFAULT, ENABLE), (DEFAULT, REALTIME), (SERVICES_ONLY, ENABLE),\n    ('O:BAG:BAD:(XD;;0x80;;;WD;(@User.lagdoctor == \"x\"))(A;;0x80;;;WD)', ENABLE),",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_the_check_for_you_without_the_group_agrees_with_access_check_on_this_token"
+  ]
+ }
+]

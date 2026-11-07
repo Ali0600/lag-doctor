@@ -6,10 +6,9 @@
   present-mode state to get right. Revisit hook: a second `Collector` named `frames` in `capture/`.
 - **A live dashboard on a second monitor** (local web page fed by the session's `live()` snapshots).
   Revisit hook: `capture/session.py` already gathers `live()` once a second for the console line.
-- **An elevated helper that relays PresentMon rows to an unelevated tool** (no whole-capture elevation).
-  Revisit hook: `PresentMonSource` reads a line stream; a named-pipe reader could replace the child's stdout.
-  Its installed form, a pipe-triggered LocalService capture service from a signed MSI (one approval at install, none
-  per recording, no sign-out), with its constraints and the experiments that gate it: `docs/research/install-and-rights.md`.
+- **`uv tool install` from PyPI as a developer channel**: no admin at install, but every recording keeps its UAC
+  prompt and the elevated code stays user-writable. Revisit hook: the build backend and console entry point that
+  the installer stage adds to `pyproject.toml` (`docs/INSTALLER-PLAN.md`).
 - **The Wi-Fi background-scan fix** (`WlanSetInterface` background_scan_enabled / media_streaming_mode,
   session-scoped). The DACL allows it unelevated but it was never executed. Revisit hook: the
   `wifi_scan_spikes` rule, once a capture shows ping spikes lined up with `wifi_scans`.
@@ -18,14 +17,54 @@
 - **Compact frame storage for long captures** (`array('d')` columns, interned strings, or rows spilled to a
   temp file and streamed into the gzip writer). Today a frame costs about 0.7 KB of RAM and a 3-hour 240 FPS
   evening about 1.8 GiB. Revisit hook: `PresentMonSource`'s `SeriesBuilder` and `Capture.save`.
-- **Elevate only code the user cannot write** (a per-machine install under Program Files, or the elevated relay
-  above; a frozen exe draws antivirus false positives, see `docs/research/install-and-rights.md`). Today `--elevate`
-  runs the checkout's Python as administrator. Revisit hook: `cli.elevated_argv`.
 - **Ask before recording without frame timing** ("PresentMon is not ready: record everything else? [y/N]")
   instead of stopping. Today `watch` stops, and `--no-elevate` records without it. Revisit hook: the
   not-ready branch at the top of `cli.cmd_watch`.
 
 ---
+
+## 2026-11-06: How other people get frame timing without prompts
+
+Windows lets only administrators, members of Performance Log Users and the LocalSystem, LocalService and
+NetworkService accounts control ETW, so one administrator approval is the floor (`docs/research/install-and-rights.md`).
+This takes up two former backlog items: the elevated helper that relays PresentMon rows, and elevating only code
+the user cannot write.
+- **A signed per-machine MSI that installs a capture service (chosen)**: one UAC prompt at install (an
+  administrator's password on a standard account), then nothing per recording and no sign-out, and the user's own
+  account gains nothing. The service runs as LocalService with its privileges trimmed, starts when lag-doctor opens
+  its named pipe, and records only the requested process in the caller's own session. It is the most work and the
+  project's highest-stakes code, so it is built in stages behind experiments (`docs/INSTALLER-PLAN.md`).
+- **Per-recording UAC (`watch --elevate`) and the printed Performance Log Users steps**: kept, as the fallback for
+  git checkouts and PCs without the service.
+- **lag-doctor joins the account to Performance Log Users behind one UAC prompt (as Xbox Game Bar does)**: rejected.
+  It still needs a sign-out, it gives the account and everything it runs machine-wide trace rights, and the service
+  makes it unnecessary. lag-doctor still never changes group membership itself (2026-11-04).
+- **Intel's PresentMon service through its API**: rejected. Frame timing only, a resident LocalSystem service whose
+  pipe admits all authenticated users (v2.6.0), coupling to Intel's API, and a 170 MB install.
+- **An elevated scheduled task**: rejected. It is the UAC-bypass pattern Administrator protection is built to remove,
+  and it prompts nothing only on administrator accounts.
+- **MSIX**: rejected. Its AppData virtualization is the private-copy failure of 2026-11-05, and a packaged service
+  needs restricted capabilities.
+- **A frozen exe (PyInstaller, Nuitka)**: rejected. Antivirus false positives that those projects do not fix, and no
+  rights gained.
+- **`uv tool install` from PyPI**: deferred, worth trying as a developer channel (backlog).
+Revisit hook: the service's pipe protocol and the rights branch of `cli.cmd_watch` (`elevation_choice`).
+
+## 2026-11-06: MIT licence; code signing through SignPath Foundation
+
+Smart App Control blocks unknown unsigned code and allows no exception for a single app, so other people's PCs need
+a trusted signature on the installer and on every binary in it.
+- **SignPath Foundation (chosen)**: free for open-source projects; the signature names SignPath Foundation as the
+  publisher. Its conditions (signpath.org/terms): an OSI licence and no proprietary component; the project "already
+  released in the form that should be signed"; "a certain verifiable reputation" for downloadable programs; binaries
+  built verifiably by the repository's CI; multi-factor authentication for every team member; a code signing policy
+  and a privacy statement on the project's home page; manual approval of every signing request. So the repo goes
+  public and an unsigned release comes first.
+- **Microsoft Artifact Signing**: rejected. About US$10 a month, and open to individuals only in the US or Canada.
+- **An OV certificate**: rejected. About US$150 to 300 a year plus a hardware token.
+- **Licence: MIT (chosen)**, the same as PresentMon's and OSI-approved, as SignPath requires.
+Revisit hook: the signing step of the release workflow. If SignPath declines (its reputation condition), releases
+stay unsigned and the README says what SmartScreen and Smart App Control will show.
 
 ## 2026-11-05: Find a private copy of AppData by where a new file lands
 
@@ -171,7 +210,8 @@ PresentMon exits with code 6 ("access denied") unless the token is elevated or i
   the journal stay with the real user.
 - **Join Performance Log Users once (offered by `setup` as instructions)**: no prompt afterwards, but it is a
   security-group change the user makes themselves; untested for the kernel network provider.
-- **Elevated helper relaying rows**: deferred, worth trying (see Backlog).
+- **Elevated helper relaying rows**: deferred, worth trying; taken up on 2026-11-06 as the capture service
+  ("How other people get frame timing without prompts").
 - **Elevated `--output_file` run, analysed afterwards**: rejected. Same prompt as the chosen option, but no
   live status, and PresentMon block-buffers that file until exit.
 Both offered options stay available at run time, so the user picks per run.

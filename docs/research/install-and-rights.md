@@ -37,7 +37,11 @@ observed. `[unverified]` = could not be checked.
   `klist purge` only drops Kerberos tickets and does not help [research: Microsoft klist doc].
 - Performance Log Users is not on the list of groups UAC filters out of an administrator's standard token, so it
   should stay enabled unelevated [research: 2007 MSDN Magazine and TechNet Magazine UAC articles; inferred for
-  Windows 11; E2]. setup's "No prompts after that" rests on this and on E1.
+  Windows 11; E2]. setup's "After that, frame timing needs no prompt" rests on this and on E1 (no provider
+  PresentMon needs may refuse the group); for the game-server tracker setup says "Not checked yet". If this
+  premise fails, `elevation.trace_rights()` reads a group that is in the token but not enabled (deny-only) as
+  `filtered`, and setup says each recording asks for one UAC prompt instead of asking for a sign-out, which would
+  not help there [inferred: a new sign-in gets the same filtered token].
 - The group is broader than lag-doctor needs: a member controls every session under the default descriptor, and
   membership was the trigger condition in the proof of concept for CVE-2025-47985 (ETW, elevation to SYSTEM, published
   and patched 2025-07-08) [verified: STAR Labs advisory 25-47985]. Visual Studio's installer adds interactive users to
@@ -79,7 +83,11 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
   a client after authentication"; research: potato write-ups]. Trim it: with SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO
   the SCM removes every unlisted privilege when the process starts, and never removes SeChangeNotifyPrivilege
   [verified: SERVICE_REQUIRED_PRIVILEGES_INFOW]. ETW control is an ACL check, not a privilege, so the trim should
-  not stop it [research: etw-rights sweep; E3]. Add a restricted service SID.
+  not stop it [research: etw-rights sweep; E3]. Add a restricted service SID, but it is untested with ETW until E3
+  runs with it: it puts the service SID, World, the service logon SID and the write-restricted SID S-1-5-33 on the
+  token's restricted SID list [verified: SERVICE_SID_INFO], and the default descriptor above grants World only
+  RegisterGuids (`0x800`; `0x1800` adds JoinGroup) [verified: SDK `wmistr.h`], so whether trace control passes
+  that second list is unknown [inferred].
 - **Start on demand**: trigger type SERVICE_TRIGGER_TYPE_NETWORK_ENDPOINT with subtype NAMED_PIPE_EVENT_GUID
   `1F81D131-3FAC-4537-9E0C-7E7B0C2F4B55` starts the service "when a request is made to open the named pipe", and is
   "commonly used to start a service that has stopped itself after an idle time-out" [verified: SERVICE_TRIGGER].
@@ -115,9 +123,10 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
   the United States or Canada; organisations qualify in more countries [verified: Artifact Signing quickstart, updated
   2026-10-08]. Its price, about US$9.99 a month, is not on that page [research]. A Microsoft Q&A claim that individual
   onboarding is paused comes from an "AI answer" [verified as such; the claim itself unverified, not used]. SignPath
-  Foundation signs open-source projects free of charge, under its own name [verified: signpath.org]; its application
-  requirements (licence, public repo, an existing release) were not re-read [research]. An OV certificate costs about
-  US$150 to 300 a year and needs a hardware token or HSM [research: Microsoft code-signing options].
+  Foundation signs open-source projects free of charge, under its own name [verified: signpath.org]; its conditions
+  (an OSI licence, an existing release, a verifiable build and more) are listed under "Decided" below [verified:
+  signpath.org/terms]. An OV certificate costs about US$150 to 300 a year and needs a hardware token or HSM
+  [research: Microsoft code-signing options].
 - **Smart App Control** blocks "unknown, unsigned code" by default, and "there is currently no way to bypass" it for
   individual apps [verified: Smart App Control overview and support FAQ]. Recent updates let it be re-enabled without
   a clean install, except when optional diagnostic data is off [verified: support FAQ]. It is off on this PC
@@ -135,9 +144,9 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
 
 | Id | What | Gates |
 |---|---|---|
-| E1 | Elevated `EventAccessQuery` dump as SDDL: Kernel-Network `{7DD42A49-5329-4832-8DFD-43D979153A88}`, Kernel-Process `{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}`, PresentMon's other providers, the default GUID. Read-only, one UAC | setup's wording; the service account |
-| E2 | Join Performance Log Users, sign out and in: `whoami /groups` shows it enabled unelevated, and an unelevated `watch` records frames and network flows | option C's "no prompts" |
-| E3 | Throwaway LocalService service with privileges trimmed to SeChangeNotifyPrivilege (read back from the running token) on a VM: every PresentMon provider enables, rows arrive for the game's PID, Kernel-Network events arrive, the capture ends when the game exits | option A's account |
+| E1 | Elevated `EventAccessQuery` dump as SDDL: Kernel-Network `{7DD42A49-5329-4832-8DFD-43D979153A88}`, Kernel-Process `{22FB2CD6-0E7B-422B-A0C7-2FAD1FD0E716}`, PresentMon's other providers, the default GUID. Read-only, one UAC. Written as `scripts/etw_access.py`: the elevated copy reads the descriptors, and the unelevated window judges them with Windows' own access check (Authz) for "you, after joining Performance Log Users", a modelled LocalService token and a modelled SYSTEM token | setup's wording; the service account |
+| E2 | Join Performance Log Users, sign out and in: `whoami /groups` shows it enabled unelevated, and an unelevated `watch` records frames and network flows. If it shows deny-only instead, setup already handles it (`trace_rights()` answers `filtered`: one UAC prompt per recording, no sign-out asked for) | option C's "no prompts" |
+| E3 | Throwaway LocalService service with privileges trimmed to SeChangeNotifyPrivilege and a restricted service SID (both read back from the running token) on a VM: every PresentMon provider enables, rows arrive for the game's PID, Kernel-Network events arrive, the capture ends when the game exits | option A's account |
 | E3b | Named-pipe trigger on Windows 11 Home 25H2 and Windows 10 22H2: start, idle self-stop, restart, start latency | option A's start mode |
 | E3c | python.org's embeddable runtime as an SCM service from Program Files: `sys.path` holds only Program Files entries, every `.exe`/`.pyd`/`.dll` signed | Python vs a small native helper |
 | E5 | Administrator protection on: `--elevate`'s waitable child, the shared capture mutex, the capture landing in the user's folder | the public `--elevate` fallback |
@@ -147,17 +156,26 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
 
 ## 7. Before anything is public
 
-- The repo has no git remote and no LICENSE; MIT would match PresentMon's.
+- The repo has no git remote [verified: `git remote`, 2026-11-06]. It is MIT-licensed, as PresentMon is: `LICENSE`
+  and `license` in `pyproject.toml` were added on 2026-11-06.
 - 16 lines in 4 research notes carry this PC's user name in paths [verified: `git grep`]; scrub them, and the history,
   before publishing. Commits are authored with a GitHub noreply address [verified: `git log`].
 
-## Still open (decisions for the owner)
+## Decided (2026-11-06) and still open
 
-1. Which route to build: A (installer plus service), or stop at C/D/E.
-2. Keep "lag-doctor never changes group membership itself" (DECISIONS 2026-11-04)? Reversing it enables D.
-3. The licence and the signing route, which depends on the owner's country (Artifact Signing, SignPath, or OV).
-4. Whether the first public release waits for the service (the judge's pick: yes).
-5. Python on the embeddable runtime or a native helper for the service (after E3c and E6).
+Decided by the owner (DECISIONS 2026-11-06; the work is tracked in `docs/INSTALLER-PLAN.md`):
+1. Route A: the signed MSI with a capture service. D is rejected, so lag-doctor still never changes group
+   membership itself; C and E stay as fallbacks.
+2. MIT licence; signing through SignPath Foundation (free). Its conditions [verified: signpath.org/terms]: an OSI
+   licence and no proprietary component; "already released in the form that should be signed"; "a certain
+   verifiable reputation" for downloadable programs; a verifiable CI build; MFA for every team member; a code signing
+   policy and a privacy statement on the home page; manual approval of every signing request. Upstream open-source
+   binaries may ride unsigned inside a signed MSI (the terms warn that a later policy may require signed files
+   only). That the first public release is an unsigned preview already carrying the service was not a separate
+   decision by the owner: it follows from the "already released" condition and the plan's order
+   (`docs/INSTALLER-PLAN.md`, Stage 5).
+
+Still open: Python on the embeddable runtime or a small native helper for the service (after E3c and E6).
 
 ## Verification log (2026-11-06)
 
@@ -174,7 +192,10 @@ Each claim below was re-read from its source by a reader separate from the sweep
 | CVE-2025-47985 needed Performance Log Users | confirmed for the advisory's trigger path; impact SYSTEM; published 2025-07-08 | STAR Labs advisory |
 | Game Bar FPS: "Request access", Performance Log Users, restart | confirmed through a Microsoft Answers thread quoting the support page; the support page itself returned no text to the reader | answers.microsoft.com |
 | Artifact Signing: individuals in the US or Canada only | confirmed; no price on the page; the "onboarding paused" claim is an AI answer | Artifact Signing quickstart; Microsoft Q&A |
-| SignPath Foundation free for OSS, signs under its own name | confirmed; requirements page not read | signpath.org |
+| SignPath Foundation free for OSS, signs under its own name | confirmed; its conditions are the next row | signpath.org |
+| SignPath Foundation's conditions: an OSI licence and no proprietary component; "already released in the form that should be signed"; "a certain verifiable reputation" for downloadable programs; a verifiable build; MFA for every team member; a code signing policy and a privacy statement on the home page; manual approval of every signing request; unsigned upstream open-source binaries allowed in a signed package | confirmed, the quoted phrases verbatim; the terms add that a later policy may require signed files only, and that some constraints are not yet enforced automatically | signpath.org/terms (fetched 2026-11-06) |
+| A restricted service SID puts the service SID, World, the service logon SID and S-1-5-33 on the token's restricted SID list | confirmed; the page does not say how access checks use that list | SERVICE_SID_INFO (updated 2024-02-22) |
+| `0x800` = TRACELOG_REGISTER_GUIDS, `0x1000` = TRACELOG_JOIN_GROUP | confirmed | SDK 10.0.19041 `shared\wmistr.h`:467-468 |
 | Smart App Control: blocks unknown unsigned code, no per-app bypass, re-enable without clean install | confirmed (with the diagnostic-data caveat) | overview; support FAQ |
 | Administrator protection: off by default, KB5120998, on by default with the October 2026 update for security-baseline users, hidden profile-separated account, Windows Hello | confirmed | Administrator protection overview |
 | WiX v7 and the US$10,000 OSMF threshold | confirmed only in the page's summary; the EULA switch name not stated there | docs.firegiant.com/wix/whatsnew |

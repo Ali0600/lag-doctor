@@ -6,8 +6,13 @@ fake opener. Verification uses WinVerifyTrust with cached revocation data only.
 from __future__ import annotations
 
 import _winapi
+import argparse
+import base64
+import csv
 import ctypes
 import hashlib
+import io
+import json
 import os
 import shutil
 import struct
@@ -415,17 +420,187 @@ def test_fetch_refuses_plain_http_and_redirects_away_from_https(tmp_path, monkey
 
 # --------------------------------------------------------------- the ETW how-to ---
 
-def test_the_howto_joins_the_group_by_sid_and_says_how_to_undo_it():
-    text = setup.performance_log_users_howto("PC\\Sam")
-    assert "Add-LocalGroupMember -SID S-1-5-32-559 -Member 'PC\\Sam'" in text
-    assert "Remove-LocalGroupMember -SID S-1-5-32-559 -Member 'PC\\Sam'" in text
+SID = "S-1-5-21-1111111111-2222222222-3333333333-1001"
+
+
+def test_the_howto_joins_the_account_by_its_sid_and_says_how_to_undo_it():
+    text = setup.performance_log_users_howto("PC\\Sam", sid=SID)
+    assert f"Add-LocalGroupMember -SID S-1-5-32-559 -Member '{SID}'" in text
+    assert f"Remove-LocalGroupMember -SID S-1-5-32-559 -Member '{SID}'" in text
+    assert f"{SID} is your account, PC\\Sam" in text           # the reader sees whose number it is
     assert "sign back in" in text and "never changes group membership" in text
 
 
-def test_the_howto_quotes_the_name_for_powershell():
-    assert "-Member 'PC\\O''Brien'" in setup.performance_log_users_howto("PC\\O'Brien")
+@pytest.mark.parametrize("bad", ["", "1001", "S-1-5", "S-1-5-21-1'; Remove-Item C:\\x", "S-1-5-21-1\n-1001"])
+def test_only_a_well_formed_sid_goes_into_the_command(bad):
+    text = setup.performance_log_users_howto("PC\\Sam", sid=bad)
+    assert "Add-LocalGroupMember -SID S-1-5-32-559 -Member 'PC\\Sam'" in text
+    assert "Remove-Item" not in text and "security ID" not in text
 
 
-def test_the_howto_names_this_account():
-    me = subprocess.run(["whoami"], capture_output=True, text=True, timeout=30).stdout.strip()
-    assert me and f"-Member '{me}'".lower() in setup.performance_log_users_howto().lower()
+def test_without_this_accounts_sid_the_howto_names_the_account(monkeypatch):
+    from lagdoctor.winapi import elevation
+
+    def refuse():
+        raise PermissionError(5, "Access is denied")
+    monkeypatch.setattr(elevation, "token_user_sid", refuse)
+    assert "-Member 'PC\\Sam'" in setup.performance_log_users_howto("PC\\Sam")
+
+
+@pytest.mark.parametrize("name,quoted", [("PC\\O'Brien", "'PC\\O''Brien'"),       # ' doubled, as PowerShell reads it
+                                         ("PC\\Ann Lee", "'PC\\Ann Lee'"),        # the ends of printable ASCII stay
+                                         ("PC\\a~b", "'PC\\a~b'")])
+def test_the_howto_quotes_the_name_for_powershell(name, quoted):
+    text = setup.performance_log_users_howto(name, sid="")
+    assert f"Add-LocalGroupMember -SID S-1-5-32-559 -Member {quoted}" in text
+    assert f"Remove-LocalGroupMember -SID S-1-5-32-559 -Member {quoted}" in text
+    assert setup.NAME_PLACEHOLDER not in text
+
+
+@pytest.mark.parametrize("name", ["PC\\O‘Brien", "PC\\O’Brien", "PC\\O‚Brien", "PC\\O‛Brien",
+                                  "PC\\Zoë", "PC\\tab\there", "PC\\esc\x1b[2J", "PC\\del\x7f"])
+def test_a_name_powershell_or_the_console_would_change_becomes_a_placeholder(name):
+    # PowerShell ends a single-quoted string at the curly quotes too, and the console prints non-ASCII as '?'.
+    text = setup.performance_log_users_howto(name, sid="")
+    assert "Add-LocalGroupMember -SID S-1-5-32-559 -Member 'YOUR-ACCOUNT-NAME'" in text
+    assert "Remove-LocalGroupMember -SID S-1-5-32-559 -Member 'YOUR-ACCOUNT-NAME'" in text
+    assert "in place of YOUR-ACCOUNT-NAME" in text and "whoami shows your account name" in text
+    assert name.split("\\")[1] not in text and text.isascii()
+
+
+def test_the_howto_names_this_account_by_its_sid():
+    # Live: whoami reads the same token's user, independently.
+    out = subprocess.run(["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, text=True, timeout=30).stdout
+    name, sid = next(csv.reader(io.StringIO(out)))
+    text = setup.performance_log_users_howto()
+    assert sid.startswith("S-1-") and f"-Member '{sid}'" in text
+    assert name.lower() in text.lower()
+
+
+POWERSHELL = shutil.which("powershell.exe")
+
+# Reads each command with PowerShell's own parser; prints, per command, its parse errors, how many commands it
+# holds and its elements: "-Name" for a parameter, "<quoting>:<base64 of the UTF-8 value>" for a string.
+PARSE_COMMANDS = r"""
+$ErrorActionPreference = 'Stop'
+$texts = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('@@TEXTS@@')) | ConvertFrom-Json
+$results = foreach ($text in $texts) {
+  $tokens = $null; $errors = $null
+  $ast = [System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$tokens, [ref]$errors)
+  $commands = @($ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.CommandAst] }, $true))
+  $elements = @()
+  if ($commands.Count -eq 1) { $elements = @($commands[0].CommandElements) }
+  $described = @(foreach ($e in $elements) {
+    if ($e -is [System.Management.Automation.Language.CommandParameterAst]) { '-' + $e.ParameterName }
+    elseif ($e -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+      [string]$e.StringConstantType + ':' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($e.Value)) }
+    else { $e.GetType().Name }
+  })
+  [pscustomobject]@{ errors = $errors.Count; commands = $commands.Count; elements = $described }
+}
+ConvertTo-Json -InputObject @($results) -Depth 3 -Compress
+"""
+
+
+def powershell_parse(texts: list[str]) -> list[tuple[int, int, list[str]]]:
+    """(parse errors, commands, elements) for each text, as PowerShell 5.1's parser reads it."""
+    payload = base64.b64encode(json.dumps(texts).encode("utf-8")).decode("ascii")
+    script = PARSE_COMMANDS.replace("@@TEXTS@@", payload)
+    ps = subprocess.run([POWERSHELL, "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                         base64.b64encode(script.encode("utf-16-le")).decode("ascii")],
+                        capture_output=True, text=True, timeout=120)
+    assert ps.returncode == 0, ps.stderr[-2000:]
+    results = json.loads(ps.stdout)
+    assert len(results) == len(texts), ps.stdout
+    decoded = []
+    for r in results:
+        elements = []
+        for e in r["elements"]:
+            kind, _, value = e.partition(":")
+            elements.append(e if e.startswith("-") or not value else
+                            f"{kind}:{base64.b64decode(value).decode('utf-8')}")
+        decoded.append((r["errors"], r["commands"], elements))
+    return decoded
+
+
+def one_string_member(verb: str, member: str) -> tuple[int, int, list[str]]:
+    return 0, 1, [f"BareWord:{verb}", "-SID", "BareWord:S-1-5-32-559", "-Member", f"SingleQuoted:{member}"]
+
+
+@pytest.mark.skipif(POWERSHELL is None, reason="powershell.exe is not on this PC")
+def test_powershell_reads_every_printed_member_as_one_string():
+    # Live: PowerShell's own parser reads the printed commands. The last texts check the instrument: a curly
+    # quote inside the quotes, as the howto printed such a name before, must not read as one string.
+    names = {"PC\\O'Brien": "PC\\O'Brien", "PC\\a b$c`d\"e;f|g(h)": "PC\\a b$c`d\"e;f|g(h)",
+             "PC\\O’Brien": setup.NAME_PLACEHOLDER}
+    howtos = [(setup.performance_log_users_howto("PC\\Sam", sid=SID), SID)]
+    howtos += [(setup.performance_log_users_howto(name, sid=""), member) for name, member in names.items()]
+    texts, expect = [], []
+    for text, member in howtos:
+        for verb in ("Add-LocalGroupMember", "Remove-LocalGroupMember"):
+            lines = [line[line.index(verb):] for line in text.splitlines() if verb in line]
+            assert len(lines) == 1, text
+            texts.append(lines[0])
+            expect.append(one_string_member(verb, member))
+    curly = [f"PC\\O{q}Brien" for q in "‘’‚‛"]
+    parsed = powershell_parse(texts + [f"Add-LocalGroupMember -SID S-1-5-32-559 -Member '{c}'" for c in curly])
+    assert parsed[:len(texts)] == expect
+    for name, (errors, _, elements) in zip(curly, parsed[len(texts):]):
+        assert errors > 0 and f"SingleQuoted:{name}" not in elements, (name, elements)   # the string ended early
+
+
+# ---------------------------------------------------------------- what setup prints ---
+
+@pytest.fixture
+def setup_output(monkeypatch, tmp_path, capsys):
+    """cmd_setup with a verified PresentMon, for a given trace_rights() answer; returns what it printed."""
+    from lagdoctor import cli
+    from lagdoctor.winapi import elevation
+    exe = tmp_path / setup.EXE_NAME
+    monkeypatch.setattr(setup, "ensure_presentmon", lambda allow_download: exe)
+    monkeypatch.setattr(setup, "verify", lambda path: {"signer": "Intel Corporation"})
+    monkeypatch.setattr(setup, "_user_sid", lambda: SID)
+
+    def run(rights: str) -> str:
+        monkeypatch.setattr(elevation, "trace_rights", lambda: rights)
+        assert cli.cmd_setup(argparse.Namespace(download=False)) == 0
+        return capsys.readouterr().out
+    return run
+
+
+def test_setup_says_ready_when_this_token_may_trace(setup_output):
+    out = setup_output("now")
+    assert "Frame timing: ready" in out and "Two ways" not in out and "Add-LocalGroupMember" not in out
+
+
+def test_setup_asks_only_for_a_sign_out_when_the_account_already_joined(setup_output):
+    out = setup_output("after_sign_in")
+    assert "in the Performance Log Users group, but this sign-in began before it" in out
+    assert "Sign out of Windows and back in once" in out
+    assert "Two ways" not in out and "Add-LocalGroupMember" not in out
+
+
+def test_setup_never_asks_for_a_sign_out_while_windows_keeps_the_group_switched_off(setup_output):
+    out = setup_output("filtered")
+    assert "in the Performance Log Users group, but Windows keeps that group" in out
+    assert "switched off in normal windows here, so `lagdoctor watch` asks for one UAC prompt each recording" in out
+    assert "Sign out" not in out and "sign-in began before" not in out
+    assert "Two ways" not in out and "Add-LocalGroupMember" not in out
+
+
+def test_setup_prints_a_placeholder_for_a_name_the_console_cannot_show(setup_output, monkeypatch):
+    monkeypatch.setattr(setup, "_user_sid", lambda: None)
+    monkeypatch.setattr(setup, "_user_name", lambda: "PC\\Zoë")      # say() would print it as "PC\Zo?"
+    out = setup_output("no")
+    assert "Add-LocalGroupMember -SID S-1-5-32-559 -Member 'YOUR-ACCOUNT-NAME'" in out
+    assert "in place of YOUR-ACCOUNT-NAME" in out and "Zo?" not in out
+
+
+@pytest.mark.parametrize("rights", ["no", "unknown"])
+def test_setup_explains_both_ways_and_what_is_not_checked_yet(setup_output, rights):
+    out = setup_output(rights)
+    assert "Two ways" in out and "one UAC prompt each recording" in out
+    assert f"Add-LocalGroupMember -SID S-1-5-32-559 -Member '{SID}'" in out
+    # The group's reach over the game-server tracker's provider is unmeasured (docs/research/install-and-rights.md, E1).
+    assert "Not checked yet: whether the game-server tracker" in out
+    assert "sign-in began before" not in out

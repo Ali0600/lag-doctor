@@ -3,6 +3,8 @@ name = "lag-doctor"
 version = "0.1.0"
 description = "Finds out why a PC game is lagging, and fixes what can be fixed, without touching the game process."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "psutil>=7.0",
