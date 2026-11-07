@@ -363,11 +363,10 @@ def _pc(cap: Capture) -> str:
                                 f"(max {_fmt(dsp.get('max_hz'))} Hz)"))
     pw = _dict(inv.get("power"))
     if pw:
-        mode = str(pw.get("slider") or "?").replace("_", " ")
         on_battery = pw.get("on_battery")
         battery = ("on battery" if on_battery is True else "plugged in" if on_battery is False
                    else "power source unknown")
-        rows.append(("Power", f"plan {pw.get('scheme_name') or '?'}; power mode {mode}; {battery}"))
+        rows.append(("Power", f"plan {pw.get('scheme_name') or '?'}; {labels.power_mode_text(pw)}; {battery}"))
     st = _dict(inv.get("settings"))
     if st:
         rows.append(("Settings", f"Game Mode {_yes_no(st.get('game_mode'))}; background recording "

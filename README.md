@@ -129,9 +129,9 @@ uv run python scripts/etw_access.py                            # who may trace o
 - PresentMon's parser is tested against its own gold ETW captures replayed through the real exe, and the
   ETW consumer against private in-process sessions, so neither needs admin rights in the test suite.
 - **CI** (`.github/workflows/ci.yml`) runs the suite on GitHub's Windows Server 2025 runners for Python 3.13 and
-  3.11. A runner has no GPU, no NVIDIA driver, no thermal sensors and no ping replies, and uses a High performance
-  plan: the workflow declares that in `LAGDOCTOR_ABSENT`, and the tests marked as needing those skip there with the
-  reason. Tests that need PresentMon's download skip through their own fixtures. On a PC without an NVIDIA GPU, set
+  3.11. A runner has no GPU, no NVIDIA driver, no thermal sensors and no ping replies: the workflow declares that in
+  `LAGDOCTOR_ABSENT`, and the tests marked as needing those skip there with the reason. Its High performance plan
+  needs no declaring: the power tests hold on any plan. Tests that need PresentMon's download skip through their own fixtures. On a PC without an NVIDIA GPU, set
   `$env:LAGDOCTOR_ABSENT = "nvidia"` before running the tests, or the NVIDIA ones fail.
 
 ## Experience Gained

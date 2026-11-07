@@ -989,6 +989,32 @@ def test_power_plan_fine_is_cleared_and_unread_is_unchecked():
     assert isinstance(run("power_plan", make(inventory={"power": {}})), rules.Unchecked)
 
 
+HIGH_PERFORMANCE = dict(POWER, scheme_name="High performance", scheme_guid="8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c",
+                        personality="high_performance", effective_mode="high_performance")
+BALANCED_PLAN = dict(POWER, scheme_name="Balanced", scheme_guid="381b4222-f694-41f0-9685-ff5bb260df2e",
+                     personality="balanced")
+
+
+def test_power_plan_never_cites_a_power_mode_on_a_plan_without_one():
+    # The capture holds a slider position, but a High performance type plan has no slider: it is not the PC's mode.
+    res = run("power_plan", make(inventory={"power": dict(HIGH_PERFORMANCE, slider="best_efficiency")}))
+    assert isinstance(res, rules.Cleared) and "power mode" not in res.text.lower()
+    res = run("power_plan", make(inventory={"power": dict(BALANCED_PLAN, slider="best_performance")}))
+    assert isinstance(res, rules.Cleared) and "power mode best performance" in res.text
+
+
+def test_power_plan_never_advises_the_power_mode_on_a_plan_without_one():
+    saver = dict(HIGH_PERFORMANCE, slider=None, saver=True, effective_mode="battery_saver")
+    res = run("power_plan", make(inventory={"power": saver}))
+    assert is_finding(res) and "battery saver" in res.evidence[0].text
+    titles = [f.title for f in res.fixes]
+    assert "Turn off battery saver while gaming" in titles and "Set the power mode to Best performance" not in titles
+    # The same capture on a Balanced type plan, and saved before the type was read: there the slider can be set
+    for kind in ("balanced", None):
+        res = run("power_plan", make(inventory={"power": dict(saver, personality=kind)}))
+        assert "Set the power mode to Best performance" in [f.title for f in res.fixes], kind
+
+
 # ---------------------------------------------------------------------------- refresh rate ---
 
 @pytest.mark.parametrize("hz, kind", [(142.9, Finding), (143.0, rules.Cleared)])

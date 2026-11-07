@@ -140,6 +140,11 @@ SOURCES = {
     "network": "the ping and Wi-Fi monitor", "net_flows": "the game's own network traffic (ETW)",
 }
 
+# The power-mode slider's positions (inventory power.slider) and the plan types (power.personality) that have no
+# slider: Windows shows it only on Balanced and plans derived from it (winapi/power.py).
+POWER_MODES = ("best_efficiency", "balanced", "best_performance")
+PLAN_TYPES_WITHOUT_POWER_MODE = ("high_performance", "power_saver")
+
 
 def severity_text(kind: str, severity: float, detail: dict | None = None) -> str:
     """An event's severity in words. A pacing event flagged by its animation error alone (events.py's
@@ -215,6 +220,34 @@ def topic_text(cause: str) -> str:
 
 def source_text(source: str) -> str:
     return SOURCES.get(source, source.replace("_", " "))
+
+
+def plan_has_power_mode(power: Any) -> bool | None:
+    """Whether a capture's active plan has the power-mode slider: True for a Balanced type, False for a High
+    performance or Power saver type, None when the type was not read (as in captures saved before it was)."""
+    kind = power.get("personality") if isinstance(power, dict) else None
+    if kind == "balanced":
+        return True
+    if kind in PLAN_TYPES_WITHOUT_POWER_MODE:
+        return False
+    return None
+
+
+def power_mode(power: Any) -> str | None:
+    """The slider position a capture holds ("best_efficiency", "balanced" or "best_performance"); None when it was
+    not read, and on a plan type without the slider, whatever position the capture holds."""
+    if not isinstance(power, dict) or plan_has_power_mode(power) is False:
+        return None
+    mode = power.get("slider")
+    return mode if mode in POWER_MODES else None
+
+
+def power_mode_text(power: Any) -> str:
+    """The power mode in plain words, for the PC details."""
+    if plan_has_power_mode(power) is False:
+        return "no power mode on this plan"
+    mode = power_mode(power)
+    return f"power mode {mode.replace('_', ' ')}" if mode else "power mode ?"
 
 
 def not_measured(sources: Any, measured: Any) -> list[tuple[str, str]]:

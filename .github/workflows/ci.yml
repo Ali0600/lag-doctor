@@ -12,9 +12,10 @@ permissions:
   contents: read
 
 env:
-  # Measured on the first runs (2026-11-07): no GPU, no NVIDIA driver, no thermal sensors, no ping replies, and a
-  # High performance plan. The account is an administrator with UAC off; tests/test_cli.py models an unelevated owner.
-  LAGDOCTOR_ABSENT: internet_icmp,gpu,thermal_zone,power_slider,nvidia
+  # Measured on the first runs (2026-11-07): no GPU, no NVIDIA driver, no thermal sensors and no ping replies. The
+  # runner's High performance plan has no power-mode slider; the power tests hold on it, so it is not declared. The
+  # account is an administrator with UAC off; tests/test_cli.py models an unelevated owner.
+  LAGDOCTOR_ABSENT: internet_icmp,gpu,thermal_zone,nvidia
   # Timing-sensitive under full-suite load (CLAUDE.md): it runs on its own after the rest.
   ALONE: tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap
 
