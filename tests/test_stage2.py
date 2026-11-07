@@ -68,6 +68,36 @@ def test_a_capability_sid_in_the_default_descriptor_is_masked():
     assert drive.masked(drive.LAPTOP_OWN) == drive.LAPTOP_OWN
 
 
+def test_the_signature_verdict_decides_by_winverifytrust_and_reports_the_cross_check():
+    rows = [{"name": "python.exe", "winverifytrust": "0x00000000", "signer_cn": "Python Software Foundation",
+             "ps_status": "Valid"},
+            {"name": "vcruntime140.dll", "winverifytrust": "0x00000000", "signer_cn": "Microsoft", "ps_status": "Valid"},
+            {"name": "mystery.pyd", "winverifytrust": "0x800B0100", "signer_cn": None, "ps_status": "NotSigned"},
+            {"name": "python.cat", "winverifytrust": "0x00000000", "signer_cn": "Python Software Foundation",
+             "ps_status": None}]
+    v = drive.signature_verdict(rows, {"parsed": 3})
+    assert v["binaries"] == 3 and v["unsigned"] == ["mystery.pyd"]
+    assert v["signers"] == ["Microsoft", "Python Software Foundation"]
+    assert v["cross_check"] == "PowerShell agrees on every binary"
+    rows[0]["ps_status"] = "NotSigned"
+    assert drive.signature_verdict(rows, {"parsed": 3})["cross_check"] == "PowerShell disagrees on ['python.exe']"
+    # A reading PowerShell could not give is said, never counted as unsigned (the first run did that).
+    v = drive.signature_verdict(rows, {"parsed": 0, "parse_error": "ValueError: no JSON"})
+    assert v["unsigned"] == ["mystery.pyd"] and v["cross_check"].startswith("PowerShell's reading could not be read")
+
+
+def test_presentmon_rows_are_tallied_per_process():
+    from lagdoctor.capture import presentmon
+    header = "Application,ProcessID,SwapChainAddress,PresentRuntime,SyncInterval,PresentFlags,AllowsTearing,PresentMode,FrameType,TimeInQPC,MsBetweenPresents,MsUntilDisplayed\n"
+    row = "{app},{pid},0x1A2B,DXGI,1,0,0,Composed: Flip,Application,{q},16.7,NA\n"
+    text = header + "".join(row.format(app=a, pid=p, q=100 + i) for i, (a, p) in
+                            enumerate([("game.exe", 7), ("dwm.exe", 3), ("game.exe", 7), ("game.exe", 7)]))
+    rows = list(presentmon.parse([text.encode("latin-1")]))
+    assert service_host.tally(rows) == {"7": {"rows": 3, "application": "game.exe"},
+                                        "3": {"rows": 1, "application": "dwm.exe"}}
+    assert service_host.tally([]) == {}
+
+
 def test_e3_judges_refusals_and_disagreements_from_the_service_record():
     rec = {"result": {
         "token": {"user": {"sid": "S-1-5-19"}, "privileges": [{"name": "SeChangeNotifyPrivilege"}],
@@ -75,6 +105,9 @@ def test_e3_judges_refusals_and_disagreements_from_the_service_record():
         "providers": {"A": {"enabled": True}, "B": {"enabled": False, "error": "EnableTraceEx2: Access is denied."},
                       "C": {"enabled": False, "error": "StartTraceW: Access is denied."}},
         "authz": {"A": {"enable": True}, "B": {"enable": True}, "C": {"enable": False}},
+        "game_pid": 42,
+        "all_presents": {"exit_code": 0, "rows": 5, "rows_per_pid": {"42": {"rows": 4, "application": "<unknown>"},
+                                                                       "3": {"rows": 1, "application": "dwm.exe"}}},
         "capture": {"ended_by_itself": True, "ended_qpc_s": 110.0,
                     "frames": {"status": {"state": "ok"}, "presentmon": {"rows": 7, "exit_code": 0, "stop_path": "exited"}},
                     "net_flows": {"status": {"state": "ok"}, "health": {"events": 3, "game_events": 2,
@@ -89,6 +122,7 @@ def test_e3_judges_refusals_and_disagreements_from_the_service_record():
     assert v["ended_s_after_game_exit"] == 10.0
     assert v["leftover_sessions"] == ["lag-doctor-net"]
     assert v["frame_rows"] == 7 and v["tracker_events"] == 3 and v["tracker_selftest"] is True
+    assert v["all_presents"]["rows"] == 5 and v["all_presents"]["pids"] == 2 and v["all_presents"]["game_rows"] == 4
 
 
 # ------------------------------------------------------------------------------- live, read-only ---

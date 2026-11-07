@@ -26,6 +26,7 @@ import ctypes  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
 import statistics  # noqa: E402
+import subprocess  # noqa: E402
 import threading  # noqa: E402
 import traceback  # noqa: E402
 from ctypes import wintypes  # noqa: E402
@@ -140,7 +141,39 @@ def authz_with_own_token(descriptors: Path) -> dict:
     return rows
 
 
-def capture(game_pid: int, seconds: float, stop: threading.Event) -> dict:
+def all_presents(seconds: float, exe: Path | None = None, session: str = "lagdoctor-e3-all") -> dict:
+    """PresentMon on every process for `seconds` (it stops itself): how many rows each PID produced, the header
+    and the first rows. Tells "no presents visible to this token at all" from "none for the game's PID"."""
+    from lagdoctor import setup
+    from lagdoctor.capture import presentmon
+    argv = [str(exe or INSTALL / setup.EXE_NAME), "--timed", str(int(seconds)), "--terminate_after_timed",
+            *presentmon.FLAGS, "--session_name", session, "--stop_existing_session"]
+    proc = presentmon.spawn(argv, console=False)
+    try:
+        out, err = proc.communicate(timeout=seconds + 30)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        out, err = proc.communicate()
+    parser = presentmon.CsvParser()
+    rows = list(presentmon.parse([out], parser))
+    return {"exit_code": proc.returncode, "stdout_bytes": len(out), "headers": parser.headers,
+            "rows": len(rows), "malformed": parser.malformed, "rows_per_pid": tally(rows),
+            "first_rows": [{k: r.get(k) for k in ("Application", "ProcessID", "SwapChainAddress", "PresentRuntime",
+                                                  "PresentMode", "MsBetweenPresents", "MsUntilDisplayed")}
+                           for r in rows[:3]],
+            "stderr_tail": err.decode("latin-1", "replace").splitlines()[-8:]}
+
+
+def tally(rows) -> dict[str, dict]:
+    """{pid: {"rows", "application"}} over parsed PresentMon rows, most rows first."""
+    out: dict[str, dict] = {}
+    for r in rows:
+        entry = out.setdefault(str(r["ProcessID"]), {"rows": 0, "application": r.get("Application")})
+        entry["rows"] += 1
+    return dict(sorted(out.items(), key=lambda kv: -kv[1]["rows"]))
+
+
+def capture(game_pid: int, seconds: float, stop: threading.Event, exe: Path | None = None) -> dict:
     """lag-doctor's own collectors, as the capture service will run them: PresentMon on the game's PID and the
     Kernel-Network tracker, until PresentMon's capture ends by itself (the game exited) or `seconds` pass."""
     from lagdoctor import clock, setup
@@ -148,7 +181,7 @@ def capture(game_pid: int, seconds: float, stop: threading.Event) -> dict:
     from lagdoctor.capture.presentmon import PresentMonSource
     from lagdoctor.model import F
     origin = clock.now()
-    frames = PresentMonSource(game_pid, exe=INSTALL / setup.EXE_NAME)
+    frames = PresentMonSource(game_pid, exe=exe or INSTALL / setup.EXE_NAME)
     flows = FlowTracker([game_pid])
     frames.start(origin)
     flows.start(origin)
@@ -162,6 +195,7 @@ def capture(game_pid: int, seconds: float, stop: threading.Event) -> dict:
     fr, nf = frames.result(), flows.result()
     frame_ms = [v for v in fr["columns"].get(F.FRAME_MS, []) if isinstance(v, (int, float))]
     return {"origin_qpc_s": origin, "ended_by_itself": ended_by_itself, "ended_qpc_s": ended_qpc_s,
+            "frames_first_t": fr["columns"].get(F.T, [None])[0] if fr["columns"].get(F.T) else None,
             "frames": {"status": _status(frames), "presentmon": fr["presentmon"], "swap_chains": fr["swap_chains"],
                        "main_chain": fr["main_chain"],
                        "frame_ms_median": statistics.median(frame_ms) if frame_ms else None},
@@ -181,10 +215,14 @@ def mode_e3c(name: str, args: list[str], stop: threading.Event) -> dict:
     return {"runtime": _runtime(), "token": _part(tokeninfo.snapshot)}
 
 
+ALL_PRESENTS_S = 8
+
+
 def mode_e3(name: str, args: list[str], stop: threading.Event) -> dict:
     _result, game_pid, seconds, descriptors = args
     return {"game_pid": int(game_pid), "runtime": _runtime(), "token": _part(tokeninfo.snapshot),
             "providers": _part(provider_probe), "authz": _part(authz_with_own_token, Path(descriptors)),
+            "all_presents": _part(all_presents, ALL_PRESENTS_S),
             "capture": _part(capture, int(game_pid), float(seconds), stop)}
 
 

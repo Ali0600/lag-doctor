@@ -174,29 +174,52 @@ def cmd_facts() -> int:
     return MEASURED
 
 
-def _signatures(folder: Path, names: list[str]) -> list[dict]:
-    """Each file's Authenticode state two ways: PowerShell's Get-AuthenticodeSignature (embedded or installed-catalog
-    signature) and lag-doctor's own WinVerifyTrust check (setup.authenticode, cached revocation data only)."""
+TRUSTED = "0x00000000"
+
+
+def _signatures(folder: Path, names: list[str]) -> tuple[list[dict], dict]:
+    """Each file's Authenticode state two ways: lag-doctor's own WinVerifyTrust check (setup.authenticode, cached
+    revocation data only), which decides, and PowerShell's Get-AuthenticodeSignature as an independent second
+    reading. (rows, readout): the readout says whether PowerShell's answer could be read at all."""
     from lagdoctor import setup
-    script = ("$ErrorActionPreference = 'Stop'; Get-ChildItem -LiteralPath $env:STAGE2_DIR -File | ForEach-Object { "
-              "$s = Get-AuthenticodeSignature -LiteralPath $_.FullName; [pscustomobject]@{ name = $_.Name; "
-              "status = [string]$s.Status; type = [string]$s.SignatureType; "
-              "signer = $(if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { $null }) } } | ConvertTo-Json")
+    script = ("Get-ChildItem -LiteralPath $env:STAGE2_DIR -File | ForEach-Object { try { "
+              "$s = Get-AuthenticodeSignature -LiteralPath $_.FullName -ErrorAction Stop; [pscustomobject]@{ "
+              "name = $_.Name; status = [string]$s.Status; type = [string]$s.SignatureType; "
+              "signer = $(if ($s.SignerCertificate) { $s.SignerCertificate.Subject } else { $null }) } } catch { "
+              "[pscustomobject]@{ name = $_.TargetObject; status = 'error'; type = ''; signer = $_.Exception.Message } } } "
+              "| ConvertTo-Json -Compress")
     ps = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True,
                         text=True, timeout=120, env={**os.environ, "STAGE2_DIR": str(folder)})
-    by_name = {}
+    by_name, parse_error = {}, None
     try:
         listed = json.loads(ps.stdout)
         by_name = {r["name"]: r for r in (listed if isinstance(listed, list) else [listed])}
-    except ValueError:
-        pass
+    except (ValueError, TypeError, KeyError) as exc:
+        parse_error = f"{type(exc).__name__}: {exc}"
+    readout = {"returncode": ps.returncode, "parsed": len(by_name), "parse_error": parse_error,
+               "stdout_head": ps.stdout[:300], "stderr_tail": ps.stderr[-500:]}
     rows = []
     for n in names:
         code, signer = setup.authenticode(folder / n)
         ps_row = by_name.get(n, {})
         rows.append({"name": n, "winverifytrust": f"0x{code:08X}", "signer_cn": signer, "ps_status": ps_row.get("status"),
                      "ps_type": ps_row.get("type"), "ps_signer": ps_row.get("signer")})
-    return rows
+    return rows, readout
+
+
+def signature_verdict(rows: list[dict], readout: dict | None) -> dict:
+    """E3c's signature answer from the rows: which binaries WinVerifyTrust refused, who signed the rest, and whether
+    PowerShell's independent reading agrees (or could not be read, which is said, never counted as unsigned)."""
+    binaries = [r for r in rows if not r["name"].lower().endswith(".cat")]
+    unsigned = [r["name"] for r in binaries if r["winverifytrust"] != TRUSTED]
+    signers = sorted({r["signer_cn"] for r in binaries if r["winverifytrust"] == TRUSTED and r["signer_cn"]})
+    if not readout or not readout.get("parsed"):
+        cross = "PowerShell's reading could not be read: " + str((readout or {}).get("parse_error") or
+                                                                 (readout or {}).get("stderr_tail") or "no output")
+    else:
+        disagree = sorted(r["name"] for r in binaries if (r["ps_status"] == "Valid") != (r["winverifytrust"] == TRUSTED))
+        cross = "PowerShell agrees on every binary" if not disagree else f"PowerShell disagrees on {disagree}"
+    return {"binaries": len(binaries), "unsigned": unsigned, "signers": signers, "cross_check": cross}
 
 
 def _catalog_check(folder: Path, names: list[str]) -> dict:
@@ -239,8 +262,8 @@ def cmd_layout() -> int:
             with z.open(n) as src, open(INSTALL / n, "xb") as dst:
                 shutil.copyfileobj(src, dst)
     binaries = sorted(n for n in names if n.lower().endswith((".exe", ".dll", ".pyd")))
-    signatures = _signatures(INSTALL, binaries + ["python.cat"])
-    unsigned = [r["name"] for r in signatures if r["ps_status"] != "Valid" and r["name"] != "python.cat"]
+    signatures, readout = _signatures(INSTALL, binaries + ["python.cat"])
+    unsigned = signature_verdict(signatures, readout)["unsigned"]
     catalog = _catalog_check(INSTALL, unsigned) if unsigned else {"checked": False, "why": "every binary is signed"}
     skip = shutil.ignore_patterns("__pycache__", "*.pyc")
     shutil.copytree(ROOT / "lagdoctor", INSTALL / "lagdoctor", ignore=skip)
@@ -258,7 +281,8 @@ def cmd_layout() -> int:
     presentmon = setup.verify(INSTALL / setup.EXE_NAME)
     record = {"install": str(INSTALL), "embed": {"url": EMBED_URL, "sha256": digest, "size": len(data)},
               "files": sorted(names), "pth": (INSTALL / f"python{EMBED_VERSION.replace('.', '')[:3]}._pth").read_text(),
-              "signatures": signatures, "catalog": catalog, "psutil": psutil.__version__, "presentmon": presentmon}
+              "signatures": signatures, "signature_readout": readout, "catalog": catalog, "psutil": psutil.__version__,
+              "presentmon": presentmon}
     RESULTS.mkdir(exist_ok=True)
     _write_json(RESULTS / "layout.json", record)
     print(f"Built {INSTALL}: {len(names)} runtime files, {len(binaries) - len(unsigned)} of {len(binaries)} binaries "
@@ -302,6 +326,7 @@ def cmd_e3c() -> int:
     data = record["result"] = _read_json(result)
     layout = _read_json(RESULTS / "layout.json") or {}
     record["signatures"], record["catalog"] = layout.get("signatures"), layout.get("catalog")
+    record["signature_readout"] = layout.get("signature_readout")
     if data is None:
         record["verdict"] = None
         _write_json(RESULTS / "e3c.json", record)
@@ -316,7 +341,8 @@ def cmd_e3c() -> int:
         "outside_install": [e for e in entries if not inside(e, INSTALL)],
         "script_folder_on_path": any(inside(e, INSTALL / "stage2") for e in entries),
         "site_imported": data.get("runtime", {}).get("site_imported_at_start"),
-        "unsigned_binaries": [r["name"] for r in record["signatures"] or [] if r["ps_status"] != "Valid"],
+        "flags": data.get("runtime", {}).get("flags"),
+        "signatures": signature_verdict(record["signatures"] or [], record["signature_readout"]),
     }
     _write_json(RESULTS / "e3c.json", record)
     print(json.dumps(record["verdict"], indent=1))
@@ -332,6 +358,8 @@ def _judge_e3(rec: dict, name: str) -> dict:
     frames, flows = cap.get("frames") or {}, cap.get("net_flows") or {}
     pm, health = frames.get("presentmon") or {}, flows.get("health") or {}
     standin = rec.get("standin") or {}
+    everyone = res.get("all_presents") if isinstance(res.get("all_presents"), dict) else {}
+    game_pid = str(res.get("game_pid") or standin.get("pid"))
     probe_rows = {n: r for n, r in providers.items() if isinstance(r, dict) and "enabled" in r}
     # Windows' own check with this token (authz, E1's method) against what enabling really did.
     disagree = sorted(n for n, r in probe_rows.items()
@@ -347,6 +375,13 @@ def _judge_e3(rec: dict, name: str) -> dict:
         "providers_enabled": sorted(n for n, r in probe_rows.items() if r["enabled"]),
         "providers_refused": {n: r.get("error") for n, r in probe_rows.items() if not r["enabled"]},
         "authz_disagrees_on": disagree,
+        "standin": {k: standin.get(k) for k in ("pid", "session_id", "presents", "swap_effect", "adapter")},
+        # PresentMon on every process, before the targeted capture: what this token sees at all
+        "all_presents": {"exit_code": everyone.get("exit_code"), "rows": everyone.get("rows"),
+                         "pids": len(everyone.get("rows_per_pid") or {}),
+                         "game_rows": (everyone.get("rows_per_pid") or {}).get(game_pid, {}).get("rows", 0),
+                         "first_rows": everyone.get("first_rows"), "stderr_tail": everyone.get("stderr_tail"),
+                         "error": everyone.get("error")},
         "frames_status": frames.get("status"), "frame_rows": pm.get("rows"), "presentmon_exit": pm.get("exit_code"),
         "stop_path": pm.get("stop_path"), "stderr_tail": pm.get("stderr_tail"),
         "capture_ended_by_itself": cap.get("ended_by_itself"), "ended_s_after_game_exit": ended_after,
@@ -393,11 +428,45 @@ def _e3_config(sid_type: str) -> dict:
     return rec
 
 
+def _e3_control() -> dict:
+    """The same capture run by this job's own account (an administrator, in the desktop session, PresentMon able
+    to open the stand-in): what a GPU-less runner's WARP stand-in gives PresentMon at all, apart from any
+    service question. A service result is read against this."""
+    import threading
+    from lagdoctor import setup
+    from lagdoctor.winapi import etw
+    from stage2 import service_host
+    exe = INSTALL / setup.EXE_NAME
+    status_file = RESULTS / "standin-control.json"
+    rec: dict = {"service": None}
+    game = subprocess.Popen([sys.executable, str(SCRIPTS / "stage2" / "standin.py"), "--seconds", str(GAME_SECONDS),
+                             "--status", str(status_file)])
+    try:
+        first = _wait_json(status_file, lambda d: d.get("ready") or "ended_qpc_s" in d, 60)
+        if not first or not first.get("ready"):
+            rec.update(measured=False, why="the stand-in never presented a frame", standin=first)
+            return rec
+        rec["result"] = {"game_pid": first["pid"], "token": service_host._part(tokeninfo.snapshot),
+                         "all_presents": service_host._part(service_host.all_presents, service_host.ALL_PRESENTS_S, exe),
+                         "capture": service_host._part(service_host.capture, first["pid"], CAPTURE_SECONDS,
+                                                       threading.Event(), exe)}
+        game.wait(GAME_SECONDS + 60)
+    finally:
+        if game.poll() is None:
+            game.kill()
+        rec["leftover_sessions"] = {s: etw.query_session(s) for s in ("lagdoctor", "lag-doctor-net", "lagdoctor-e3-all")}
+    rec["standin"] = _read_json(status_file)
+    rec["measured"] = True
+    rec["verdict"] = _judge_e3(rec, "control")
+    return rec
+
+
 def cmd_e3() -> int:
-    """E3: lag-doctor's frame timing and tracker in a LocalService service with trimmed privileges, once with a
-    restricted service SID and once with an unrestricted one (which tells whether the restricted SID is the cause
-    of anything refused)."""
-    configs = {t: _e3_config(t) for t in ("restricted", "unrestricted")}
+    """E3: lag-doctor's frame timing and tracker in a LocalService service with trimmed privileges, once with an
+    unrestricted service SID and once with a restricted one (which tells whether the restricted SID is the cause
+    of anything refused), read against a control run by the job's own administrator account."""
+    configs = {"control_admin": _e3_control()}
+    configs.update({t: _e3_config(t) for t in ("unrestricted", "restricted")})
     _write_json(RESULTS / "e3.json", configs)
     for t, rec in configs.items():
         print(f"--- {t}:", json.dumps(rec.get("verdict") or {"why": rec.get("why")}, indent=1))
@@ -444,12 +513,20 @@ def cmd_e3b() -> int:
     rec["starts"] = list(starts.values())
     ok = [c for c in cycles if c.get("connected")]
     pids = [c["reply"]["pid"] for c in ok]
+
+    def span(p: int, a: str, b: str) -> float | None:
+        s = starts.get(p, {})
+        return round(s[b] - s[a], 4) if isinstance(s.get(a), float) and isinstance(s.get(b), float) else None
+
     rec["verdict"] = {
         "cycles_connected": f"{len(ok)} of {E3B_CYCLES}",
         "started_by_trigger": all(c["state_before"] == "stopped" for c in ok) and bool(ok),
         "distinct_pids": len(set(pids)) == len(pids),
         "start_latency_s": [c["connect"]["connect_s"] for c in ok],
+        "connect_attempts": [c["connect"]["attempts"] for c in ok],
         "first_error_seen_by_client": [c["connect"]["first_error"] for c in ok],
+        "service_start_to_pipe_s": [span(p, "started_qpc_s", "pipe_ready_qpc_s") for p in pids],
+        "idle_to_stop_s": [span(p, "pipe_ready_qpc_s", "stopped_qpc_s") for p in pids],
         "stopped_by": [starts.get(p, {}).get("stopped_by") for p in pids],
         "stop_wait_s": [c["stop"]["waited_s"] for c in ok],
         "servicemain_args": [starts.get(p, {}).get("servicemain_args") for p in pids],
