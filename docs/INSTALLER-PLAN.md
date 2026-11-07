@@ -47,8 +47,9 @@ not help.
 3. Done (2026-11-07): CI on `windows-2025` for Python 3.13 and 3.11, SHA-pinned actions, a read-only token. Tests
    that need what the runner lacks skip by declaration (`LAGDOCTOR_ABSENT`, `tests/capabilities.py`). Standard
    runners are free for public repositories [verified: GitHub Actions billing page, 2026-11-06].
-4. Done (2026-11-07): the 32 tests that skipped there for want of PresentMon's download or its gold captures run in
-   CI. It gets PresentMon through `lagdoctor setup --download` and the captures at the pinned commit
+4. Done (2026-11-07): of the 32 tests that skipped there for want of PresentMon's download or its gold captures, 31
+   run in CI; the 32nd needs a token without ETW rights, and the runner's can trace. CI gets PresentMon through
+   `lagdoctor setup --download` and the captures at the pinned commit
    (`tests/downloads.py`), checks both against the tests' own pins and caches them; `LAGDOCTOR_REQUIRE` makes a
    missing one fail those tests rather than skip them.
 
