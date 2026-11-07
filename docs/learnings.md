@@ -201,3 +201,21 @@ as well as the logon SID, though the token held both as enabled groups: 14 group
 temporary CI step printed both lists, and this laptop's token holds no such group.
 **Takeaway**: before trusting a tool's output as a test's oracle, compare it with the raw source once on every kind
 of machine the test runs on, and name each known gap in the test.
+
+### Rewrite history by swapping whole blobs, then prove the rewrite against the original
+`git filter-branch --index-filter` with a reviewed map of old blob to new blob changes only the file versions that
+held a detail, byte for byte, while a tree filter re-adds every file and can renormalise line endings on the way.
+**Why it came up**: removing the owner's personal details before the first public push took three passes. Each
+built its map from exact text rules, refused to write if anything personal survived, re-pointed cited commit ids
+with `--msg-filter` and `map`, and was checked by a script that paired every original commit with its rewrite:
+same author, dates and parents, trees differing only by mapped blobs, nothing personal in any blob, message or path.
+**Takeaway**: rewrite from a map you can review, and push only after a check against the original commit by commit
+plus a scan of a fresh clone.
+
+### Skip a test on a declared absence, never a detected one
+A test that skips when it cannot find its hardware also skips when a bug hides that hardware, and stays green.
+**Why it came up**: the NVIDIA tests skipped whenever `Nvml.open()` returned None; the mutation "NVML never opens"
+survived on main. CI's runner lacks a GPU, so its workflow now declares what is missing (`LAGDOCTOR_ABSENT`), the
+tests that need it skip there by name, and an undeclared absence fails.
+**Takeaway**: let whoever runs the suite say what the machine lacks; when a capability is not declared absent, its
+absence is a failure.
