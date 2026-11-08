@@ -454,3 +454,15 @@ with `\0` usually leaves the file as it was.
 because the bytes had not changed.
 **Takeaway**: tamper by flipping a byte inside the code (`data[500_000] ^= 0xFF`), and assert the hash changed
 before trusting the test.
+
+### Windows hands out port 0 in sequence, and excludes ports per protocol
+A socket bound to port 0 gets the next free number after one hint that every process and every `connect()` shares,
+one step at a time, the hint jumping somewhere else now and then. Excluded ports are kept per protocol (`netsh int
+ipv4 show excludedportrange protocol=udp`): on GitHub's runners, Docker's NAT holds 200 UDP ports in a row, at a new
+place on each runner, that TCP still hands out.
+**Why it came up**: the self-test's loopback DNS stand-ins took TCP's next port-0 number and tried UDP on it, ten
+times, and twice on CI all ten failed. On ten fresh runners, nine had that UDP block; with the hint inside it (1.2 %
+of its positions), the real tests failed 36 times out of 36. With random dynamic ports instead, they passed 60 of 60
+there.
+**Takeaway**: one protocol's port-0 choice says nothing about another protocol's ports, and retries taken from a
+sequential allocator are one try, not ten: draw them independently, and name each refusal.

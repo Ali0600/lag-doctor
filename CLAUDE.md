@@ -183,9 +183,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   alone), and `tests/test_sysmon_target.py::test_auto_picks_a_windowed_renderer_and_never_a_windowless_gpu_job`, which
   needs LagLab to render where Windows counts it: on 2026-11-07 at 00:30 (Silent mode, display asleep) it failed on
   unchanged code too, in a worktree of the previous commit. Rerun them alone, with the display awake, and run that
-  control before blaming a change. On a CI runner, the self-test cases of `tests/test_etw_flows.py` and
-  `tests/test_etw_tracker.py` (4 at once) failed once with "no free port for both UDP and TCP" (2026-11-07): their
-  loopback DNS stand-ins try 10 ephemeral ports for one number free for both; rerun before blaming a change.
+  control before blaming a change. The self-test cases of `tests/test_etw_flows.py` and `tests/test_etw_tracker.py`
+  failed on CI with "no free port for both UDP and TCP" until 2026-11-08 (4 at once on 2026-11-07, 2 on 2026-11-08):
+  their loopback DNS stand-ins took TCP's next port-0 number and tried UDP on it, 10 times. Windows hands port-0
+  numbers out in sequence, and on 9 of 10 runners Docker's NAT holds 200 UDP ports in a row that TCP still hands out;
+  with the hint there (1.2 % of its positions), all 10 tries failed. The one stand-in left, `tests/loopback_dns.py`,
+  draws random dynamic ports and names every refusal: never take one protocol's port from another's port-0 choice.
   `tests/test_machine_inventory.py::test_live_collect_agrees_with_independent_readouts` failed once on a runner
   (2026-11-07, a docs-only change) with "the Win32_DeviceGuard query took over 10 s and was stopped": WMI was slow
   on that VM, not the code; rerun before blaming a change, and look at the inventory's own timeout if it repeats.

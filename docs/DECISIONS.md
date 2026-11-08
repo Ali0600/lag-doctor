@@ -37,6 +37,27 @@
 
 ---
 
+## 2026-11-08: The loopback DNS stand-in draws random dynamic ports
+
+The self-test's tests need one loopback port number free for both UDP and TCP. The stand-ins took TCP's next port-0
+number and tried UDP on it, ten times; Windows hands those numbers out in sequence, and on 9 of 10 GitHub runners
+Docker's NAT holds 200 UDP ports in a row that TCP still hands out, so at 1.2 % of the hint's positions every try
+failed. The implementing session chose; the owner has not weighed in.
+- **One stand-in, `tests/loopback_dns.py`, tries up to 64 random numbers from the dynamic range (chosen)**: the tries
+  are independent, and 2.3 % of dynamic ports were refused on the runners (15 % on a laptop with Hyper-V's blocks),
+  so all 64 refused is out of reach; each refusal is named in the error.
+- **More tries in sequence**: rejected, an excluded block is 200 ports on the runners and 800 on that laptop, and no
+  count is long enough everywhere.
+- **UDP's next port-0 number first, then TCP on it**: rejected, Docker's NAT holds 200 TCP-only ports too, and this
+  order failed at the same 1.2 % of positions on the runners (7.7 % on the laptop, against 7.5 % for TCP first).
+- **Random numbers below the dynamic range** (20000 to 40000, free for both 100 % of the time on the runners):
+  rejected, fixed-port services live there, and a test holding one could stop one starting; the dynamic range is
+  where short-lived ports belong.
+- **Reading the excluded ranges and skipping them**: rejected, it parses netsh's localised text, and still misses
+  ports another program holds.
+- **Separate port numbers for UDP and TCP**: rejected, the tracker takes one self-test port for both, as DNS uses 53.
+Revisit hook: `random_ports()` and `TRIES` in `tests/loopback_dns.py`.
+
 ## 2026-11-08: The MSI: WiX v7 under its EULA, a .cmd shim on PATH, the wheel's code with its bytecode
 
 Stage 3's per-machine MSI (`docs/INSTALLER-PLAN.md`; built by `scripts/msi_build.py`, checked on CI's runner by
