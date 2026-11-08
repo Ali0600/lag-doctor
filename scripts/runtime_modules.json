@@ -266,7 +266,7 @@
   "wsgiref": "zip",
   "xml": "zip",
   "xmlrpc": "zip",
-  "zipapp": "zip",
+  "zipapp": "frozen",
   "zipfile": "zip",
   "zipimport": "frozen",
   "zlib": "built-in",
