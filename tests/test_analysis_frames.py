@@ -387,6 +387,44 @@ def test_no_frames_falls_back_to_the_3d_engine():
     assert fa.bound(cap, fa.main_chain(cap), [])["verdict"] == "unknown"
 
 
+def busy_engine(seconds, busy, marks=()):
+    """A capture without frame timing whose game kept its GPU 99 % busy in the 1 s windows in `busy` (indices) and
+    60 % in the others (so the median says nothing), and LagEvents for lag-key presses at `marks`."""
+    cap = make_cap({}, make_system(seconds, game_gpu_pct=lambda t: 99.0 if int(t) in busy else 60.0,
+                                   game_top_thread_pct=30.0))
+    evs = [LagEvent(id=i, kind="mark", t_start=m - 3.0, t_end=m + 0.5, severity=0.0) for i, m in enumerate(marks)]
+    return fa.bound(cap, fa.main_chain(cap), evs)
+
+
+@pytest.mark.parametrize("seconds, busy, holds", [
+    (100.0, range(10), True),              # 10 of 100 windows: 10 % and 10 s
+    (100.0, range(9), False),              # 9 %
+    (50.0, range(6), False),               # 12 %, but only 6 s
+])
+def test_without_frame_timing_the_gpu_limit_is_also_read_per_second(seconds, busy, holds):
+    # Item 1: the first real capture's game kept its GPU at a median 71 %, yet 98-99 % through its last three
+    # minutes; only the whole-capture median was ever asked, so GPU heat and video memory could not be checked
+    b = busy_engine(seconds, set(busy))
+    p = b["gpu_probable"]
+    assert b["verdict"] == "unknown" and p["holds"] is holds
+    assert p["seconds"] == len(busy) and p["windows"] == int(seconds) and p["share"] == pytest.approx(len(busy) / seconds)
+
+
+@pytest.mark.parametrize("busy, holds", [({40, 60}, True), ({40}, False)])
+def test_without_frame_timing_the_marks_say_where_the_gpu_was_the_limit_too(busy, holds):
+    # Item 1: the first real capture's GPU was 96-100 % busy at all three marks. Here 2 of 4 marks (half) hold
+    b = busy_engine(100.0, busy, marks=(41.0, 61.0, 81.0, 91.0))
+    p = b["gpu_probable"]
+    assert p["share"] < fa.PROBABLE_GPU_SHARE and p["holds"] is holds
+    assert p["marks"] == 4 and p["marks_busy"] == len(busy)
+
+
+def test_the_per_second_reading_is_only_for_a_capture_without_frame_timing_and_an_open_verdict():
+    cap = make_cap({}, make_system(20.0, game_gpu_pct=95.0))               # the median already says "gpu"
+    assert fa.bound(cap, fa.main_chain(cap), [])["gpu_probable"] is None
+    assert bound_of(20.0, 19.5)["gpu_probable"] is None                    # frames measured: the verdict decides
+
+
 def test_the_1_ms_gap_never_calls_a_gpu_idle_a_quarter_of_the_frame_the_limit():
     # A14: at 500 FPS a GPU busy 1.0 of 2.0 ms (r = 0.5) idles half of every frame: the saturated thread limits it
     assert bound_of(2.0, 1.0, thread=95.0, n=6000)["verdict"] == "cpu_main"

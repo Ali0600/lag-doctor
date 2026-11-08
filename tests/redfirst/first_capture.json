@@ -1,0 +1,186 @@
+[
+ {
+  "name": "idle readings counted as throttling",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    return [(float(ti), None if idle_named(fa._at(why, i)) else read(G.THROTTLE_PCT, fa._at(v, i)),",
+  "new": "    return [(float(ti), read(G.THROTTLE_PCT, fa._at(v, i)),",
+  "tests": [
+   "tests/test_analysis_rules.py::test_an_idle_gpu_is_never_read_as_throttled",
+   "tests/test_analysis_rules.py::test_the_per_event_gpu_heat_signal_leaves_idle_readings_out_too"
+  ]
+ },
+ {
+  "name": "the idle reason never recognised",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    return IDLE_REASON in _reasons(reasons)",
+  "new": "    return False",
+  "tests": [
+   "tests/test_analysis_rules.py::test_an_idle_gpu_is_never_read_as_throttled",
+   "tests/test_analysis_rules.py::test_the_per_event_gpu_heat_signal_leaves_idle_readings_out_too"
+  ]
+ },
+ {
+  "name": "idle readings in the power-cap share",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if ti is None or x is None or idle_named(cell):",
+  "new": "        if ti is None or x is None:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_an_idle_gpu_is_never_read_as_throttled"
+  ]
+ },
+ {
+  "name": "the power cap counted where the reasons never named it",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        out.append((float(ti), x if named else 0.0, x, named))",
+  "new": "        out.append((float(ti), x, x, named))",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_power_cap_share_counts_only_readings_that_named_the_cap"
+  ]
+ },
+ {
+  "name": "the counter's disagreement unsaid",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    moved = any(raw > 0 and not n for _, _, raw, n in rows)",
+  "new": "    moved = False",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_power_cap_share_counts_only_readings_that_named_the_cap"
+  ]
+ },
+ {
+  "name": "the CPU's speed level never checked",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    slow = level is not None and level <= CPU_SLOW_PCT",
+  "new": "    slow = False",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_throttle_counts_a_cpu_held_below_its_base_clock"
+  ]
+ },
+ {
+  "name": "the CPU level's edge at 80 % of base",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "CPU_SLOW_PCT = 100.0 * (1.0 - CPU_PERF_DROP) ",
+  "new": "CPU_SLOW_PCT = 100.0 * (1.0 - CPU_PERF_DROP) - 0.01 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_throttle_counts_a_cpu_held_below_its_base_clock"
+  ]
+ },
+ {
+  "name": "full speed claimed without the level",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        c.against(\"cpu_limits\", W_STEADY, \"Windows reported no power or thermal limit\" + speed)",
+  "new": "        c.against(\"cpu_limits\", W_STEADY, \"the CPU ran at full speed\" + speed)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_throttle_never_calls_a_cpu_it_did_not_see_at_full_speed",
+   "tests/test_analysis_rules.py::test_cpu_throttle_counts_a_cpu_held_below_its_base_clock"
+  ]
+ },
+ {
+  "name": "no speed drop said without the comparison",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            (\" with no speed drop\" if dropped is False else \"\")",
+  "new": "            \" with no speed drop\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_throttle_never_calls_a_cpu_it_did_not_see_at_full_speed"
+  ]
+ },
+ {
+  "name": "a CPU-only level titled as heat or power",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if slow and not held:                 # only the level",
+  "new": "    if False:                 # only the level",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_throttle_counts_a_cpu_held_below_its_base_clock"
+  ]
+ },
+ {
+  "name": "free RAM cancels a commit charge at the limit",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif total and commit_top is not None and commit_top > COMMIT_CRIT_PCT:",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_free_ram_never_cancels_a_commit_charge_at_the_limit"
+  ]
+ },
+ {
+  "name": "hard faults with RAM free counted as pressure",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if hi > FAULTS_WARN_PS and roomy:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_free_ram_never_cancels_a_commit_charge_at_the_limit"
+  ]
+ },
+ {
+  "name": "the no-frames gate reads only the median",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if probable is not None and probable[0]:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_without_frame_timing_a_gpu_side_finding_passes_where_the_gpu_was_probably_the_limit",
+   "tests/test_analysis_rules_diagnose.py::test_without_frame_timing_gpu_heat_is_reported_where_the_gpu_was_pegged"
+  ]
+ },
+ {
+  "name": "the per-second reading opens the gate with frame timing",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if e.frames_measured or e.verdict != \"unknown\" or seconds is None or share is None:",
+  "new": "    if e.verdict != \"unknown\" or seconds is None or share is None:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_per_second_gpu_reading_never_opens_the_gate_with_frame_timing_or_for_the_cpu_side"
+  ]
+ },
+ {
+  "name": "the 10 % share's edge",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    holds = ((len(busy) * THREAD_WINDOW_S >= BOUND_MIN_S and share >= PROBABLE_GPU_SHARE)",
+  "new": "    holds = ((len(busy) * THREAD_WINDOW_S >= BOUND_MIN_S and share > PROBABLE_GPU_SHARE)",
+  "tests": [
+   "tests/test_analysis_frames.py::test_without_frame_timing_the_gpu_limit_is_also_read_per_second"
+  ]
+ },
+ {
+  "name": "the 10 s floor dropped",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    holds = ((len(busy) * THREAD_WINDOW_S >= BOUND_MIN_S and",
+  "new": "    holds = ((len(busy) * THREAD_WINDOW_S >= 0 and",
+  "tests": [
+   "tests/test_analysis_frames.py::test_without_frame_timing_the_gpu_limit_is_also_read_per_second"
+  ]
+ },
+ {
+  "name": "the marks' half edge",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "             or (bool(marks) and at_marks >= PROBABLE_GPU_MARKS * len(marks)))",
+  "new": "             or (bool(marks) and at_marks > PROBABLE_GPU_MARKS * len(marks)))",
+  "tests": [
+   "tests/test_analysis_frames.py::test_without_frame_timing_the_marks_say_where_the_gpu_was_the_limit_too"
+  ]
+ },
+ {
+  "name": "the per-second reading also with a verdict",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "if not fr.get(F.T) and out[\"verdict\"] == \"unknown\"",
+  "new": "if not fr.get(F.T)",
+  "tests": [
+   "tests/test_analysis_frames.py::test_the_per_second_reading_is_only_for_a_capture_without_frame_timing_and_an_open_verdict"
+  ]
+ },
+ {
+  "name": "no per-second reading at all",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    out[\"gpu_probable\"] = (probable_gpu(cap, events, tick_spans)",
+  "new": "    out[\"gpu_probable\"] = (None",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_without_frame_timing_gpu_heat_is_reported_where_the_gpu_was_pegged"
+  ]
+ },
+ {
+  "name": "a CPU-side gate refuses an unknown verdict",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    \"cpu\": frozenset({\"cpu_main\", \"cpu_all\", \"mixed\", \"unknown\"}),",
+  "new": "    \"cpu\": frozenset({\"cpu_main\", \"cpu_all\", \"mixed\"}),",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_per_second_gpu_reading_never_opens_the_gate_with_frame_timing_or_for_the_cpu_side"
+  ]
+ }
+]

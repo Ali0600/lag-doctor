@@ -361,8 +361,8 @@
  {
   "name": "event frames counted as steady",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "    return _classify(cap, fr, _steady_rows(fr, spans), tick_spans)",
-  "new": "    return _classify(cap, fr, _steady_rows(fr, []), tick_spans)",
+  "old": "    out = _classify(cap, fr, _steady_rows(fr, spans), tick_spans)",
+  "new": "    out = _classify(cap, fr, _steady_rows(fr, []), tick_spans)",
   "tests": [
    "tests/test_analysis_frames.py::test_event_frames_are_not_steady"
   ]
@@ -1783,7 +1783,7 @@
  {
   "name": "no reading names heat",
   "file": "lagdoctor/analysis/attribute.py",
-  "old": "    return isinstance(reasons, str) and any(r.strip().lower() in HEAT_REASONS for r in reasons.split(\",\"))",
+  "old": "    return bool(_reasons(reasons) & set(HEAT_REASONS))",
   "new": "    return False",
   "tests": [
    "tests/test_analysis_rules.py::test_an_earlier_capture_counts_only_the_readings_that_named_heat_or_the_brake",

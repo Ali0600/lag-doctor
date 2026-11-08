@@ -70,6 +70,10 @@ CPU_PERF_DROP = attribute.PERF_DROP_FRAC      # LC 4.5: % Processor Performance 
 CPU_BUSY_FOR_THROTTLE = 0.70  # LC 4.5: throttling matters when the game is CPU-bound or near it (thread >= 0.7)
 PERF_BASE_S = 120.0          # LC 4.5: "the run's first two minutes"
 PERF_MIN_SAMPLES = 8         # [inferred] fewer samples on either side of the comparison say nothing
+CPU_SLOW_PCT = 100.0 * (1.0 - CPU_PERF_DROP)   # [inferred, LC 4.5's 20 % drop measured against the base clock]: a
+                             # median % Processor Performance at or below 80 % of base ran below full speed most of the
+                             # time. The first real capture: median 70 % for 14 minutes in a quiet mode Windows
+                             # reported no limit for (% Performance Limit 100 throughout)
 # ---- memory (LC 4.3, 4.7) ------------------------------------------------------------------------
 VRAM_FULL_FRAC = attribute.VRAM_FULL_FRAC     # LC 4.3: dedicated VRAM >= 90 % of its size
 SHARED_SPILL_MB = 512.0      # LC 4.3: the game's shared GPU memory > 512 MiB ...
@@ -517,7 +521,7 @@ def run_rule(rule: Rule, cap: Capture, ctx: dict, env: _Env | None = None) -> An
     try:
         res = rule.fn(cap, ctx)
         if isinstance(res, Finding) and rule.gate and env.verdict not in GATES[rule.gate]:
-            res = _gated(rule, env)
+            res = _gated(rule, env, res)
         held = _holds_open(rule.cause, env) if isinstance(res, Cleared) and not res.firm else None
     except Exception as exc:  # noqa: BLE001 - one broken rule must not hide the rest; it says it failed
         return Unchecked(rule.cause, f"the check failed ({type(exc).__name__}: {exc})")
@@ -571,16 +575,45 @@ def _hold_unexplained_pacing(e: _Env, findings: list[Finding], cleared: dict[str
             unchecked[cause] = why
 
 
-def _gated(rule: Rule, env: _Env) -> Any:
-    """LC 5.1: the bound verdict is a gate, not evidence."""
+def _gated(rule: Rule, env: _Env, finding: Finding) -> Any:
+    """LC 5.1: the bound verdict is a gate, not evidence. Without frame timing a GPU-side finding still passes where
+    the GPU probably was the limit for part of the capture (_probable_gpu), saying so in its evidence."""
     v = env.verdict
     side = "the CPU" if rule.gate == "cpu" else "the GPU"
+    probable = _probable_gpu(env)       # an unknown verdict reaches here only through the gpu gate (GATES)
+    if probable is not None and probable[0]:
+        finding.evidence.append(Evidence(_sentence(probable[1])))
+        return finding
     if v == "unknown":
         notes = [n for n in env.bound.get("notes") or [] if isinstance(n, str)]
+        why = notes[:1] + ([probable[1]] if probable is not None else [])
         return Unchecked(rule.cause, f"whether {side} limits the frame rate could not be judged"
-                         + (f" ({notes[0]})" if notes else ""))
+                         + (f" ({'; '.join(why)})" if why else ""))
     return Cleared(rule.cause, _sentence(f"{side} is not what limits the frame rate: "
                                          f"it is limited by {labels.BOUND.get(v, v)}"))
+
+
+def _probable_gpu(e: _Env) -> tuple[bool, str] | None:
+    """Item 1, LC 3.4 per second: without frame timing, (whether the GPU probably limited the frame rate for enough
+    of the capture for a GPU-side cause to matter, the measured words for it), from frames.probable_gpu; None when
+    frame timing was measured or the bound verdict is not unknown."""
+    p = _dict(e.bound.get("gpu_probable"))
+    seconds, share, n, busy = (_fin(p.get(k)) for k in ("seconds", "share", "marks", "marks_busy"))
+    if e.frames_measured or e.verdict != "unknown" or seconds is None or share is None:
+        return None
+    if not n or busy is None:
+        marks = ""
+    elif n == 1:
+        marks = " and at the moment you marked" if busy else ", though not at the moment you marked"
+    else:
+        marks = f" and at {busy:.0f} of the {n:.0f} moments you marked" if busy else \
+            f", though at none of the {n:.0f} moments you marked"
+    if p.get("holds") is True:
+        return True, (f"frame timing was not measured, but the game kept its GPU's 3D engine "
+                      f"{fa.ENGINE_GPU_PCT:.0f}% or more busy for {seconds:.0f} s ({100 * share:.0f}% of the capture)"
+                      f"{marks}, so the GPU probably limited the frame rate then")
+    return False, (f"the game kept its GPU's 3D engine {fa.ENGINE_GPU_PCT:.0f}% or more busy for only {seconds:.0f} s "
+                   f"({100 * share:.0f}% of the capture){marks}")
 
 
 # ----------------------------------------------------------------------------- GPU and CPU ---
@@ -940,7 +973,14 @@ def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
                                                  + (", the power cap included" if old else "") + ")",
                       full, "%", NV_THROTTLE_PCT)
     elif not limited:
-        c.lack("gpu_telemetry", W_DIRECT, "NVML reported no throttle readings")
+        idle, rows = attribute.idle_readings(cap), len(attribute.throttle_readings(cap))
+        if idle:          # the counters keep growing at idle, so those readings say nothing either way (item 8)
+            c.lack("gpu_telemetry", W_DIRECT, f"the NVIDIA GPU was idle in {'all' if idle == rows else idle} of its "
+                                              f"{rows} readings" + ("" if idle == rows else ", and the rest held no "
+                                                                    "throttle share") + ", so whether heat held it "
+                                              "down could not be told")
+        else:
+            c.lack("gpu_telemetry", W_DIRECT, "NVML reported no throttle readings")
     temps = e.gpu(G.TEMP_C)
     target = _fin(_dict(e.inv.get("nvidia")).get("temp_target_c"))
     if temps and target:
@@ -962,24 +1002,29 @@ def _power_cap_item(c: _Case) -> bool:
     """The software power cap (nv_power_cap_pct). While GPU-bound it is the design limit, not throttling, so it
     is context (LC 4.1, 4.2); it counts only as LC 4.2's power-limit variant, the enforced limit held below the
     GPU's default (battery, a quiet mode). The default comes from the inventory's nvidia "power_default_w".
-    True when that variant holds."""
+    A reading's share counts only where its own reasons named the cap (attribute.power_cap_readings): the counter
+    alone once read 42 % over readings that never named it. True when that variant holds."""
     e = c.env
-    cap = e.gpu(G.POWER_CAP_PCT)
-    if not cap:
+    rows = attribute.power_cap_readings(e.cap)
+    if not rows:
         return False
-    share = st.mean(cap)
+    share = st.mean([x for _, x, _, _ in rows])
+    named = sum(1 for *_, n in rows if n)
+    moved = any(raw > 0 and not n for _, _, raw, n in rows)        # the counter moved where the reasons never named it
+    only = (f", counting only the {named} of {len(rows)} readings that named it (the driver's counter also moved in "
+            "readings that did not)" if moved else "")
     limits = [w for w in e.gpu(G.POWER_LIMIT_W) if w > 0]
     limit = st.median(limits) if limits else None
     default = _fin(_dict(e.inv.get("nvidia")).get("power_default_w"))
     if share >= NV_THROTTLE_PCT and limit is not None and default and limit < default:
         c.support("gpu_telemetry", W_STEADY, f"the GPU sat at its power cap {share:.0f}% of the time with the cap at "
                                              f"{limit:.0f} W, below its {default:.0f} W default (on battery or in a "
-                                             "quiet mode)", share, "%", NV_THROTTLE_PCT)   # LC 4.2
+                                             f"quiet mode){only}", share, "%", NV_THROTTLE_PCT)   # LC 4.2
         return True
     if share > 0:
         c.neutral("gpu_telemetry", f"the GPU sat at its software power cap {share:.0f}% of the time: the design limit "
                                    "of a GPU-bound laptop, not throttling"   # LC 4.1
-                  + ("" if default else "; whether the cap was below the GPU's default was not recorded"),
+                  + ("" if default else "; whether the cap was below the GPU's default was not recorded") + only,
                   share, "%", NV_THROTTLE_PCT)
     return False
 
@@ -1012,6 +1057,13 @@ def _cpu_throttle(cap: Capture, ctx: dict) -> Any:
         held = True
         c.support("cpu_limits", W_STEADY, f"the CPU's thermal zone limited it to {min(thermal):.0f}% (passive limit)",
                   min(thermal), "%", 100.0)
+    level = st.median([v for _, v in perf_rows]) if perf_rows else None
+    slow = level is not None and level <= CPU_SLOW_PCT
+    if slow:          # item 2: the level itself; the limit flags and the drop below can all miss a mode set outside Windows
+        c.support("cpu_limits", W_STEADY, f"the CPU ran at a median {level:.0f}% of its base clock ({CPU_SLOW_PCT:.0f}% "
+                                          "or less), below full speed for most of the capture"
+                  + ("" if held else ", though Windows reported no power or thermal limit"), level, "%", CPU_SLOW_PCT)
+    dropped = None                        # None: too few speed samples to compare the start with the rest
     if len(perf_rows) >= 2 * PERF_MIN_SAMPLES:
         t0 = perf_rows[0][0]
         split = t0 + min(PERF_BASE_S, (perf_rows[-1][0] - t0) / 3.0)
@@ -1019,14 +1071,17 @@ def _cpu_throttle(cap: Capture, ctx: dict) -> Any:
         rest = [v for t, v in perf_rows if t > split]
         if len(first) >= PERF_MIN_SAMPLES and len(rest) >= PERF_MIN_SAMPLES:
             a, b = st.median(first), st.median(rest)
-            if a > 0 and b <= (1.0 - CPU_PERF_DROP) * a:
+            dropped = a > 0 and b <= (1.0 - CPU_PERF_DROP) * a
+            if dropped:
                 held = True
                 c.support("cpu_limits", W_STEADY, f"the CPU's speed fell from {a:.0f}% to {b:.0f}% of its base clock "
                                                   f"({100 * CPU_PERF_DROP:.0f}% or more down)", b, "%", (1 - CPU_PERF_DROP) * a)
     if not (limit or thermal or perf_rows):
         c.lack("cpu_limits", W_STEADY, "no CPU speed or limit counters were read")
-    elif not held:
-        c.against("cpu_limits", W_STEADY, "the CPU ran at full speed: no power or thermal limit and no speed drop")
+    elif not (held or slow):              # say what was measured: "full speed" once stood for a median 70 % of base
+        speed = "" if level is None else f", and the CPU ran at a median {level:.0f}% of its base clock" + \
+            (" with no speed drop" if dropped is False else "")
+        c.against("cpu_limits", W_STEADY, "Windows reported no power or thermal limit" + speed)
     busiest = _fin(e.bound.get("busiest_thread"))
     if busiest is not None and busiest < CPU_BUSY_FOR_THROTTLE:
         c.against("cpu_threads", W_STEADY, f"the game's busiest thread used only {100 * busiest:.0f}% of a CPU, so CPU "
@@ -1036,6 +1091,11 @@ def _cpu_throttle(cap: Capture, ctx: dict) -> Any:
     fixes = [_advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
              _advice("Give the laptop more air", "Raise its back, keep the vents clear and clean."),
              _advice("Cap the frame rate a little lower", "Less CPU work per second means less heat.")]
+    if slow and not held:                 # only the level: no limit Windows saw, so no heat or power claim either
+        return c.conclude("The CPU ran below its base clock",
+                          "The processor ran below its base clock for most of the capture while Windows reported no "
+                          "limit; a power mode set outside Windows, such as the laptop maker's quiet mode, can hold it "
+                          "there.", fixes)
     return c.conclude("The CPU slows down from heat or power limits",
                       "Windows reported the processor running below its full speed while the game needed it.", fixes)
 
@@ -1093,6 +1153,9 @@ def _ram_pressure(cap: Capture, ctx: dict) -> Any:
     e = c.env
     ram_gb = _fin(e.inv.get("ram_gb"))
     avail = e.sys(S.RAM_AVAIL_MB)
+    commit = e.sys(S.COMMIT_PCT)
+    commit_top = max(commit) if commit else None
+    roomy = False                         # RAM stayed free: what ran short, if anything, was the commit limit
     if avail:
         low = min(avail)
         total = ram_gb * 1024.0 if ram_gb and ram_gb > 0 else None
@@ -1103,6 +1166,13 @@ def _ram_pressure(cap: Capture, ctx: dict) -> Any:
         elif total and low < RAM_WARN_FRAC * total:
             c.support("memory", W_STEADY, f"free RAM fell to {low:.0f} MB of {total / 1024:.1f} GB "
                                           f"(under {100 * RAM_WARN_FRAC:.0f}%)", low, "MB", RAM_WARN_FRAC * total)
+        elif total and commit_top is not None and commit_top > COMMIT_CRIT_PCT:
+            # item 7: the commit limit is RAM plus the page file, so free RAM is no evidence against reaching it
+            # (the first real capture: 89-99.9 % committed all session with 7.9 GB or more of RAM free)
+            roomy = True
+            c.neutral("memory", f"at least {low / 1024:.1f} GB of {total / 1024:.1f} GB RAM stayed free "
+                                f"({100 * low / total:.0f}%), so what ran short was the page file", low, "MB",
+                      RAM_WARN_FRAC * total)
         elif total:
             c.against("memory", W_STEADY, f"at least {low / 1024:.1f} GB of {total / 1024:.1f} GB RAM stayed free "
                                           f"({100 * low / total:.0f}%)", low, "MB", RAM_WARN_FRAC * total)
@@ -1111,21 +1181,31 @@ def _ram_pressure(cap: Capture, ctx: dict) -> Any:
     faults = e.sys(S.HARD_FAULTS_PS)
     if faults:
         hi = st.percentile(faults, 95.0)
-        if hi > FAULTS_WARN_PS:
+        if hi > FAULTS_WARN_PS and roomy:    # LC 4.7: file reads count as hard faults too: with RAM free, no pressure
+            c.neutral("memory", f"Windows read {hi:,.0f} pages a second from disk, which with RAM free is file reads "
+                                "more than memory pressure", hi, "/s", FAULTS_WARN_PS)
+        elif hi > FAULTS_WARN_PS:
             c.support("memory", W_STEADY, f"Windows read {hi:,.0f} pages a second from disk to satisfy memory "
                                           f"(over {FAULTS_WARN_PS:,.0f})", hi, "/s", FAULTS_WARN_PS)
-    commit = e.sys(S.COMMIT_PCT)
-    if commit:
-        top = max(commit)
-        if top > COMMIT_CRIT_PCT:
-            c.support("memory", W_STEADY, f"committed memory reached {top:.0f}% of the limit (critical over "
-                                          f"{COMMIT_CRIT_PCT:.0f}%)", top, "%", COMMIT_CRIT_PCT)
-        elif top > COMMIT_WARN_PCT:
-            c.support("memory", W_STATIC, f"committed memory reached {top:.0f}% of the limit (over "
-                                          f"{COMMIT_WARN_PCT:.0f}%)", top, "%", COMMIT_WARN_PCT)
+    if commit_top is not None:
+        if commit_top > COMMIT_CRIT_PCT:
+            c.support("memory", W_STEADY, f"committed memory reached {commit_top:.0f}% of the limit (critical over "
+                                          f"{COMMIT_CRIT_PCT:.0f}%)", commit_top, "%", COMMIT_CRIT_PCT)
+        elif commit_top > COMMIT_WARN_PCT:
+            c.support("memory", W_STATIC, f"committed memory reached {commit_top:.0f}% of the limit (over "
+                                          f"{COMMIT_WARN_PCT:.0f}%)", commit_top, "%", COMMIT_WARN_PCT)
     if not (avail or faults or commit):
         c.lack("memory", W_STEADY, "no memory counters were read")
     _event_link(c, "memory_paging", "memory", "Windows paging memory to disk")
+    if roomy:
+        fixes = [_advice("Let Windows manage the page file size, or make it larger",
+                         "Search the Start menu for \"View advanced system settings\", then Performance: Settings > "
+                         "Advanced > Virtual memory."),
+                 _advice("Close memory-heavy programs while playing", "Browsers with many tabs are the usual ones.")]
+        return c.conclude("Windows nearly ran out of memory to hand out: the page file is small",
+                          "Programs had reserved almost all the memory Windows can promise (RAM plus the page file) "
+                          "while RAM itself stayed free. At that limit a program that asks for more, the game "
+                          "included, can stall while the page file grows, or fail to get it.", fixes)
     fixes = [_advice("Close memory-heavy programs while playing", "Browsers with many tabs are the usual ones."),
              _advice("Keep the page file system-managed"), _advice("Add RAM if this happens often")]
     return c.conclude("The PC is low on RAM", "Free memory ran short, so Windows moved memory to and from the disk "

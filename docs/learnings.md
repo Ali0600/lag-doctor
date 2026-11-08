@@ -317,3 +317,12 @@ pointer at a time, aiming it at a valid buffer elsewhere, so a sabotaged check r
 crashing the test process.
 **Takeaway**: when an API's output is self-contained in your buffer, check each pointer against the buffer before
 following it; and test such a guard with readable memory on the wrong side, never with a wild pointer.
+
+### A driver's own counter can disagree with the reasons it reports
+NVML's cumulative clock-event counters are meant to add up the time each reason its bitmask names was active. On
+driver 591.86 the SW power-cap counter read 42 % over 169 readings whose reasons never named the cap, and the thermal
+counter kept growing (99-100 % a reading) through idle readings that named only `gpu_idle`.
+**Why it came up**: the review of the first real capture recomputed the power-cap and heat shares from the raw rows;
+the rules had trusted the counters alone.
+**Takeaway**: before turning a counter into a share, check it against the instantaneous flags of the same reading,
+and count it only where they agree (or leave out the state, here idle, where it is known to drift).
