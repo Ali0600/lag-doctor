@@ -353,3 +353,210 @@ def test_pruning_never_touches_an_unfinished_run_younger_than_the_grace_period(t
     ws.prune_runs(tmp_path, now=1_000_000)
     assert (young / "webview-data").is_dir() and young.is_dir()
     assert not old.exists()                                 # unfinished but long dead: pruned
+
+
+# ----------------------------------------------------------------------------------------------- step 2's keys --
+# The owner's first two runs never counted step 2: the first saw no right-click, the second only four keys, and Alt+Left
+# reached the page in neither (docs/research/desktop-app.md, section 11). These hold the rebuilt step's rules.
+
+NOTHING, SOMETHING = "Nothing happened", "Something happened"
+FOUR = {"ctrl+r", "ctrl+p", "ctrl+f", "ctrl+s"}
+SEVEN = FOUR | {"ctrl+shift+i", "ctrl+plus", "ctrl+minus"}
+
+
+def test_the_host_names_every_owner_key_as_the_page_does():
+    assert set(ws.KEY_STROKES) == set(ws.OWNER_KEYS)                  # each key the owner presses can be typed, and back
+    for combo, (mods, vk) in ws.KEY_STROKES.items():
+        assert ws.host_combo(vk, ws.VK_CONTROL in mods, ws.VK_SHIFT in mods, ws.VK_MENU in mods) == combo
+    assert ws.host_combo(ws.VK_ADD, True, False, False) == "ctrl+plus"            # the number pad's + and -
+    assert ws.host_combo(ws.VK_SUBTRACT, True, False, False) == "ctrl+minus"
+    assert ws.host_combo(ws.VK_OEM_PLUS, True, True, False) == "ctrl+plus"        # Shift held to type +: left out
+    assert ws.host_combo(ws.VK_LEFT, True, False, True) == "alt+arrowleft"         # AltGr: a non-US right Alt
+    assert ws.host_combo(ws.VK_LEFT, False, False, False) == "arrowleft"          # the control: no Alt, no Alt+Left
+    assert ws.host_combo(0x52, False, False, False) == "r"                        # R without Ctrl: no owner key
+    assert ws.host_combo(0x74, True, False, False) is None                        # F5: no line of step 2 names it
+
+
+def test_the_pages_own_naming_follows_the_same_rules():
+    js = ws.APP_JS.split("function combo(e) {")[1].split("\n}\n")[0]
+    for rule in ("k = 'plus'", "k = 'minus'", "k !== 'plus' && k !== 'minus'", "e.altKey) return 'alt+arrowleft'"):
+        assert rule in js
+    assert js.index("mods.push('ctrl')") < js.index("mods.push('shift')") < js.index("mods.push('alt')")
+
+
+def test_step_2_lists_every_key_the_wheel_and_a_right_click_with_alt_left_last():
+    ids = [item for item, _ in ws.KEYS_CHECKLIST]
+    assert set(ids) == set(ws.OWNER_KEYS) | {"ctrl-wheel", "right-click"} and len(ids) == len(set(ids))
+    assert ids[-1] == "alt+arrowleft"                                  # a menu mode it starts can take nothing after it
+
+
+def test_a_key_the_window_saw_counts_as_pressed_even_when_the_page_never_got_it():
+    ok, text = ws.keys_verdict(NOTHING, False, FOUR, {"ctrl+shift+i", "ctrl+plus", "alt+arrowleft"}, 1, "the effects")
+    assert ok is True                                                  # 7 of 8 pressed, and a right-click
+    assert "7 of 8 keys pressed (missing: Ctrl+Minus)" in text
+    assert "Ctrl+Shift+I, Ctrl+Plus, Alt+Left reached the window but not the page" in text and "the effects" in text
+    assert ws.keys_verdict(NOTHING, False, FOUR, set(), 1, "")[0] is None        # the control: the page's four alone
+
+
+def test_nothing_happened_counts_only_with_six_keys_and_a_right_click():
+    six = SEVEN - {"ctrl+minus"}
+    assert ws.keys_verdict(NOTHING, False, six, set(), 1, "")[0] is True
+    assert ws.keys_verdict(NOTHING, False, six - {"ctrl+plus"}, set(), 1, "")[0] is None    # five keys
+    ok, text = ws.keys_verdict(NOTHING, False, set(ws.OWNER_KEYS), set(ws.OWNER_KEYS), 0, "")
+    assert ok is None and text.startswith("too few") and "0 right-clicks" in text      # all eight, no right-click
+    assert ws.keys_verdict(NOTHING, False, SEVEN, set(), 0, "")[0] is None        # the owner's first run
+    assert ws.keys_verdict(NOTHING, False, FOUR, set(), 4, "")[0] is None         # and their second
+
+
+def test_something_happened_or_a_change_the_spike_saw_fails_even_with_too_few_tries():
+    assert ws.keys_verdict(SOMETHING, False, set(), set(), 0, "")[0] is False
+    assert ws.keys_verdict(SOMETHING, False, set(ws.OWNER_KEYS), set(), 2, "")[0] is False
+    assert ws.keys_verdict(NOTHING, True, set(), set(), 0, "")[0] is False        # the zoom moved, say
+    assert ws.keys_verdict(NOTHING, True, set(ws.OWNER_KEYS), set(), 2, "")[0] is False
+    assert ws.keys_verdict("Skip", False, set(ws.OWNER_KEYS), set(), 2, "") == (None, "skipped")
+
+
+def test_the_alt_left_story_reads_only_what_came_after_it():
+    window = [{"t": 1.0, "combo": "ctrl+r"}, {"t": 5.0, "combo": "alt+arrowleft"}]
+    page = [("ctrl+r", 1.0), ("x", 5.5)]
+    earlier = [{"t": 2.0, "msg": "menu loop started"}, {"t": 2.5, "msg": "menu loop ended"}]   # a lone Alt before it
+    later = [{"t": 5.1, "msg": "system command", "command": "keyboard menu"}, {"t": 5.12, "msg": "menu loop started"},
+             {"t": 6.0, "msg": "view lost focus"}]
+    text = ws.alt_left_story(window, page, earlier + later)
+    assert text.startswith("Alt+Left reached the window but not the page")
+    assert "menu mode started 0.10 s later;" in text                   # not the earlier loop, and not its end
+    assert "the view lost the keyboard" in text and "1 key reached the page after it" in text
+    text = ws.alt_left_story(window, page, earlier)                    # the control: nothing after Alt+Left
+    assert "no menu mode followed" in text and "lost the keyboard" not in text
+    assert ws.alt_left_story([], [("ctrl+r", 1.0)], later) == "Alt+Left was seen by neither the window nor the page"
+    assert ws.alt_left_story([], [("alt+arrowleft", 3.0)], []).startswith("Alt+Left reached the page but not")
+
+
+def _fake_key_args(kind: int, vk: int, lparam: int):
+    """A stand-in ICoreWebView2AcceleratorKeyPressedEventArgs: KeyEventKind, VirtualKey and KeyEventLParam."""
+    int_out = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(ctypes.c_int))
+    u32_out = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32))
+
+    def getter(value, proto):
+        def get(this, out):
+            out[0] = value
+            return ws.S_OK
+        return proto(get)
+    fns = [ws.QI_PROTO(lambda this, riid, ppv: ws.E_NOINTERFACE), ws.REF_PROTO(lambda this: 1),
+           ws.REF_PROTO(lambda this: 1), getter(kind, int_out), getter(vk, u32_out),
+           getter(ctypes.c_int(lparam).value, int_out)]
+    assert [ws.SLOTS["ICoreWebView2AcceleratorKeyPressedEventArgs"][m]
+            for m in ("get_KeyEventKind", "get_VirtualKey", "get_KeyEventLParam")] == [3, 4, 5]
+    vtbl = (ctypes.c_void_p * len(fns))(*[ctypes.cast(f, ctypes.c_void_p) for f in fns])
+    cell = ctypes.c_void_p(ctypes.addressof(vtbl))
+    return ctypes.addressof(cell), (fns, vtbl, cell)
+
+
+def test_the_key_handler_keeps_every_key_and_ticks_the_page_only_for_a_first_press_during_step_2(tmp_path,
+                                                                                                 monkeypatch):
+    spike = ws.Spike("main", tmp_path, False, lambda line: None)
+    handler = spike.handler("ICoreWebView2AcceleratorKeyPressedEventHandler", ws.EVENT, spike.on_accelerator)
+    held = {ws.VK_CONTROL}
+    monkeypatch.setattr(ws, "GetKeyState", lambda vk: -32768 if vk in held else 0)   # the high bit: held down
+    kept = []
+
+    def key(kind, vk, lparam=0x00130001):
+        args, keep = _fake_key_args(kind, vk, lparam)
+        kept.append(keep)
+        assert ws.vcall(handler.ptr, 3, (ctypes.c_void_p, ctypes.c_void_p), 0, args) == ws.S_OK   # nothing raised
+        return spike.accel_keys[-1]
+    assert key(0, 0x52)["combo"] == "ctrl+r" and not spike.calls       # outside step 2: kept, no tick
+    spike.keys_watch = True
+    assert key(0, 0x52)["combo"] == "ctrl+r" and len(spike.calls) == 1
+    assert key(0, 0x52, 0x40130001)["combo"] is None and len(spike.calls) == 1      # held: a repeat, no new press
+    assert key(1, 0x52, 0xC0130001)["combo"] is None and len(spike.calls) == 1      # let go
+    held.clear()
+    alt = key(2, ws.VK_LEFT, 0x214B0001)                               # a system key, Alt in its lParam (bit 29)
+    assert alt["combo"] == "alt+arrowleft" and alt["alt"] and not alt["ctrl"] and len(spike.calls) == 2
+    sent = []
+    spike.to_page = lambda obj: sent.append(obj) or True
+    while spike.calls:
+        spike.calls.popleft()()
+    assert sent == [{"type": "keyseen", "item": "ctrl+r"}, {"type": "keyseen", "item": "alt+arrowleft"}]
+
+
+def test_the_window_keeps_its_focus_and_menu_messages_and_still_passes_each_on(tmp_path):
+    spike = ws.Spike("main", tmp_path, False, lambda line: None)
+    for msg, wp in ((ws.WM_SYSCOMMAND, ws.SC_KEYMENU), (ws.WM_ENTERMENULOOP, 0), (ws.WM_KILLFOCUS, 0),
+                    (ws.WM_ACTIVATE, 1), (ws.WM_SYSKEYUP, ws.VK_MENU), (ws.WM_SYSCOMMAND, ws.SC_MOVE)):
+        assert spike.on_message(0, msg, wp, 0) is None                 # None: DefWindowProc still gets it
+    assert spike.menu_open                                             # a menu loop started and has not ended
+    assert spike.on_message(0, ws.WM_EXITMENULOOP, 0, 0) is None and not spike.menu_open
+    assert [e["msg"] for e in spike.focus_events] == ["system command", "menu loop started", "window lost focus",
+                                                     "window activation", "window system key up", "system command",
+                                                     "menu loop ended"]
+    assert [e.get("command") for e in spike.focus_events if e["msg"] == "system command"] == ["keyboard menu",
+                                                                                              "0xF010"]
+    assert spike.on_message(0, ws.WM_SETFOCUS, 0, 0) == 0              # kept, and its own branch still answers it
+    assert spike.focus_events[-1]["msg"] == "window got focus"
+    assert spike.on_message(0, ws.WM_SIZE, 0, 0) == 0 and len(spike.focus_events) == 8    # the control: not kept
+
+
+def test_a_rehearsal_clicks_the_first_button_itself_unless_the_step_answers_by_typing():
+    w = ws.Owner("Step 2", "text", [NOTHING, "Skip"], checklist=ws.KEYS_CHECKLIST)
+    prompt = ws.owner_prompt(w, "id1", rehearse=True)
+    assert prompt["auto"] == NOTHING and prompt["checklist"][-1] == ["alt+arrowleft", ws.KEYS_CHECKLIST[-1][1]]
+    assert "auto" not in ws.owner_prompt(ws.Owner("Step 2", "text", [NOTHING], auto=False), "id2", rehearse=True)
+    assert "auto" not in ws.owner_prompt(w, "id3", rehearse=False)     # a person answers
+
+
+def test_only_a_ci_rehearsal_on_githubs_own_runner_types_keys():
+    github = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted"}
+    assert ws.types_keys("main", True, True, github)
+    assert not ws.types_keys("main", True, True, {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted"})
+    assert not ws.types_keys("main", True, True, {})                   # a PC someone uses
+    assert not ws.types_keys("main", False, True, github)              # the automated checks: no step 2 to type into
+    assert not ws.types_keys("main", True, False, github)
+    assert not ws.types_keys("droprefs", True, True, github)
+
+
+def _typing_spike(tmp_path, monkeypatch, on_runner: bool):
+    """A spike whose type_keys runs at once and touches nothing real: no window, pointer or input."""
+    spike = ws.Spike("main", tmp_path, False, lambda line: None)
+    spike.keys_probe, spike.hwnd = True, 0x1234
+    monkeypatch.setattr(ws.guard, "on_throwaway_runner", lambda environ=None: on_runner)
+    for name in ("ShowWindow", "SetForegroundWindow", "SetCursorPos", "ClientToScreen", "GetClientRect", "EndMenu"):
+        monkeypatch.setattr(ws, name, lambda *a: 1)
+    monkeypatch.setattr(ws, "GetCursorPos", lambda p: 0)
+    front = {"hwnd": spike.hwnd, "lost_after": None}
+    typed, sent = [], []
+
+    def send(items):
+        typed.append([(i.u.ki.wVk if i.type == ws.INPUT_KEYBOARD else -i.u.mi.dwFlags) for i in items])
+        if len(typed) == front["lost_after"]:
+            front["hwnd"] = 0x9999                                     # another window comes to the front
+        return len(items)
+    monkeypatch.setattr(ws, "send_input", send)
+    monkeypatch.setattr(ws, "GetForegroundWindow", lambda: front["hwnd"])
+    spike.after = lambda ms, fn: fn()
+    spike.to_page = lambda obj: sent.append(obj) or True
+    return spike, front, typed, sent
+
+
+def test_type_keys_refuses_off_githubs_runner_even_with_its_flag_set(tmp_path, monkeypatch):
+    spike, _, typed, sent = _typing_spike(tmp_path, monkeypatch, on_runner=False)
+    spike.type_keys()
+    assert typed == [] and spike.typing.startswith("not typed")        # a wrong flag alone types nothing
+    assert sent == [{"type": "press", "button": NOTHING}]              # and the step is still answered
+
+
+def test_type_keys_types_each_action_in_order_and_stops_once_the_window_is_not_in_front(tmp_path, monkeypatch):
+    spike, front, typed, sent = _typing_spike(tmp_path, monkeypatch, on_runner=True)
+    spike.type_keys()
+    ctrl, shift, alt = ws.VK_CONTROL, ws.VK_SHIFT, ws.VK_MENU
+    assert typed[0] == [ctrl, 0x52, 0x52, ctrl] and typed[4] == [ctrl, shift, 0x49, 0x49, shift, ctrl]
+    assert typed[7] == [ctrl, -ws.MOUSEEVENTF_WHEEL, ctrl]
+    assert typed[8] == [-ws.MOUSEEVENTF_RIGHTDOWN, -ws.MOUSEEVENTF_RIGHTUP]
+    assert typed[9] == [alt, ws.VK_LEFT, ws.VK_LEFT, alt] and typed[10] == [0x58, 0x58]   # Alt+Left, then a letter
+    assert len(typed) == 11 and spike.typing.startswith("typed all 11 actions")
+    assert sent == [{"type": "press", "button": NOTHING}]
+    spike, front, typed, sent = _typing_spike(tmp_path, monkeypatch, on_runner=True)
+    front["lost_after"] = 3
+    spike.type_keys()
+    assert len(typed) == 3 and "typed 3 of 11 actions: the window was not in front before ctrl+s" in spike.typing
+    assert sent == [{"type": "press", "button": NOTHING}]
