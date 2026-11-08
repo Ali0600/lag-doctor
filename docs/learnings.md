@@ -680,3 +680,19 @@ commit, or pass without having checked anything.
 **Takeaway**: once a workflow filters by path, prove that a commit was meant to be skipped from its diff against the
 last commit that ran, never from the missing run; and keep path filters off any check that is, or may become,
 required.
+
+### A bound UDP endpoint is not a server, and Windows' tables cannot say which it is
+TCP has a state for a server (LISTEN); UDP does not. Windows lists every UDP socket as a bound endpoint, a client's
+too: a socket that only called `connect()` is listed at the address Windows bound it to (0.0.0.0 or ::), not the one
+it sends from, and no UDP table records a peer. A probe from outside cannot tell either, since a connected socket
+drops a stranger's datagram without an answer. What the owner-module table does give: the bound address (a loopback
+or interface address means the program chose it), the SpecificPortBind flag (the program named the port), and the
+owning PID, which the program's own process list can name (WebView2's `GetProcessInfos`: browser, renderer,
+utility, GPU).
+**Why it came up**: the Window spike's no-server check failed 3 of 20 workflow attempts on one "bound" UDP port in a
+WebView2 process. Watching every socket for a whole run showed 70 UDP sockets, all in WebView2's utility process,
+all on 0.0.0.0 with a port Windows chose: its own lookups, which the check's two readings caught only when the timing
+lined up.
+**Takeaway**: to tell a UDP client from a server, read who holds it and how it was bound, and fail on every other
+shape; and before calling a point-in-time check flaky, watch the state for the whole run to see what its instants
+miss.

@@ -339,6 +339,33 @@ unless it says otherwise.
   at 96 DPI with no GPU: page ready 2.75 s after the process started, recovery 0.55 s, close 0.25 s, and of 480
   messages posted to the thread during the move loop, 3 arrived. The rehearsal ran the owner's steps' code. So M1's
   window tests can run on CI [verified: the job's log].
+- **WebView2's own UDP sockets, and the socket check's flake** (GitHub's runner, 2026-11-08) [verified: each run's
+  results.json and log]:
+  - **The flake**: of 20 attempts of the Window spike workflow (13 on main, 5 on M1's branch, 2 on pull requests), 3
+    failed the socket check, each on one UDP endpoint "bound" on a dynamic port (60256, 63250, 64713) in a WebView2
+    process: 3 of 80 readings (an attempt reads 4 times: at the first page and after the recovery, in the automated run
+    and in the rehearsal). No reading showed a TCP listener. The rehearsal's first reading held an outgoing HTTPS
+    connection in 8 of 20.
+  - **What WebView2 opens**: a throwaway copy of the spike (branch `diag/spike-udp-before`, never merged) read every
+    socket of its WebView2 processes every 20 ms, in 20 runs. WebView2 opened 70 UDP sockets, and every one was held
+    by a utility process (WebView2's own process list, `GetProcessInfos`), bound to 0.0.0.0 on a port Windows chose
+    (the table's SpecificPortBind clear), in the dynamic range. 40 lived 50 ms or less, often in pairs; 30 lived 10 s
+    or more, until the recovery ended their process. All 53 TCP connections were that process's too, to port 443. The
+    first UDP socket appeared 0.02 to 1.94 s after the first check had read the table (median about 1 s), and after the
+    recovery the new network process starts its own: the check was racing the runtime's first lookups.
+  - **What Windows' tables can tell**: a UDP socket connected without a bind is listed at the address Windows bound it
+    to (0.0.0.0 or ::), not the one it sends from (measured on own sockets), and no UDP table records a peer: the
+    owner-module row holds the bound address, a creation time and SpecificPortBind only (udpmib.h; UDP_TABLE_CLASS has
+    no other kind). A probe from outside cannot tell either: a connected UDP socket drops a stranger's datagram
+    without an answer, and only a closed port answers "port unreachable" (this PC's loopback, 3 rounds).
+  - **So the check** counts a UDP endpoint as WebView2's own client only in that one shape: a utility process's, bound
+    to the unspecified address on a port Windows chose. Anything else fails it: a TCP listener anywhere, any socket in
+    the spike, a UDP endpoint on loopback or an interface's address or on a port its program named, or one held by the
+    browser, a renderer, the GPU process or a process WebView2 does not list. Its control adds a UDP client connected
+    without a bind and a UDP endpoint on a named port, and sorts each of the spike's own sockets as a utility
+    process's would be. What it cannot see: an unconnected UDP socket that WebView2's network process binds to the
+    unspecified address on a port Windows chose (WebRTC binding to "any address" would be one) reads exactly like a
+    client.
 - **The owner's two runs** (in the owner's terminal, 2026-11-08; each INCOMPLETE: 33 passed, 0 failed, step 2 not
   run) [verified: each run's results.json and log]:
   - **Drag**: every result posted to the window arrived (1,717 of 1,717 in 9.5 s of dragging; 1,420 of 1,420 in
@@ -447,4 +474,6 @@ harness's facts file], unless it says otherwise.
 | `CreateWebViewEnvironmentWithOptionsInternal` takes (bool, runtime type, folder, options, handler), 0 = installed; the runtime's folder is the `EBWebView` value read with `KEY_WOW64_32KEY` | confirmed | webview/webview `loader.hh` and Wails `env_create.go`, `find_dll_installed.go` (master, 2026-11-08) |
 | Step 2's additions: the controller's `add_GotFocus` 15 and `add_LostFocus` 17, `ICoreWebView2FocusChangedEventHandler` 05EA24BD-6452-4926-9014-4B82B498135D, and the key event's `get_KeyEventLParam` 5 | confirmed: 140 entries, 0 mismatches | the same header and script, against the spike's tables |
 | M1's additions: `ICoreWebView2::ExecuteScript` 29, `ICoreWebView2_17::PostSharedBufferToScript` 116, `ICoreWebView2Environment12::CreateSharedBuffer` 24, `ICoreWebView2SharedBuffer` get_Size 3, get_Buffer 4, Close 7, and the IIDs of those interfaces and of `ICoreWebView2ExecuteScriptCompletedHandler` | confirmed: every slot and IID `lagdoctor/winapi/webview2.py` names equals `WebView2.idl`'s, and a reader of that IDL matched `WebView2.h`'s C vtables in all 297 interfaces (5,731 slots) | the SDK's nupkg, SHA-256 pinned, through `tests/test_webview2_idl.py` |
+| The socket check's additions: `ICoreWebView2Environment8::GetProcessInfos` 18, `ICoreWebView2ProcessInfoCollection` get_Count 3 and GetValueAtIndex 4, `ICoreWebView2ProcessInfo` get_ProcessId 3 and get_Kind 4, their IIDs, and `COREWEBVIEW2_PROCESS_KIND` (browser 0, renderer 1, utility 2, sandbox helper 3, GPU 4) | confirmed: counted from `WebView2.h`'s C vtables and enum, and equal to `WebView2.idl`'s | the SDK's nupkg (SHA-256 equal to the pin), by script; `tests/test_webview2_idl.py` |
+| `MIB_UDPROW_OWNER_MODULE` and `MIB_UDP6ROW_OWNER_MODULE` (160 and 176 bytes), SpecificPortBind as bit 0 of `dwFlags`, and no UDP table with a peer (`UDP_TABLE_CLASS`: BASIC, OWNER_PID, OWNER_MODULE) | confirmed | Windows SDK 10.0.19041.0 `udpmib.h`, `iprtrmib.h`, `tcpmib.h`; the sizes and the flag also read back from own sockets |
 | Section 12's quotes (the key event, its order, GetKeyState, AltGr, `SC_KEYMENU`, AllowHostInputProcessing) | quoted, not re-read here | learn.microsoft.com references, WebView2Feedback issues 1703 and 5549 and Chromium's source, read by this session's research agent on 2026-11-08 |

@@ -325,7 +325,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `tests/test_sysmon_sampler.py::test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild` failed once in a
   full local run (2026-11-08: the grandchild's first reading was 0.0, so its mean was 72 % against the 88 % expected,
   outside the 10-point bound) and passed alone; rerun it alone before blaming a change. The Window spike workflow's
-  socket check (`sockets-1` or `sockets-2`) failed 2 of 7 dispatched runs on 2026-11-08 (the M1 branch 2 of 4, main 0
-  of 3, the spike's code the same on both): a WebView2 process held one UDP4 socket "bound" on an ephemeral port, once
-  with an outgoing connection, which reads as the runtime's own network traffic rather than a listener; rerun the job
-  before blaming a change. A fix that tells the two apart was proposed as its own session, not made.
+  socket check (`sockets-1` or `sockets-2`) failed 3 of 20 attempts on 2026-11-08 (main 1 of 13, the M1 branch 2 of
+  5), each on one UDP4 socket "bound" on an ephemeral port in a WebView2 process: the runtime's own lookups (in 20
+  runs watched every 20 ms, all 70 of its UDP sockets were a utility process's, on 0.0.0.0, on a port Windows chose).
+  Since PR #22 the check counts that one shape as WebView2's client and fails on every other (`server_reason` in the
+  spike; `docs/research/desktop-app.md` section 11). If it fails again, read the failing reading's `servers` in
+  results.json (each names its reason and process kind) before rerunning.

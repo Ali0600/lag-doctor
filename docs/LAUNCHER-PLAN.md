@@ -288,9 +288,12 @@ a check that needs a control runs it: a control that does not fail as predicted 
   after a recovery; every setting reads back as set, before and after.
 - The view fills the window at the display's scale, Windows' text size included.
 - Assets come from the virtual host, and none of 9 path escapes reads the file beside its folder.
-- No listening TCP socket or bound UDP endpoint in the app or its WebView2 processes. The control: a listener, a
-  connected pair and UDP endpoints of the spike's own are read back with their states. WebView2's own outgoing
-  connections are counted, not failed.
+- No socket in the app, and no listening TCP socket or UDP server in its WebView2 processes. The control: a listener,
+  a connected pair, UDP endpoints (one on a named port) and a connected UDP client of the spike's own are read back
+  with their states, addresses and port flags, and sorted. WebView2's own clients are counted, not failed: its TCP
+  connections, and UDP sockets in the one shape its lookups leave (a utility process's, bound to the unspecified
+  address on a port Windows chose; `docs/research/desktop-app.md` section 11 has why that is as narrow as Windows
+  allows).
 - The page's CSP blocks an inline handler and an outside fetch, each with its violation report.
 - 1,000 messages round-trip in order from the right origin; p50 and p95 latency printed.
 - A window watch sees browser-owned windows. The control: DevTools, opened on purpose and closed.

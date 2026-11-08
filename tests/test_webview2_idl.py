@@ -151,7 +151,7 @@ def test_the_reader_gives_every_slot_and_iid_counted_from_webview2_h(sdk):
         else:
             assert idl.same_iid(defs[iface].iid, iid), (iface, defs[iface].iid, iid)
         iids += 1
-    assert (compared, iids) == (106 + 6, 35 + 4)              # the spike's tables and the header's additions, all
+    assert (compared, iids) == (111 + 6, 38 + 4)              # the spike's tables and the header's additions, all
 
 
 def test_the_apps_module_names_only_slots_and_iids_the_idl_gives(sdk):

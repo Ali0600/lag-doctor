@@ -124,6 +124,9 @@ HARDENED_ENV = {
 SLOTS = {
     "ICoreWebView2Environment": {"CreateCoreWebView2Controller": 3, "get_BrowserVersionString": 5},
     "ICoreWebView2Environment5": {"add_BrowserProcessExited": 12},
+    "ICoreWebView2Environment8": {"GetProcessInfos": 18},
+    "ICoreWebView2ProcessInfoCollection": {"get_Count": 3, "GetValueAtIndex": 4},
+    "ICoreWebView2ProcessInfo": {"get_ProcessId": 3, "get_Kind": 4},
     "ICoreWebView2Controller": {"put_IsVisible": 4, "get_Bounds": 5, "put_Bounds": 6, "get_ZoomFactor": 7, "add_ZoomFactorChanged": 9, "MoveFocus": 12, "add_GotFocus": 15, "add_LostFocus": 17, "add_AcceleratorKeyPressed": 19, "NotifyParentWindowPositionChanged": 23, "Close": 24, "get_CoreWebView2": 25},
     "ICoreWebView2Controller3": {"put_DefaultBackgroundColor": 27, "get_RasterizationScale": 28, "get_ShouldDetectMonitorScaleChanges": 30, "add_RasterizationScaleChanged": 32, "get_BoundsMode": 34},
     "ICoreWebView2": {"get_Settings": 3, "Navigate": 5, "add_NavigationStarting": 7, "add_NavigationCompleted": 15, "add_FrameNavigationStarting": 17, "add_ScriptDialogOpening": 21, "add_PermissionRequested": 23, "add_ProcessFailed": 25, "PostWebMessageAsJson": 32, "add_WebMessageReceived": 34, "remove_WebMessageReceived": 35, "get_BrowserProcessId": 37, "add_NewWindowRequested": 44, "OpenDevToolsWindow": 51},
@@ -155,6 +158,9 @@ IIDS = {
     "IUnknown": "00000000-0000-0000-C000-000000000046",
     "ICoreWebView2Environment": "B96D755E-0319-4E92-A296-23436F46A1FC",
     "ICoreWebView2Environment5": "319E423D-E0D7-4B8D-9254-AE9475DE9B17",
+    "ICoreWebView2Environment8": "D6EB91DD-C3D2-45E5-BD29-6DC2BC4DE9CF",
+    "ICoreWebView2ProcessInfoCollection": "402B99CD-A0CC-4FA5-B7A5-51D86A1D2339",
+    "ICoreWebView2ProcessInfo": "84FA7612-3F3D-4FBF-889D-FAD000492D72",
     "ICoreWebView2Controller": "4D00C0D1-9434-4EB6-8078-8697A560334F",
     "ICoreWebView2Controller3": "F9614724-5D2B-41DC-AEF7-73D62B51543B",
     "ICoreWebView2": "76ECEACB-0462-4D94-AC83-423A6793775E",
@@ -957,22 +963,29 @@ class MIB_TCP6ROW_OWNER_PID(ctypes.Structure):
                 ("dwOwningPid", wintypes.DWORD)]
 
 
-class MIB_UDPROW_OWNER_PID(ctypes.Structure):
-    _fields_ = [("dwLocalAddr", wintypes.DWORD), ("dwLocalPort", wintypes.DWORD), ("dwOwningPid", wintypes.DWORD)]
+# udpmib.h: dwFlags is a union whose bit 0 is SpecificPortBind, set when the program bound a port it named (bind to
+# port 0 leaves it clear); OwningModuleInfo is TCPIP_OWNING_MODULE_SIZE (16) ULONGLONGs.
+class MIB_UDPROW_OWNER_MODULE(ctypes.Structure):
+    _fields_ = [("dwLocalAddr", wintypes.DWORD), ("dwLocalPort", wintypes.DWORD), ("dwOwningPid", wintypes.DWORD),
+                ("liCreateTimestamp", ctypes.c_longlong), ("dwFlags", ctypes.c_int),
+                ("OwningModuleInfo", ctypes.c_ulonglong * 16)]
 
 
-class MIB_UDP6ROW_OWNER_PID(ctypes.Structure):
+class MIB_UDP6ROW_OWNER_MODULE(ctypes.Structure):
     _fields_ = [("ucLocalAddr", ctypes.c_ubyte * 16), ("dwLocalScopeId", wintypes.DWORD),
-                ("dwLocalPort", wintypes.DWORD), ("dwOwningPid", wintypes.DWORD)]
+                ("dwLocalPort", wintypes.DWORD), ("dwOwningPid", wintypes.DWORD),
+                ("liCreateTimestamp", ctypes.c_longlong), ("dwFlags", ctypes.c_int),
+                ("OwningModuleInfo", ctypes.c_ulonglong * 16)]
 
 
 assert ctypes.sizeof(MIB_TCPROW_OWNER_PID) == 24
 assert ctypes.sizeof(MIB_TCP6ROW_OWNER_PID) == 56
-assert ctypes.sizeof(MIB_UDPROW_OWNER_PID) == 12
-assert ctypes.sizeof(MIB_UDP6ROW_OWNER_PID) == 28
+assert ctypes.sizeof(MIB_UDPROW_OWNER_MODULE) == 160
+assert ctypes.sizeof(MIB_UDP6ROW_OWNER_MODULE) == 176
 
 TCP_TABLE_OWNER_PID_ALL = 5                  # every state, listeners and connections both
-UDP_TABLE_OWNER_PID = 1
+UDP_TABLE_OWNER_MODULE = 2
+UDP_SPECIFIC_PORT_BIND = 1                   # dwFlags bit 0
 MIB_TCP_STATE_LISTEN, MIB_TCP_STATE_ESTAB = 2, 5
 AF_INET, AF_INET6 = 2, 23
 
@@ -994,30 +1007,87 @@ def _table(fn, family: int, table_class: int, row_type) -> list:
     raise OSError("the socket table kept growing")
 
 
+def _local_addr(r) -> str:
+    if hasattr(r, "ucLocalAddr"):
+        return socket.inet_ntop(socket.AF_INET6, bytes(r.ucLocalAddr))
+    return socket.inet_ntop(socket.AF_INET, (r.dwLocalAddr & 0xFFFFFFFF).to_bytes(4, "little"))   # network order
+
+
 def open_sockets(pids: set[int]) -> list[dict]:
     """Every TCP socket in any state, and every bound UDP endpoint, IPv4 and IPv6, owned by any of `pids`.
 
-    state: "listen" and "bound" are a server's; "established" and the rest are connections."""
+    state: "listen" is a TCP server's; "established" and the rest are connections; a UDP endpoint is "bound", whatever
+    it does. addr is the local address as bound: a UDP socket connect() bound implicitly reads 0.0.0.0 or ::, not the
+    address it sends from. specific_port (UDP only): its program named the port, rather than letting Windows choose."""
     out = []
     for proto, fn, fam, cls, row in (("tcp4", GetExtendedTcpTable, AF_INET, TCP_TABLE_OWNER_PID_ALL,
                                       MIB_TCPROW_OWNER_PID),
                                      ("tcp6", GetExtendedTcpTable, AF_INET6, TCP_TABLE_OWNER_PID_ALL,
                                       MIB_TCP6ROW_OWNER_PID),
-                                     ("udp4", GetExtendedUdpTable, AF_INET, UDP_TABLE_OWNER_PID, MIB_UDPROW_OWNER_PID),
-                                     ("udp6", GetExtendedUdpTable, AF_INET6, UDP_TABLE_OWNER_PID,
-                                      MIB_UDP6ROW_OWNER_PID)):
+                                     ("udp4", GetExtendedUdpTable, AF_INET, UDP_TABLE_OWNER_MODULE,
+                                      MIB_UDPROW_OWNER_MODULE),
+                                     ("udp6", GetExtendedUdpTable, AF_INET6, UDP_TABLE_OWNER_MODULE,
+                                      MIB_UDP6ROW_OWNER_MODULE)):
         for r in _table(fn, fam, cls, row):
             if r.dwOwningPid not in pids:
                 continue
-            item = {"proto": proto, "pid": r.dwOwningPid, "port": socket.ntohs(r.dwLocalPort & 0xFFFF)}
+            item = {"proto": proto, "pid": r.dwOwningPid, "port": socket.ntohs(r.dwLocalPort & 0xFFFF),
+                    "addr": _local_addr(r)}
             if proto.startswith("tcp"):
                 item["state"] = ("listen" if r.dwState == MIB_TCP_STATE_LISTEN else
                                  "established" if r.dwState == MIB_TCP_STATE_ESTAB else f"state {r.dwState}")
                 item["remote_port"] = socket.ntohs(r.dwRemotePort & 0xFFFF)
             else:
                 item["state"] = "bound"
+                item["specific_port"] = bool(r.dwFlags & UDP_SPECIFIC_PORT_BIND)
             out.append(item)
     return out
+
+
+# COREWEBVIEW2_PROCESS_KIND, 0 to 6 (WebView2.h 1.0.4314.35); the last two are unused.
+PROCESS_KINDS = ("browser", "renderer", "utility", "sandbox helper", "GPU", "plugin", "plugin broker")
+UNSPECIFIED = ("0.0.0.0", "::")
+
+
+def server_reason(x: dict, kind: str | None) -> str | None:
+    """Why a socket of a WebView2 process's counts as a server; None when it is a client's.
+
+    A TCP socket is a server's only when it listens. A UDP endpoint takes a datagram from anyone unless it is connected,
+    and Windows' tables record neither its peer nor whether it has one: a connected socket is listed at the address it
+    was bound to, and it drops a stranger's datagram without an answer (both measured, docs/research/desktop-app.md
+    section 11). So a UDP endpoint counts as WebView2's own client only in the shape that every UDP socket WebView2
+    opened on GitHub's runner had (70 of 70 in 20 runs): held by a utility process (its network service), bound to the
+    unspecified address on a port Windows chose. Bound to loopback or an interface's address, to a port its program
+    named, or held by any other process (the browser, a renderer, the GPU process, one WebView2 does not list), it is a
+    server's."""
+    if x["proto"].startswith("tcp"):
+        return "listening" if x["state"] == "listen" else None
+    if kind != "utility":
+        return f"UDP in the {kind} process" if kind else "UDP in a process WebView2 does not list"
+    if x.get("addr") not in UNSPECIFIED:
+        return f"UDP bound to {x.get('addr')}"
+    if x.get("specific_port") is not False:
+        return "UDP on a port its program named"
+    return None
+
+
+def sort_sockets(found: list[dict], own: int, kinds: dict[int, str],
+                 control_ports: set[int]) -> tuple[list[dict], list[dict], list[dict]]:
+    """(mine, servers, outgoing): every socket of the spike's own but the control's, the WebView2 processes' servers
+    (each with the reason), and their clients. `kinds` maps a WebView2 process's PID to its kind."""
+    mine, servers, outgoing = [], [], []
+    for x in found:
+        if x["pid"] == own:
+            if x["port"] not in control_ports:
+                mine.append(x)
+            continue
+        kind = kinds.get(x["pid"])
+        why = server_reason(x, kind)
+        if why:
+            servers.append(dict(x, kind=kind, why=why))
+        else:
+            outgoing.append(dict(x, kind=kind))
+    return mine, servers, outgoing
 
 
 def text_scale() -> float:
@@ -2436,48 +2506,113 @@ class Spike:
                  f"(encoded slashes and backslashes, the file's absolute path), {len(leaked)} read the file",
                  report=r)
 
+    def process_kinds(self) -> tuple[dict[int, str], str | None]:
+        """Each WebView2 process's kind by PID, from the environment's own list (no handle on any process; the list
+        leaves out the crash handler), and the error that cut the list short, if any."""
+        if not self.env:
+            return {}, "no environment"
+        env8 = self.env.qi("ICoreWebView2Environment8")
+        if not env8:
+            return {}, "the environment has no ICoreWebView2Environment8"
+        kinds: dict[int, str] = {}
+        coll = Com(0, "ICoreWebView2ProcessInfoCollection")
+        try:
+            out = ctypes.c_void_p()
+            env8.do("GetProcessInfos", (ctypes.POINTER(ctypes.c_void_p),), ctypes.byref(out))
+            coll = Com(out.value, "ICoreWebView2ProcessInfoCollection")
+            for i in range(coll.get_u32("get_Count")):
+                p = ctypes.c_void_p()
+                coll.do("GetValueAtIndex", (ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p)), i, ctypes.byref(p))
+                info = Com(p.value, "ICoreWebView2ProcessInfo")
+                try:
+                    kind = info.get_int("get_Kind")
+                    kinds[info.get_int("get_ProcessId")] = (PROCESS_KINDS[kind] if 0 <= kind < len(PROCESS_KINDS)
+                                                            else f"kind {kind}")
+                finally:
+                    info.release()
+        except OSError as exc:
+            return kinds, str(exc)
+        finally:
+            coll.release()
+            env8.release()
+        return kinds, None
+
     def check_sockets(self, id_: str, when: str) -> None:
-        """No server: no listening TCP socket and no bound UDP endpoint in the spike or its WebView2 processes.
-        WebView2's own outgoing connections are counted, not failed: they are the runtime's, not the app's."""
+        """No server: no socket at all in the spike, and no listening TCP socket or UDP server in its WebView2
+        processes. WebView2's own clients are counted, not failed: its TCP connections, and UDP sockets in the one
+        shape its lookups and connections leave (server_reason says which, and why that is as narrow as Windows'
+        tables allow)."""
         own = os.getpid()
         tree = set(process_tree(self.snapshotter.snapshot(), self.browser_pid)) if self.browser_pid else set()
-        # The control: a listener, a connected pair and UDP, IPv4 and IPv6, all the spike's own, must be read back
-        # with their states, or a clean result proves nothing.
-        made, expected = [], set()
+        # The control, all the spike's own: a listener, a connected pair and UDP endpoints, IPv4 and IPv6, one on a port
+        # the spike names, and a UDP client connected without a bind. Each must read back with its state, address and
+        # port flag and, taken as a utility process's, sort the way it should, or a clean result proves nothing.
+        made, expected = [], []                 # (proto, port, state, addr, specific_port, is a server)
+        control = {"read": 0, "wrong": []}
+
+        def new(family, kind):
+            s = socket.socket(family, kind)
+            made.append(s)
+            return s
         try:
-            for family, host, proto in ((socket.AF_INET, "127.0.0.1", "4"), (socket.AF_INET6, "::1", "6")):
-                lst = socket.socket(family, socket.SOCK_STREAM)
-                made.append(lst)
+            lst4, lst6 = new(socket.AF_INET, socket.SOCK_STREAM), new(socket.AF_INET6, socket.SOCK_STREAM)
+            for lst, host in ((lst4, "127.0.0.1"), (lst6, "::1")):
                 lst.bind((host, 0))
                 lst.listen(1)
-                expected.add(("tcp" + proto, lst.getsockname()[1], "listen"))
-                udp = socket.socket(family, socket.SOCK_DGRAM)
-                made.append(udp)
-                udp.bind((host, 0))
-                expected.add(("udp" + proto, udp.getsockname()[1], "bound"))
-                if proto == "4":
-                    cli = socket.create_connection((host, lst.getsockname()[1]), timeout=5)
-                    made.append(cli)
-                    srv, _ = lst.accept()
-                    made.append(srv)
-                    expected.add(("tcp4", cli.getsockname()[1], "established"))
-            seen = {(x["proto"], x["port"], x["state"]) for x in open_sockets({own})}
-            control_ok = expected <= seen
+                expected.append(("tcp4" if lst is lst4 else "tcp6", lst.getsockname()[1], "listen", host, None, True))
+            for _ in range(5):                  # udp4's port, named on ::1 (a port space of its own): rarely taken
+                udp4, udp6 = new(socket.AF_INET, socket.SOCK_DGRAM), new(socket.AF_INET6, socket.SOCK_DGRAM)
+                udp4.bind(("127.0.0.1", 0))
+                try:
+                    udp6.bind(("::1", udp4.getsockname()[1]))
+                    break
+                except OSError:
+                    continue
+            expected.append(("udp4", udp4.getsockname()[1], "bound", "127.0.0.1", False, True))
+            expected.append(("udp6", udp6.getsockname()[1], "bound", "::1", True, True))
+            cli = socket.create_connection(("127.0.0.1", lst4.getsockname()[1]), timeout=5)
+            made.append(cli)
+            made.append(lst4.accept()[0])
+            expected.append(("tcp4", cli.getsockname()[1], "established", "127.0.0.1", None, False))
+            ucli = new(socket.AF_INET, socket.SOCK_DGRAM)
+            ucli.connect(("127.0.0.1", udp4.getsockname()[1]))      # sends nothing; Windows binds it implicitly
+            expected.append(("udp4", ucli.getsockname()[1], "bound", "0.0.0.0", False, False))
+            seen = {(x["proto"], x["port"], x["state"]): x for x in open_sockets({own})}
+            for proto, port, state, addr, specific, is_server in expected:
+                x = seen.get((proto, port, state))
+                if x is None:
+                    control["wrong"].append(f"{proto} {port} {state}: not read back")
+                    continue
+                control["read"] += 1
+                got = (x["addr"], x.get("specific_port"), server_reason(x, "utility") is not None)
+                if got != (addr, specific, is_server):
+                    control["wrong"].append(f"{proto} {port} {state}: read as {got}, expected "
+                                            f"{(addr, specific, is_server)}")
+        except OSError as exc:
+            control["wrong"].append(f"the control could not be set up: {exc}")
         finally:
             for s in made:
                 s.close()
-        control_ports = {port for _, port, _ in expected}
+        control_ok = not control["wrong"] and control["read"] == len(expected) == 6
         found = open_sockets({own} | tree)
-        servers = [x for x in found if x["state"] in ("listen", "bound") and x["pid"] != own]
-        mine = [x for x in found if x["pid"] == own and x["port"] not in control_ports]
-        outgoing = [x for x in found if x["pid"] != own and x not in servers]
-        ok = control_ok and self.browser_pid in tree and not servers and not mine
+        kinds, kinds_error = self.process_kinds()           # read after the sockets: each holder is still running
+        kinds_ok = kinds_error is None and kinds.get(self.browser_pid) == "browser"
+        mine, servers, outgoing = sort_sockets(found, own, kinds, {e[1] for e in expected})
+        tcp_out = [x for x in outgoing if x["proto"].startswith("tcp")]
+        udp_out = [x for x in outgoing if x["proto"].startswith("udp")]
+        ok = control_ok and kinds_ok and self.browser_pid in tree and not servers and not mine
         self.add(id_, f"No listening socket in lag-doctor or its WebView2 processes ({when})", ok,
-                 (f"{len(servers)} listening or bound across {len(tree)} WebView2 processes, {len(mine)} sockets in "
-                  f"the spike; WebView2's own outgoing connections: {len(outgoing)}; the control's "
-                  f"{len(expected)} sockets {'were' if control_ok else 'were NOT'} read back"),
-                 servers=servers, mine=mine, outgoing=[{"proto": x["proto"], "state": x["state"],
-                                                        "remote_port": x.get("remote_port")} for x in outgoing])
+                 (f"{len(servers)} servers across {len(tree)} WebView2 processes, {len(mine)} sockets in the spike; "
+                  f"WebView2's own: {len(tcp_out)} TCP connections, {len(udp_out)} UDP client sockets in its utility "
+                  f"process; the control's {len(expected)} sockets "
+                  f"{'were read back and sorted right' if control_ok else 'were NOT all read back and sorted right'}; "
+                  f"WebView2's process list {'named' if kinds_ok else 'did NOT name'} the browser process"
+                  + (f" ({kinds_error})" if kinds_error else "")),
+                 servers=servers, mine=mine,
+                 outgoing=[{"proto": x["proto"], "state": x["state"], "kind": x["kind"],
+                            **({"remote_port": x["remote_port"]} if "remote_port" in x else
+                               {"addr": x["addr"], "port": x["port"]})} for x in outgoing],
+                 control=control, kinds={str(pid): kinds.get(pid) for pid in sorted(tree)})
 
     def check_csp(self, r) -> None:
         if not r:
