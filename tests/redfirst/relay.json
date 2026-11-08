@@ -610,7 +610,7 @@
   "old": "            self._reader.join(3.0)",
   "new": "            pass",
   "tests": [
-   "tests/test_relay.py::test_a_closed_handle_is_no_exit_code_and_the_reader_is_done_before_the_handle_closes"
+   "tests/test_relay.py::test_a_relay_that_dies_as_the_window_closes_keeps_its_handle_until_the_reader_is_done"
   ]
  },
  {

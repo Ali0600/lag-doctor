@@ -396,8 +396,14 @@ relay forwards the game's rows and keeps none; its frames reach the capture exac
 replay through the relay gives the same columns). Per-program traffic comes only from the player's session
 (DECISIONS 2026-11-08), so `bandwidth_hog` rules a download out only with the adapter's counters. On GitHub's runner,
 where UAC is off, `tests/test_relay_live.py` starts the real relay through `launch_elevated` and checks real
-PresentMon and Kernel-Network data come back. Of the child's red-first anchors, 43 retired with the code they
-guarded and 11 moved; `tests/redfirst/relay.json` holds the relay's own. Still the owner's: one real
+PresentMon and Kernel-Network data come back. Three adversarial reviews (privilege boundary, concurrency, integration)
+raised 21 distinct findings. 18 were fixed before merge; two concern Stage 4's service (INSTALLER-PLAN, Stage 4), and
+PresentMon still outlives a relay that is killed, as it outlived a killed recorder before. Among the fixes, the game's
+and the recorder's pids are now kept by identity and
+session, so a number Windows gives to another program never carries its traffic out; PresentMon is never opened
+from a share; the relay's stop no longer reads as its trace dying; and the game's own traffic is taken off the
+adapter's total before `bandwidth_hog` judges what is left. Of the child's red-first anchors, 43 retired with the
+code they guarded and 12 moved; `tests/redfirst/relay.json` holds the relay's own. Still the owner's: one real
 `lagdoctor watch --elevate` with a game, to see the prompt, no second window, and frames in the report.
 
 Of the two checks once left to the owner, the first is answered on CI, where the suite runs elevated (High

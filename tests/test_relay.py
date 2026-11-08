@@ -1112,3 +1112,35 @@ def test_the_relays_pipe_lets_in_the_recorders_account_alone(game):
     sid = elevation.token_user_sid()
     with pipe.PipeServer(f"lagdoctor-dacl-{secrets.token_hex(8)}", pipe.client_dacl([sid])) as want:
         assert got == want.descriptor()                   # Windows' own spelling of one ACE, for this account
+
+
+def test_a_relay_that_dies_as_the_window_closes_keeps_its_handle_until_the_reader_is_done():
+    # The relay's end goes first: the reader is reading its exit code through the process handle when close() comes.
+    class Pipe:
+        def read(self, timeout_s):
+            raise OSError(109, "The pipe has been ended")
+
+        def close(self):
+            pass
+
+    class Child:
+        pid = 1
+
+        def __init__(self):
+            self.waits, self.in_wait = [], threading.Event()
+            self.reader_alive_at_close = None
+
+        def wait(self, timeout_s=None):
+            self.waits.append(timeout_s)
+            self.in_wait.set()
+            time.sleep(0.5)
+            return 7
+
+        def close(self):
+            self.reader_alive_at_close = link._reader.is_alive()
+    child = Child()
+    link = client.RelayLink(Pipe(), child, {"pid": os.getpid(), "frames": False, "network": True})
+    _until(child.in_wait.is_set, 5, "the reader to wait on the relay's exit")
+    link.close()
+    assert child.reader_alive_at_close is False and child.waits[0] == 1.0
+    assert link.why == "the relay ended (exit code 7)"

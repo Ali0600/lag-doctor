@@ -887,7 +887,8 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   is unchecked (a TCP-only or offline game); an "open" gap is a lost connection; "local" gaps are the game
   pausing its own sending. `bandwidth_hog`: checked only from a source that sees all traffic (ETW talkers, or the
   NIC counters); talkers that cover only the player's Windows session (`talkers_scope` "session", through the
-  relay) can name a program but rule out only together with the NIC counters, since services run outside it.
+  relay) can name a program but rule out only together with the NIC counters, since services run outside it: what
+  the adapter moved less the game's own bytes over the network (`game_wire_bytes`) must stay under 1 MB/s.
 
 ### Scoring (LC 5)
 - Evidence families: frame timing, GPU telemetry, GPU engine/memory, CPU threads, CPU frequency/limits,
