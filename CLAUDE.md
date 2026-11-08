@@ -185,6 +185,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
 - A new worktree has no `.venv`, and the first `uv run` builds one on uv's own managed Python 3.12 (pyproject asks
   only for 3.11 or later; seen 2026-11-07). Run the `uv sync ... --python 3.13` line first: it resolves to
   `C:\Python313`, the interpreter of the main checkout's venv.
+- The main checkout (`<repo>`) is also a session's working folder: on 2026-11-08 the original session worked there
+  while worktree sessions built M0 and its step 2. Work in a worktree. After landing a change, bring the main checkout
+  to the new main only with `git merge --ff-only origin/main`, only when it is on `main` with `git status --porcelain`
+  empty, and never switch its branch; the owner runs the tool there.
 - `uv sync` installs lag-doctor itself, editable: `.venv\Lib\site-packages\lag_doctor.pth` holds the checkout's root,
   so every process in the venv can import `lagdoctor`, `laglab`, `tests` and `scripts`, after its own folder,
   `PYTHONPATH` and site-packages. Red-first runs still test their copy: pytest's `pythonpath` and `cwd` put it first,
