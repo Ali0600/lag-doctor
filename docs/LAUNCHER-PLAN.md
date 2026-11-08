@@ -16,7 +16,9 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 - [x] M0: the window spike (`scripts/webview_spike.py`) passed the owner's own run on 2026-11-08: 34 passed, 0
   failed, 0 not run. The first two runs never counted step 2 (keys and right-click); the owner chose to rebuild it
   (DECISIONS 2026-11-08, PR #20), and the third run completed it (research note, section 11).
-- [ ] M1: the app with your results.
+- [x] M1: the app with your results: `lagdoctor app` and the MSI's Start-menu shortcut, merged 2026-11-08 (PR #21).
+  Its window tests drive the real window on a demo library, here and on CI's runner; the owner tried `lagdoctor app`
+  in their own terminal before the merge ("It works, merge it").
 - [ ] M2: the recording seams. The locked pipe is done (`lagdoctor/winapi/pipe.py`, PR #19, 2026-11-08), and so are
   tool roots whose whole tree joins `tool_pids` (M3 needed them for the relay); the other seams are not.
 - [x] M3: the relay (`lagdoctor/relay/`, 2026-11-08). `watch --elevate` records in the player's own window; only
@@ -348,6 +350,23 @@ Play and screen 6 with M6. It needs:
   the app: its shell has the private copy, and from M4 on the app raises a UAC prompt. The spike keeps its data in
   `%TEMP%`, which the private copy leaves alone, so an agent may run its `--auto` and `--rehearse`; its interactive
   run is the owner's.
+
+Built (2026-11-08), as above, with these choices and limits:
+- Results read each session's saved `diagnosis.json` back (`Diagnosis.from_json`) and analyse the capture again only
+  when it cannot be read: the screen shows what the report showed, and a long capture is not analysed twice.
+- The summary holds more than who and when: the verdict's numbers and the conditions Compare shows (power plan and
+  mode, refresh rate, how frames were timed, measured length), so the library, a game's page and Compare read no
+  capture. Older sessions have none: they show by folder name, their numbers come from `diagnosis.json`, and Compare
+  shows their conditions as "-".
+- The library holds recorded games only: All and Recorded filters, no Installed one until Play brings the stores
+  (M6). Tiles are generated (initials on a colour from the name); the Recent row shows once there are more games than
+  it holds.
+- Settings show readiness, the lag key, a sound test (Windows' own asterisk sound: the recording sounds come with
+  M4 and M5), the library's sources and the sessions folder with a button that opens it. There is no setting to
+  change yet: the default length and the start key come with M5.
+- The page names sessions and games only by id; the app answers on two worker threads, at most 32 requests waiting.
+  The window comes back from a crashed page (the entry page again) and from an ended browser process (a new
+  environment once BrowserProcessExited says the data folder is free), both driven in its tests.
 
 Tests:
 - view-models in plain pytest;

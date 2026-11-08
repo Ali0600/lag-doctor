@@ -128,8 +128,8 @@
  {
   "name": "the journal healed before the gate",
   "file": "lagdoctor/cli.py",
-  "old": "    code, private = _private_copy_gate(PRIVATE_COPY_POLICY[args.cmd])",
-  "new": "    _settle_journal()\n    code, private = _private_copy_gate(PRIVATE_COPY_POLICY[args.cmd])",
+  "old": "    code, private = _private_copy_gate(PRIVATE_COPY_POLICY[args.cmd],",
+  "new": "    _settle_journal()\n    code, private = _private_copy_gate(PRIVATE_COPY_POLICY[args.cmd],",
   "tests": [
    "tests/test_private_copy.py::test_commands_that_save_for_other_windows_refuse_and_say_where_and_why"
   ]
@@ -146,8 +146,8 @@
  {
   "name": "a refusal turned into a note",
   "file": "lagdoctor/cli.py",
-  "old": "    if policy == \"refuse\":\n        say(f\"Not started:",
-  "new": "    if False:\n        say(f\"Not started:",
+  "old": "    if policy == \"refuse\":\n        show(f\"Not started:",
+  "new": "    if False:\n        show(f\"Not started:",
   "tests": [
    "tests/test_private_copy.py::test_commands_that_save_for_other_windows_refuse_and_say_where_and_why"
   ]
@@ -164,7 +164,7 @@
  {
   "name": "readers say nothing",
   "file": "lagdoctor/cli.py",
-  "old": "    say(f\"Note: {paths.private_copy_advice(copy)} What this command saves goes there too.\")",
+  "old": "    show(f\"Note: {paths.private_copy_advice(copy)} What this command saves goes there too.\")",
   "new": "    pass",
   "tests": [
    "tests/test_private_copy.py::test_commands_that_only_read_say_where_their_files_go_and_carry_on"

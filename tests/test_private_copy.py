@@ -96,7 +96,7 @@ def private(monkeypatch):
 
 def _no_commands(monkeypatch) -> list[str]:
     started: list[str] = []
-    for name in ("cmd_setup", "cmd_watch", "cmd_fix", "cmd_undo", "cmd_check", "cmd_analyze"):
+    for name in ("cmd_setup", "cmd_watch", "cmd_fix", "cmd_undo", "cmd_check", "cmd_analyze", "cmd_app"):
         monkeypatch.setattr(cli, name, lambda args, n=name: started.append(n) or 0)
     monkeypatch.setattr(cli, "_settle_journal", lambda: started.append("_settle_journal"))
     return started
@@ -194,7 +194,24 @@ def test_without_a_private_copy_every_command_runs_as_before(monkeypatch, capsys
 
 
 def test_every_command_has_a_policy_and_only_those_that_save_refuse():
+    # app saves its log and WebView2's data folder under lag-doctor's home, and from M4 on it records.
     sub = next(a for a in cli.build_parser()._actions if isinstance(a, argparse._SubParsersAction))
     assert set(sub.choices) == set(cli.PRIVATE_COPY_POLICY)
-    assert {c for c, p in cli.PRIVATE_COPY_POLICY.items() if p == "refuse"} == {"setup", "watch", "fix", "undo"}
+    assert {c for c, p in cli.PRIVATE_COPY_POLICY.items() if p == "refuse"} == {"setup", "watch", "fix", "undo",
+                                                                                 "app"}
     assert {c for c, p in cli.PRIVATE_COPY_POLICY.items() if p == "note"} == {"check", "analyze"}
+
+
+def test_the_app_is_refused_under_a_private_copy_and_says_so_where_a_shortcut_start_can_see_it(private, monkeypatch):
+    # Started from the Start menu the app runs under pythonw, with no console: the refusal goes through the app's
+    # own tell(), which shows a message box there, never through say() alone.
+    from lagdoctor.app import main as app_main
+    started = _no_commands(monkeypatch)
+    told: list[str] = []
+    said: list[str] = []
+    monkeypatch.setattr(app_main, "tell", told.append)
+    monkeypatch.setattr(cli, "say", said.append)
+    assert cli.main(["app"]) == cli.EXIT_PRIVATE_COPY
+    assert started == []
+    assert len(told) == 1 and told[0].startswith("Not started:") and "Claude_pzs8sxrjxfjjc" in told[0]
+    assert said == []

@@ -635,3 +635,23 @@ typed the step's 11 actions on the runner (41 of 41 input events taken, PR #20):
 key reached the WebView2 page, and the step's own check passed.
 **Takeaway**: UI tests can drive real keys and clicks on GitHub's x64 Windows runners; let only those runners inject
 input (`scripts/stage2/guard.py`), since on a person's PC the keys go to whatever window has the keyboard.
+
+### Testing a web view's recovery: crash its renderer on purpose through the DevTools protocol
+`ICoreWebView2::CallDevToolsProtocolMethod("Page.crash", "{}")` ends the page's render process from the host, even
+with DevTools turned off; ProcessFailed then reports kind 1 (render process exited), and the app can load its page
+again. Ending the browser process (kind 0) is a separate path: a new environment, once BrowserProcessExited says the
+exclusive data folder is free.
+**Why it came up**: M1 renavigates its entry page after a render process exits, a path nothing else reached; the
+app's page test now crashes the page, then ends the browser process, and both come back within seconds.
+**Takeaway**: a recovery path needs a way to cause its failure on demand; look for the platform's own fault hooks
+(a debugging protocol, a test-only API) before writing recovery code that no test can reach.
+
+### A bounded read is not a size check
+Reading at most N+1 bytes keeps memory bounded, but whatever fits in those bytes can still parse: a valid JSON
+object followed by spaces past the cap reads as the whole record when only the first N+1 bytes are parsed. The
+explicit "more than N bytes: refuse" is what refuses it.
+**Why it came up**: M1's red-first run removed the summary's size check and its test stayed green, because the test's
+oversized file was cut mid-string and failed to parse on its own; a file whose first 64 KB is a complete summary
+needs the check.
+**Takeaway**: test a size cap with input whose first N bytes are valid; input that is broken anywhere tests the
+parser, not the cap.

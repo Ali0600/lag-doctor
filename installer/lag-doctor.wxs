@@ -6,8 +6,9 @@
 
   The payload is the install folder as msi_build.py laid it out and checked it: python.org's embeddable runtime,
   lagdoctor\ with its bytecode, PresentMon\ with Intel's licence, and bin\lagdoctor.cmd. It installs to
-  C:\Program Files\lag-doctor; bin\ goes on the system PATH and comes off it on uninstall. No dialogs and no custom
-  actions: one UAC prompt, then done. Syntax checked against WiX v7.0.1's documentation and source (2026-11-08).
+  C:\Program Files\lag-doctor; bin\ goes on the system PATH and comes off it on uninstall, and the app gets a
+  shortcut in every account's Start menu. No dialogs and no custom actions: one UAC prompt, then done. Syntax checked
+  against WiX v7.0.1's documentation and source (2026-11-08).
 
   The UpgradeCode names lag-doctor across every version, so it never changes (tests/test_msi.py pins it).
 -->
@@ -43,5 +44,28 @@
       <Environment Id="PathEntry" Name="PATH" Value="[BINFOLDER]" Part="last" Action="set" System="yes"
                    Permanent="no" />
     </Component>
+
+    <!-- The app's Start-menu shortcut (docs/LAUNCHER-PLAN.md, The window: Identity), straight in the Start menu's
+         Programs folder, which a per-machine install makes the one every account sees. It starts the installed
+         runtime's pythonw.exe, which opens no console, on `-m lagdoctor app`, with lag-doctor's icon and the app's
+         AppUserModel ID: the process sets the same ID before its window opens (APP_ID in lagdoctor/app/__init__.py;
+         tests/test_msi.py holds the two equal), so the taskbar shows, pins and relaunches lag-doctor, not Python.
+         Target names the folder rather than [#file], which would need the harvested file's generated id.
+         The component's key path is a value under HKCU: for a shortcut that is not advertised, in a Start-menu
+         folder, it is the one key path Windows Installer's ICEs accept even in a per-machine package (WiX v7.0.1's
+         darice.cub run over each choice, 2026-11-08: HKMU fails ICE57; HKLM fails ICE38, ICE43 and ICE57; a file
+         fails ICE43 and ICE57; the folder fails ICE18, ICE38 and ICE43). The value goes in the installing account's
+         hive and goes with the uninstall. -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="{01802E5D-285B-4DE1-9453-DA5F7F1BDAC5}">
+        <Shortcut Id="AppShortcut" Name="lag-doctor" Target="[INSTALLFOLDER]pythonw.exe" Arguments="-m lagdoctor app"
+                  WorkingDirectory="INSTALLFOLDER">
+          <Icon Id="lagdoctor.ico" SourceFile="!(bindpath.payload)\lagdoctor\app\lag-doctor.ico" />
+          <ShortcutProperty Key="System.AppUserModel.ID" Value="LagDoctor.App" />
+        </Shortcut>
+        <RegistryValue Root="HKCU" Key="Software\lag-doctor" Name="StartMenuShortcut" Type="integer" Value="1"
+                       KeyPath="yes" />
+      </Component>
+    </StandardDirectory>
   </Package>
 </Wix>

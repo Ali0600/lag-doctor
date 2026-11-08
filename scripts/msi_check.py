@@ -19,6 +19,12 @@ failed, 2 if they could not start (not a runner, an input missing, the product o
   upgrade code, and an Apps entry naming lag-doctor, its version and publisher; the registry keys an install adds
   (its Uninstall entry and its Installer Products, Features and UpgradeCodes keys) appeared, and nothing else there.
 - path: the system PATH is the old one with the install's bin\ added once, at the end.
+- registry: every value the MSI's Registry table writes is there with its data (the Start-menu shortcut's key path,
+  under HKCU: the account that ran the install).
+- shortcut: the app's Start-menu shortcut, read back from the .lnk itself through the shell (IShellLinkW and the link's
+  own property store), sits in every account's Start menu and nowhere else, starts the installed pythonw.exe (no
+  console) on `-m lagdoctor app` in the install folder, carries the app's AppUserModel ID (lagdoctor.app.APP_ID) and
+  shows an icon whose bytes are lagdoctor/app/lag-doctor.ico's.
 - command: in a fresh shell (the environment a new sign-in gets, built from the registry rather than this job's),
   `where lagdoctor` finds bin\lagdoctor.cmd alone and `where python` nothing installed; `lagdoctor --version` from cmd
   and from Windows PowerShell names the MSI's version; `--help` starts; `lagdoctor setup` uses the PresentMon under
@@ -29,7 +35,8 @@ failed, 2 if they could not start (not a runner, an input missing, the product o
   so no __pycache__ was written beside the shipped bytecode.
 - uninstall: `msiexec /x MSI /qn` exits 0.
 - gone: every installed file and the folder itself; the system PATH exactly as before; the product, its components
-  and its upgrade code unknown to Windows Installer; the registry keys the install added gone.
+  and its upgrade code unknown to Windows Installer; the registry keys the install added gone, and its registry values
+  and their keys as before the install; the Start-menu shortcut and the icon file it showed gone.
 """
 from __future__ import annotations
 
@@ -37,6 +44,7 @@ import ctypes
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -73,7 +81,18 @@ INSTALLER_KEYS = {
 INSTALLER_FOLDERS = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\Folders"
 MSIEXEC_TIMEOUT_S = 900
 COMMAND_TIMEOUT_S = 300
-MIDDLE = ("files", "registered", "path", "command", "imports", "untouched")
+MIDDLE = ("files", "registered", "path", "registry", "shortcut", "command", "imports", "untouched")
+
+# The app's Start-menu shortcut (installer/lag-doctor.wxs): the Shortcut's Name, to which Windows Installer adds .lnk,
+# and what it must start. pythonw.exe is the runtime's windowless interpreter: python.exe would open a console.
+SHORTCUT_NAME = "lag-doctor.lnk"
+APP_RUNTIME = "pythonw.exe"
+APP_ARGUMENTS = "-m lagdoctor app"
+# Known folders (KnownFolders.h): the Start menu's Programs folder every account sees, and this account's own.
+FOLDERID_COMMON_PROGRAMS = "{0139D44E-6AFE-49F2-8690-3DAFCAE6FFB8}"
+FOLDERID_PROGRAMS = "{A77F5D77-2E2B-44C3-A6A2-ABA601054A51}"
+# The registry roots a Registry row names (Windows Installer's Registry table) that this check reads back.
+REGISTRY_ROOTS = {1: ("HKCU", winreg.HKEY_CURRENT_USER), 2: ("HKLM", winreg.HKEY_LOCAL_MACHINE)}
 
 # Run by the installed python.exe: argv[1] names the modules (JSON), argv[2] gets the result. For every .py the child
 # also compares its shipped bytecode's source hash (PEP 552) with the .py's own, computed by that very runtime.
@@ -239,6 +258,119 @@ def judge_untouched(before: dict[str, str], after: dict[str, str]) -> Check:
     return Check("untouched", True, f"all {len(before)} files as installed, nothing written")
 
 
+def registry_data(value: str | None) -> int | str:
+    """What a Registry row's Value column writes (Windows Installer's Registry table): "#<digits>" a DWORD, text
+    without a leading "#" or a "[" a string. Any other form raises ValueError: this check does not read it back."""
+    if value is None:
+        raise ValueError("a row without a value")
+    if value.startswith("#"):
+        if re.fullmatch(r"#\d+", value):
+            return int(value[1:])
+        raise ValueError(f"the value {value!r} (only #<digits> is read back)")
+    if "[" in value:
+        raise ValueError(f"the formatted value {value!r}")
+    return value
+
+
+def registry_name(row: dict) -> str:
+    hive = REGISTRY_ROOTS.get(int(row["Root"]), (f"root {row['Root']}",))[0]
+    return f"{hive}\\{row['Key']}\\{row['Name']}"
+
+
+def registry_keypaths(row: dict) -> set[str]:
+    """How MsiGetComponentPath names a component keyed by this Registry row, lower-cased: the root as a number (01
+    HKCU, 02 HKLM; 20 more on 64-bit Windows), a colon, then the key and the value name ("21:\\Software\\x\\name")."""
+    root = int(row["Root"])
+    tail = f":\\{row['Key']}\\{row['Name']}".lower()
+    return {f"{root:02d}{tail}", f"{root + 20:02d}{tail}"}
+
+
+def component_in_place(state: int, path: str | None, install: Path, registry_paths: set[str]) -> bool:
+    """A component Windows Installer reports installed where it belongs: its key file in the install folder, or the
+    registry value one of the MSI's Registry rows writes."""
+    if state != msidb.INSTALLSTATE_LOCAL or not path:
+        return False
+    return wc._inside(path, install) or _same_dir(path, str(install)) or path.lower() in registry_paths
+
+
+def judge_registry(rows: list[dict], found: dict[str, tuple[bool | None, Any]]) -> Check:
+    """After the install: each Registry row's value is there with the data it writes. `found` maps each row's id to
+    (whether its key exists, the value's data or None), (None, None) when it could not be read."""
+    if not rows:
+        return Check("registry", False, "the MSI writes no registry values, though its Start-menu shortcut's component "
+                                        "is keyed by one")
+    problems = []
+    for row in rows:
+        exists, data = found.get(row["Registry"], (None, None))
+        try:
+            want = registry_data(row["Value"])
+        except ValueError as exc:
+            problems.append(f"{registry_name(row)}: {exc}")
+            continue
+        if exists is None:
+            problems.append(f"{registry_name(row)} could not be read")
+        elif data != want:
+            problems.append(f"{registry_name(row)} is {data!r}, not {want!r}")
+    if problems:
+        return Check("registry", False, "; ".join(problems))
+    return Check("registry", True, "; ".join(f"{registry_name(r)} = {registry_data(r['Value'])!r}" for r in rows))
+
+
+def registry_left(rows: list[dict], before: dict[str, tuple], after: dict[str, tuple]) -> list[str]:
+    """After the uninstall: why any Registry row's value, or its key, is not as it was before the install."""
+    out = []
+    for row in rows:
+        was, now = before.get(row["Registry"], (None, None)), after.get(row["Registry"], (None, None))
+        if was[0] is None or now[0] is None:
+            out.append(f"{registry_name(row)} could not be read")
+        elif now != was:
+            out.append(f"{registry_name(row)}: key there {now[0]}, value {now[1]!r}; before the install key there "
+                       f"{was[0]}, value {was[1]!r}")
+    return out
+
+
+def expected_shortcut(install: Path) -> dict[str, str]:
+    """What the Start-menu shortcut must hold, from the product and the install folder rather than the MSI."""
+    from lagdoctor import app
+    return {"target": str(install / APP_RUNTIME), "arguments": APP_ARGUMENTS, "working_dir": str(install),
+            "app_id": app.APP_ID, "icon_sha256": mb.sha256_file(app.ICON)}
+
+
+def judge_shortcut(found: dict | None, want: dict[str, str], lnk: Path, elsewhere: list[str]) -> Check:
+    """The installed Start-menu shortcut as read back from the .lnk (None: there is none at `lnk`). `elsewhere` lists
+    any other lag-doctor shortcut found in the Start menu's Programs folders: there must be none."""
+    if found is None:
+        return Check("shortcut", False, f"no shortcut at {lnk}" + (f"; found {', '.join(elsewhere)} instead"
+                                                                   if elsewhere else ""))
+    problems = []
+    target = found.get("target") or ""
+    if not _same_dir(target, want["target"]):
+        console = " (python.exe opens a console)" if Path(target).name.lower() == "python.exe" else ""
+        problems.append(f"it starts {target!r}{console}, not {want['target']}")
+    if (found.get("arguments") or "").strip() != want["arguments"]:
+        problems.append(f"its arguments are {found.get('arguments')!r}, not {want['arguments']!r}")
+    if not _same_dir(found.get("working_dir") or "", want["working_dir"]):
+        problems.append(f"it starts in {found.get('working_dir')!r}, not {want['working_dir']}")
+    if found.get("app_id") != want["app_id"]:
+        problems.append(f"its AppUserModel ID is {found.get('app_id')!r}, not {want['app_id']!r}")
+    if found.get("icon_sha256") is None:
+        problems.append(f"its icon {found.get('icon')!r} cannot be read")
+    elif found["icon_sha256"] != want["icon_sha256"]:
+        problems.append(f"its icon {found.get('icon')!r} is not lag-doctor's (SHA-256 {found['icon_sha256']})")
+    if elsewhere:
+        problems.append(f"another lag-doctor shortcut is in the Start menu: {', '.join(elsewhere)}")
+    if problems:
+        return Check("shortcut", False, f"{lnk}: " + "; ".join(problems))
+    return Check("shortcut", True, f"{lnk} starts {target} {want['arguments']} with AppUserModel ID "
+                                   f"{want['app_id']} and lag-doctor's icon")
+
+
+def shortcut_left(paths: Iterable[Path | None]) -> str | None:
+    """After the uninstall: why the Start-menu shortcut, or the icon file it showed, is still there, or None."""
+    left = [str(p) for p in paths if p is not None and p.exists()]
+    return f"the Start-menu shortcut or its icon is still there: {', '.join(left)}" if left else None
+
+
 def parse_env_block(block: str) -> dict[str, str]:
     """A Windows environment block ("A=1\0B=2\0\0") as a dict; the hidden "=C:" entries left out."""
     out = {}
@@ -319,6 +451,194 @@ def uninstall_entry(product_code: str) -> dict[str, Any] | None:
             return out
     except OSError:
         return None
+
+
+def read_registry_value(row: dict) -> tuple[bool | None, Any]:
+    """(whether the Registry row's key exists, its value's data or None when absent), as the 64-bit registry holds
+    them; (None, None) when the row's root is not one this check reads, or the key cannot be read."""
+    root = REGISTRY_ROOTS.get(int(row["Root"]))
+    if root is None:
+        return None, None
+    try:
+        with winreg.OpenKey(root[1], row["Key"], 0, winreg.KEY_READ | winreg.KEY_WOW64_64KEY) as key:
+            try:
+                return True, winreg.QueryValueEx(key, row["Name"])[0]
+            except FileNotFoundError:
+                return True, None
+    except FileNotFoundError:
+        return False, None
+    except OSError:
+        return None, None
+
+
+def read_registry_values(rows: list[dict]) -> dict[str, tuple[bool | None, Any]]:
+    return {row["Registry"]: read_registry_value(row) for row in rows}
+
+
+# ------------------------------------------------- the Start-menu shortcut, through the shell's own COM objects ---
+
+class GUID(ctypes.Structure):
+    _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD), ("Data3", wintypes.WORD),
+                ("Data4", ctypes.c_ubyte * 8)]
+
+
+class PROPERTYKEY(ctypes.Structure):
+    _fields_ = [("fmtid", GUID), ("pid", wintypes.DWORD)]
+
+
+class PROPVARIANT(ctypes.Structure):
+    """The 24-byte PROPVARIANT (64-bit): its type, three reserved words, then the value; a VT_LPWSTR's pointer comes
+    first in the value."""
+    _fields_ = [("vt", ctypes.c_ushort), ("reserved", ctypes.c_ushort * 3), ("ptr", ctypes.c_void_p),
+                ("ptr2", ctypes.c_void_p)]
+
+
+CLSID_SHELL_LINK = "{00021401-0000-0000-C000-000000000046}"
+IID_ISHELL_LINK_W = "{000214F9-0000-0000-C000-000000000046}"
+IID_IPERSIST_FILE = "{0000010B-0000-0000-C000-000000000046}"
+IID_IPROPERTY_STORE = "{886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99}"
+PKEY_APP_USER_MODEL_ID = ("{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}", 5)      # propkey.h: PKEY_AppUserModel_ID
+VT_EMPTY, VT_LPWSTR = 0, 31
+# Vtable slots: IUnknown's three, then IShellLinkW's GetPath (3), GetWorkingDirectory (8), GetArguments (10) and
+# GetIconLocation (16); IPersistFile's Load (5); IPropertyStore's GetValue (5) (ShObjIdl_core.h, ObjIdl.h,
+# propsys.h, in declaration order).
+QUERY_INTERFACE, RELEASE = 0, 2
+LINK_GET_PATH, LINK_GET_WORKING_DIRECTORY, LINK_GET_ARGUMENTS, LINK_GET_ICON_LOCATION = 3, 8, 10, 16
+PERSIST_FILE_LOAD, STORE_GET_VALUE = 5, 5
+CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, STGM_READ, RPC_E_CHANGED_MODE = 1, 2, 0, -2147417850
+
+
+def com_guid(text: str) -> GUID:
+    g = GUID()
+    ole32 = ctypes.OleDLL("ole32")
+    ole32.CLSIDFromString.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(GUID)]
+    ole32.CLSIDFromString(text, ctypes.byref(g))
+    return g
+
+
+def com_method(obj: ctypes.c_void_p, slot: int, restype, *argtypes):
+    """The COM method at `slot` of obj's vtable, to be called with obj first. With ctypes.HRESULT as restype a
+    failing HRESULT raises OSError."""
+    vtable = ctypes.cast(obj, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+    return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vtable[slot])
+
+
+def com_query(obj: ctypes.c_void_p, iid: str) -> ctypes.c_void_p:
+    out = ctypes.c_void_p()
+    com_method(obj, QUERY_INTERFACE, ctypes.HRESULT, ctypes.POINTER(GUID), ctypes.POINTER(ctypes.c_void_p))(
+        obj, ctypes.byref(com_guid(iid)), ctypes.byref(out))
+    return out
+
+
+def com_release(obj: ctypes.c_void_p) -> None:
+    if obj:
+        com_method(obj, RELEASE, wintypes.ULONG)(obj)
+
+
+class ComApartment:
+    """COM for this thread while in use (single-threaded, as the shell's objects want), left as it was afterwards."""
+
+    def __enter__(self):
+        self.ole32 = ctypes.WinDLL("ole32")
+        self.ole32.CoInitializeEx.argtypes = [ctypes.c_void_p, wintypes.DWORD]
+        self.ole32.CoInitializeEx.restype = ctypes.c_long
+        hr = self.ole32.CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+        if hr < 0 and hr != RPC_E_CHANGED_MODE:             # already multi-threaded here is fine: use that
+            raise ctypes.WinError(hr)
+        self.owned = hr >= 0
+        return self
+
+    def __exit__(self, *exc):
+        if self.owned:
+            self.ole32.CoUninitialize()
+
+
+def shell_link() -> ctypes.c_void_p:
+    """A new ShellLink object's IShellLinkW (the apartment must be open)."""
+    ole32 = ctypes.OleDLL("ole32")
+    ole32.CoCreateInstance.argtypes = [ctypes.POINTER(GUID), ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(GUID),
+                                       ctypes.POINTER(ctypes.c_void_p)]
+    link = ctypes.c_void_p()
+    ole32.CoCreateInstance(ctypes.byref(com_guid(CLSID_SHELL_LINK)), None, CLSCTX_INPROC_SERVER,
+                           ctypes.byref(com_guid(IID_ISHELL_LINK_W)), ctypes.byref(link))
+    return link
+
+
+def read_shortcut(lnk: Path) -> dict[str, Any]:
+    """A .lnk read back through the shell: its target, arguments, working folder, icon location and the
+    System.AppUserModel.ID in the link's own property store (None when it has none)."""
+    with ComApartment():
+        link = shell_link()
+        persist, store = ctypes.c_void_p(), ctypes.c_void_p()
+        try:
+            persist = com_query(link, IID_IPERSIST_FILE)
+            com_method(persist, PERSIST_FILE_LOAD, ctypes.HRESULT, wintypes.LPCWSTR, wintypes.DWORD)(
+                persist, str(lnk), STGM_READ)
+            out: dict[str, Any] = {"path": str(lnk)}
+            buf = ctypes.create_unicode_buffer(32768)
+            com_method(link, LINK_GET_PATH, ctypes.HRESULT, wintypes.LPWSTR, ctypes.c_int, ctypes.c_void_p,
+                       wintypes.DWORD)(link, buf, len(buf), None, 0)
+            out["target"] = buf.value
+            com_method(link, LINK_GET_ARGUMENTS, ctypes.HRESULT, wintypes.LPWSTR, ctypes.c_int)(link, buf, len(buf))
+            out["arguments"] = buf.value
+            com_method(link, LINK_GET_WORKING_DIRECTORY, ctypes.HRESULT, wintypes.LPWSTR, ctypes.c_int)(
+                link, buf, len(buf))
+            out["working_dir"] = buf.value
+            index = ctypes.c_int()
+            com_method(link, LINK_GET_ICON_LOCATION, ctypes.HRESULT, wintypes.LPWSTR, ctypes.c_int,
+                       ctypes.POINTER(ctypes.c_int))(link, buf, len(buf), ctypes.byref(index))
+            out["icon"], out["icon_index"] = buf.value, index.value
+            store = com_query(link, IID_IPROPERTY_STORE)
+            key = PROPERTYKEY(com_guid(PKEY_APP_USER_MODEL_ID[0]), PKEY_APP_USER_MODEL_ID[1])
+            value = PROPVARIANT()
+            com_method(store, STORE_GET_VALUE, ctypes.HRESULT, ctypes.POINTER(PROPERTYKEY),
+                       ctypes.POINTER(PROPVARIANT))(store, ctypes.byref(key), ctypes.byref(value))
+            try:
+                if value.vt == VT_LPWSTR:
+                    out["app_id"] = ctypes.wstring_at(value.ptr)
+                elif value.vt == VT_EMPTY:
+                    out["app_id"] = None
+                else:
+                    out["app_id"] = f"<a value of type {value.vt}, not text>"
+            finally:
+                ctypes.oledll.ole32.PropVariantClear(ctypes.byref(value))
+            return out
+        finally:
+            for obj in (store, persist, link):
+                com_release(obj)
+
+
+def known_folder(folder_id: str) -> Path:
+    """A known folder's path (SHGetKnownFolderPath)."""
+    shell32 = ctypes.OleDLL("shell32")
+    shell32.SHGetKnownFolderPath.argtypes = [ctypes.POINTER(GUID), wintypes.DWORD, wintypes.HANDLE,
+                                             ctypes.POINTER(ctypes.c_void_p)]
+    out = ctypes.c_void_p()
+    shell32.SHGetKnownFolderPath(ctypes.byref(com_guid(folder_id)), 0, None, ctypes.byref(out))
+    try:
+        return Path(ctypes.wstring_at(out.value))
+    finally:
+        ctypes.windll.ole32.CoTaskMemFree(out)
+
+
+def shortcut_paths() -> list[Path]:
+    """Where the app's shortcut must be (every account's Start menu), then where it must not (this account's)."""
+    return [known_folder(FOLDERID_COMMON_PROGRAMS) / SHORTCUT_NAME, known_folder(FOLDERID_PROGRAMS) / SHORTCUT_NAME]
+
+
+def check_shortcut(install: Path, seen: dict) -> Check:
+    """The Start-menu shortcut, read back from the .lnk; `seen` keeps the icon file it shows, which the uninstall
+    must remove too."""
+    lnk, own = shortcut_paths()
+    found = read_shortcut(lnk) if lnk.is_file() else None
+    if found is not None:
+        icon = Path(os.path.expandvars(found["icon"])) if found.get("icon") else None
+        found["icon_sha256"] = mb.sha256_file(icon) if icon is not None and icon.is_file() else None
+        seen["icon"] = icon
+    stem = Path(SHORTCUT_NAME).stem.lower()
+    elsewhere = sorted(str(p) for folder in (lnk.parent, own.parent) if folder.is_dir()
+                       for p in folder.iterdir() if p.name.lower().startswith(stem) and p != lnk)
+    return judge_shortcut(found, expected_shortcut(install), lnk, elsewhere)
 
 
 def fresh_environment() -> dict[str, str]:
@@ -425,13 +745,14 @@ def check_registered(info: dict, install: Path, before: dict, version: str) -> C
     if [r.upper() for r in related] != [code.upper()]:
         problems.append(f"the upgrade code has {related}, not just {code}")
     elsewhere = []
+    registry_paths = {p for row in info["registry"] for p in registry_keypaths(row)}
     for comp in info["components"]:
         st, path = msidb.component_path(code, comp)
-        if st != msidb.INSTALLSTATE_LOCAL or not wc._inside(path, install) and not _same_dir(path, str(install)):
+        if not component_in_place(st, path, install, registry_paths):
             elsewhere.append(f"{comp}: state {st}, {path!r}")
     if elsewhere:
-        problems.append(f"{len(elsewhere)} of {len(info['components'])} components not installed in {install}: "
-                        f"{elsewhere[:4]}")
+        problems.append(f"{len(elsewhere)} of {len(info['components'])} components not installed in {install} or at "
+                        f"a registry value the MSI writes: {elsewhere[:4]}")
     entry = uninstall_entry(code)
     want = {"DisplayName": mb.PRODUCT, "DisplayVersion": version, "Publisher": info["manufacturer"]}
     if entry is None or any(entry.get(k) != v for k, v in want.items()):
@@ -498,7 +819,7 @@ def msiexec(action: str, msi: Path, log: Path) -> tuple[int | None, str]:
 
 
 def check_gone(info: dict, install: Path, installed: dict[str, str], before_keys: dict, path_before,
-               entry: str) -> Check:
+               entry: str, registry_before: dict, shortcut_seen: dict) -> Check:
     code, upgrade = info["product_code"], info["upgrade_code"]
     problems = []
     left = [f for f in installed if (install / PurePosixPath(f)).exists()]
@@ -524,12 +845,15 @@ def check_gone(info: dict, install: Path, installed: dict[str, str], before_keys
     folders = installer_folders(install)
     if folders is None or folders:
         problems.append(f"Windows Installer's Folders key still lists {folders if folders else 'something unreadable'}")
-    for row in info["registry"]:
-        problems.append(f"the MSI writes registry key {row} (this check does not read those back yet)")
+    problems += registry_left(info["registry"], registry_before, read_registry_values(info["registry"]))
+    lnk_left = shortcut_left([*shortcut_paths(), shortcut_seen.get("icon")])
+    if lnk_left:
+        problems.append(lnk_left)
     if problems:
         return Check("gone", False, "; ".join(problems))
     return Check("gone", True, f"all {len(installed)} files and {install}, the PATH entry, the product's "
-                               f"registration and its {len(INSTALLER_KEYS)} kinds of Installer keys")
+                               f"registration and its {len(INSTALLER_KEYS)} kinds of Installer keys, its "
+                               f"{len(info['registry'])} registry values, the Start-menu shortcut and its icon")
 
 
 def read_msi(msi: Path) -> dict:
@@ -541,7 +865,7 @@ def read_msi(msi: Path) -> dict:
              if r["ComponentId"]]
     return {"product_code": props["ProductCode"], "upgrade_code": props["UpgradeCode"],
             "version": props["ProductVersion"], "manufacturer": props["Manufacturer"], "components": comps,
-            "registry": msidb.rows(str(msi), "Registry", ("Root", "Key", "Name"))}
+            "registry": msidb.rows(str(msi), "Registry", ("Registry", "Root", "Key", "Name", "Value", "Component_"))}
 
 
 def guarded(name: str, fn, *args) -> list[Check]:
@@ -565,11 +889,17 @@ def run_checks(msi: Path, runtime_zip: Path, presentmon: Path, logs: Path) -> li
     entry = str(install / "bin") + "\\"
     info = read_msi(msi)
     expected, runtime_names, package, z = expected_install(runtime_zip)
+    try:
+        shortcuts = shortcut_paths()
+    except OSError as exc:
+        raise CannotStart(f"the Start menu's Programs folders could not be found: {exc}") from exc
     if (msidb.product_state(info["product_code"]) != msidb.INSTALLSTATE_UNKNOWN or install.exists()
-            or msidb.related_products(info["upgrade_code"])):
-        raise CannotStart(f"lag-doctor is already installed here, or {install} exists: this runs on a fresh runner")
+            or msidb.related_products(info["upgrade_code"]) or any(p.exists() for p in shortcuts)):
+        raise CannotStart(f"lag-doctor is already installed here, or {install} or a shortcut in {shortcuts} exists: "
+                          "this runs on a fresh runner")
     logs.mkdir(parents=True, exist_ok=True)
     path_before, keys_before = read_path(), installer_keys()
+    registry_before, shortcut_seen = read_registry_values(info["registry"]), {}
     tmp = Path(tempfile.mkdtemp(prefix="msi-check-")).resolve()
     checks: list[Check] = []
     installed: dict[str, str] = {}
@@ -587,6 +917,8 @@ def run_checks(msi: Path, runtime_zip: Path, presentmon: Path, logs: Path) -> li
         checks += guarded("files", check_files, install, expected, runtime_names, package, z)
         checks += guarded("registered", check_registered, info, install, keys_before, info["version"])
         checks += guarded("path", judge_path_added, path_before, read_path(), entry)
+        checks += guarded("registry", lambda: judge_registry(info["registry"], read_registry_values(info["registry"])))
+        checks += guarded("shortcut", check_shortcut, install, shortcut_seen)
         checks += guarded("command", lambda: check_command(fresh_environment(), install, work, home,
                                                            info["version"], presentmon))
         checks += guarded("imports", check_imports, install, package, work)
@@ -596,7 +928,8 @@ def run_checks(msi: Path, runtime_zip: Path, presentmon: Path, logs: Path) -> li
             u_code, out = msiexec("/x", msi, logs / "uninstall.log")
             checks.append(Check("uninstall", u_code == 0,
                                 f"msiexec /x exit code {u_code} {out.strip()[-300:]}".strip()))
-            checks += guarded("gone", check_gone, info, install, installed, keys_before, path_before, entry)
+            checks += guarded("gone", check_gone, info, install, installed, keys_before, path_before, entry,
+                              registry_before, shortcut_seen)
         else:
             checks += [Check(n, False, "not run: nothing was installed") for n in ("uninstall", "gone")]
         z.close()

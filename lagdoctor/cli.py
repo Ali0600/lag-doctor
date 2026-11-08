@@ -47,7 +47,7 @@ EXIT_NOT_READY = 6             # frame timing was wanted, but PresentMon is miss
 
 # What each command does when Windows keeps this process's files in another app's private copy
 # (paths.private_copy): "refuse" what saves files other windows must find, "note" what only reads.
-PRIVATE_COPY_POLICY = {"setup": "refuse", "watch": "refuse", "fix": "refuse", "undo": "refuse",
+PRIVATE_COPY_POLICY = {"setup": "refuse", "watch": "refuse", "fix": "refuse", "undo": "refuse", "app": "refuse",
                        "check": "note", "analyze": "note"}
 
 # Performance Log Users may trace frames but not enable Kernel-Network, the game-server tracker's provider
@@ -111,6 +111,9 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("setup", help="download and verify PresentMon, and explain admin rights")
     s.add_argument("--download", action="store_true", help="download PresentMon without asking")
     s.set_defaults(func=cmd_setup)
+
+    ap = sub.add_parser("app", help="open lag-doctor's window: your recorded games and their results")
+    ap.set_defaults(func=cmd_app)
     return p
 
 
@@ -175,7 +178,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     # First, before anything is written (the journal healing below writes): a file saved where the user's
     # other windows cannot see it is worse than none.
-    code, private = _private_copy_gate(PRIVATE_COPY_POLICY[args.cmd])
+    code, private = _private_copy_gate(PRIVATE_COPY_POLICY[args.cmd],
+                                       show=_app_tell if args.cmd == "app" else say)
     if code is not None:
         return code
     # Under a private copy (a reading command was let through) the journal is not healed: what it writes would
@@ -427,25 +431,27 @@ def _relay_failure(exc) -> tuple[int, str]:
     return 1, f"Frame timing could not be started: {exc.why}. Nothing was recorded."
 
 
-def _private_copy_gate(policy: str, folder: Path | None = None) -> tuple[int | None, bool]:
+def _private_copy_gate(policy: str, folder: Path | None = None, show: Callable[[str], None] | None = None,
+                       ) -> tuple[int | None, bool]:
     """(the exit code or None to go on, whether the files land in a private copy). Windows may keep what this process
     saves in `folder` (default: lag-doctor's home) in another app's private folder (paths.private_copy), which the
     user's other windows never see: a PresentMon set up, a recording saved or a fix journaled from here would be
     missing for them."""
+    show = show or say
     try:
         folder = folder if folder is not None else paths.home()
         copy = paths.private_copy(folder)
     except OSError as exc:
         if policy == "refuse":                  # cannot tell where it would be saved: save nothing
-            say(f"lag-doctor cannot save files in {folder or 'its folder'}: {exc}")
+            show(f"lag-doctor cannot save files in {folder or 'its folder'}: {exc}")
             return 1, False
         return None, False
     if copy is None:
         return None, False
     if policy == "refuse":
-        say(f"Not started: {paths.private_copy_advice(copy)}")
+        show(f"Not started: {paths.private_copy_advice(copy)}")
         return EXIT_PRIVATE_COPY, True
-    say(f"Note: {paths.private_copy_advice(copy)} What this command saves goes there too.")
+    show(f"Note: {paths.private_copy_advice(copy)} What this command saves goes there too.")
     return None, True
 
 
@@ -465,6 +471,22 @@ def _presentmon_exe() -> tuple[Path | None, str]:
         return None, str(exc)
 
 
+# -------------------------------------------------------------------- app --
+
+def cmd_app(args: argparse.Namespace) -> int:
+    """lag-doctor's window (lagdoctor/app). Only the owner starts it: an agent's shell may hold another app's private
+    copy of AppData, which main() refuses before this runs."""
+    from lagdoctor.app import main as app_main
+    return app_main.run()
+
+
+def _app_tell(text: str) -> None:
+    """A message from `lagdoctor app` before its window exists: in the console that started it, or in a message box
+    when there is none (the Start-menu shortcut runs pythonw.exe, which has no console)."""
+    from lagdoctor.app import main as app_main
+    app_main.tell(text)
+
+
 # ---------------------------------------------------------------- analyze --
 
 def analyze_and_report(cap, cap_path: Path, out_dir: Path, *, remember: bool = False) -> int:
@@ -481,10 +503,21 @@ def analyze_and_report(cap, cap_path: Path, out_dir: Path, *, remember: bool = F
         return 1
     _write_json(out_dir / DIAGNOSIS_NAME, d.to_json())
     report = html.write(d, cap, out_dir / REPORT_NAME, capture_path=cap_path)
+    _write_summary(d, cap, out_dir, "watch" if remember else "analyze")
     print(console.render(d, cap, report_path=report, width=_width()))
     if remember:
         _remember(out_dir)
     return 0
+
+
+def _write_summary(d, cap, out_dir: Path, kind: str) -> None:
+    """The app's summary of this session (report/summary.py). Without it the app still lists the session, by its
+    folder's name, so a failed write is said and the analysis goes on."""
+    from lagdoctor.report import summary
+    try:
+        _write_json(out_dir / summary.SUMMARY_NAME, summary.build(d, cap, kind))
+    except (OSError, ValueError) as exc:
+        say(f"(The app's summary of this session could not be saved: {exc}. The app lists it by its folder's name.)")
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:

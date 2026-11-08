@@ -18,6 +18,9 @@ CAPABILITIES = {
     "gpu": "hardware GPU with 3D engines",
     "thermal_zone": "ACPI thermal-zone sensors",
     "nvidia": "NVIDIA GPU and driver (NVML and nvidia-smi)",
+    # GitHub's windows-2025 runner has the runtime and opens the window (M0's probe, 2026-11-08), so CI declares
+    # nothing; a PC without the runtime or a desktop (a service session) sets LAGDOCTOR_ABSENT=webview2.
+    "webview2": "WebView2 Runtime and a desktop to open lag-doctor's window on",
 }
 
 

@@ -13,6 +13,7 @@ uv run pytest -q                                         # unit + live read-only
 uv run pytest -q tests/test_<area>.py                    # one area (use this while other work is running)
 uv run python scripts/redfirst.py tests/redfirst/<spec>.json   # prove a guard's test can fail
 uv run python -m tests.downloads fetch-gold              # PresentMon's gold captures, for the replay tests
+uv run python -m tests.downloads fetch-webview2-idl      # WebView2.idl of the SDK, for the vtable-slot tests
 uv run python -m laglab --list-modes                     # the fake laggy game used by tests
 uv run lagdoctor ...                                     # the tool (see README); the elevated child runs -m lagdoctor
 uv build --clear --out-dir dist                          # the sdist, and the wheel built from it
@@ -20,6 +21,10 @@ uv run python scripts/wheel_check.py dist                # that wheel in a fresh
 uv run pytest -q tests/test_msi.py                       # the MSI's build, WiX source and install check, no install
 uv run python scripts/runtime_modules.py --zip <path>.zip [--write]   # what the pinned runtime imports, asked of it
 uv run python scripts/webview_spike.py --auto            # M0: the WebView2 window's automated checks (the owner runs it bare)
+uv run pytest -q tests/test_app_page.py                  # M1: the app's real window, driven on a demo library (~10 s)
+uv run python -m tests.app_demo <home> [--pictures]      # a demo library of made-up games, under <home>\sessions
+uv run python -m tests.app_harness <home> <out.json> [<shots>]   # drive the window on it; LAGDOCTOR_HOME=<home>
+uv run python scripts/make_icon.py                       # rewrite lag-doctor's icon, lagdoctor/app/lag-doctor.ico
 ```
 
 CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 and 3.11 on every push to `main` and
@@ -136,9 +141,31 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `lagdoctor.cmd`, since the folder on PATH must not offer the runtime's `python.exe`. Python must never write into
   the install: the build ships unchecked-hash `.pyc` files the shipped runtime compiles, and the check's `untouched`
   and `gone` verdicts fail on anything an administrator's run wrote there (a build without them did exactly that).
+  The Start-menu shortcut's AppUserModel ID in the `.wxs` equals `lagdoctor.app.APP_ID` (`tests/test_msi.py` holds
+  them equal): change both together. Its component's key path stays an HKCU value: HKMU, HKLM, a file and the folder
+  each fail an ICE that `wix msi validate` runs (WiX v7.0.1's darice.cub, measured 2026-11-08), and
+  `SUPPRESSED_ICES` stays ICE61 alone. `msi_check` reads back only `#<digits>` and plain-string Registry rows under
+  HKCU or HKLM; a new row of another form fails its `registry` verdict until the check learns it.
+- **An agent never starts the app.** `lagdoctor app` (and the MSI's Start-menu shortcut) is the owner's: the
+  agent's shell has another app's private copy of AppData, where `app` refuses (exit 5, `cli.PRIVATE_COPY_POLICY`),
+  and from M4 on the app raises a UAC prompt. What an agent may run is the app's tests: `tests/test_app_page.py`
+  (through `tests/app_harness.py`) opens the real window for about 10 s without taking the focus, on a demo library
+  (`tests/app_demo.py`) under the test's own `LAGDOCTOR_HOME` in `%TEMP%`, crashes its page and ends its WebView2
+  browser process on purpose (both recover), and closes it; run it when the owner is not mid-game. The library the
+  repo shows is only ever the demo one: never put the owner's games or sessions in a test, a fixture or a picture.
+- **The app's page puts outside text on screen as text only.** Game, process and window names, evidence and
+  reasons reach the page as JSON and go into the DOM through `el()` in `lagdoctor/app/assets/app.js`, which makes
+  text nodes; nothing there parses markup (`tests/test_app_page.py` refuses `innerHTML`, `outerHTML`,
+  `insertAdjacentHTML`, `document.write`, `DOMParser` and `eval` in it, and drives a game named like markup through
+  the real page). The page names a session or a game only by the id the app gave it; `bridge.parse` checks every
+  field, and `App.entry` resolves an id against its own listing, never by joining it to a path. The vendored
+  `assets/vendor/` (uPlot 1.6.32 and its licence) is pinned by SHA-256 in that test: replace all three files and
+  the pins together, never edit one.
 - **The desktop app is built milestone by milestone** (`docs/LAUNCHER-PLAN.md`; the owner said go on 2026-11-08).
   M0's spike (`scripts/webview_spike.py`) gated the window, and the owner's own run passed on 2026-11-08 (the plan
-  records it), so M1's window code may now go into `lagdoctor/`. The spike stays as the record of what WebView2 does
+  records it). M1, the app with your results, is `lagdoctor/app/` over `lagdoctor/winapi/webview2.py`, whose slots
+  and IIDs `tests/test_webview2_idl.py` checks against the SDK's own `WebView2.idl` (`fetch-webview2-idl`; a slot or
+  IID the module adds must be in that IDL, or the test fails). The spike stays as the record of what WebView2 does
   from ctypes, and its tests and CI probe keep running. An agent may run `--auto` or `--rehearse`, which do
   this on the owner's screen for about 45 s: a window opens without taking the focus; it opens a DevTools window on
   purpose and closes it; it goes blank for about 6 s and reloads, because the run ends its own WebView2 browser
@@ -187,8 +214,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   missing capability fails. Never make a test skip on a detected absence that a regression could also cause (the NVIDIA
   fixtures used to), and mark a test only when a CI run shows it failing for that lack: a test that passes on the
   runner keeps running there, even on another branch (elevated, the ETW tests check the real-time session). A PC
-  without an NVIDIA GPU sets `LAGDOCTOR_ABSENT=nvidia`. The runner's account is an administrator with UAC off, so
-  `tests/test_cli.py` models an unelevated owner unless a test says otherwise.
+  without an NVIDIA GPU sets `LAGDOCTOR_ABSENT=nvidia`. The runner has the WebView2 Runtime and a desktop (M0's
+  probe), so the app's window tests carry `needs("webview2")` and CI declares nothing for them. The runner's account
+  is an administrator with UAC off, so `tests/test_cli.py` models an unelevated owner unless a test says otherwise,
+  and the app's own `run()`, which refuses an elevated start, is never what a test opens: `tests/app_harness.py`
+  builds `App` itself.
 - `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
 - A new worktree has no `.venv`, and the first `uv run` builds one on uv's own managed Python 3.12 (pyproject asks
   only for 3.11 or later; seen 2026-11-07). Run the `uv sync ... --python 3.13` line first: it resolves to

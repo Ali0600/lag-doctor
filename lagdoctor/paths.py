@@ -43,6 +43,16 @@ def sessions_dir() -> Path:
     return d
 
 
+def folder_stem(name: object) -> str:
+    """The game's part of a session folder's name, from the game's exe name: "ff7rebirth_.exe" is "ff7rebirth_".
+    Letters, digits, '-', '_' and '.' are kept, anything else is '_'; the extension goes; at most 40 characters;
+    "game" when nothing is left. capture.session.session_dir names folders with it, and the app groups a game's
+    sessions by it."""
+    text = name if isinstance(name, str) and name else "game"
+    stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in text)
+    return stem.rsplit(".", 1)[0].strip("._")[:40] or "game"
+
+
 def journal_path() -> Path:
     """The fix journal: every change lag-doctor made, with the value it replaced."""
     return home() / "fix-journal.json"

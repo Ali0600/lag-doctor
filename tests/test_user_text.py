@@ -165,3 +165,38 @@ def test_every_character_outside_ascii_a_module_writes_has_a_form_in_the_console
     assert {"°", "≥"} <= {ch for _, ch in found}                    # the ones a report prints today are seen
     missing = [f"{where}: {ch!r} (U+{ord(ch):04X})" for where, ch in found if console.ascii_text(ch) == "?"]
     assert missing == [], "\n".join(missing)
+
+
+# The app's page (lagdoctor/app/assets): its text, its script's strings and its stylesheet's generated content are
+# read by a player too. Comments may cite; vendored files are not ours to scan.
+APP_ASSETS = ROOT / "lagdoctor" / "app" / "assets"
+_ASSET_COMMENTS = {".js": re.compile(r"(?<![:'\"\w])//[^\n]*|/\*.*?\*/", re.S),
+                   ".css": re.compile(r"/\*.*?\*/", re.S),
+                   ".html": re.compile(r"<!--.*?-->", re.S)}
+
+
+def asset_citations(text: str, suffix: str, name: str = "<asset>") -> list[tuple[str, str]]:
+    """(where, citation) for each citation in a page file outside its comments."""
+    bare = _ASSET_COMMENTS[suffix].sub(lambda m: "\n" * m.group(0).count("\n"), text)
+    return [(f"{name}:{bare.count(chr(10), 0, m.start()) + 1}", m.group(0)) for m in CITATION.finditer(bare)]
+
+
+def app_assets() -> list[Path]:
+    return sorted(p for p in APP_ASSETS.rglob("*") if p.suffix in _ASSET_COMMENTS and "vendor" not in p.parts)
+
+
+def test_the_page_scan_finds_citations_in_text_and_strings_but_not_in_comments():
+    js = ("// a comment (WT 8)\n/* LC 4.9 */\nconst a = 'see https://x (NE 2.4)';\nshow('as CC-5 found');\n"
+          "const b = 1; // trailing (PM 3)\n")
+    assert [c for _, c in asset_citations(js, ".js")] == ["NE 2.4", "CC-5"]
+    assert [w for w, _ in asset_citations(js, ".js")] == ["<asset>:3", "<asset>:4"]
+    assert [c for _, c in asset_citations("<!-- WT 8 -->\n<p>DESIGN</p>", ".html")] == ["DESIGN"]
+    assert [c for _, c in asset_citations("/* LC 2 */ a::after { content: 'LC 2' }", ".css")] == ["LC 2"]
+
+
+def test_no_internal_citations_in_the_apps_page():
+    files = app_assets()
+    assert {p.name for p in files} == {"index.html", "app.js", "app.css"}
+    hits = [f"{where}: {c}" for p in files
+            for where, c in asset_citations(p.read_text(encoding="utf-8"), p.suffix, p.relative_to(ROOT).as_posix())]
+    assert hits == [], "\n".join(hits)

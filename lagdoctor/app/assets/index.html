@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self';
+ img-src 'self'; font-src 'self'; connect-src 'none'; worker-src 'none'; frame-src 'none'; object-src 'none';
+ base-uri 'none'; form-action 'none'">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lag-doctor</title>
+<link rel="stylesheet" href="vendor/uPlot.min.css">
+<link rel="stylesheet" href="app.css">
+<script src="vendor/uPlot.iife.min.js" defer></script>
+<script src="app.js" defer></script>
+</head>
+<body>
+<header id="bar">
+  <button id="back" type="button" title="Back (Alt+Left)" hidden>Back</button>
+  <div id="brand"><span id="logo">L</span><span>lag-doctor</span></div>
+  <nav>
+    <button type="button" data-go="library">Library</button>
+    <button type="button" data-go="settings">Settings</button>
+  </nav>
+</header>
+<main id="view"><p class="muted">Starting.</p></main>
+</body>
+</html>

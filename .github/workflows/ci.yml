@@ -1,7 +1,8 @@
 # The unit tests plus every live test a GitHub Windows runner can run. What the runner lacks is declared in
 # LAGDOCTOR_ABSENT (tests/capabilities.py): a test that needs one of those skips with the reason. What the tests
-# download, PresentMon's pinned release and its gold ETW captures (tests/downloads.py), is fetched, checked against the
-# tests' own pins and cached below, and LAGDOCTOR_REQUIRE makes a test that finds one missing fail instead of skip.
+# download, PresentMon's pinned release, its gold ETW captures and the WebView2 SDK's WebView2.idl (tests/downloads.py),
+# is fetched, checked against the tests' own pins and cached below, and LAGDOCTOR_REQUIRE makes a test that finds one
+# missing fail instead of skip.
 # The summary at the end of each test step lists every skip; each job's summary counts the tests that use a download.
 # The wheel job builds the wheel and runs it from a fresh venv, outside the checkout.
 name: CI
@@ -20,7 +21,7 @@ env:
   # account is an administrator with UAC off; tests/test_cli.py models an unelevated owner.
   LAGDOCTOR_ABSENT: internet_icmp,gpu,thermal_zone,nvidia
   # Downloaded by the steps below, so a test that finds one missing fails rather than skips (tests/downloads.py).
-  LAGDOCTOR_REQUIRE: presentmon,presentmon_gold
+  LAGDOCTOR_REQUIRE: presentmon,presentmon_gold,webview2_idl
 
 jobs:
   test:
@@ -79,8 +80,26 @@ jobs:
             Write-Output "::warning::fetch-gold failed with exit code $LASTEXITCODE"
           }
           exit 1
+      # WebView2.idl, read out of the SDK's nuget.org package once the package's SHA-256 is the pinned one; the key
+      # holds the IDL's own pin, which the check below and every test that uses it compare the file with.
+      - name: Restore WebView2.idl from the cache
+        id: webview2-idl-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.downloads.outputs.webview2_idl_dir }}
+          key: ${{ steps.downloads.outputs.webview2_idl_key }}
+      - name: Fetch WebView2.idl from the pinned SDK package
+        if: steps.webview2-idl-cache.outputs.cache-hit != 'true'
+        run: |
+          foreach ($wait in 0, 20, 60) {
+            Start-Sleep -Seconds $wait
+            uv run --no-sync python -m tests.downloads fetch-webview2-idl
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Output "::warning::fetch-webview2-idl failed with exit code $LASTEXITCODE"
+          }
+          exit 1
       - name: Check the downloads against the tests' pins
-        run: uv run --no-sync python -m tests.downloads check presentmon presentmon_gold
+        run: uv run --no-sync python -m tests.downloads check presentmon presentmon_gold webview2_idl
       # Saved only once checked: a failed step above ends the job before these.
       - name: Save PresentMon to the cache
         if: steps.presentmon-cache.outputs.cache-hit != 'true'
@@ -94,6 +113,12 @@ jobs:
         with:
           path: ${{ steps.downloads.outputs.gold_dir }}
           key: ${{ steps.downloads.outputs.gold_key }}
+      - name: Save WebView2.idl to the cache
+        if: steps.webview2-idl-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.downloads.outputs.webview2_idl_dir }}
+          key: ${{ steps.downloads.outputs.webview2_idl_key }}
       - name: Tests
         run: uv run --no-sync pytest -v --durations=25
 
