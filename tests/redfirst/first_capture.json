@@ -182,5 +182,176 @@
   "tests": [
    "tests/test_analysis_rules.py::test_the_per_second_gpu_reading_never_opens_the_gate_with_frame_timing_or_for_the_cpu_side"
   ]
+ },
+ {
+  "name": "a MAD of 0 makes every change infinitely unusual",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        self.scale = fa.MAD_TO_SD * mad if mad > 0 else MEAN_AD_TO_SD * mean_ad",
+  "new": "        self.scale = fa.MAD_TO_SD * mad",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_baseline_mostly_at_one_value_takes_its_spread_from_the_mean_deviation"
+  ]
+ },
+ {
+  "name": "the mean deviation never computed",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    return _Baseline(med, st.mad(xs), math.fsum(abs(x - med) for x in xs) / len(xs))",
+  "new": "    return _Baseline(med, st.mad(xs))",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_baseline_mostly_at_one_value_takes_its_spread_from_the_mean_deviation"
+  ]
+ },
+ {
+  "name": "the mean deviation's normal-data ratio",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "MEAN_AD_TO_SD = math.sqrt(math.pi / 2.0)",
+  "new": "MEAN_AD_TO_SD = 1.0",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_baseline_mostly_at_one_value_takes_its_spread_from_the_mean_deviation"
+  ]
+ },
+ {
+  "name": "the spill judged by its level, not its rise",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        _Cause(\"vram_overflow\", [_Part(_rise(shared, SPILL_LOOKBACK_S), +1,",
+  "new": "        _Cause(\"vram_overflow\", [_Part(shared, +1,",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_shared_memory_standing_at_a_level_is_no_spill_rising"
+  ]
+ },
+ {
+  "name": "the rise's lookback gone",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "SPILL_LOOKBACK_S = 5.0 ",
+  "new": "SPILL_LOOKBACK_S = 0.0 ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_shared_memory_standing_at_a_level_is_no_spill_rising"
+  ]
+ },
+ {
+  "name": "the rise measured from the capture's lowest reading",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        while low and series.t[low[0]] < ti - lookback:",
+  "new": "        while low and series.t[low[0]] < ti - 1e9:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_shared_memory_standing_at_a_level_is_no_spill_rising"
+  ]
+ },
+ {
+  "name": "the 1 s share for every window length",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    slides = [_slides(e.t_start - WINDOW_BEFORE_S, e.t_end + WINDOW_AFTER_S, _grid_stride(start, end)) for e in targets]",
+  "new": "    slides = [1 for e in targets]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_mark_window_is_judged_against_quiet_stretches_as_long_as_it"
+  ]
+ },
+ {
+  "name": "a quiet stretch counted across a gap",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        run = run + 1 if i and index[i] == index[i - 1] + 1 else 1",
+  "new": "        run = run + 1",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_mark_window_is_judged_against_quiet_stretches_as_long_as_it"
+  ]
+ },
+ {
+  "name": "a stretch judged on its last window only",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            hits += 1 if prefix[i + 1] - prefix[i + 1 - slides] > 0 else 0",
+  "new": "            hits += 1 if active[i] else 0",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_mark_window_is_judged_against_quiet_stretches_as_long_as_it"
+  ]
+ },
+ {
+  "name": "a length too few stretches reach still used",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        s = max(1, min(s, longest))",
+  "new": "        s = max(1, s)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_mark_window_is_judged_against_quiet_stretches_as_long_as_it"
+  ]
+ },
+ {
+  "name": "a mark keeps two causes",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "                    \"causes\": list(dict.fromkeys(c for c in mk.causes if isinstance(c, str)))})",
+  "new": "                    \"causes\": [c for c in mk.causes if isinstance(c, str)][:2]})",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_a_mark_keeps_every_signal_that_moved"
+  ]
+ },
+ {
+  "name": "lag-doctor's own CPU in the background totals",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if is_tool(pid, name):                              # its sampling is the measurement's cost",
+  "new": "            if False:                              # its sampling is the measurement's cost",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lag_doctors_own_processes_are_never_named"
+  ]
+ },
+ {
+  "name": "the machine-wide reading keeps lag-doctor's own CPU",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "max(0.0, x * nlp - g - (o or 0.0))",
+  "new": "max(0.0, x * nlp - g)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_lag_doctors_own_processes_are_never_named"
+  ]
+ },
+ {
+  "name": "the steady others reading keeps lag-doctor's own",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "and not ((attribute._is_pid(p[0]) and p[0] in tool_pids)",
+  "new": "and not ((attribute._is_pid(p[0]) and p[0] in ())",
+  "tests": [
+   "tests/test_analysis_rules.py::test_lag_doctors_own_load_is_no_other_program_beside_a_cpu_limit"
+  ]
+ },
+ {
+  "name": "the marks never judged by the rules",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        self.judged = [e for e in self.events if e.kind == \"mark\"] if self.half and not self.attributed \\",
+  "new": "        self.judged = [] if self.half and not self.attributed \\",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cause_the_marks_named_is_listed_even_with_too_few_marks"
+  ]
+ },
+ {
+  "name": "a marked moment titled a stutter",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if half and title.startswith(\"Stutters\"):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cause_the_marks_named_is_listed_even_with_too_few_marks"
+  ]
+ },
+ {
+  "name": "the example taken from the stutters only",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    for ev in e.judged:",
+  "new": "    for ev in e.attributed:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cause_the_marks_named_is_listed_even_with_too_few_marks"
+  ]
+ },
+ {
+  "name": "the session's focus share stands for marks behind it",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    behind = a > 0 and n > 0 and a / n > share",
+  "new": "    behind = False",
+  "tests": [
+   "tests/test_analysis_rules.py::test_mostly_in_front_is_no_evidence_when_the_marks_came_while_it_was_behind"
+  ]
+ },
+ {
+  "name": "too few marks behind left silent",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if share < UNFOCUSED_SHARE and not linked and behind and entry.get(\"label\") == \"too_few_events\":",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_mostly_in_front_is_no_evidence_when_the_marks_came_while_it_was_behind"
+  ]
  }
 ]

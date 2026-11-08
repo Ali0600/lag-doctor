@@ -582,7 +582,7 @@
  {
   "name": "in front counted against linked stutters",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    elif not linked:",
+  "old": "    elif not linked and not behind:",
   "new": "    else:",
   "tests": [
    "tests/test_analysis_rules.py::test_not_focused_linked_to_the_stutters_counts_even_when_mostly_in_front"

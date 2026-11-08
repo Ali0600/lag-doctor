@@ -1449,6 +1449,31 @@ def test_not_focused_linked_to_the_stutters_counts_on_any_side():
     assert is_finding(res, "medium") and res.event_ids == [1, 2, 3, 4, 5, 6]
 
 
+def marked(n, unfocused=(), cause="not_focused"):
+    """n lag-key presses (frames not measured), every 3 s from 3 s; those in `unfocused` came while another window
+    was in front, and name `cause` first."""
+    return [LagEvent(i, "mark", 3.0 * i - 3.0, 3.0 * i + 0.5, 0.0, {"why": ["a moment you marked", f"signal {i}"]},
+                     causes=[cause] if i in unfocused else []) for i in range(1, n + 1)]
+
+
+def test_mostly_in_front_is_no_evidence_when_the_marks_came_while_it_was_behind():
+    # Item 3: the first real capture's game was in front 94 % of the time, but 2 of its 3 marks fell in its one
+    # stretch behind another window; too few marks for the lift test, so the session share alone cleared it
+    sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 1.5 else 1)            # 5 % behind
+    nofr = dict(ok=("system",), src={"frames": NO_FRAMES})
+    behind = {"not_focused": lift("too_few_events", a=2, n=3, half_weight=True)}
+    res = run("not_focused", make(system=sys_, **nofr), stats={"frames": 0}, events=marked(3, {2, 3}), causes=behind)
+    assert isinstance(res, rules.Unchecked) and res.text == ("the game was the active window 95% of the time, but 2 of "
+                                                             "the 3 marked moments came while another window was in "
+                                                             "front: too few to tell (at least 5 needed)")
+    quiet = {"not_focused": lift("too_few_events", a=0, n=3, half_weight=True)}          # control: none behind
+    res = run("not_focused", make(system=sys_, **nofr), stats={"frames": 0}, events=marked(3), causes=quiet)
+    assert isinstance(res, rules.Cleared) and res.text == "The game was the active window 95% of the time."
+    many = {"not_focused": lift("neutral", a=2, n=6)}                    # enough events, and 33 % behind: no sample
+    evs = [stutter(i, 3.0 * i, "not_focused" if i <= 2 else None) for i in range(1, 7)]
+    assert run("not_focused", make(system=sys_), events=evs, causes=many) is None
+
+
 def test_not_focused_linked_to_the_stutters_counts_even_when_mostly_in_front():
     sys_ = synth.system_table(30, game_focused=1)
     res = run("not_focused", make(system=sys_), events=[stutter(i, 3.0 * i, "not_focused") for i in range(1, 7)],
@@ -1736,6 +1761,36 @@ def test_marks_stand_in_for_frames_at_half_weight():
     res = run("game_cpu_spike", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0}, events=marks,
               causes=causes)
     assert is_finding(res, "low") and "marked moments" in res.evidence[0].text
+
+
+def test_a_cause_the_marks_named_is_listed_even_with_too_few_marks():
+    # Item 11: with only marks, the stutter-cause rules looked for its best-explained events among the stutters and
+    # FPS drops, found none, and so a cause too few marks named went to neither list
+    few = {"asset_streaming": lift("too_few_events", a=2, n=3, weight=0.5, half_weight=True)}
+    res = run("asset_streaming", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0},
+              events=marked(3, {1, 3}, "asset_streaming"), causes=few)
+    assert isinstance(res, rules.Unchecked) and res.text == "only 3 marked moments: blaming a cause needs at least 5"
+    none = {"asset_streaming": lift("too_few_events", a=0, n=3, weight=0.5, half_weight=True)}
+    assert run("asset_streaming", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0},
+               events=marked(3), causes=none) is None                              # none of them named it: silent
+    enough = {"asset_streaming": lift("supports", a=5, n=6, weight=1.5, half_weight=True)}
+    res = run("asset_streaming", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0},
+              events=marked(6, {1, 2, 3, 4, 5}, "asset_streaming"), causes=enough)
+    assert is_finding(res) and res.title == "Lag you marked while the game loads from disk (5 of 6)"
+    assert res.event_ids == [1, 2, 3, 4, 5] and any(e.text.startswith("For example at 0.0 s: signal 1")
+                                                    for e in res.evidence)
+
+
+def test_lag_doctors_own_load_is_no_other_program_beside_a_cpu_limit():
+    # Item 10: "other programs used X% of a CPU meanwhile" summed lag-doctor's own capture process (target tool_pids)
+    own = [[0.25 * k, [[5555, "python.exe", 150.0, 0.0, 0.0], [2656, "dwm.exe", 3.0, 0.0, 3.0]]] for k in range(1, 121)]
+
+    def lines(target):
+        res = run("cpu_limit", make(system=synth.system_table(30, game_top_thread_pct=95.0), others=own, target=target),
+                  bound={"verdict": "cpu_main", "r": 0.3, "busiest_thread": 0.95})
+        return [e.text for e in res.evidence if "other programs used" in e.text.lower()]
+    assert lines({"tool_pids": [5555]}) == []
+    assert lines({}) == ["Other programs used 153% of a CPU meanwhile (100% = one logical CPU)."]    # control
 
 
 def test_marks_never_rule_out_the_residual_causes_they_were_not_judged_for():

@@ -724,6 +724,16 @@ def test_a_mark_is_not_matched_by_a_router_that_ignored_pings():
     assert dg.mark_list([gw, inet, mk])[0]["events"] == [1, 2]
 
 
+def test_a_mark_keeps_every_signal_that_moved():
+    # Item 6: a mark kept its first two causes, which CAUSE_ORDER picked where z tied at Z_CAP, so the first real
+    # capture's mark at 13:27 dropped other programs at 602 % of a CPU (and the next one the CPU at 56 % of base)
+    from lagdoctor.model import LagEvent
+    moved = ["not_focused", "asset_streaming", "vram_overflow", "background_cpu", "asset_streaming"]
+    mk = LagEvent(3, "mark", 804.1, 807.6, 0.0, {"mark_t": 807.1, "frame_events": [], "net_events": []}, causes=moved)
+    assert dg.mark_list([mk]) == [{"t": 807.1, "events": [],
+                                   "causes": ["not_focused", "asset_streaming", "vram_overflow", "background_cpu"]}]
+
+
 def test_marks_are_reported_also_without_frame_timing():
     from lagdoctor.report import console, html
     s = synth.laglab("smooth", duration_s=40.0, marks=(8.0, 15.0, 22.0, 30.0), with_frames=False)

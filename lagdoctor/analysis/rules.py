@@ -229,6 +229,10 @@ class _Env:
         self.target = _dict(cap.target)
         self.sources = cap.sources if isinstance(cap.sources, dict) else {}
         self.attributed = [e for e in self.events if e.kind in attribute.ATTRIBUTED_KINDS]
+        # item 11: the events attribution judged, the user's marks when they stood in for the frames (half weight)
+        self.half = any(isinstance(v, dict) and v.get("half_weight") for v in self.causes.values())
+        self.judged = [e for e in self.events if e.kind == "mark"] if self.half and not self.attributed \
+            else self.attributed
         self.tick_spans = fa._merged_spans(self.events, fa.FRAME_EVENT_KINDS, pad=fa.TICK_PAD_S)
         dur = fa._bounded(cap.duration_s)
         self.duration = float(dur) if dur is not None and dur > 0 else None
@@ -922,12 +926,16 @@ def _top_gpu_user(e: _Env) -> tuple[str, int, float, bool] | None:
 
 
 def _others_steady(e: _Env) -> float | None:
-    """Median CPU of the listed non-game processes per tick (100 = one logical CPU)."""
+    """Median CPU of the listed non-game processes per tick (100 = one logical CPU), lag-doctor's own left out as in
+    attribute's background signals (item 10)."""
+    tool_pids, tool_names = attribute.tool_processes(e.cap)
     sums = []
     for row in e.cap.others if isinstance(e.cap.others, list) else []:
         if isinstance(row, (list, tuple)) and len(row) == 2 and isinstance(row[1], (list, tuple)):
             sums.append(math.fsum(float(x) for x in (fa._bounded(p[2]) for p in row[1]
-                                                     if isinstance(p, (list, tuple)) and len(p) >= 3)
+                                                     if isinstance(p, (list, tuple)) and len(p) >= 3
+                                                     and not ((attribute._is_pid(p[0]) and p[0] in tool_pids)
+                                                              or (isinstance(p[1], str) and p[1].lower() in tool_names)))
                                   if x is not None and x >= 0))
     return st.median(sums) if sums else None
 
@@ -1780,7 +1788,17 @@ def _not_focused(cap: Capture, ctx: dict) -> Any:
         c.lack("foreground", W_STEADY, "the foreground window was not recorded")
         return c.conclude()
     share = sum(1 for v in vals if v == 0.0) / len(vals)
-    linked = _dict(e.causes.get("not_focused")).get("label") == "supports"
+    entry = _dict(e.causes.get("not_focused"))
+    linked = entry.get("label") == "supports"
+    a, n = _num(entry.get("a")) or 0, _num(entry.get("n")) or 0
+    # item 3: lag moments that came while it was behind more often than the session share says are no sample of the
+    # session; "in front 94 % of the time" was no evidence when 2 of 3 marks fell in its one stretch behind
+    behind = a > 0 and n > 0 and a / n > share
+    if share < UNFOCUSED_SHARE and not linked and behind and entry.get("label") == "too_few_events":
+        what = "marked moments" if entry.get("half_weight") else "stutters and FPS drops"
+        return Unchecked("not_focused", f"the game was the active window {100 * (1 - share):.0f}% of the time, but "
+                                        f"{a:.0f} of the {n:.0f} {what} came while another window was in front: too "
+                                        f"few to tell (at least {MIN_EVENTS} needed)")
     if share >= UNFOCUSED_SHARE and e.verdict in GATES["cpu"]:
         c.support("foreground", W_STEADY, f"the game was not the active window for {100 * share:.0f}% of the capture "
                                           f"({100 * UNFOCUSED_SHARE:.0f}% or more)", 100 * share, "%", 100 * UNFOCUSED_SHARE)
@@ -1790,7 +1808,7 @@ def _not_focused(cap: Capture, ctx: dict) -> Any:
         c.neutral("foreground", f"the game was not the active window for {100 * share:.0f}% of the capture, but the "
                                 f"frame rate is limited by {labels.BOUND.get(e.verdict, e.verdict)}, so less CPU time "
                                 "is not what holds it back", 100 * share, "%", 100 * UNFOCUSED_SHARE)
-    elif not linked:     # mostly in front is no evidence against stutters that all came while it was behind
+    elif not linked and not behind:   # mostly in front is no evidence against lag that came while it was behind
         c.against("foreground", W_STEADY, f"the game was the active window {100 * (1 - share):.0f}% of the time",
                   100 * share, "%", 100 * UNFOCUSED_SHARE)
     _event_link(c, "not_focused", "foreground", "another window being in front")
@@ -1798,7 +1816,7 @@ def _not_focused(cap: Capture, ctx: dict) -> Any:
     fixes = [_advice("Keep the game in front while you play", "Click into its window; Windows gives background "
                                                               "windows a lower priority"
                      + (", and on battery an even lower speed." if battery else "."))]
-    ids = [ev.id for ev in e.attributed if ev.causes and ev.causes[0] == "not_focused"]
+    ids = _first_cause_ids(e, ("not_focused",))
     return c.conclude("The game was not the active window", "Windows lowers the priority of windows that are not in "
                                                             "front, so the game got less CPU time.", fixes, ids)
 
@@ -1837,8 +1855,11 @@ def _event_link(c: _Case, cause: str, family: str, phrase: str, contradict: bool
 
 
 def _first_cause_ids(e: _Env, causes: Iterable[str]) -> list[int]:
+    """The judged events (the marks, when they stood in for the frames) whose best cause is one of `causes`. Read
+    from the stutters and FPS drops alone, a capture with only marks named none, so the too-few-events branch never
+    fired and the causes its marks named left both lists (item 11)."""
     want = set(causes)
-    return [ev.id for ev in e.attributed if ev.causes and ev.causes[0] in want]
+    return [ev.id for ev in e.judged if ev.causes and ev.causes[0] in want]
 
 
 def _name_cpu(e: _Env, name: str, spans: list[tuple[float, float]],
@@ -2171,12 +2192,14 @@ def _stutter_cause(cap: Capture, ctx: dict, cause: str) -> Any:
                                         "sure")
     if cpu_side and not half:
         _cpu_side_item(c, ids)
-    for ev in e.attributed:
+    for ev in e.judged:
         if ev.id in ids and isinstance(ev.detail.get("why"), list) and len(ev.detail["why"]) > 1:
             c.neutral(family, f"for example at {ev.t_start:.1f} s: {_text(ev.detail['why'][1], 200)}")
             break
     fixes = [_advice(t, d) for t, d in advice]
     share = _fin(entry.get("share")) or 0.0
+    if half and title.startswith("Stutters"):     # no stutter was measured: the moments are the user's own
+        title = "Lag you marked" + title[len("Stutters"):]
     return c.conclude(f"{title} ({len(ids)} of {n:.0f})",
                       _sentence(f"{len(ids)} of {n:.0f} {what} were best explained by {phrase} "
                                 f"({100 * share:.0f}%)"), fixes, ids)
