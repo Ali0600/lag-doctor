@@ -272,7 +272,7 @@ this applies.
 Each item is an owner run or a measurement, and the plan names it where it is needed:
 - **M0** on the owner's PC: the automated checks pass, and the owner's two runs passed everything but step 2 (keys
   and right-click), which neither completed (section 11). Step 2 was rebuilt (section 12); a run that completes it is
-  still open, and so is what Alt+Left does to the keyboard.
+  still open, and so is what Alt+Left does on the owner's PC (on GitHub's runner it kept the keyboard, section 12).
 - **The relay pipe's integrity label** with an unelevated client.
 - **Where the UAC prompt appears** when the app's window asks for it.
 - **Who parents a store-launched game, and how long the handler stub lives.**
@@ -393,6 +393,12 @@ WebView2 reference by this session's research agent and are marked [research: ..
   notes; a West Wind blog post]. M1's other road, should Alt need handling at all.
 - **A right-click with the default menus off** still raises the page's own `contextmenu` event: run 2 counted 4
   [verified: run 2's results.json]. Microsoft documents only that the host's ContextMenuRequested is not raised then.
+- **Typed on GitHub's runner** (PR #20's Window spike rehearsal, runtime 156.0.4314.58, 2026-11-08): all 11 actions
+  went in with SendInput (41 of 41 input events taken). The view's key event named the 7 Ctrl keys and Alt+Left (a
+  system key) from the keys held, and the page got each about 1 ms later. Alt+Left reached the page, no menu mode
+  followed, and a letter typed 0.4 s after it reached the page too; the view's GotFocus fired as typing began, every
+  line ticked, and nothing acted (no zoom change, navigation or browser window) [verified: the run's results.json].
+  So there Alt+Left keeps the keyboard; the owner's PC has not shown it yet.
 
 ## Verification log (2026-11-08)
 
