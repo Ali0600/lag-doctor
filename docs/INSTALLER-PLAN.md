@@ -133,6 +133,11 @@ but a GitHub-hosted runner. Measured (research note section 8):
   handle-free snapshot (ProcessIdToSessionId would open the game). Only that process's frame rows and network
   events are relayed. No file writes; nothing loaded from a user-writable folder.
 - The CLI uses the service when it answers and falls back to `watch --elevate` when it does not (git checkouts).
+- The service hosts the relay core that `docs/LAUNCHER-PLAN.md` builds first as a relay elevated per recording (its
+  M3): one protocol, one client for the CLI and the app. Stage 4 changes where the relay runs and its policy: a fixed
+  pipe name its trigger starts, not a random one; the caller's own session and target, not a command line approved at
+  a prompt; the installer's PresentMon only; and the client checks the server's PID against the service's, since any
+  process could create that name first.
 - E8: each guard ships red-first, as every guard here does.
 
 ## Stage 5: release

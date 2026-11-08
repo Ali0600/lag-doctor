@@ -7,8 +7,10 @@
   condition on its "Restore PresentMon from the cache" step.
 - **Own ETW frame tracer instead of PresentMon**: no download, but no GPU-busy timing and a lot of
   present-mode state to get right. Revisit hook: a second `Collector` named `frames` in `capture/`.
-- **A live dashboard on a second monitor** (local web page fed by the session's `live()` snapshots).
-  Revisit hook: `capture/session.py` already gathers `live()` once a second for the console line.
+- **A live view on a second monitor**: a screen of the app's window (`docs/LAUNCHER-PLAN.md`), not a local web page,
+  whose server 2026-11-08 rejected. While a game records the app draws nothing that moves, because its GPU time counts
+  as another program's, so that cost needs measuring first. Revisit hook: the recorder's status messages
+  (`watch --control stdio`, M4), which would carry `live()`, gathered once a second in `capture/session.py`.
 - **`uv tool install` from PyPI as a developer channel**: no admin at install, but every recording keeps its UAC
   prompt and the elevated code stays user-writable. Revisit hook: the build backend and console entry point that
   the installer stage adds to `pyproject.toml` (`docs/INSTALLER-PLAN.md`).
@@ -32,14 +34,87 @@
   rose at the mark, "running below full speed" where only the clock fell. Revisit hook: `diagnose.mark_list` would
   keep each cause's part, for `labels.cause_text` to read.
 - **A launcher .exe for `lagdoctor` instead of the `.cmd` shim**, built in CI from our own C source: no "Terminate
-  batch job (Y/N)?" after Ctrl+C and exact arguments, once Stage 4 records in the user's own window; SignPath could
-  sign it. Revisit hook: `SHIM` in `scripts/msi_build.py` and the `bin\` harvest in `installer/lag-doctor.wxs`.
+  batch job (Y/N)?" after Ctrl+C and exact arguments, once recordings run in the user's own window (from M3 of
+  `docs/LAUNCHER-PLAN.md`, before Stage 4); SignPath could sign it. Revisit hook: `SHIM` in `scripts/msi_build.py`
+  and the `bin\` harvest in `installer/lag-doctor.wxs`.
 - **Check whole dotted module names against the runtime**, not only top-level ones, should a pin ever ship a package
   without one of its submodules (3.13.17 has every one the full installer has). Revisit hook: the child in
   `scripts/runtime_modules.py` would list every module in `python313.zip`, and `allowed()` in
   `tests/test_stdlib_only.py` would check the whole name.
+- **Microsoft's `WebView2Loader.dll` for the app's window, instead of the runtime's own export**: documented, and it
+  honours WebView2's policy keys and overrides, but it is a binary without published source that SignPath must accept
+  first. Revisit hook: the app's create-environment function (`docs/LAUNCHER-PLAN.md`, "The window").
+- **A host exe for the app's window** (C# with Microsoft's WebView2 control, or C++ on webview/webview): Task Manager
+  would name lag-doctor, and DPI, focus and accessibility would come with the control. The cost is a second toolchain
+  and a signed exe, and it would reverse 2026-11-04's "Python with ctypes, no compiled code". Revisit hook: the M0
+  gate in `docs/LAUNCHER-PLAN.md`.
+- **Starting the store client through Explorer** (`IShellDispatch2::ShellExecute`) when Play finds it closed, so it
+  never becomes lag-doctor's child. Revisit hook: the store-client check in the launch policy module
+  (`docs/LAUNCHER-PLAN.md`, M6).
 
 ---
+
+## 2026-11-08: A desktop app that launches the games, drawn by WebView2 in lag-doctor's own window
+
+The owner asked for a light app that launches games with lag-doctor attached and shows results to explore. The plan
+is `docs/LAUNCHER-PLAN.md`; the facts and sources are in `docs/research/desktop-app.md`. The first three forks are the
+owner's, answered on 2026-11-08. The planning session chose the rest, and the owner has not weighed in.
+- **A desktop app you start like Steam (chosen by the owner)**: its own icon, window and taskbar button.
+  - **A local web page in an Edge `--app` window, served by `http.server`** (the session's first proposal): rejected by
+    the owner ("Why a web app?"). It would also be Edge's window, with an "Open browser window" item that cannot be
+    hidden and Edge's first-run screens, and missing where Edge was uninstalled. And it brings a server to harden:
+    CPython's default SO_REUSEADDR lets another account bind the same port, and cookies are not isolated by port.
+- **It launches the games (chosen by the owner)**.
+  - **Results first, launching last or never** (the session's proposal: one click saved, for the most risk): rejected by
+    the owner.
+- **Plan only for now (the owner)**: nothing is built until the owner says go.
+- **The window: WebView2 in lag-doctor's own window, driven by its Python through ctypes (chosen, gated by the M0
+  spike)**. It is the launchers' own architecture (Steam draws with an embedded Chromium). No new binary and no
+  server, and the stdlib-only rule holds.
+  - **A small C# host (.NET Framework 4.8.1) with Microsoft's WebView2 control**: deferred, the fallback if M0 fails,
+    for the owner to decide then. It costs a second toolchain, a signed exe and three binary-only Microsoft DLLs, and
+    it would reverse 2026-11-04's "Python with ctypes, no compiled code".
+  - **A C++ host on webview/webview**: deferred, the same fallback without Microsoft's DLLs.
+  - Rejected: **tkinter** (no JPEG cover art; not in the embeddable runtime), **pure Win32** (no DOM to test),
+    **pywebview** (an unsigned native module), **PySide6** (size; GPLv3 charts), **Electron and Tauri** (prebuilt
+    binaries, or two more toolchains).
+- **WebView2's environment from the runtime's own `CreateWebViewEnvironmentWithOptionsInternal` (chosen)**: it ships no
+  Microsoft binary, so SignPath's "no proprietary, non open-source component" question never arises; webview/webview
+  and Wails take this path. Microsoft says the function "may be modified or removed in future versions". The owner's
+  PC, whose runtime updates itself, would meet a break first, and the app then falls back to `report.html` with a plain
+  message.
+  - **Microsoft's `WebView2Loader.dll`**: deferred. Documented and Microsoft-signed, but without published source; it
+    ships only with SignPath's written OK.
+- **One relay protocol with two hosts (chosen)**: a relay elevated by one UAC prompt per recording first, and the
+  Stage 4 LocalService service later. Under the prompt it takes every decision from its approved command line; the
+  service checks the target against the caller's own session instead. Either way it talks over a pipe it creates.
+  From M3 it replaces 2026-11-04's elevated child, which recorded in its own window and wrote the capture, for
+  `watch --elevate` too.
+  - **A waiting elevated child steered by files in the user's session folder**: rejected. User-writable files would
+    steer an administrator's process after the prompt, and Stage 4 replaces it anyway.
+  - **The app runs the Session in its own process**: rejected. A crash or a closed window would lose the recording, and
+    the samplers would share the UI's interpreter.
+  - **Keeping today's elevated child, prompted after the game is found**: rejected. For Play the prompt would come over
+    a starting game, with a second console window; for `watch --elevate`, two child protocols would stay.
+- **Measure from an in-game start key for a fixed window, with the startup shaded and trim handles in Results
+  (chosen)**: recording from launch to quit folds shader preparation and menus into every statistic. The cost: the
+  player must press the key, and a game that takes raw keyboard input with `RIDEV_NOHOTKEYS` may swallow it, so the
+  trim handles fix a missed press.
+  - **Analysing the whole recording**: rejected, the startup would weigh in every statistic, baseline and rule.
+  - **Skipping a fixed startup per game**: rejected, menus last as long as the player stays in them.
+  - **Detecting gameplay automatically**: rejected as a default, since menus draw too (the render gate passes them),
+    so a detected start is a guess; it is only proposed, labelled as one.
+- **The relay forwards only the game's network events, plus the recorder's own for the tracker's DNS self-test
+  (chosen provisionally; open to the owner before M3)**: the elevated side hands over nothing about other programs.
+  `watch --elevate` then stops naming a program that filled the connection, and `bandwidth_hog` falls back to the
+  adapter's total.
+  - **Per-program byte totals from the user's own session**: open, the owner's call (`docs/LAUNCHER-PLAN.md`, Open
+    questions).
+- **Play requires the store client to be running (chosen)**: opening the URI would otherwise make the client
+  lag-doctor's child.
+  - **Starting it through Explorer**: deferred (Backlog).
+Revisit hooks: the M0 gate and the create-environment function in `docs/LAUNCHER-PLAN.md`; the relay's policy (`uac`
+or `service`) and its network filter; `crop` and the start key.
 
 ## 2026-11-08: lagdoctor/ may import what the installed runtime imports, by that runtime's own answer
 
