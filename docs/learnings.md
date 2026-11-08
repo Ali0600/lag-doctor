@@ -485,3 +485,22 @@ Windows user name stays off a page people share; a test runs the command's argum
 `powershell.exe`.
 **Takeaway**: write `${env:NAME}` unless a separator follows, put a backtick before `$`, backticks and quotes in
 the rest, and prove the string by running PowerShell on it.
+
+### Opening a store URI starts the game elsewhere; opening the game's exe starts it inside you
+`ShellExecuteEx` of `steam://rungameid/<id>` starts the scheme's handler with the URI, and without
+`SEE_MASK_NOCLOSEPROCESS` the caller gets no handle at all: the running store client starts the game. `ShellExecuteEx`
+of an `.exe` calls CreateProcess inside the caller, which becomes the game's parent, and CreateProcess makes
+full-access handles whether or not they are passed back.
+**Why it came up**: the desktop-app plan (`docs/LAUNCHER-PLAN.md`) needs a Play button that keeps "never touch the
+game", and `tests/test_no_handles.py` scans only psutil and OpenProcess, so it would have noticed neither launch.
+**Takeaway**: start a game through its launcher's URI, never from your own process; a "no handles" guard must cover
+the launch APIs too.
+
+### A local web UI is a server: Windows lets another account share its port, and cookies ignore ports
+CPython's `HTTPServer` sets `allow_reuse_address`, so it binds with SO_REUSEADDR, and on Windows another account's
+socket that also sets it may bind the same port and take its connections. Cookies are scoped by host, not by port
+(RFC 6265, section 8.5), so a login cookie for `127.0.0.1:PORT` reaches every local server the browser talks to.
+**Why it came up**: the first draft of lag-doctor's UI was a page served on 127.0.0.1 into an Edge window. The
+review found both problems, and the owner then chose a desktop window with no server (DECISIONS 2026-11-08).
+**Takeaway**: a local UI server binds with SO_EXCLUSIVEADDRUSE and checks a per-launch secret sent in a header, never
+a cookie; a window that needs no server at all is simpler still.

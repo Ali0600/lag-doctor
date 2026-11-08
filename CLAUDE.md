@@ -124,6 +124,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `lagdoctor.cmd`, since the folder on PATH must not offer the runtime's `python.exe`. Python must never write into
   the install: the build ships unchecked-hash `.pyc` files the shipped runtime compiles, and the check's `untouched`
   and `gone` verdicts fail on anything an administrator's run wrote there (a build without them did exactly that).
+- **The desktop app is a plan only** (`docs/LAUNCHER-PLAN.md`; the owner, 2026-11-08). Build no part of it, the M0
+  window spike included, until the owner says go. Its relay is also the protocol of Stage 4's capture service
+  (`docs/INSTALLER-PLAN.md`), so Stage 4 work starts from that plan too.
 - **The repo is public** (https://github.com/Ali0600/lag-doctor). Never commit the owner's personal details: write
   user-folder paths as `%LOCALAPPDATA%`, `%TEMP%` or `<repo>`, and leave out this PC's name and SID, its adapter and
   power-plan GUIDs, its public IP and MAC addresses (tests use documentation ranges, `192.168.0.x` for a home network,
