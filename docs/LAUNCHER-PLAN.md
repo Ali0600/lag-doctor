@@ -109,8 +109,9 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
     DLL. So one create-environment function keeps Microsoft's `WebView2Loader.dll` as the documented swap. That DLL
     ships only if SignPath agrees in writing.
   - Nothing runs a canary yet. The owner's PC, whose runtime updates itself, would meet a break first, and M1's window
-    tests catch one on CI only if the runner has the runtime (M0 finds out). If the window cannot open, the app shows
-    a plain message and opens `report.html` instead; the CLI keeps working either way.
+    tests catch one on CI as well: GitHub's `windows-2025` runner has the runtime and opens the window (M0's probe,
+    2026-11-08). If the window cannot open, the app shows a plain message and opens `report.html` instead; the CLI
+    keeps working either way.
 - **Identity.**
   - The MSI adds a Start-menu shortcut: target `pythonw.exe`, arguments `-m lagdoctor app`, lag-doctor's icon, and a
     `System.AppUserModel.ID` set through WiX's ShortcutProperty.
@@ -309,7 +310,8 @@ taskbar shows. The owner runs it in their own terminal. `--auto` runs the automa
 `--rehearse` walks the four steps with automatic answers, so their code runs without a person and checks nothing. A
 run cut short (the window closed, Ctrl+C) says so and exits 4, listing every check it never reached. CI's probe
 (`.github/workflows/webview-spike.yml`) asks whether the runner has the WebView2 Runtime and can open the window; a
-"no runtime" answer counts only when a second reading (the runtime's registry version and its exe) agrees.
+"no runtime" answer counts only when a second reading (the runtime's registry version and its exe) agrees. It does:
+on PR #18 the runner had 156.0.4314.58, and all 30 automated checks passed there.
 
 The gate: the owner's run passes on their PC, the drop-refs sabotage fails as predicted, and no control misses.
 Otherwise the owner decides on the fallback (DECISIONS 2026-11-08): a small host exe showing the same screens. It is
@@ -334,8 +336,8 @@ Play and screen 6 with M6. It needs:
 
 Tests:
 - view-models in plain pytest;
-- the page driven through the host's own script hook, behind a declared `webview2` capability. WebDriver for WebView2
-  has been broken since runtime 133;
+- the page driven through the host's own script hook, behind a declared `webview2` capability, which CI's runner has
+  (M0). WebDriver for WebView2 has been broken since runtime 133;
 - the bridge's origin and navigation policy as pure functions, with negative cases;
 - names with markup shown as text (the `textContent` rule above);
 - `test_user_text` extended to the app's HTML, JS and CSS;

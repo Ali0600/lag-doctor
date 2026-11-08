@@ -272,7 +272,6 @@ this applies.
 Each item is an owner run or a measurement, and the plan names it where it is needed:
 - **M0** on the owner's PC: the automated checks pass (section 11); the owner's own run, with the steps only a person
   can do, is still open.
-- **The runner's WebView2 Runtime**: the CI probe (`.github/workflows/webview-spike.yml`) asks.
 - **The relay pipe's integrity label** with an unelevated client.
 - **Where the UAC prompt appears** when the app's window asks for it.
 - **Who parents a store-launched game, and how long the handler stub lives.**
@@ -333,7 +332,11 @@ unless it says otherwise.
 - **A dropped handler**: kept, it answered 20 of 20; dropped, its process ended with an access violation (reading
   0xFFFFFFFFFFFFFFFF). ctypes raised it as an `OSError`, so the exit code was 1, not 0xC0000005.
 - **A run cut short**: closing the window midway gave exit 4 and listed the 16 checks it never reached.
-
+- **GitHub's runner** (`windows-2025`, the Window spike workflow on PR #18, 2026-11-08): it has WebView2 Runtime
+  156.0.4314.58, though its image lists none (section 3), and it opens the window. All 30 automated checks passed there
+  at 96 DPI with no GPU: page ready 2.75 s after the process started, recovery 0.55 s, close 0.25 s, and of 480
+  messages posted to the thread during the move loop, 3 arrived. The rehearsal ran the owner's steps' code. So M1's
+  window tests can run on CI [verified: the job's log].
 ## Verification log (2026-11-08)
 
 | Claim | Result | Source read |
