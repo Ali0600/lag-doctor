@@ -3,14 +3,17 @@
 The window itself runs only in the spike: by the owner, by an agent with --auto, and in the Window spike workflow.
 These hold the parts a regression could break without a window to show it: the origin and navigation rules the
 window's security rests on, the COM objects the spike hands WebView2 (driven here through their own vtables, as
-WebView2 calls them), the socket reader behind the no-server check (proved on sockets this test opens), and the
+WebView2 calls them), the no-server check (its socket reader proved on sockets this test opens, the rule that tells a
+server from WebView2's own clients, and the whole check run against a process holding a client or a server), and the
 environment-variable fact the hardening relies on.
 """
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import socket
+import subprocess
 import sys
 from ctypes import wintypes
 from pathlib import Path
@@ -198,6 +201,168 @@ def test_the_socket_reader_sees_sockets_this_process_opens_with_their_states_and
             s.close()
     after = {(x["proto"], x["port"], x["state"]) for x in ws.open_sockets({os.getpid()})}
     assert not {e for e in expected if e[2] in ("listen", "bound")} & after
+
+
+def test_the_socket_reader_gives_the_bound_address_and_whether_the_program_named_a_udp_port():
+    made = []
+
+    def new(family, kind):
+        s = socket.socket(family, kind)
+        made.append(s)
+        return s
+    try:
+        lst = new(socket.AF_INET6, socket.SOCK_STREAM)
+        lst.bind(("::1", 0))
+        lst.listen(1)
+        u4 = new(socket.AF_INET, socket.SOCK_DGRAM)
+        u4.bind(("127.0.0.1", 0))
+        named = new(socket.AF_INET6, socket.SOCK_DGRAM)
+        named.bind(("::1", u4.getsockname()[1]))                       # IPv6 ports are a space of their own
+        client = new(socket.AF_INET, socket.SOCK_DGRAM)
+        client.connect(("127.0.0.1", u4.getsockname()[1]))             # bound by Windows; sends nothing
+        assert client.getsockname()[0] == "127.0.0.1"                  # what it sends from
+        seen = {(x["proto"], x["port"]): x for x in ws.open_sockets({os.getpid()})}
+        assert seen[("tcp6", lst.getsockname()[1])]["addr"] == "::1"
+        for proto, s, addr, named_port in (("udp4", u4, "127.0.0.1", False), ("udp6", named, "::1", True),
+                                           ("udp4", client, "0.0.0.0", False)):    # the client: as bound, not sent
+            x = seen[(proto, s.getsockname()[1])]
+            assert (x["addr"], x["specific_port"]) == (addr, named_port)
+            assert x["specific_port"] is named_port                    # a bool: the rule tells False from unread
+    finally:
+        for s in made:
+            s.close()
+
+
+def _row(proto="udp4", addr="0.0.0.0", specific=False, state="established", pid=200, port=50000):
+    x = {"proto": proto, "pid": pid, "port": port, "addr": addr}
+    if proto.startswith("tcp"):
+        x.update(state=state, remote_port=443)
+    else:
+        x.update(state="bound", specific_port=specific)
+    return x
+
+
+@pytest.mark.parametrize("row, kind, why", [
+    (_row(), "utility", None),                         # the shape all 70 of WebView2's UDP sockets had on the runner
+    (_row("udp6", "::"), "utility", None),
+    (_row(), "browser", "UDP in the browser process"),
+    (_row(), "renderer", "UDP in the renderer process"),
+    (_row(), "GPU", "UDP in the GPU process"),
+    (_row(), None, "UDP in a process WebView2 does not list"),
+    (_row(addr="127.0.0.1"), "utility", "UDP bound to 127.0.0.1"),
+    (_row("udp6", "::1"), "utility", "UDP bound to ::1"),
+    (_row(addr="192.168.0.10"), "utility", "UDP bound to 192.168.0.10"),
+    (_row(specific=True), "utility", "UDP on a port its program named"),
+    (_row("udp6", "::", specific=True), "utility", "UDP on a port its program named"),
+    (_row(specific=None), "utility", "UDP on a port its program named"),       # unread is a server's
+    (_row("tcp4", "127.0.0.1", state="listen"), "utility", "listening"),
+    (_row("tcp6", "::", state="listen"), "browser", "listening"),
+    (_row("tcp4", "192.168.0.10"), "utility", None),
+    (_row("tcp4", "192.168.0.10", state="state 3"), "renderer", None),        # a connection, whoever holds it
+])
+def test_a_webview2_socket_is_a_server_unless_it_has_a_clients_shape(row, kind, why):
+    assert ws.server_reason(row, kind) == why
+
+
+def test_sort_sockets_keeps_the_spikes_own_apart_and_gives_each_server_its_reason():
+    own = 100
+    found = [_row(pid=own, port=40000),                # a control socket: left out
+             _row(pid=own, port=40001),                # any other of the spike's own, even in a client's shape
+             _row(pid=200, port=50000),
+             _row("tcp4", "192.168.0.10", pid=200, port=50001),
+             _row("tcp4", "127.0.0.1", state="listen", pid=300, port=50002),
+             _row(pid=300, port=50003)]
+    mine, servers, outgoing = ws.sort_sockets(found, own, {200: "utility", 300: "browser"}, {40000})
+    assert [x["port"] for x in mine] == [40001]
+    assert [(x["port"], x["kind"], x["why"]) for x in servers] == [(50002, "browser", "listening"),
+                                                                    (50003, "browser", "UDP in the browser process")]
+    assert [(x["port"], x["kind"]) for x in outgoing] == [(50000, "utility"), (50001, "utility")]
+
+
+# The whole check, in a clean process (pytest's own may hold sockets other tests left): that process plays WebView2's
+# browser, and a child it starts holds the sockets under test, as the process kind the case names. "unlisted" leaves
+# the process list unread (no WebView2 environment); "blind" and "flagless" break the reader for the control only, and
+# "lenient" breaks the rule, so that only the control can still fail the check.
+CHECK_RUNNER = r'''
+import json, os, subprocess, sys, tempfile
+from pathlib import Path
+import webview_spike as ws
+
+HOLDER = """
+import os, socket, sys
+mode = sys.argv[1]
+held = []
+if mode != "nothing":
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM if mode == "tcp-listen" else socket.SOCK_DGRAM)
+    if mode == "udp-client":
+        s.connect(("127.0.0.1", 9))
+    else:
+        s.bind(("127.0.0.1", 0))
+        if mode == "tcp-listen":
+            s.listen(1)
+    held.append(s)
+print(os.getpid(), flush=True)
+sys.stdin.read()
+"""
+mode, kind, sabotage, out = sys.argv[1:5]
+holder = subprocess.Popen([sys.executable, "-c", HOLDER, mode], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          text=True)
+try:
+    holder_pid = int(holder.stdout.readline())
+    spike = ws.Spike("socket-test", Path(tempfile.mkdtemp()), False, lambda line: None)
+    spike.browser_pid = os.getpid()
+    if kind != "unlisted":
+        spike.process_kinds = lambda: ({os.getpid(): "browser", holder_pid: kind}, None)
+    reader = ws.open_sockets
+    if sabotage == "blind":
+        ws.open_sockets = lambda pids: [x for x in reader(pids) if x["pid"] != os.getpid()]
+    elif sabotage == "flagless":
+        ws.open_sockets = lambda pids: [dict(x, specific_port=False) if "specific_port" in x else x
+                                        for x in reader(pids)]
+    elif sabotage == "lenient":
+        ws.server_reason = lambda x, kind: None
+    spike.check_sockets("sockets-1", "in a test")
+    r = spike.results[-1]
+    Path(out).write_text(json.dumps({"status": r.status, "measured": r.measured, "detail": r.detail},
+                                    default=str), encoding="utf-8")
+finally:
+    holder.stdin.close()
+    holder.wait(10)
+'''
+
+
+@pytest.mark.parametrize("mode, kind, sabotage, status, why", [
+    ("nothing", "utility", "none", "PASS", None),
+    ("udp-client", "utility", "none", "PASS", None),
+    ("udp-client", "renderer", "none", "FAIL", "UDP in the renderer process"),
+    ("udp-loopback", "utility", "none", "FAIL", "UDP bound to 127.0.0.1"),
+    ("tcp-listen", "utility", "none", "FAIL", "listening"),
+    ("nothing", "unlisted", "none", "FAIL", None),
+    ("nothing", "utility", "blind", "FAIL", None),
+    ("nothing", "utility", "flagless", "FAIL", None),
+    ("nothing", "utility", "lenient", "FAIL", None),
+])
+def test_the_check_fails_on_a_server_in_a_webview2_process_and_counts_its_clients(tmp_path, mode, kind, sabotage,
+                                                                                  status, why):
+    out = tmp_path / "result.json"
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(ROOT / "scripts"), str(ROOT)]), TEMP=str(tmp_path),
+               TMP=str(tmp_path))
+    subprocess.run([sys.executable, "-c", CHECK_RUNNER, mode, kind, sabotage, str(out)], cwd=ROOT, env=env,
+                   timeout=60, check=True)
+    r = json.loads(out.read_text(encoding="utf-8"))
+    d = r["detail"]
+    assert r["status"] == status, r["measured"]
+    assert d["mine"] == []
+    assert [x["why"] for x in d["servers"]] == ([why] if why else [])
+    clients = [x for x in d["outgoing"] if x["proto"] == "udp4"]
+    expect_client = mode == "udp-client" and kind == "utility"
+    assert [(x["kind"], x["addr"]) for x in clients] == ([("utility", "0.0.0.0")] if expect_client else [])
+    if sabotage == "none":
+        assert d["control"] == {"read": 6, "wrong": []}
+    else:                                              # the control catches a reader that cannot see it
+        assert d["control"]["wrong"] and "were NOT all read back" in r["measured"]
+    if kind == "unlisted":
+        assert "did NOT name the browser process (no environment)" in r["measured"]
 
 
 def _proc(pid, ppid, created, name="msedgewebview2.exe"):
