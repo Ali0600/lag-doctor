@@ -27,7 +27,7 @@ import pytest
 
 from lagdoctor.capture import presentmon as pm
 from lagdoctor.model import F
-from lagdoctor.winapi import elevation
+from lagdoctor.winapi import elevation, ntquery
 
 FIX = Path(__file__).parent / "fixtures" / "presentmon"
 FAKE = FIX / "fake_presentmon.py"
@@ -465,12 +465,40 @@ def test_presentmon_ending_by_itself_with_no_working_liveness_check_is_partial(s
 
 def test_the_default_liveness_check_uses_the_pid_list_only(state, monkeypatch):
     seen = []
-    monkeypatch.setattr(psutil, "pids", lambda: seen.append(1) or [1, 2, 3])
+    monkeypatch.setattr(ntquery, "pids", lambda snapshotter=None: seen.append(1) or frozenset({1, 2, 3}))
     src = Fake("breakable", state, is_alive=None)
     src.start(0.0)
     wait_for(lambda: not src._thread.is_alive(), 15, "the capture to stop when PID 24892 is not listed")
     src.stop()
     assert seen and "game exited" in src.status().detail
+
+
+def test_the_default_liveness_check_follows_a_real_process(state, monkeypatch):
+    # The stand-in "game" is a child of this test; our Popen keeps its handle, so its PID cannot be reused here.
+    real, checks = ntquery.pids, []
+    monkeypatch.setattr(ntquery, "pids", lambda snapshotter=None: checks.append(1) or real(snapshotter))
+    game = subprocess.Popen([BASE_PY, "-I", "-c", "import time; time.sleep(60)"])
+    src = Fake("breakable", state, pid=game.pid, is_alive=None)
+    try:
+        src.start(0.0)
+        wait_for(lambda: (state / "running").exists(), 15, "the stand-in to start")
+        wait_for(lambda: len(checks) >= 3, 15, "three liveness checks while the game runs")
+        assert src._thread.is_alive(), src.status().detail
+        game.kill()
+        game.wait(10)
+        wait_for(lambda: not src._thread.is_alive(), 15, "the capture to stop once the game exited")
+    finally:
+        game.kill()
+        src.stop()
+    assert "game exited" in src.status().detail
+
+
+def test_the_default_liveness_check_keeps_one_snapshot_buffer(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ntquery, "pids", lambda snapshotter=None: seen.append(snapshotter) or frozenset({1234}))
+    src = pm.PresentMonSource(1234)
+    assert src._probe_alive() is True and src._probe_alive() is True
+    assert len(seen) == 2 and isinstance(seen[0], ntquery.Snapshotter) and seen[1] is seen[0]
 
 
 def test_no_rights_is_unavailable_with_presentmons_own_reason(state):

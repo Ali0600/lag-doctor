@@ -2,7 +2,7 @@
 server flow, tick, gaps and their kinds (NE 4.6), talkers, server_rx, the reorder buffer and the bounds.
 
 Expected values are written here as literals or built by this file's own encoders, never read
-back from the code under test.
+back from the code under test; the live local address set is checked against psutil.net_if_addrs().
 """
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import socket
 import struct
 import threading
 
+import psutil
 import pytest
 
 from lagdoctor.capture import netflows as nf
@@ -152,6 +153,30 @@ def test_the_local_address_set_has_loopback_and_this_pcs_addresses():
     finally:
         probe.close()
     assert source in local
+
+
+def _set_from_psutil() -> set[str]:
+    """The set the tracker built from psutil.net_if_addrs() before lag-doctor read the adapters itself."""
+    out = {"127.0.0.1", "::1"}
+    for addrs in psutil.net_if_addrs().values():
+        out |= {nf.normalize_ip(a.address) for a in addrs if a.family in (socket.AF_INET, socket.AF_INET6)}
+    return out - {None}
+
+
+def test_the_local_address_set_is_the_one_psutil_gave():
+    before = _set_from_psutil()
+    local = nf.local_addresses()
+    after = _set_from_psutil()
+    assert before & after <= local, sorted((before & after) - local)
+    assert local <= before | after, sorted(local - (before | after))     # spelled as decode() spells, no zones
+
+
+def test_the_local_address_set_spells_each_adapter_address_as_decode_does(monkeypatch):
+    adapters = [{"alias": "Wi-Fi", "if_index": 8,
+                 "addresses": ["192.168.0.40", "fe80::1C2D:0:0:7%8", "::ffff:192.0.2.9"]},
+                {"alias": "Ethernet 2", "if_index": 12, "addresses": []}]
+    monkeypatch.setattr(nf.iphlp, "adapter_addresses", lambda: adapters)
+    assert nf.local_addresses() == {"127.0.0.1", "::1", "192.168.0.40", "fe80::1c2d:0:0:7", "192.0.2.9"}
 
 
 # ---------------------------------------------------------------- endpoints (NE 4.4) ---

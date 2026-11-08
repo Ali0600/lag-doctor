@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 import threading
 import time
@@ -120,6 +121,29 @@ def test_if_row_of_a_missing_interface_is_an_oserror():
     with pytest.raises(OSError) as e:
         iphlp.if_row(0x7FFFFFFF)
     assert e.value.winerror == iphlp.ERROR_FILE_NOT_FOUND
+
+
+def _psutil_addresses() -> dict[str, set[str]]:
+    """psutil.net_if_addrs(): the same GetAdaptersAddresses data read by psutil's own C code, IPv4 and IPv6 by
+    adapter alias, without zones (inet_ntop writes none)."""
+    return {nic: {a.address for a in addrs if a.family in (socket.AF_INET, socket.AF_INET6)}
+            for nic, addrs in psutil.net_if_addrs().items()}
+
+
+def test_adapter_addresses_match_psutil_adapter_by_adapter():
+    before = _psutil_addresses()
+    mine = iphlp.adapter_addresses()
+    after = _psutil_addresses()
+    got = {a["alias"]: {text.split("%")[0] for text in a["addresses"]} for a in mine}
+    assert len(got) == len(mine), "two adapters share an alias"
+    assert set(before) & set(after) <= set(got) <= set(before) | set(after)
+    for alias in set(before) & set(after):
+        stable, seen = before[alias] & after[alias], before[alias] | after[alias]
+        assert stable <= got[alias] <= seen, alias
+    assert {"127.0.0.1", "::1"} <= set().union(*got.values())
+    assert any(len(a["addresses"]) > 1 for a in mine)         # an adapter's second address was read too (loopback)
+    for a in mine:                                            # a link-local zone is its adapter's index
+        assert all(t.split("%")[1] == str(a["if_index"]) for t in a["addresses"] if "%" in t), a
 
 
 # ---------------------------------------------------------------- wlan ---

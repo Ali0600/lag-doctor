@@ -6,6 +6,7 @@ windows-telemetry.md (WT) 11.1, never read back from the modules under test.
 from __future__ import annotations
 
 import ctypes
+import ipaddress
 import struct
 import uuid
 import winreg
@@ -185,6 +186,229 @@ def test_if_row_refuses_a_bad_index(bad):
 def test_best_route_refuses_a_bad_address(bad):
     with pytest.raises(ValueError):
         iphlp.best_route(bad)
+
+
+# ---------------------------------------------------------------- adapter addresses ---
+
+ADAPTER, UNICAST = iphlp.IP_ADAPTER_ADDRESSES_LH, iphlp.IP_ADAPTER_UNICAST_ADDRESS_LH
+
+
+def test_adapter_address_layouts_match_the_sdk():
+    assert (ctypes.sizeof(ADAPTER), ctypes.sizeof(UNICAST), ctypes.sizeof(iphlp.SOCKET_ADDRESS)) == (448, 64, 16)
+    assert (ADAPTER.Next.offset, ADAPTER.FirstUnicastAddress.offset, ADAPTER.FriendlyName.offset,
+            ADAPTER.OperStatus.offset, ADAPTER.Ipv6IfIndex.offset, ADAPTER.Luid.offset, ADAPTER.NetworkGuid.offset,
+            ADAPTER.Dhcpv6Server.offset, ADAPTER.FirstDnsSuffix.offset) == (8, 24, 72, 104, 108, 224, 252, 280, 440)
+    assert (UNICAST.Next.offset, UNICAST.Address.offset, UNICAST.OnLinkPrefixLength.offset) == (8, 16, 56)
+
+
+def _sockaddr_bytes(text: str) -> bytes:
+    """SOCKADDR_IN (16 bytes) or SOCKADDR_IN6 (28 bytes, the zone as its scope id), packed here by hand."""
+    ip, _, zone = text.partition("%")
+    addr = ipaddress.ip_address(ip)
+    if addr.version == 4:
+        return struct.pack("<HH4s8x", 2, 0, addr.packed)
+    return struct.pack("<HHI16sI", 23, 0, 0, addr.packed, int(zone or 0))
+
+
+class Adapters:
+    """A buffer laid out as GetAdaptersAddresses writes one: the first adapter at its start, then names, address
+    entries and socket addresses, 8-byte aligned, every pointer into the buffer itself. Built from literals, so a test
+    can break one pointer or length at a time. Each adapter is (alias, IfIndex, Ipv6IfIndex, [address text or raw
+    socket address bytes])."""
+
+    def __init__(self, adapters: list[tuple], size: int = 4096) -> None:
+        self.buf = (ctypes.c_ulonglong * (size // 8))()
+        self.base, self.size, self.pos = ctypes.addressof(self.buf), size, 0
+        self.entries: list[tuple] = []          # (adapter, [its unicast entries]), ctypes views into the buffer
+        prev = None
+        for alias, if_index, v6_index, addresses in adapters:
+            a = ADAPTER.from_buffer(self.buf, self.take(448))
+            a.Length, a.IfIndex, a.Ipv6IfIndex = 448, if_index, v6_index
+            a.FriendlyName = self.put(alias.encode("utf-16-le") + b"\0\0")
+            units = []
+            for item in addresses:
+                u = UNICAST.from_buffer(self.buf, self.take(64))
+                u.Length = 64
+                raw = item if isinstance(item, bytes) else _sockaddr_bytes(item)
+                u.Address.lpSockaddr, u.Address.iSockaddrLength = self.put(raw), len(raw)
+                if units:
+                    units[-1].Next = ctypes.addressof(u)
+                else:
+                    a.FirstUnicastAddress = ctypes.addressof(u)
+                units.append(u)
+            if prev is not None:
+                prev.Next = ctypes.addressof(a)
+            prev = a
+            self.entries.append((a, units))
+
+    def take(self, n: int) -> int:
+        at = self.pos
+        self.pos += (n + 7) // 8 * 8
+        assert self.pos <= self.size, "the test buffer is too small"
+        return at
+
+    def put(self, data: bytes) -> int:
+        at = self.base + self.take(len(data))
+        ctypes.memmove(at, data, len(data))
+        return at
+
+    def parse(self) -> list[dict]:
+        return iphlp._parse_adapters(self.base, self.size)
+
+
+def _two() -> Adapters:
+    return Adapters([("Wi-Fi", 8, 8, ["192.168.0.40", "fe80::1c2d:3e4f:5a6b:7c8d%8"]),
+                     ("Loopback Pseudo-Interface 1", 1, 1, ["::1", "127.0.0.1"])])
+
+
+# A valid list somewhere else in memory: a pointer into it is readable, so a parser that followed one would return
+# an answer (and fail the test), never crash it.
+ELSEWHERE = Adapters([("Elsewhere", 5, 5, ["198.51.100.20"])])
+
+
+def _refused(adapters: Adapters, what: str) -> None:
+    with pytest.raises(OSError) as err:
+        adapters.parse()
+    assert err.value.winerror == 13 and what in str(err.value), err.value
+
+
+def test_a_synthetic_adapter_list_parses_to_its_literals():
+    adapters = Adapters([("Wi-Fi", 8, 8, ["192.168.0.40", "fe80::1c2d:3e4f:5a6b:7c8d%8"]),
+                         ("Ethernet 2", 0, 12, ["0.0.0.0", struct.pack("<H14x", 17)]),   # unspecified; AF_NETBIOS
+                         ("Loopback Pseudo-Interface 1", 1, 1, ["::1", "127.0.0.1"])])
+    assert adapters.parse() == [
+        {"alias": "Wi-Fi", "if_index": 8, "addresses": ["192.168.0.40", "fe80::1c2d:3e4f:5a6b:7c8d%8"]},
+        {"alias": "Ethernet 2", "if_index": 12, "addresses": []},
+        {"alias": "Loopback Pseudo-Interface 1", "if_index": 1, "addresses": ["::1", "127.0.0.1"]}]
+    assert Adapters([("", 3, 0, [])]).parse() == [{"alias": "", "if_index": 3, "addresses": []}]
+
+
+def test_an_adapter_pointer_outside_the_buffer_is_refused():
+    adapters = _two()
+    adapters.entries[0][0].Next = ELSEWHERE.base
+    _refused(adapters, "outside the 4096-byte buffer")
+
+
+def test_a_misaligned_adapter_pointer_is_refused():
+    adapters = _two()
+    second = adapters.entries[1][0]
+    copy = adapters.base + adapters.take(448 + 8) + 4               # a whole, valid copy, 4 bytes off alignment
+    ctypes.memmove(copy, ctypes.addressof(second), 448)
+    adapters.entries[0][0].Next = copy
+    _refused(adapters, "not 8-byte aligned")
+
+
+def test_an_address_pointer_outside_the_buffer_is_refused():
+    adapters = _two()
+    adapters.entries[0][1][0].Next = ctypes.addressof(ELSEWHERE.entries[0][1][0])
+    _refused(adapters, "a unicast address at offset")
+    adapters = _two()
+    adapters.entries[1][0].FirstUnicastAddress = ctypes.addressof(ELSEWHERE.entries[0][1][0])
+    _refused(adapters, "outside the 4096-byte buffer")
+
+
+def test_a_name_or_socket_address_outside_the_buffer_is_refused():
+    adapters = _two()
+    adapters.entries[1][0].FriendlyName = ELSEWHERE.entries[0][0].FriendlyName
+    _refused(adapters, "a name at offset")
+    adapters = _two()
+    adapters.entries[0][1][1].Address.lpSockaddr = ELSEWHERE.entries[0][1][0].Address.lpSockaddr
+    _refused(adapters, "socket address points outside")
+
+
+@pytest.mark.parametrize("entry, length", [("adapter", 8), ("adapter", 1 << 20), ("unicast", 16), ("unicast", 1 << 20)])
+def test_an_entry_length_that_does_not_fit_is_refused(entry, length):
+    adapters = _two()
+    a, units = adapters.entries[1]
+    if entry == "adapter":
+        a.Length = length
+    else:
+        units[1].Length = length
+    _refused(adapters, f"claims {length} bytes")
+
+
+def test_a_socket_address_too_short_for_its_family_is_refused():
+    adapters = _two()
+    adapters.entries[0][1][0].Address.iSockaddrLength = 8               # an IPv4 address needs 16
+    _refused(adapters, "family 2 socket address is 8 bytes")
+    adapters = _two()
+    adapters.entries[0][1][1].Address.iSockaddrLength = 16              # an IPv6 one needs 28
+    _refused(adapters, "family 23 socket address is 16 bytes")
+    adapters = _two()
+    adapters.entries[0][1][0].Address.iSockaddrLength = 1
+    _refused(adapters, "a socket address claims 1 bytes")
+
+
+def test_a_name_without_an_end_is_refused():
+    adapters = _two()
+    adapters.entries[1][0].FriendlyName = adapters.put(("x" * 300).encode("utf-16-le"))
+    _refused(adapters, "has no end within 257 characters")
+    adapters = _two()
+    adapters.entries[1][0].FriendlyName = adapters.put(("x" * 256).encode("utf-16-le") + b"\0\0")
+    assert adapters.parse()[1]["alias"] == "x" * 256                    # the longest name an alias can be
+
+
+def test_lists_that_never_end_are_refused():
+    adapters = _two()
+    units = adapters.entries[0][1]
+    units[-1].Next = ctypes.addressof(units[0])
+    _refused(adapters, "address list never ended")
+    adapters = _two()
+    adapters.entries[-1][0].Next = adapters.base
+    _refused(adapters, "adapter list never ended")
+
+
+class FakeGetAdaptersAddresses:
+    """Stands in for the API: answers from `script` in turn ((return code, size to report) or "real")."""
+
+    def __init__(self, script: list) -> None:
+        self.script, self.real, self.buffers = list(script), iphlp._iphlpapi.GetAdaptersAddresses, []
+
+    def __call__(self, family, flags, reserved, buf, size_ptr):
+        self.buffers.append(ctypes.sizeof(buf))
+        assert size_ptr._obj.value == ctypes.sizeof(buf)       # the size passed in is the buffer's own
+        step = self.script.pop(0) if self.script else "real"
+        if step == "real":
+            return self.real(family, flags, reserved, buf, size_ptr)
+        rc, size = step
+        size_ptr._obj.value = size
+        return rc
+
+
+def test_the_buffer_grows_to_the_size_windows_asks_for(monkeypatch):
+    fake = FakeGetAdaptersAddresses([(iphlp.ERROR_BUFFER_OVERFLOW, 50_000), "real"])
+    monkeypatch.setattr(iphlp._iphlpapi, "GetAdaptersAddresses", fake)
+    got = iphlp.adapter_addresses(start_bytes=64)
+    assert fake.buffers[0] == 64 and fake.buffers[1] >= 50_000 and len(fake.buffers) == 2
+    assert any("127.0.0.1" in a["addresses"] for a in got)
+
+
+def test_a_buffer_that_never_fits_and_an_absurd_size_are_errors_not_loops(monkeypatch):
+    fake = FakeGetAdaptersAddresses([(iphlp.ERROR_BUFFER_OVERFLOW, 1000 * (i + 1)) for i in range(10)])
+    monkeypatch.setattr(iphlp._iphlpapi, "GetAdaptersAddresses", fake)
+    with pytest.raises(OSError, match="kept asking"):
+        iphlp.adapter_addresses(start_bytes=64)
+    assert len(fake.buffers) == 4
+    fake = FakeGetAdaptersAddresses([(iphlp.ERROR_BUFFER_OVERFLOW, 64 << 20)])
+    monkeypatch.setattr(iphlp._iphlpapi, "GetAdaptersAddresses", fake)
+    with pytest.raises(OSError, match="over the"):
+        iphlp.adapter_addresses()
+    assert len(fake.buffers) == 1                               # refused before allocating 64 MiB
+
+
+def test_no_data_is_no_adapters_and_another_error_is_raised(monkeypatch):
+    monkeypatch.setattr(iphlp._iphlpapi, "GetAdaptersAddresses", FakeGetAdaptersAddresses([(iphlp.ERROR_NO_DATA, 0)]))
+    assert iphlp.adapter_addresses() == []
+    monkeypatch.setattr(iphlp._iphlpapi, "GetAdaptersAddresses", FakeGetAdaptersAddresses([(8, 0)]))
+    with pytest.raises(OSError) as err:
+        iphlp.adapter_addresses()
+    assert err.value.winerror == 8
+
+
+@pytest.mark.parametrize("bad", [0, -1, True, "64", 64.0, (16 << 20) + 1])
+def test_adapter_addresses_refuses_a_bad_start_size(bad):
+    with pytest.raises(ValueError):
+        iphlp.adapter_addresses(start_bytes=bad)
 
 
 # ---------------------------------------------------------------- wlan ---
