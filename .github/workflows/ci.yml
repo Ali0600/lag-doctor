@@ -3,6 +3,7 @@
 # download, PresentMon's pinned release and its gold ETW captures (tests/downloads.py), is fetched, checked against the
 # tests' own pins and cached below, and LAGDOCTOR_REQUIRE makes a test that finds one missing fail instead of skip.
 # The summary at the end of each test step lists every skip; each job's summary counts the tests that use a download.
+# The wheel job builds the wheel and runs it from a fresh venv, outside the checkout.
 name: CI
 
 on:
@@ -99,3 +100,25 @@ jobs:
         run: uv run --no-sync pytest -v --durations=25 --deselect "$env:ALONE"
       - name: Timing-sensitive test, alone
         run: uv run --no-sync pytest -v "$env:ALONE"
+
+  wheel:
+    # The wheel `uv build` makes, installed into a fresh venv and run outside the checkout by scripts/wheel_check.py:
+    # a module, data file or dependency the wheel lacks fails here. Its summary lists every check.
+    name: Wheel (installed and run outside the checkout)
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.10.4"
+          python-version: "3.13"
+      - name: Install the checker's environment
+        run: uv sync --locked
+      # --offline: uv builds with the copy of uv_build it carries (pyproject.toml's bound), never one from the index.
+      - name: Build the sdist, and the wheel from it
+        run: uv build --offline --clear --out-dir "$env:RUNNER_TEMP\dist"
+      - name: Install the wheel into a fresh venv and run it there
+        run: uv run --no-sync python scripts/wheel_check.py "$env:RUNNER_TEMP\dist"
