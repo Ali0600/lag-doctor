@@ -557,3 +557,14 @@ list and a maintainer's remark that the runtime is "not installed or pinned by t
 CI probe measured it on PR #18.
 **Takeaway**: before planning around a dependency's absence on a CI runner, probe the runner itself, and check an
 "absent" answer a second way, since a broken finder says "absent" too.
+
+### A check a person performs must show what it has registered, and keep each event
+Step 2 of the window spike asked for eight keys, a wheel turn and a right-click in one paragraph, showed nothing of
+what had registered, and kept only a count of the window's key events (36, then 9). The owner's first run did seven
+keys and no right-click; the second did four keys and four right-clicks; neither counted, and the record could not
+tell a key not pressed from one the page never got.
+**Why it came up**: M0's gate is the owner's own run; two runs of about three minutes each ended INCOMPLETE on the same
+step, each for a different reason. The rebuilt step lists one action per line, ticks each off from either side that
+can see it (the page or the view's key event), and keeps every event with its time.
+**Takeaway**: give a person-run check a live checklist, one action per line, ticked off as each registers, and keep
+the raw events from every place that can see them; a bare count cannot be turned back into which ones happened.

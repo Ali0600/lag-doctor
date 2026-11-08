@@ -271,7 +271,8 @@ this applies.
 
 Each item is an owner run or a measurement, and the plan names it where it is needed:
 - **M0** on the owner's PC: the automated checks pass, and the owner's two runs passed everything but step 2 (keys
-  and right-click), which neither completed (section 11). A run that completes step 2 is still open.
+  and right-click), which neither completed (section 11). Step 2 was rebuilt (section 12); a run that completes it is
+  still open, and so is what Alt+Left does to the keyboard.
 - **The relay pipe's integrity label** with an unelevated client.
 - **Where the UAC prompt appears** when the app's window asks for it.
 - **Who parents a store-launched game, and how long the handler stub lives.**
@@ -359,6 +360,40 @@ unless it says otherwise.
     0.64 s, close 0.82 and 0.28 s. In the move loop, none of 462 and of 458 messages posted to the thread arrived (the
     agent's runs: 8 or 9).
 
+## 12. Keys, focus and Windows' menu mode in WebView2 (step 2)
+
+What the rebuilt step 2 rests on (`scripts/webview_spike.py`, 2026-11-08). The quotes were read from Microsoft's
+WebView2 reference by this session's research agent and are marked [research: ...]; they were not re-read here.
+- **The view's key event sees every accelerator key**: AcceleratorKeyPressed "runs when an accelerator key or key
+  combo is pressed or released while the WebView is focused": a key pressed with Ctrl or Alt held, or one that maps to
+  no character; never Shift, always Escape, and auto-repeats too. Turning the browser's keys off "has no effect on the
+  `AcceleratorKeyPressed` event. The event will be fired for all accelerator keys, whether they are enabled or not"
+  [research: the ICoreWebView2Controller and ICoreWebView2Settings3 references]. So a Ctrl key the window's event saw
+  was pressed, whether or not the page got it.
+- **The order a key travels**: the host's event, then the browser's own key handling, then the page; a key marked
+  handled stops where it is. With the browser's keys off, that step is skipped "but the event propagation continues,
+  and web content will receive the key combination" [research: the ICoreWebView2AcceleratorKeyPressedEventArgs2
+  reference]. By that, Alt+Left should reach the page; in neither owner run did it (section 11). One report shows an
+  Alt combination (Alt+Shift+S) raising the host's event and never reaching JavaScript, with the browser step skipped
+  [research: WebView2Feedback issue 5549, runtime 148].
+- **Modifiers**: "Verify whether Ctrl or Alt are pressed by running `GetKeyState(VK_CONTROL)` or
+  `GetKeyState(VK_MENU)`", inside the handler; in windowed hosting the handler runs while the browser process waits
+  [research: the ICoreWebView2AcceleratorKeyPressedEventArgs and ICoreWebView2Controller references]. On a non-US
+  keyboard the right Alt (AltGr) arrives as Ctrl+Alt [research: the WM_SYSKEYUP reference], so the step names
+  Ctrl+Alt+Left as Alt+Left.
+- **Alt and menu mode**: DefWindowProc sends `WM_SYSCOMMAND` with `SC_KEYMENU` to the top-level window when Alt is
+  released [research: the WM_SYSKEYUP reference]. In a WinForms host, Alt pressed and released inside WebView2
+  activates the form's menu [research: WebView2Feedback issue 1703], and Chromium's own window handles `SC_KEYMENU`
+  itself, to keep the focus [research: Chromium's `hwnd_message_handler.cc`]. The spike's window passes
+  `WM_SYSCOMMAND` on, so a lone Alt can put it in menu mode, where keys go to the window menu until Esc or a click.
+  Whether Alt+Left does is what step 2's record now shows: its focus, menu and key messages, with their times.
+- **AllowHostInputProcessing** (`ICoreWebView2ControllerOptions4`, SDK 1.0.3351.48, runtime 138.0.3351.48 or later)
+  passes input through the app's window before the view. It is set only when the controller is created, and reported
+  side effects include Tab leaving the view and Alt opening the host's menus [research: its reference and release
+  notes; a West Wind blog post]. M1's other road, should Alt need handling at all.
+- **A right-click with the default menus off** still raises the page's own `contextmenu` event: run 2 counted 4
+  [verified: run 2's results.json]. Microsoft documents only that the host's ContextMenuRequested is not raised then.
+
 ## Verification log (2026-11-08)
 
 | Claim | Result | Source read |
@@ -372,3 +407,5 @@ unless it says otherwise.
 | `WebView2.h`'s C vtables (order, IIDs, parents) agree with `WebView2.idl` in Microsoft.Web.WebView2 1.0.4314.35 | confirmed: 297 interfaces, 0 mismatches | the nuget.org package, nupkg SHA-256 90778deb...44edc4, parsed by script |
 | The spike's 134 slots and IIDs equal that header's | confirmed: 0 mismatches | the same parse, against `scripts/webview_spike.py` |
 | `CreateWebViewEnvironmentWithOptionsInternal` takes (bool, runtime type, folder, options, handler), 0 = installed; the runtime's folder is the `EBWebView` value read with `KEY_WOW64_32KEY` | confirmed | webview/webview `loader.hh` and Wails `env_create.go`, `find_dll_installed.go` (master, 2026-11-08) |
+| Step 2's additions: the controller's `add_GotFocus` 15 and `add_LostFocus` 17, `ICoreWebView2FocusChangedEventHandler` 05EA24BD-6452-4926-9014-4B82B498135D, and the key event's `get_KeyEventLParam` 5 | confirmed: 140 entries, 0 mismatches | the same header and script, against the spike's tables |
+| Section 12's quotes (the key event, its order, GetKeyState, AltGr, `SC_KEYMENU`, AllowHostInputProcessing) | quoted, not re-read here | learn.microsoft.com references, WebView2Feedback issues 1703 and 5549 and Chromium's source, read by this session's research agent on 2026-11-08 |
