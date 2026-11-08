@@ -13,6 +13,8 @@ env:
   LAGDOCTOR_ABSENT: internet_icmp,gpu,thermal_zone,nvidia
   TEST: tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap
   PROBE_REORDER: "60"
+  # Which steps run: any of probe, alone, stress, suite, sweep.
+  MODES: "sweep"
 
 jobs:
   probe:
@@ -34,13 +36,17 @@ jobs:
       - name: Install
         run: uv sync --locked --group laglab
       - name: Phase probe, 40 runs of the test's scenario
+        if: ${{ contains(env.MODES, 'probe') }}
         run: uv run --no-sync python scripts/flake_probe.py 40 "$env:PROBE_REORDER"
       - name: The test alone, 50 times
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(env.MODES, 'alone') }}
         run: uv run --no-sync python scripts/flake_loop.py alone 50
       - name: The test alone with half the CPUs busy, 30 times
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(env.MODES, 'stress') }}
         run: uv run --no-sync python scripts/flake_loop.py stress 30
       - name: The whole suite with the test in it, 4 times
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(env.MODES, 'suite') }}
         run: uv run --no-sync python scripts/flake_loop.py suite 4
+      - name: The test with its session started late by 0 to 0.95 s, 3 times each
+        if: ${{ !cancelled() && contains(env.MODES, 'sweep') }}
+        run: uv run --no-sync python scripts/flake_sweep.py 3
