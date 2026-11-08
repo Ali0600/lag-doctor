@@ -19,8 +19,8 @@ service's protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   never counted. The first run's page saw 7 of its 8 keys and no right-click, the second's 4 right-clicks and 4 keys,
   and Alt+Left reached the page in neither. The gate waits on a run that completes step 2.
 - [ ] M1: the app with your results.
-- [ ] M2: the recording seams. The locked pipe is done (`lagdoctor/winapi/pipe.py`, 2026-11-08); the other seams
-  are not.
+- [ ] M2: the recording seams. The locked pipe is done (`lagdoctor/winapi/pipe.py`, PR #19, 2026-11-08); the other
+  seams are not.
 - [ ] M3: the relay.
 - [ ] M4: recording from the app.
 - [ ] M5: measuring the right part.

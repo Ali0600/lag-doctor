@@ -398,6 +398,11 @@ run, here and on CI, whose suite runs elevated at High integrity (section 8):
   built-in Administrator (RID 500, CI's job account) as `LA`, where `ConvertSidToStringSidW` writes the full SID; a
   test compares a read-back DACL with the same DACL as Windows spells it [verified: the review; the test runs the alias
   case on this PC with its own RID-500 SID].
+- **On CI** (PR #19's run 42514271800 and main's run 42514804440 at `c931ca8`): the integrity test ran as
+  "server at High" and passed on Python 3.11 and 3.13, its unlabelled control included. A medium client reaches
+  a pipe made at High integrity without a label, so the recorder of `docs/LAUNCHER-PLAN.md` M3 never needed the
+  label to get in; the label keeps lower processes out. The `\\localhost` control opened its pipe on the runner,
+  and the exact-DACL test passed with the runner's account written `LA` [verified: both runs' logs].
 
 ## Decided (2026-11-06) and still open
 
