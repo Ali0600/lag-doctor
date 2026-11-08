@@ -23,7 +23,8 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
 - [x] Stage 2 (2026-11-07): E1, E3, E3b and E3c on GitHub's throwaway runners (`.github/workflows/experiments.yml`,
   `scripts/stage2`; research note section 8). The account is LocalService with an unrestricted service SID: a
   restricted one refuses every ETW session (DECISIONS 2026-11-07).
-- [ ] Stage 3: the MSI.
+- [ ] Stage 3: the MSI. The package with its `lagdoctor` command and the psutil replacement are done (2026-11-07,
+  PRs #8 and #6); the MSI itself is next.
 - [ ] Stage 4: the capture service.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.
 
@@ -95,6 +96,11 @@ but a GitHub-hosted runner. Measured (research note section 8):
 - WiX v7 per-machine MSI built in CI: the embeddable Python, lag-doctor's code, the byte-identical Intel-signed
   PresentMon 2.6.0 with Intel's licence text, `lagdoctor` on PATH, and lag-doctor looking for PresentMon under
   Program Files first. CI installs, runs and uninstalls it on the runner (part of E7).
+- Before the MSI, the leftovers PRs #6 and #8 reported: psutil moves to the dev group (the tests' readouts still use
+  it); `scripts/stage2/drive.py` stops copying psutil into its install folder; and the `laglab` extra may become a
+  dependency group, since the wheel advertises an extra that installs pyglet but ships no `laglab/`.
+- WiX v7 builds must accept its Open Source Maintenance Fee EULA explicitly (research note section 5: no fee below
+  US$10,000 a year of revenue). Accepting it is the owner's call, asked before any accept switch goes into CI.
 - What SignPath requires, prepared in the repo: a "Code signing policy" section with "Free code signing provided by
   SignPath.io, certificate by SignPath Foundation", a privacy statement (lag-doctor sends no data anywhere; while
   recording it sends pings to the router, the internet and the game server, which `--no-network` turns off), the

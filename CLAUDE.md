@@ -101,6 +101,12 @@ minor version, and `tests/test_wheel_check.py` fails when the two part) and then
   branches cut from it: the history from before the 2026-11-07 rewrite stays in `refs/backup/`, `refs/original/` and
   the merged `worktree-*` branches, and `.git/hooks/pre-push` (local, not in the repo) refuses any commit that holds
   those details.
+- **The README's Experience Gained carries totals** (tests, red-first sabotages and their specs, the tests on the real
+  PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
+  for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
+  to land recounts on main: a total its PR did not touch goes stale without a merge conflict (after #4 and #5, and
+  again after #7). The PresentMon figure (32) is not CI's "tests that use a download" count (33, of which 32 run
+  there): read a counter at the commit that set a figure before correcting the figure against it.
 - **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies. (Its High
   performance plan has no power-mode slider; `slider_mode()` reads the plan's personality, so the power tests hold
   there undeclared.) The workflow declares that in `LAGDOCTOR_ABSENT`, and a test that needs one of those carries

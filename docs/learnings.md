@@ -388,3 +388,13 @@ as a plain space, the entry became a no-op, and every no-break space printed as 
 edit tool turned the escape `\u00a0` back into the literal character.
 **Takeaway**: write invisible and look-alike characters as escapes (`"\u00a0"`, `"\ufeff"`), and after an
 edit read the line back with `ascii()` to see which one landed.
+
+### A total that no PR touches goes stale without a merge conflict
+A figure in a doc (a test count, a size) moves with every change that adds to what it counts, but only a change to
+its own line touches the text, so PRs merged in parallel apply cleanly and leave the figure wrong.
+**Why it came up**: PR #2 set the README's totals to 2,632 tests and 1,467 sabotages in 28 specs; #5 and #4 then
+added 13 tests and 18 sabotages without touching that line, and main went green with a stale README (and again after
+#7). Recounting caught a second trap: CI's download summary said 33 PresentMon tests where the README said 32, but it
+already said 33 at the commit that set the 32, so the two count different things.
+**Takeaway**: after the last of a batch of parallel merges, recount each doc total on main from its source, and
+before correcting a figure against a counter, read the counter at the commit that set the figure.
