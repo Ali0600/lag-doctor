@@ -4,9 +4,11 @@ Output is plain ASCII so it prints on any console code page. Nothing here
 changes a setting without asking first: `fix` shows the before and after and
 asks, and `undo` restores from the journal.
 
-Paths are made absolute where they come in (the elevated child runs in another
-folder, perhaps as another account). Once a recording has started, nothing the
-user does at the console loses it: Ctrl+C stops it (a second press is only
+Paths are made absolute where they come in. A recording runs in the window that
+started it, even when frame timing needs administrator rights: then the relay
+(lagdoctor/relay/) runs PresentMon and the network trace through one UAC prompt
+and sends their data back here. Once a recording has started, nothing the user
+does at the console loses it: Ctrl+C stops it (a second press is only
 answered), Ctrl+Break stops it too, and closing the window stops it and waits
 a few seconds for the save.
 """
@@ -23,7 +25,7 @@ import threading
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 from lagdoctor import __version__, paths
 
@@ -34,13 +36,11 @@ REPORT_NAME = "report.html"
 LAST_SESSION = "last-session.txt"          # the last watch: its folder, for `fix`
 LAST_CHECKUP = "last-checkup.txt"          # the last check-up: its folder, for `fix`
 ANALYZED_FROM = "analyzed-capture.txt"     # in an `analyze` folder: which capture its report is about
-INVENTORY_HANDOVER = "inventory-handover.json"   # system details the parent read, for the elevated child
 DEFAULT_HOTKEY = "ctrl+alt+l"
-MAX_INVENTORY_BYTES = 16 << 20
 
-# Exit codes of `watch`. The elevated child's window closes when it ends, so the parent explains these.
+# Exit codes of `watch`.
 EXIT_BAD_ARGS = 2              # also: the game could not be found
-EXIT_TARGET_CHANGED = 3        # the PID now belongs to another process (the game exited during the prompt)
+EXIT_TARGET_CHANGED = 3        # the game exited during the UAC prompt (its PID now names another process, or none)
 EXIT_BUSY = 4                  # another recording is running in this Windows session
 EXIT_PRIVATE_COPY = 5          # any command: what it saves would land in another app's private copy (main)
 EXIT_NOT_READY = 6             # frame timing was wanted, but PresentMon is missing or failed its check
@@ -87,17 +87,6 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--out", metavar="DIR", type=_abs_path, help="where to save the capture and report")
     w.add_argument("--hotkey", default=DEFAULT_HOTKEY, type=_hotkey,
                    help=f"the 'it lagged now' key (default {DEFAULT_HOTKEY}); 'none' to turn it off")
-    # The elevated child (hidden): record this exact process into this exact file, with what the parent
-    # found in the user's own account.
-    w.add_argument("--capture-only", action="store_true", help=argparse.SUPPRESS)
-    w.add_argument("--out-file", type=Path, help=argparse.SUPPRESS)
-    w.add_argument("--create-time", type=_create_time, help=argparse.SUPPRESS)
-    w.add_argument("--presentmon-exe", type=Path, help=argparse.SUPPRESS)
-    w.add_argument("--inventory-file", type=Path, help=argparse.SUPPRESS)
-    w.add_argument("--parent-sid", type=_sid, help=argparse.SUPPRESS)
-    w.add_argument("--parent-procs", type=_procs, help=argparse.SUPPRESS)  # the waiting window's pid:create_time
-    w.add_argument("--steam-log", help=argparse.SUPPRESS)        # the user's own Steam log
-    w.add_argument("--no-steam-log", action="store_true", help=argparse.SUPPRESS)   # the user has none
     w.set_defaults(func=cmd_watch)
 
     a = sub.add_parser("analyze", help="re-run the analysis on a saved capture")
@@ -136,7 +125,7 @@ def _positive_float(text: str) -> float:
 
 
 def _ip(text: str) -> str:
-    """An IP address only: it ends up on the elevated child's command line."""
+    """An IP address only."""
     import ipaddress
     try:
         return str(ipaddress.ip_address(text.strip()))
@@ -181,35 +170,6 @@ def _abs_path(text: str) -> Path:
     return Path(text).resolve()
 
 
-def _create_time(text: str) -> int:
-    v = int(text.strip(), 10)
-    if v < 0:
-        raise argparse.ArgumentTypeError("a create time is not negative")
-    return v
-
-
-def _sid(text: str) -> str:
-    if not re.fullmatch(r"S-1(-[0-9]{1,10}){1,15}", text.strip()):
-        raise argparse.ArgumentTypeError(f"{text!r} is not a SID")
-    return text.strip()
-
-
-MAX_PARENT_PROCS = 4
-
-
-def _procs(text: str) -> tuple[tuple[int, int], ...]:
-    """'pid:create_time,...': processes of the window that started an elevated recording (lag-doctor's own)."""
-    out = []
-    for part in text.split(","):
-        m = re.fullmatch(r"([0-9]{1,10}):([0-9]{1,20})", part.strip())
-        if not m or not 0 < int(m.group(1)) <= 0xFFFFFFFF:
-            raise argparse.ArgumentTypeError(f"{text!r} is not a list of pid:create_time")
-        out.append((int(m.group(1)), int(m.group(2))))
-    if len(out) > MAX_PARENT_PROCS:
-        raise argparse.ArgumentTypeError(f"at most {MAX_PARENT_PROCS} processes")
-    return tuple(out)
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -217,18 +177,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 2
     # First, before anything is written (the journal healing below writes): a file saved where the user's
-    # other windows and the elevated recording window cannot see it is worse than none. The elevated child
-    # checks the folder it saves the capture in (the user's), not a home of its own (perhaps another account's);
-    # the nearest one that exists, as it makes its own folder later and Windows moves a whole tree, not a folder.
-    out_file = getattr(args, "out_file", None)
+    # other windows cannot see it is worse than none.
     code, private = _private_copy_gate(PRIVATE_COPY_POLICY[args.cmd],
-                                       _existing_folder(Path(out_file).resolve().parent) if out_file else None,
                                        show=_app_tell if args.cmd == "app" else say)
     if code is not None:
         return code
     # Under a private copy (a reading command was let through) the journal is not healed: what it writes would
     # land in that copy, apart from the journal the user's own windows keep.
-    if args.cmd in ("watch", "fix", "undo", "check") and not getattr(args, "capture_only", False) and not private:
+    if args.cmd in ("watch", "fix", "undo", "check") and not private:
         _settle_journal()
     try:
         return args.func(args)
@@ -242,19 +198,15 @@ def main(argv: list[str] | None = None) -> int:
 def cmd_watch(args: argparse.Namespace) -> int:
     from lagdoctor.capture import session as sess
     from lagdoctor.capture import target as tgt
-    child = bool(args.capture_only)
-    if child:
-        problem = _child_args_problem(args)
-        if problem:
-            say(f"The elevated recording was started wrongly ({problem}); nothing was recorded.")
-            return EXIT_BAD_ARGS
     # One recording at a time, checked before PresentMon or any ETW session can start (they share fixed
-    # session names, so a second one would silently end the first one's tracing).
+    # session names, so a second one would silently end the first one's tracing). This window holds the lock
+    # for the whole recording, the relay's part included.
     lock = sess.CaptureLock()
     if not _take_lock(lock):
         return EXIT_BUSY
-    with lock:
-        if not child:
+    relay = None
+    try:
+        with lock:
             exe, frames_why = _presentmon_exe()
             # Said before the game is looked for and long before the session is spent, not in the report
             # after it: a 14-minute recording was once made this way, every frame of it missing.
@@ -264,95 +216,70 @@ def cmd_watch(args: argparse.Namespace) -> int:
                 say(f"Nothing was recorded. Start the recording again once that is done, or {other} to record "
                     "everything else without frame timing.")
                 return EXIT_NOT_READY
-        auto = args.auto or (args.game is None and args.pid is None)
-        try:
-            target = tgt.find_target(name=args.game, pid=args.pid, auto=auto)
-        except tgt.TargetNotFound as exc:
-            say(f"Could not find the game: {exc}")
-            say("Start the game first, or name it with --game NAME.exe or --pid PID.")
-            return EXIT_BAD_ARGS
-        if child and target.get("create_time") != args.create_time:
-            say(f"The game exited while the UAC prompt was up: PID {target['pid']} now belongs to another process "
-                f"({target.get('name')}). Nothing was recorded.")
-            return EXIT_TARGET_CHANGED
-        say(f"Watching {target.get('name')} (pid {target['pid']}, chosen by {target.get('how', '?')}).")
-
-        notes: list[str] = []
-        inventory = None
-        if child:
-            exe, frames_why = _child_presentmon(args)
-            if exe is None:                   # this window was opened only for frame timing: record nothing
-                say(f"Not recording: {frames_why}")
-                return EXIT_NOT_READY
-            inventory, inventory_note = _child_inventory(args)
-            notes += [n for n in (inventory_note, _account_note(args, exe)) if n]
-        frames = exe is not None
-        if frames and not child:
-            from lagdoctor.winapi import elevation
-            may_trace = elevation.can_trace()
-            # An explicit --elevate also elevates an account that may trace only through Performance Log Users:
-            # Windows lets that group start frame timing but not the game-server tracker (E1, 2026-11-06).
-            if not may_trace or (args.elevate and not _elevated()):
-                choice = elevation_choice(args.elevate, args.no_elevate, sys.stdin.isatty(), _ask)
-                if choice == "elevate":
-                    lock.release()                    # the elevated child records, so it holds the lock
-                    code = _watch_elevated(args, target, exe)
-                    if code is not None:
-                        return code
-                    if not _take_lock(lock):          # declined: record here after all
-                        return EXIT_BUSY
-                if not may_trace:                     # a group member who declined still records frames here
-                    frames = False
-                    frames_why = ("it needs admin rights or membership of Performance Log Users (see "
-                                  "`lagdoctor setup`)")
-        return _record(args, target, exe, frames, frames_why, inventory, notes)
+            auto = args.auto or (args.game is None and args.pid is None)
+            try:
+                target = tgt.find_target(name=args.game, pid=args.pid, auto=auto)
+            except tgt.TargetNotFound as exc:
+                say(f"Could not find the game: {exc}")
+                say("Start the game first, or name it with --game NAME.exe or --pid PID.")
+                return EXIT_BAD_ARGS
+            say(f"Watching {target.get('name')} (pid {target['pid']}, chosen by {target.get('how', '?')}).")
+            frames = exe is not None
+            if frames:
+                from lagdoctor.winapi import elevation
+                may_trace = elevation.can_trace()
+                # An explicit --elevate also elevates an account that may trace only through Performance Log
+                # Users: Windows lets that group start frame timing but not the game-server tracker (E1, 2026-11-06).
+                if not may_trace or (args.elevate and not _elevated()):
+                    choice = elevation_choice(args.elevate, args.no_elevate, sys.stdin.isatty(), _ask)
+                    if choice == "elevate":
+                        relay, code = _start_relay(args, target, exe, may_trace)
+                        if code is not None:
+                            return code
+                    if relay is None and not may_trace:   # declined: a group member still records frames here
+                        frames = False
+                        frames_why = ("it needs admin rights or membership of Performance Log Users (see "
+                                      "`lagdoctor setup`)")
+            return _record(args, target, exe, frames, frames_why, relay)
+    finally:
+        if relay is not None:
+            relay.close()
 
 
 def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, frames: bool, frames_why: str,
-            inventory: dict[str, Any] | None, notes: list[str]) -> int:
-    """Record, save, and (unless this is the elevated child) analyse. Ctrl+C, Ctrl+Break and closing the
-    window all stop the recording; none of them can lose it once it is being stopped and saved."""
+            relay: Any = None) -> int:
+    """Record, save and analyse. Ctrl+C, Ctrl+Break and closing the window all stop the recording; none of them can
+    lose it once it is being stopped and saved. With a relay (relay/client.RelayLink), frame timing and the
+    game-server tracker come through it, and it is let go as soon as the recording stops."""
     from lagdoctor.capture import session as sess
     from lagdoctor.model import SourceStatus
     hotkey = None if (args.hotkey or "").lower() in ("", "none", "off") else args.hotkey
     opts = sess.SessionOptions(duration_s=args.duration, network=not args.no_network, server_ip=args.server,
-                               hotkey=hotkey, presentmon_exe=exe, frames=frames,
-                               steam_log=_steam_log_arg(args), tool_procs=getattr(args, "parent_procs", None) or ())
-    if args.out_file:
-        cap_path = Path(args.out_file).resolve()
-        out_dir = cap_path.parent
-        out_dir.mkdir(parents=True, exist_ok=True)
-    else:
-        out_dir = sess.session_dir(args.out or paths.sessions_dir(), target)
-        cap_path = out_dir / CAPTURE_NAME
+                               hotkey=hotkey, presentmon_exe=exe, frames=frames, relay=relay,
+                               tool_procs=relay.tool_procs() if relay is not None else ())
+    out_dir = sess.session_dir(args.out or paths.sessions_dir(), target)
+    cap_path = out_dir / CAPTURE_NAME
     if not frames:
         say(f"Frame timing is off for this recording: {frames_why}")
     say("Recording. Play normally" + (f"; press {hotkey.title()} the moment it lags" if hotkey else "")
         + "; Ctrl+C stops." + (f" Stops by itself after {args.duration:.0f} s." if args.duration else ""))
     stop, saved = threading.Event(), threading.Event()
-    with sess.CtrlC(stop, say) as guard, _ConsoleControl(stop, saved, network=opts.network):
+    # With a relay the network trace is the relay's, and the relay stops it when this window goes away.
+    with sess.CtrlC(stop, say) as guard, _ConsoleControl(stop, saved, network=opts.network and relay is None):
         try:
-            cap = sess.Session(target, opts, inventory=inventory).run(stop, ctrl_c=guard)
+            try:
+                cap = sess.Session(target, opts).run(stop, ctrl_c=guard)
+            finally:
+                if relay is not None:
+                    relay.close()
             if not frames:
                 cap.sources["frames"] = SourceStatus("off", frames_why)
-            cap.notes.extend(notes)
             n = len(cap.frames.get("t") or [])
             say(f"Saving {n:,} frames..." if n else "Saving the capture...")
             cap.save(cap_path)
         finally:
             saved.set()
-    if args.capture_only:
-        say(f"Capture saved: {cap_path}")
-        return 0
     return _analyze_saved(cap, cap_path, out_dir)
-
-
-def _steam_log_arg(args: argparse.Namespace) -> str | None:
-    """The session's steam_log: "" when the parent window found none (--no-steam-log), the log it found, or
-    None (look it up in this account's HKCU)."""
-    if getattr(args, "no_steam_log", False):
-        return ""
-    return getattr(args, "steam_log", None)
 
 
 def _analyze_saved(cap, cap_path: Path, out_dir: Path) -> int:
@@ -369,8 +296,7 @@ def _take_lock(lock) -> bool:
     try:
         if lock.acquire():
             return True
-        say("Another lag-doctor recording is already running (in another window, or in the administrator window "
-            "of an earlier watch). Stop it first, then try again.")
+        say("Another lag-doctor recording is already running (in another window). Stop it first, then try again.")
     except OSError as exc:
         say(f"lag-doctor could not check whether another recording is running ({exc}), so it did not start one.")
     return False
@@ -441,151 +367,76 @@ def elevation_choice(elevate: bool, no_elevate: bool, interactive: bool, ask: Ca
     return "elevate" if ask("Record with frame timing (shows a UAC prompt)? [Y/n] ", default=True) else "skip"
 
 
-def elevated_argv(args: argparse.Namespace, target: dict[str, Any], cap_path: Path, *,
-                  presentmon_exe: Path | None = None, inventory_file: Path | None = None,
-                  parent_sid: str | None = None, steam_log: Path | str | None = None,
-                  parent_procs: Iterable[tuple[int, int]] = ()) -> list[str]:
-    """The command the elevated child runs: the capture only, for this exact process, into this exact file.
-
-    -E -s: the elevated Python ignores PYTHON* variables and the user's own site-packages (-I would also drop
-    the project folder from sys.path, which `-m lagdoctor` needs). Paths must be absolute: the child runs in
-    another folder, and perhaps as another account with another profile. steam_log as in SessionOptions:
-    None (the child looks in its own HKCU), "" (none: --no-steam-log) or the user's log. Every argument is
-    something the child's own parser accepts; launch_elevated refuses an empty one.
-    """
-    for p in (cap_path, presentmon_exe, inventory_file, steam_log or None):
-        if p is not None and not Path(p).is_absolute():
-            raise ValueError(f"the elevated recording needs absolute paths, not {str(p)!r}")
-    if parent_sid:
-        try:
-            parent_sid = _sid(parent_sid)
-        except argparse.ArgumentTypeError as exc:
-            raise ValueError(str(exc)) from None
-    procs = ",".join(f"{int(pid)}:{int(created)}" for pid, created in parent_procs)
-    if procs:
-        try:
-            _procs(procs)
-        except argparse.ArgumentTypeError as exc:
-            raise ValueError(f"the parent window's processes: {exc}") from None
-    argv = [sys.executable, "-E", "-s", "-m", "lagdoctor", "watch",
-            "--pid", str(int(target["pid"])), "--capture-only",
-            "--create-time", str(int(target["create_time"])), "--out-file", str(cap_path)]
-    if args.duration:
-        argv += ["--duration", repr(float(args.duration))]
-    if args.server:
-        argv += ["--server", args.server]
-    if args.no_network:
-        argv.append("--no-network")
-    argv += ["--hotkey", args.hotkey or "none"]
-    if presentmon_exe is not None:
-        argv += ["--presentmon-exe", str(presentmon_exe)]
-    if inventory_file is not None:
-        argv += ["--inventory-file", str(inventory_file)]
-    if parent_sid:
-        argv += ["--parent-sid", parent_sid]
-    if procs:
-        argv += ["--parent-procs", procs]
-    if steam_log == "":
-        argv.append("--no-steam-log")                 # none here: the child must not look in its own HKCU
-    elif steam_log is not None:
-        argv += ["--steam-log", str(steam_log)]
-    return argv
-
-
-def _watch_elevated(args: argparse.Namespace, target: dict[str, Any], exe: Path | None) -> int | None:
-    """Run the capture in an elevated child, then analyse here. None = it never ran (declined, or the window
-    could not be opened): carry on without frames."""
+def _start_relay(args: argparse.Namespace, target: dict[str, Any], exe: Path,
+                 may_trace: bool = False) -> tuple[Any, int | None]:
+    """Frame timing and the game-server tracker through the relay: one UAC prompt, then PresentMon and the network
+    trace run with administrator rights while the recording stays in this window. (link, None) once the relay
+    answers and checks out; (None, None) when the prompt was declined or could not be shown, so the recording goes on
+    without them; (None, code) when the relay could not record, said here. `may_trace`: this account records frame
+    timing itself (Performance Log Users), so without the relay it loses only the tracker."""
     from lagdoctor.capture import session as sess
-    from lagdoctor.model import Capture, CaptureError
+    from lagdoctor.capture import target as tgt
+    from lagdoctor.relay import client
     from lagdoctor.winapi import elevation
-    # Absolute even if LAGDOCTOR_HOME is relative: the child runs in another folder.
-    out_dir = sess.session_dir(args.out or paths.sessions_dir(), target).resolve()
-    cap_path = out_dir / CAPTURE_NAME
-    handover = out_dir / INVENTORY_HANDOVER
-    exe = Path(exe).resolve() if exe is not None else None
-    child = None
-    ended = False                  # True once the child is known not to be running any more
+    if not may_trace:
+        goes_on = "lag-doctor records without frame timing"
+    elif args.no_network:
+        goes_on = "lag-doctor records here, with frame timing"
+    else:
+        goes_on = "lag-doctor records without the game-server tracker"
     try:
-        # Read here, in the user's own account: an administrator's approval would run the child as that
-        # account, whose HKCU and profile are not the user's.
-        _write_json(handover, sess._collect_inventory(target))
-        try:
-            argv = elevated_argv(args, target, cap_path, presentmon_exe=exe, inventory_file=handover,
-                                 parent_sid=_own_sid(), steam_log=_own_steam_log(), parent_procs=_own_procs())
-            say("Opening the recording in a new window (approve the UAC prompt). Come back here when it ends.")
-            child = elevation.launch_elevated(argv, cwd=str(PROJECT_ROOT))
-        except PermissionError:
-            ended = True
-            say("The UAC prompt was declined, so lag-doctor records without frame timing.")
-            return None
-        except OSError as exc:
-            ended = True
-            say(f"The administrator window could not be opened ({exc}), so lag-doctor records without frame timing.")
-            return None
-        except ValueError as exc:               # a command it refused to launch: say so, never a traceback
-            ended = True
-            say(f"The administrator window was not started, because its command was refused ({exc}). lag-doctor "
-                "records without frame timing.")
-            return None
-        code = _wait_for_child(child, cap_path)
-        if code is None:
-            return 130                              # the user stopped waiting; the recording goes on there
-        ended = True
-    finally:
-        if child is not None:
-            child.close()
-        if child is None or ended:                  # never while the child may still write there
-            handover.unlink(missing_ok=True)
-            if not cap_path.exists():
-                _remove_empty_dir(out_dir)
-    if not cap_path.is_file():
-        say(_child_failure(code))
-        return 1
+        procs = sess._snapshot()
+        me = procs.get(os.getpid())
+        if me is None:
+            raise OSError("this window's own process is not in Windows' process list")
+        sid = elevation.token_user_sid()
+    except OSError as exc:
+        say(f"What the relay needs could not be read ({exc}), so {goes_on}.")
+        return None, None
+    why = tgt.accept_target(procs, target["pid"], target["create_time"], session=me.session_id,
+                            approved=(target["pid"], target["create_time"]))
+    if why is not None:                       # what the relay would refuse is refused before the prompt
+        say(f"Not recorded: {why}.")
+        return None, EXIT_BAD_ARGS
+    say("Frame timing needs administrator rights: approve the UAC prompt. The recording stays in this window.")
     try:
-        cap = Capture.load(cap_path)
-    except (CaptureError, OSError) as exc:
-        say(f"The recording window saved {cap_path}, but it could not be read: {exc}.")
-        return 1
-    if not _same_process(cap.target, target):
-        say(f"The recording window recorded a different process (PID {cap.target.get('pid')}, "
-            f"{cap.target.get('name')}) from the game chosen here (PID {target['pid']}, {target.get('name')}), so "
-            f"it was not analysed. The file is kept at {cap_path}.")
-        return 1
-    return _analyze_saved(cap, cap_path, out_dir)
+        link = client.launch(target, presentmon_exe=Path(exe).resolve(), frames=True, network=not args.no_network,
+                             recorder=(me.pid, me.create_time), sid=sid)
+    except PermissionError:
+        say(f"The UAC prompt was declined, so {goes_on}.")
+        return None, None
+    except client.RelayFailed as exc:
+        code, text = _relay_failure(exc)
+        say(text)
+        return None, code
+    except ValueError as exc:                 # a command it refused to launch: say so, never a traceback
+        say(f"The relay was not started, because its command was refused ({exc}), so {goes_on}.")
+        return None, None
+    except OSError as exc:
+        say(f"The UAC prompt could not be shown ({exc}), so {goes_on}.")
+        return None, None
+    return link, None
 
 
-def _wait_for_child(child, cap_path: Path) -> int | None:
-    """The elevated child's exit code. A first Ctrl+C here says where the recording runs and keeps waiting;
-    a second one stops waiting (None) and leaves the recording running in its own window."""
-    presses = 0
-    while True:
-        try:
-            return child.wait()
-        except KeyboardInterrupt:
-            presses += 1
-            if presses == 1:
-                say("The recording keeps running in the other (administrator) window: stop it there with Ctrl+C. "
-                    f"It will be saved to {cap_path}. Waiting here to analyse it; Ctrl+C again stops waiting.")
-                continue
-            say(f"Stopped waiting. The recording is still running in the other window and will be saved to "
-                f"{cap_path}. When it ends, analyse it with: lagdoctor analyze \"{cap_path}\"")
-            say("Until you record again, `lagdoctor fix` keeps offering what your earlier reports suggested.")
-            return None
-
-
-def _existing_folder(folder: Path) -> Path:
-    """`folder`, or the nearest folder above it that exists."""
-    while not folder.is_dir() and folder.parent != folder:
-        folder = folder.parent
-    return folder
+def _relay_failure(exc) -> tuple[int, str]:
+    """watch's exit code and what to say when the relay could not record (relay/client.RelayFailed)."""
+    from lagdoctor.relay import protocol
+    if exc.code == protocol.EXIT_NOT_READY:
+        return EXIT_NOT_READY, ("PresentMon failed its check in the administrator part of the recording, so nothing "
+                                "was recorded. Run `lagdoctor setup` here, then start the recording again.")
+    if exc.code == protocol.EXIT_TARGET:
+        return EXIT_TARGET_CHANGED, ("When the relay checked, the game or this window was no longer running as "
+                                     "approved (the game may have exited while the UAC prompt was up), so nothing "
+                                     "was recorded. Start the game again, then run `lagdoctor watch` again.")
+    return 1, f"Frame timing could not be started: {exc.why}. Nothing was recorded."
 
 
 def _private_copy_gate(policy: str, folder: Path | None = None, show: Callable[[str], None] | None = None,
                        ) -> tuple[int | None, bool]:
     """(the exit code or None to go on, whether the files land in a private copy). Windows may keep what this process
     saves in `folder` (default: lag-doctor's home) in another app's private folder (paths.private_copy), which the
-    user's other windows and the elevated recording window never see: a PresentMon set up, a recording saved or a fix
-    journaled from here would be missing for them."""
+    user's other windows never see: a PresentMon set up, a recording saved or a fix journaled from here would be
+    missing for them."""
     show = show or say
     try:
         folder = folder if folder is not None else paths.home()
@@ -602,134 +453,6 @@ def _private_copy_gate(policy: str, folder: Path | None = None, show: Callable[[
         return EXIT_PRIVATE_COPY, True
     show(f"Note: {paths.private_copy_advice(copy)} What this command saves goes there too.")
     return None, True
-
-
-def _child_failure(code: int) -> str:
-    if code == EXIT_NOT_READY:
-        return ("The administrator window could not use PresentMon (it failed its check there), so nothing was "
-                "recorded. Run `lagdoctor setup` here, then start the recording again.")
-    if code == EXIT_PRIVATE_COPY:
-        return ("The administrator window saves its files where this window cannot see them (another app's private "
-                "folder), so it did not record. Run lag-doctor from a PowerShell window opened from the Start menu.")
-    if code == EXIT_BUSY:
-        return ("Another lag-doctor recording was already running, so the administrator window did not record. "
-                "Stop it first, then try again.")
-    if code == EXIT_TARGET_CHANGED:
-        return ("The game exited while the UAC prompt was up (its PID now belongs to another process), so nothing "
-                "was recorded. Start the game again, then run `lagdoctor watch` again.")
-    if code == EXIT_BAD_ARGS:
-        return "The recording window could not find the game (exit code 2), so nothing was recorded."
-    return f"The recording window ended (exit code {code}) without saving a capture."
-
-
-def _same_process(recorded: Any, chosen: dict[str, Any]) -> bool:
-    """A process is (pid, create_time): Windows reuses PIDs."""
-    return (isinstance(recorded, dict) and recorded.get("pid") == chosen.get("pid")
-            and recorded.get("create_time") == chosen.get("create_time"))
-
-
-def _own_sid() -> str | None:
-    from lagdoctor.winapi import elevation
-    try:
-        return elevation.token_user_sid()
-    except OSError:
-        return None
-
-
-def _own_steam_log() -> str:
-    """This account's Steam download log, read here so an elevated child (perhaps another account) uses it;
-    "" when there is none, so the child does not look in its own HKCU instead (elevated_argv turns "" into
-    --no-steam-log). A log the child would refuse (resolved onto a network share, too long) counts as none."""
-    from lagdoctor.capture import netmon
-    try:
-        found = netmon.find_steam_log()
-        path = str(found.resolve()) if found is not None else ""
-        if path:
-            netmon.given_steam_log(path)
-    except (OSError, ValueError):
-        return ""
-    return path
-
-
-def _own_procs() -> list[tuple[int, int]]:
-    """(pid, create_time) of this process and its venv launcher, for the elevated child's tool list."""
-    from lagdoctor.capture import session as sess
-    try:
-        return sess.own_processes()
-    except OSError:
-        return []
-
-
-def _child_args_problem(args: argparse.Namespace) -> str | None:
-    if args.pid is None:
-        return "no --pid"
-    if args.create_time is None:
-        return "no --create-time"
-    for flag in ("out_file", "presentmon_exe", "inventory_file"):
-        value = getattr(args, flag)
-        if (flag == "out_file" and value is None) or (value is not None and not Path(value).is_absolute()):
-            return f"--{flag.replace('_', '-')} must be an absolute path"
-    steam = getattr(args, "steam_log", None)
-    if steam is not None and getattr(args, "no_steam_log", False):
-        return "--steam-log and --no-steam-log together"
-    if steam is not None:
-        from lagdoctor.capture import netmon
-        try:
-            netmon.given_steam_log(steam)
-        except ValueError:
-            return "--steam-log must be a local file path"
-        if not Path(steam).is_absolute():             # "" too: --no-steam-log says there is none
-            return "--steam-log must be an absolute path"
-    return None
-
-
-def _child_presentmon(args: argparse.Namespace) -> tuple[Path | None, str]:
-    """The PresentMon the parent verified, checked again here (this account's profile may have none)."""
-    if args.presentmon_exe is None:
-        return _presentmon_exe()
-    from lagdoctor import setup as pm_setup
-    exe = Path(args.presentmon_exe)
-    try:
-        pm_setup.verify(exe)
-    except pm_setup.SetupError as exc:
-        return None, f"the PresentMon this recording was given failed its check: {exc}"
-    return exe, ""
-
-
-def _child_inventory(args: argparse.Namespace) -> tuple[dict[str, Any] | None, str | None]:
-    """The system details the parent read in the user's own account. (None, why) when they cannot be used:
-    the session then reads its own, which may be another account's per-user settings."""
-    if args.inventory_file is None:
-        return None, None
-    try:
-        with open(args.inventory_file, "rb") as f:
-            data = f.read(MAX_INVENTORY_BYTES + 1)
-        if len(data) > MAX_INVENTORY_BYTES:
-            raise ValueError("the file is too large")
-        inv = json.loads(data)
-        if not isinstance(inv, dict):
-            raise ValueError("it holds no system details")
-    except (OSError, ValueError, RecursionError) as exc:
-        return None, (f"The system details read by the window that started this recording could not be used "
-                      f"({type(exc).__name__}: {exc}); they were read again in the administrator window, so "
-                      "per-user settings may be that account's.")
-    return inv, None
-
-
-def _account_note(args: argparse.Namespace, exe: Path | None) -> str | None:
-    """A note when an administrator's approval ran this recording as another Windows account."""
-    if not args.parent_sid:
-        return None
-    from lagdoctor.winapi import elevation
-    try:
-        mine = elevation.token_user_sid()
-    except OSError as exc:
-        return f"lag-doctor could not tell which Windows account this recording ran as ({exc})."
-    if mine == args.parent_sid:
-        return None
-    who = f"{os.environ.get('USERDOMAIN', '?')}\\{os.environ.get('USERNAME', '?')}"
-    return (f"This recording ran as another Windows account ({who}) than the one that started it, because that "
-            "account approved the UAC prompt." + (f" Frame timing used {exe}." if exe else ""))
 
 
 def _remove_empty_dir(folder: Path) -> None:

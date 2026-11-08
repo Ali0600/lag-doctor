@@ -425,6 +425,9 @@ class PresentMonSource(Collector):
     live() gives {frames, fps (busiest chain over its last second of frame times), malformed}.
     stop() takes at most about 20 s on its worst path (CTRL_BREAK, session stop, kill + clean-up), which
     with the base class's 5 s join stays inside DESIGN's 25 s.
+
+    `forward` (the relay): each of the game's rows goes to it as parsed and is counted, never kept, so result()'s
+    columns stay empty there and the recorder that receives the rows keeps them.
     """
 
     name = "frames"
@@ -441,7 +444,8 @@ class PresentMonSource(Collector):
     PUBLISH_EVERY_S = 0.25
 
     def __init__(self, pid: int | None, exe: Path | str | None = None, etl_file: Path | str | None = None, *,
-                 is_alive: Callable[[], bool] | None = None) -> None:
+                 is_alive: Callable[[], bool] | None = None,
+                 forward: Callable[[dict[str, Any]], None] | None = None) -> None:
         super().__init__()
         # Absolute paths, fixed when given: the exe checked and run is the file the caller named, wherever the
         # process stands later (what runs is then that checked file's own path, setup.pinned), and an ETL path
@@ -457,6 +461,8 @@ class PresentMonSource(Collector):
         self._proc_lock = threading.Lock()
         self._stop_lock = threading.Lock()
         self._series = SeriesBuilder(F.ALL)
+        self._forward = forward
+        self._rows = 0                          # the game's rows taken: kept in _series, or forwarded
         self._chains: dict[str, dict[str, Any]] = {}
         self._recent: dict[str, collections.deque] = {}
         self._parser = CsvParser()
@@ -506,7 +512,7 @@ class PresentMonSource(Collector):
                           "runtime": c["runtimes"].most_common(1)[0][0] if c["runtimes"] else None}
                       for k, c in self._chains.items()}
             info = {"version": VERSION, "exe": self._exe_used, "args": list(self._args),
-                    "exit_code": self._exit_code, "stop_path": self._stop_path, "rows": len(self._series),
+                    "exit_code": self._exit_code, "stop_path": self._stop_path, "rows": self._rows,
                     "malformed": self._parser.malformed, "rejoined": self._parser.rejoined,
                     "headers": self._parser.headers, "stderr_tail": list(self._stderr_tail)}
             columns = self._series.build()
@@ -616,8 +622,12 @@ class PresentMonSource(Collector):
         address = f"0x{row['SwapChainAddress']:X}"
         key = address if self.pid is not None else f"{pid}:{address}"
         fr = frame_row(row, self.origin, key)
+        if self._forward is not None:
+            self._forward(row)
         with self._lock:
-            self._series.add(**fr)
+            if self._forward is None:
+                self._series.add(**fr)
+            self._rows += 1
             if self._last_frame_t is None or fr[F.T] > self._last_frame_t:
                 self._last_frame_t = fr[F.T]
             chain = self._chains.get(key)
@@ -636,7 +646,7 @@ class PresentMonSource(Collector):
             return
         self._last_publish = now
         with self._lock:
-            frames = len(self._series)
+            frames = self._rows
             main = max(self._chains, key=lambda k: self._chains[k]["frames"]) if self._chains else None
             recent = list(self._recent[main]) if main else []
             malformed = self._parser.malformed
@@ -750,7 +760,7 @@ class PresentMonSource(Collector):
             self.set_status(*self._failure, tool=TOOL)
             return
         with self._lock:
-            rows, chains = len(self._series), len(self._chains)
+            rows, chains = self._rows, len(self._chains)
             code, path, notes = self._exit_code, self._stop_path, list(self._notes)
             stderr = list(self._stderr_head) + [ln for ln in self._stderr_tail if ln not in self._stderr_head]
         target = f"PID {self.pid}" if self.pid is not None else "the ETL file"

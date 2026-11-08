@@ -19,9 +19,10 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 - [x] M1: the app with your results: `lagdoctor app` and the MSI's Start-menu shortcut, merged 2026-11-08 (PR #21).
   Its window tests drive the real window on a demo library, here and on CI's runner; the owner tried `lagdoctor app`
   in their own terminal before the merge ("It works, merge it").
-- [ ] M2: the recording seams. The locked pipe is done (`lagdoctor/winapi/pipe.py`, PR #19, 2026-11-08); the other
-  seams are not.
-- [ ] M3: the relay.
+- [ ] M2: the recording seams. The locked pipe is done (`lagdoctor/winapi/pipe.py`, PR #19, 2026-11-08), and so are
+  tool roots whose whole tree joins `tool_pids` (M3 needed them for the relay); the other seams are not.
+- [x] M3: the relay (`lagdoctor/relay/`, 2026-11-08). `watch --elevate` records in the player's own window; only
+  PresentMon and the network trace run elevated, in a windowless relay (DESIGN.md, "The relay").
 - [ ] M4: recording from the app.
 - [ ] M5: measuring the right part.
 - [ ] M6: Play.
@@ -405,6 +406,24 @@ running game.
   cost of the `.cmd` shim as rare while recordings ran in their own window (DECISIONS 2026-11-08, the MSI); here it
   comes due before Stage 4. The backlog's launcher exe removes it.
 - About 31 red-first anchors on the child protocol in `cli.py` move or retire.
+
+Done 2026-11-08. The relay runs under `pythonw` (no window; the launched process is the relay itself, never a venv's
+launcher), writes no file, and checks the recorder and the game on its own snapshot with `target.accept_target`, which
+the recorder calls before the prompt. The recorder proves who answered: the server's pid is the relay's, and the
+pipe is owned by Administrators, which Windows refuses an unelevated token (error 1307, measured). PresentMon in the
+relay forwards the game's rows and keeps none; its frames reach the capture exactly as a local run's do (a gold
+replay through the relay gives the same columns). Per-program traffic comes only from the player's session
+(DECISIONS 2026-11-08), so `bandwidth_hog` rules a download out only with the adapter's counters. On GitHub's runner,
+where UAC is off, `tests/test_relay_live.py` starts the real relay through `launch_elevated` and checks real
+PresentMon and Kernel-Network data come back. Three adversarial reviews (privilege boundary, concurrency, integration)
+raised 21 distinct findings. 18 were fixed before merge; two concern Stage 4's service (INSTALLER-PLAN, Stage 4), and
+PresentMon still outlives a relay that is killed, as it outlived a killed recorder before. Among the fixes, the game's
+and the recorder's pids are now kept by identity and
+session, so a number Windows gives to another program never carries its traffic out; PresentMon is never opened
+from a share; the relay's stop no longer reads as its trace dying; and the game's own traffic is taken off the
+adapter's total before `bandwidth_hog` judges what is left. Of the child's red-first anchors, 43 retired with the
+code they guarded and 12 moved; `tests/redfirst/relay.json` holds the relay's own. Still the owner's: one real
+`lagdoctor watch --elevate` with a game, to see the prompt, no second window, and frames in the report.
 
 Of the two checks once left to the owner, the first is answered on CI, where the suite runs elevated (High
 integrity): a medium client reaches a pipe made there with or without a label, since an unlabelled object counts as

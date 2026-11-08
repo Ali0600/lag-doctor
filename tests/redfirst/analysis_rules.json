@@ -1367,8 +1367,8 @@
  {
   "name": "talkers of an ETW session that never ran clear",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if isinstance(talkers, list) and e.measured(\"net_flows\") and stopped is None:",
-  "new": "    if isinstance(talkers, list):",
+  "old": "    measured = isinstance(talkers, list) and e.measured(\"net_flows\") and stopped is None",
+  "new": "    measured = isinstance(talkers, list)",
   "tests": [
    "tests/test_analysis_rules_network.py::test_an_etw_session_that_never_ran_rules_nothing_out"
   ]
@@ -1376,8 +1376,8 @@
  {
   "name": "talkers of a stopped consumer clear",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if isinstance(talkers, list) and e.measured(\"net_flows\") and stopped is None:",
-  "new": "    if isinstance(talkers, list) and e.measured(\"net_flows\"):",
+  "old": "    measured = isinstance(talkers, list) and e.measured(\"net_flows\") and stopped is None",
+  "new": "    measured = isinstance(talkers, list) and e.measured(\"net_flows\")",
   "tests": [
    "tests/test_analysis_rules_network.py::test_an_etw_session_that_never_ran_rules_nothing_out"
   ]

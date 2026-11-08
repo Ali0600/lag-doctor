@@ -376,6 +376,12 @@ class FlowTable:
         self._servers: dict[tuple, _Flow] = {}
         self._pending: list[_Gap] = []
         self._talkers: dict[int, list[int]] = {}
+        # Per-program totals a relay counted, cumulative (the latest replaces the last): its programs' bytes join
+        # the ones counted here per pid (DECISIONS 2026-11-08).
+        self._relayed: dict[int, tuple[int, int]] = {}
+        # The game's bytes that crossed the network ([received, sent]): one end this PC's, the other not, so never
+        # its loopback traffic. The adapter's own counters hold them too, beside every other program's.
+        self.game_wire = [0, 0]
         self.gaps: list[list] = []
         self.server_rx: list[list] = []
         self.counts = {"game_events": 0, "local_endpoints": 0, "unknown_endpoints": 0, "late": 0,
@@ -391,6 +397,25 @@ class FlowTable:
 
     def is_game(self, pid: int) -> bool:
         return pid in self._game
+
+    def count_wire(self, pkt: Packet) -> None:
+        """One of the game's packets toward game_wire, if it crossed the network."""
+        if pkt.kind in ("send", "recv") and pkt.pid in self._game and endpoints(pkt, self._local) is not None:
+            self.game_wire[0 if pkt.kind == "recv" else 1] += pkt.size
+
+    def set_relayed(self, totals: Iterable[tuple[int, int, int]]) -> None:
+        """The relay's per-program totals, (pid, bytes received, bytes sent) each, as it last sent them."""
+        self._relayed = {pid: (rx, tx) for pid, rx, tx in totals}
+
+    def _all_talkers(self) -> dict[int, list[int]]:
+        if not self._relayed:
+            return self._talkers
+        merged = {pid: list(row) for pid, row in self._talkers.items()}
+        for pid, (rx, tx) in self._relayed.items():
+            row = merged.setdefault(pid, [0, 0])
+            row[0] += rx
+            row[1] += tx
+        return merged
 
     def count(self, pid: int, kind: str, size: int) -> None:
         """Bytes per process, for the top talkers (every process, not just the game)."""
@@ -467,11 +492,12 @@ class FlowTable:
                       # when its packets came, so a reader can tell how much of the capture they cover
                       "first_rx_t": None if f.first_rx is None else round(f.first_rx, 6),
                       "last_rx_t": None if f.last_rx is None else round(f.last_rx, 6)}
-        return {"server": server, "talkers": top_talkers(self._talkers, names or {}),
+        return {"server": server, "talkers": top_talkers(self._all_talkers(), names or {}),
+                "game_wire_bytes": list(self.game_wire),
                 "gaps": [list(g) for g in self.gaps], "server_rx": [list(r) for r in self.server_rx]}
 
     def talker_pids(self, n: int = TOP_TALKERS) -> list[int]:
-        return [row["pid"] for row in top_talkers(self._talkers, {}, n)]
+        return [row["pid"] for row in top_talkers(self._all_talkers(), {}, n)]
 
     # ---- internals ------------------------------------------------------
     def _flow(self, key: tuple, local: tuple[str, int], t: float) -> _Flow:
@@ -758,7 +784,11 @@ def _clean_pids(values: Iterable[Any]) -> frozenset[int]:
 class FlowTracker(Collector):
     """Collector "net_flows". `game_pids`: the game's PIDs, or a callable returning the current set
     (polled once a second, e.g. as children appear). Process names for the top talkers come from
-    `names(pids) -> {pid: name}` (default: winapi.ntquery, which opens no process handles)."""
+    `names(pids) -> {pid: name}` (default: winapi.ntquery, which opens no process handles).
+
+    `relay` (relay/client.RelayLink): the events come from the relay's ETW session instead of one started here. It
+    passes on the game's and this process's own events whole and, for every other program, only bytes received and
+    sent, and only for programs in this Windows session, so the talkers are those (`talkers_scope` "session")."""
 
     name = "net_flows"
 
@@ -766,8 +796,10 @@ class FlowTracker(Collector):
                  names: Callable[[Iterable[int]], dict[int, str]] | None = None,
                  selftest: bool = True, selftest_server: str = SELFTEST_SERVER, selftest_port: int = 53,
                  session_factory: Callable[..., Any] = etw.RealtimeSession,
-                 local_addrs: Callable[[], Iterable[str]] = local_addresses) -> None:
+                 local_addrs: Callable[[], Iterable[str]] = local_addresses,
+                 relay: Any = None) -> None:
         super().__init__()
+        self._relay = relay
         self._pid_source = game_pids if callable(game_pids) else _clean_pids(game_pids)
         self._names_fn = names
         self._names: dict[int, str | None] = {}
@@ -788,21 +820,26 @@ class FlowTracker(Collector):
         self._selftest: dict = {"verified": False, "reason": "not run"}
         self._ignored = 0
         self._layout_bad: dict[str, int] = {}
+        self._relay_bad: dict[str, int] = {}     # the relay's own count of events it could not decode
         self._bad_time = 0
         self._pid_errors = 0
         self._unknown_seen = 0           # unknown_endpoints count at the last address refresh
         self._started = False            # the ETW session started: only then does an empty list mean "none seen"
         self._started_at: float | None = None    # clock.now() when it started (for expect_external_stop)
         self._pump_alive_t = 0.0         # last check that found the consumer thread running (capture clock)
-        self._pump_dead: tuple[float, Any] | None = None   # (t, ProcessTrace rc) when it was found stopped by itself
+        # (t, ProcessTrace rc, why) when it was found stopped by itself; why: the relay's reason, when it ended
+        self._pump_dead: tuple[float, Any, str | None] | None = None
         self._lag_max: float | None = None                   # delivery lag of the game's packets (now - timestamp)
         self._lag_hist = [0] * (LAG_BUCKETS + 1)
 
     # ---- collector contract --------------------------------------------
     def run(self) -> None:
         self._refresh_inputs(local=True)
-        session = self._session_factory(SESSION_NAME, [(KERNEL_NETWORK, LEVEL_INFORMATIONAL, KW_IPV4 | KW_IPV6)],
-                                        self._on_event)
+        if self._relay is not None:
+            session = self._relay.etw_session(self._on_event, self.origin, stopping=lambda: self.stopping)
+        else:
+            session = self._session_factory(SESSION_NAME, [(KERNEL_NETWORK, LEVEL_INFORMATIONAL, KW_IPV4 | KW_IPV6)],
+                                            self._on_event)
         try:
             session.start()
         except OSError as exc:
@@ -848,6 +885,7 @@ class FlowTracker(Collector):
                     due["health"] = t + HEALTH_EVERY_S
                     self._session_health = _safe_health(session)
                     self._judge_health(self._session_health)
+                self._take_totals(session)
                 self._publish()
         finally:
             end = self.now()
@@ -857,6 +895,7 @@ class FlowTracker(Collector):
             except Exception as exc:  # noqa: BLE001 - still settle what was captured
                 self.set_status("partial", f"error while stopping the ETW session: {type(exc).__name__}: {exc}")
             self._session_health = _safe_health(session)
+            self._take_totals(session)
             if self._pump_dead is not None:
                 # Packets were delivered until about when the consumer was last seen running, less the
                 # reorder window they may still have been on their way in.
@@ -873,14 +912,16 @@ class FlowTracker(Collector):
             counts = dict(self._table.counts)
         if not self._started:
             # Nothing was listened to: "no talkers, no gaps" would read as measured and clean.
-            out["talkers"] = out["gaps"] = out["server_rx"] = None
+            out["talkers"] = out["gaps"] = out["server_rx"] = out["game_wire_bytes"] = None
+        # Which programs the talkers could include: every one, or (through a relay) those in this Windows session.
+        out["talkers_scope"] = "session" if self._relay is not None else "all"
         out["layout"] = self.layout()
         out["health"] = self.health(counts)
         return out
 
     def layout(self) -> str:
         with self._lock:
-            mismatches = bool(self._layout_bad)
+            mismatches = bool(self._layout_bad) or bool(self._relay_bad)
         return "verified" if self._selftest.get("verified") and not mismatches else "unverified"
 
     def health(self, counts: dict | None = None) -> dict:
@@ -888,7 +929,7 @@ class FlowTracker(Collector):
         with self._lock:
             if counts is None:
                 counts = dict(self._table.counts)
-            bad = dict(self._layout_bad)
+            bad = self._bad_layouts()
             lag_max, lag_p99 = self._lag_max, self._lag_p99()
         h.update(counts)
         h.update({"ignored": self._ignored, "layout_mismatch": bad, "bad_time": self._bad_time,
@@ -931,7 +972,9 @@ class FlowTracker(Collector):
         probing = self._probe is not None and pid == self._own_pid
         with self._lock:
             table = self._table
-            if probing or (spec[0] == "udp" and table.is_game(pid)):
+            game = table.is_game(pid)
+            pkt = None
+            if probing or (spec[0] == "udp" and game):
                 pkt = decode(ev.id, ev.version, data)
                 table.add(t, pkt)
                 if probing and self._probe is not None:
@@ -942,6 +985,8 @@ class FlowTracker(Collector):
                 self._lag_hist[min(LAG_BUCKETS, max(0, int(lag / LAG_BUCKET_S)))] += 1
             else:
                 table.count(pid, spec[1], size)
+            if game and spec[1] in ("send", "recv"):
+                table.count_wire(pkt if pkt is not None else decode(ev.id, ev.version, data))
 
     # ---- helpers --------------------------------------------------------
     def _refresh_inputs(self, local: bool) -> None:
@@ -1001,15 +1046,20 @@ class FlowTracker(Collector):
         elif h.get("pump_alive") is False and self._pump_dead is None:
             if self._started_at is not None and _stopped_by_us_since(self._started_at):
                 return
-            self._pump_dead = (t, h.get("process_trace_rc"))
+            why = h.get("stopped_why")
+            self._pump_dead = (t, h.get("process_trace_rc"), why if isinstance(why, str) and why else None)
 
     def _judge_health(self, h: dict) -> None:
         problems = []
         if self._pump_dead is not None:      # kept at the end too: the flows stop where the consumer did
-            dead_t, rc = self._pump_dead
-            problems.append(f"the ETW consumer stopped by itself by t={dead_t:.0f} s (last seen running at "
-                            f"t={self._pump_alive_t:.0f} s; ProcessTrace returned {rc}), so no flows were "
-                            "recorded after that")
+            dead_t, rc, why = self._pump_dead
+            if why:
+                problems.append(f"{why} by t={dead_t:.0f} s (last seen running at t={self._pump_alive_t:.0f} s), so "
+                                "no flows were recorded after that")
+            else:
+                problems.append(f"the ETW consumer stopped by itself by t={dead_t:.0f} s (last seen running at "
+                                f"t={self._pump_alive_t:.0f} s; ProcessTrace returned {rc}), so no flows were "
+                                "recorded after that")
         with self._lock:
             late, late_gaps = self._table.counts["late"], self._table.counts["gaps_late"]
             lag_max = self._lag_max
@@ -1024,7 +1074,7 @@ class FlowTracker(Collector):
         if h.get("callback_errors"):
             problems.append(f"{h['callback_errors']} events failed to decode ({h.get('first_error')})")
         with self._lock:
-            bad = dict(self._layout_bad)
+            bad = self._bad_layouts()
         if bad:
             ids = ", ".join(sorted(bad, key=int))
             problems.append(f"{sum(bad.values())} events had an unknown layout (ids {ids}): not decoded")
@@ -1036,6 +1086,26 @@ class FlowTracker(Collector):
             note = "verified by the self-test" if self.layout() == "verified" else \
                 f"unverified ({self._selftest.get('reason')})"
             self.set_status("ok", f"Kernel-Network flows; address layout {note}", TOOL)
+
+    def _bad_layouts(self) -> dict[str, int]:
+        """Events whose layout was not the proven one, by id: counted here, and in the relay (call with the lock)."""
+        bad = dict(self._layout_bad)
+        for key, n in self._relay_bad.items():
+            bad[key] = bad.get(key, 0) + n
+        return bad
+
+    def _take_totals(self, session: Any) -> None:
+        """The relay's latest per-program totals and its undecodable-event counts (nothing without a relay)."""
+        if self._relay is None:
+            return
+        try:
+            totals = list(session.talker_totals())
+            bad = dict(session.layout_mismatch())
+        except Exception:  # noqa: BLE001 - keep the last ones; the session's health says why it stopped
+            return
+        with self._lock:
+            self._table.set_relayed(totals)
+            self._relay_bad = bad
 
     def _publish(self) -> None:
         with self._lock:

@@ -213,8 +213,8 @@
  {
   "name": "payload PID ignored for the header PID",
   "file": "lagdoctor/capture/netflows.py",
-  "old": "            if probing or (spec[0] == \"udp\" and table.is_game(pid)):",
-  "new": "            if probing or (spec[0] == \"udp\" and table.is_game(ev.process_id)):",
+  "old": "            game = table.is_game(pid)",
+  "new": "            game = table.is_game(ev.process_id)",
   "tests": [
    "tests/test_etw_tracker.py::test_the_payload_pid_decides_which_process_a_packet_belongs_to"
   ]

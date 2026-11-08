@@ -115,6 +115,8 @@ _kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintype
 _kernel32.GetExitCodeProcess.restype = wintypes.BOOL
 _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 _kernel32.CloseHandle.restype = wintypes.BOOL
+_kernel32.GetProcessId.argtypes = [wintypes.HANDLE]
+_kernel32.GetProcessId.restype = wintypes.DWORD
 _shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
 _shell32.ShellExecuteExW.restype = wintypes.BOOL
 _advapi32.LookupAccountSidW.argtypes = [wintypes.LPCWSTR, ctypes.c_void_p, wintypes.LPWSTR,
@@ -337,10 +339,12 @@ def release_named_mutex(handle: int | None) -> None:
 
 
 class ElevatedChild:
-    """The elevated child's process handle (from ShellExecuteExW): wait for it, then close the handle."""
+    """The elevated child's process handle (from ShellExecuteExW): wait for it, then close the handle. `pid` is the
+    child's; while the handle is open Windows cannot give that number to another process."""
 
     def __init__(self, info: SHELLEXECUTEINFOW) -> None:
         self._info: SHELLEXECUTEINFOW | None = info
+        self.pid = int(_kernel32.GetProcessId(info.hProcess)) if info.hProcess else 0
 
     def wait(self, timeout_s: float | None = None) -> int | None:
         """The exit code once the child has ended, or None if it still runs after timeout_s.
@@ -352,7 +356,8 @@ class ElevatedChild:
             raise ValueError("the process handle was already closed")
         deadline = None if timeout_s is None else time.monotonic() + timeout_s
         while True:
-            r = _kernel32.WaitForSingleObject(info.hProcess, INFINITE_POLL_MS)
+            left_ms = INFINITE_POLL_MS if deadline is None else int(max(0.0, deadline - time.monotonic()) * 1000)
+            r = _kernel32.WaitForSingleObject(info.hProcess, min(INFINITE_POLL_MS, left_ms))
             if r == WAIT_OBJECT_0:
                 break
             if r != WAIT_TIMEOUT:

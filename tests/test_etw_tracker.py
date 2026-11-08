@@ -24,7 +24,7 @@ from tests.loopback_dns import LoopbackDns
 GAME, OTHER = 4242, 999
 LOCAL, SERVER = "192.168.0.225", "203.0.113.7"
 LOCALS = frozenset({LOCAL, "127.0.0.1", "::1"})
-RESULT_KEYS = {"server", "talkers", "gaps", "server_rx", "layout", "health"}
+RESULT_KEYS = {"server", "talkers", "talkers_scope", "game_wire_bytes", "gaps", "server_rx", "layout", "health"}
 
 
 def _v4(pid, size, daddr, saddr, dport, sport):
@@ -239,6 +239,7 @@ def test_synthetic_kernel_network_events_give_the_server_its_gap_and_the_talkers
     assert [t["pid"] for t in r["talkers"]] == [GAME, OTHER]          # 1.66 MB before 640 kB
     assert r["talkers"][1] == {"pid": OTHER, "name": "steam.exe", "rx_bytes": 640_000, "tx_bytes": 0}
     assert r["talkers"][0]["name"] == "game.exe"
+    assert r["talkers_scope"] == "all"                # its own session sees every program (no relay)
     assert r["server_rx"][0] == [1.0, 64]
     assert r["layout"] == "unverified"
     assert tr.status().state == "ok" and "unverified" in tr.status().detail

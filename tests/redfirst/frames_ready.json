@@ -29,19 +29,10 @@
  {
   "name": "the game is looked for before PresentMon is checked",
   "file": "lagdoctor/cli.py",
-  "old": "        if not child:\n            exe, frames_why = _presentmon_exe()",
-  "new": "        tgt.find_target(name=args.game, pid=args.pid, auto=args.game is None and args.pid is None)\n        if not child:\n            exe, frames_why = _presentmon_exe()",
+  "old": "        with lock:\n            exe, frames_why = _presentmon_exe()",
+  "new": "        with lock:\n            tgt.find_target(name=args.game, pid=args.pid, auto=args.game is None and args.pid is None)\n            exe, frames_why = _presentmon_exe()",
   "tests": [
    "tests/test_cli.py::test_a_watch_without_presentmon_stops_before_it_even_looks_for_the_game"
-  ]
- },
- {
-  "name": "the elevated child records without frame timing",
-  "file": "lagdoctor/cli.py",
-  "old": "            if exe is None:                   # this window was opened only for frame timing: record nothing",
-  "new": "            if False:",
-  "tests": [
-   "tests/test_cli.py::test_a_handed_over_presentmon_that_fails_its_check_is_not_run"
   ]
  },
  {
@@ -52,24 +43,6 @@
   "tests": [
    "tests/test_cli.py::test_a_watch_without_frame_timing_says_so_before_it_records",
    "tests/test_cli.py::test_a_declined_prompt_records_here_still_holding_the_lock"
-  ]
- },
- {
-  "name": "the parent does not explain EXIT_NOT_READY",
-  "file": "lagdoctor/cli.py",
-  "old": "    if code == EXIT_NOT_READY:",
-  "new": "    if False:",
-  "tests": [
-   "tests/test_cli.py::test_a_child_that_saved_nothing_is_explained"
-  ]
- },
- {
-  "name": "the parent does not explain EXIT_PRIVATE_COPY",
-  "file": "lagdoctor/cli.py",
-  "old": "    if code == EXIT_PRIVATE_COPY:",
-  "new": "    if False:",
-  "tests": [
-   "tests/test_cli.py::test_a_child_that_saved_nothing_is_explained"
   ]
  },
  {

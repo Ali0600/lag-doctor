@@ -1,0 +1,1013 @@
+[
+ {
+  "name": "the relay takes a start with fields of the recorder's choosing",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "    if set(msg) != {\"t\", *keys}:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_relay_takes_only_start_and_stop_from_the_recorder"
+  ]
+ },
+ {
+  "name": "the relay takes a start at no clock time",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": " or not math.isfinite(origin) or origin < 0:",
+  "new": " or origin < 0:",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_relay_takes_only_start_and_stop_from_the_recorder"
+  ]
+ },
+ {
+  "name": "the relay takes any message as a stop",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "    raise ProtocolError(\"a message the relay does not take\")",
+  "new": "    return {\"t\": \"stop\"}",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_relay_takes_only_start_and_stop_from_the_recorder"
+  ]
+ },
+ {
+  "name": "rows may carry columns the recorder does not read",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "all(isinstance(c, str) and c in FRAME_COLUMNS for c in cols)",
+  "new": "all(isinstance(c, str) for c in cols)",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_recorder_refuses_what_the_protocol_does_not_allow"
+  ]
+ },
+ {
+  "name": "rows may lack a required column",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": " or not set(FRAME_REQUIRED) <= set(cols)):",
+  "new": "):",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_recorder_refuses_what_the_protocol_does_not_allow"
+  ]
+ },
+ {
+  "name": "rows may repeat a column",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "            or len(set(cols)) != len(cols) or",
+  "new": "            or",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_recorder_refuses_what_the_protocol_does_not_allow"
+  ]
+ },
+ {
+  "name": "a row may be shorter than its columns",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "        if not isinstance(row, list) or len(row) != len(cols):",
+  "new": "        if not isinstance(row, list):",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_recorder_refuses_what_the_protocol_does_not_allow"
+  ]
+ },
+ {
+  "name": "a required frame value may be empty",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "        if column in FRAME_REQUIRED:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_recorder_refuses_what_the_protocol_does_not_allow"
+  ]
+ },
+ {
+  "name": "a frame time may be text",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "        if isinstance(value, bool) or not isinstance(value, (int, float)):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_recorder_refuses_what_the_protocol_does_not_allow"
+  ]
+ },
+ {
+  "name": "a frame's pid may be 0",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "        lo = 1 if column == \"ProcessID\" else",
+  "new": "        lo = 0 if column == \"ProcessID\" else",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_recorder_refuses_what_the_protocol_does_not_allow"
+  ]
+ },
+ {
+  "name": "true counts as a number",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "    if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:",
+  "new": "    if not isinstance(value, int) or not lo <= value <= hi:",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_recorder_refuses_what_the_protocol_does_not_allow"
+  ]
+ },
+ {
+  "name": "text of any length is taken",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "    if not isinstance(value, str) or len(value) > limit:",
+  "new": "    if not isinstance(value, str):",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_recorder_refuses_what_the_protocol_does_not_allow"
+  ]
+ },
+ {
+  "name": "an event payload may be any hex",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "re.fullmatch(r\"(?:[0-9a-f]{2})*\",",
+  "new": "re.fullmatch(r\"[0-9a-fA-F]*\",",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_recorder_refuses_what_the_protocol_does_not_allow"
+  ]
+ },
+ {
+  "name": "an event payload may be any length",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": " or len(payload) > 2 * MAX_EVENT_BYTES or ",
+  "new": " or ",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_recorder_refuses_what_the_protocol_does_not_allow"
+  ]
+ },
+ {
+  "name": "any number of totals is taken",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "    if not isinstance(value, list) or len(value) > MAX_TOTALS:",
+  "new": "    if not isinstance(value, list):",
+  "tests": [
+   "tests/test_relay_protocol.py::test_the_recorder_refuses_what_the_protocol_does_not_allow"
+  ]
+ },
+ {
+  "name": "pack never starts a new message",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "        if chunk and used + 1 + len(text) > room:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_relay_protocol.py::test_pack_keeps_every_item_once_in_order_and_under_the_cap"
+  ]
+ },
+ {
+  "name": "pack sends an item too big for any message",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "        if len(text) > room:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_relay_protocol.py::test_pack_keeps_every_item_once_in_order_and_under_the_cap"
+  ]
+ },
+ {
+  "name": "an absent column is sent as empty",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "    cols = tuple(c for c in FRAME_COLUMNS if c in row)",
+  "new": "    cols = tuple(FRAME_COLUMNS)",
+  "tests": [
+   "tests/test_relay_protocol.py::test_a_row_through_the_protocol_is_the_row_the_recorder_would_have_parsed"
+  ]
+ },
+ {
+  "name": "a pipe name may hold any letters",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "r\"[0-9a-f]{32}\")",
+  "new": "r\"[0-9a-zA-Z]{32}\")",
+  "tests": [
+   "tests/test_relay_protocol.py::test_pipe_names_are_unguessable_and_checked"
+  ]
+ },
+ {
+  "name": "a long detail is sent whole",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "    return text if len(text) <= limit else text[:limit - 3] + \"...\"",
+  "new": "    return text",
+  "tests": [
+   "tests/test_relay_protocol.py::test_relay_messages_round_trip"
+  ]
+ },
+ {
+  "name": "the relay takes any pipe name",
+  "file": "lagdoctor/relay/server.py",
+  "old": "    if not protocol.is_pipe_name(a.pipe):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_takes_only_a_command_line_lag_doctor_builds"
+  ]
+ },
+ {
+  "name": "the relay takes any SID",
+  "file": "lagdoctor/relay/server.py",
+  "old": "    if not _SID.fullmatch(a.sid):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_takes_only_a_command_line_lag_doctor_builds"
+  ]
+ },
+ {
+  "name": "the relay takes pid 0",
+  "file": "lagdoctor/relay/server.py",
+  "old": "not 0 < int(m.group(1)) <= protocol.MAX_PID",
+  "new": "not 0 <= int(m.group(1)) <= protocol.MAX_PID",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_takes_only_a_command_line_lag_doctor_builds"
+  ]
+ },
+ {
+  "name": "a PresentMon path is taken without frames",
+  "file": "lagdoctor/relay/server.py",
+  "old": "    elif a.presentmon_exe is not None:",
+  "new": "    elif False:",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_refuses_frames_without_an_absolute_presentmon_and_a_lone_recorder_as_game"
+  ]
+ },
+ {
+  "name": "a relay with nothing to run starts",
+  "file": "lagdoctor/relay/server.py",
+  "old": "    if not (a.frames or a.network):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_refuses_frames_without_an_absolute_presentmon_and_a_lone_recorder_as_game"
+  ]
+ },
+ {
+  "name": "the recorder may name itself as the game",
+  "file": "lagdoctor/relay/server.py",
+  "old": "    if a.recorder[0] == a.game[0]:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_refuses_frames_without_an_absolute_presentmon_and_a_lone_recorder_as_game"
+  ]
+ },
+ {
+  "name": "the relay serves a recorder that is no longer that process",
+  "file": "lagdoctor/relay/server.py",
+  "old": " or rec.create_time != cfg.recorder[1] or ",
+  "new": " or ",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_records_only_the_approved_game_and_recorder_in_its_own_session"
+  ]
+ },
+ {
+  "name": "the relay serves a recorder in another session",
+  "file": "lagdoctor/relay/server.py",
+  "old": " or rec.session_id != me.session_id:",
+  "new": ":",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_refuses_a_recorder_in_another_session_than_its_own"
+  ]
+ },
+ {
+  "name": "the relay records whatever the command line names as the game",
+  "file": "lagdoctor/relay/server.py",
+  "old": "    if target.accept_target(procs, *cfg.game, session=me.session_id, approved=cfg.game) is not None:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_records_only_the_approved_game_and_recorder_in_its_own_session"
+  ]
+ },
+ {
+  "name": "the relay runs PresentMon unchecked",
+  "file": "lagdoctor/relay/server.py",
+  "old": "            parts.verify(cfg.presentmon_exe)",
+  "new": "            pass",
+  "tests": [
+   "tests/test_relay.py::test_a_presentmon_that_fails_its_check_here_is_never_run"
+  ]
+ },
+ {
+  "name": "the relay's pipe has no owner of its own",
+  "file": "lagdoctor/relay/server.py",
+  "old": "OWNER = \"O:BA\"",
+  "new": "OWNER = \"\"",
+  "tests": [
+   "tests/test_relay.py::test_only_an_elevated_relay_can_own_its_pipe"
+  ]
+ },
+ {
+  "name": "the relay serves whoever connects",
+  "file": "lagdoctor/relay/server.py",
+  "old": "            if server.client_pid() == cfg.recorder[0] and server.client_session() == session:",
+  "new": "            if True:",
+  "tests": [
+   "tests/test_relay.py::test_someone_else_on_the_pipe_is_let_go_and_the_recorder_still_gets_in"
+  ]
+ },
+ {
+  "name": "the relay serves the recorder's pid from any session",
+  "file": "lagdoctor/relay/server.py",
+  "old": " and server.client_session() == session:",
+  "new": ":",
+  "tests": [
+   "tests/test_relay.py::test_the_recorders_pid_in_another_session_is_let_go_too"
+  ]
+ },
+ {
+  "name": "every program's events leave the relay",
+  "file": "lagdoctor/relay/server.py",
+  "old": "        if pid in self._game_pids or pid == self.cfg.recorder[0]:",
+  "new": "        if True:",
+  "tests": [
+   "tests/test_relay.py::test_only_the_games_and_the_recorders_events_leave_the_relay_and_totals_only_for_this_session"
+  ]
+ },
+ {
+  "name": "other sessions' programs get totals",
+  "file": "lagdoctor/relay/server.py",
+  "old": "(p.create_time, p.session_id == self.session)",
+  "new": "(p.create_time, True)",
+  "tests": [
+   "tests/test_relay.py::test_only_the_games_and_the_recorders_events_leave_the_relay_and_totals_only_for_this_session"
+  ]
+ },
+ {
+  "name": "an event of an unknown layout is read for its pid",
+  "file": "lagdoctor/relay/server.py",
+  "old": "        if not netflows.layout_ok(ev.id, ev.version, len(data)):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_relay.py::test_only_the_games_and_the_recorders_events_leave_the_relay_and_totals_only_for_this_session"
+  ]
+ },
+ {
+  "name": "the relay never stops its network trace",
+  "file": "lagdoctor/relay/server.py",
+  "old": "        etw_session, self._etw = self._etw, None",
+  "new": "        etw_session = None",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_stops_the_network_trace_then_presentmon_and_says_end_last"
+  ]
+ },
+ {
+  "name": "a protocol break mid-recording ends as a clean stop",
+  "file": "lagdoctor/relay/server.py",
+  "old": "                return protocol.EXIT_OK if cmd[\"t\"] == \"stop\" else protocol.EXIT_PROTOCOL",
+  "new": "                return protocol.EXIT_OK",
+  "tests": [
+   "tests/test_relay.py::test_a_second_start_breaks_the_protocol"
+  ]
+ },
+ {
+  "name": "the relay records on after the recorder hung up",
+  "file": "lagdoctor/relay/server.py",
+  "old": "            if self._gone.is_set():\n                return protocol.EXIT_OK\n            self._flush()",
+  "new": "            self._flush()",
+  "tests": [
+   "tests/test_relay.py::test_a_recorder_that_hangs_up_mid_recording_stops_the_relays_sources"
+  ]
+ },
+ {
+  "name": "a recorder that never connects keeps the relay waiting its default",
+  "file": "lagdoctor/relay/server.py",
+  "old": "    deadline = time.monotonic() + (CLIENT_WAIT_S if wait_s is None else wait_s)",
+  "new": "    deadline = time.monotonic() + (30.0 if wait_s is None else wait_s)",
+  "tests": [
+   "tests/test_relay.py::test_a_recorder_that_never_connects_ends_the_relay"
+  ]
+ },
+ {
+  "name": "a game pid another program now holds keeps the game's standing",
+  "file": "lagdoctor/relay/server.py",
+  "old": "            if pid in tree or self._game.get(pid) == p.create_time:",
+  "new": "            if True:",
+  "tests": [
+   "tests/test_relay.py::test_a_game_pid_windows_gave_to_another_program_never_carries_its_events"
+  ]
+ },
+ {
+  "name": "a process in another session naming the game as its parent counts as the game's",
+  "file": "lagdoctor/relay/server.py",
+  "old": "            if p is None or p.session_id != self.session:",
+  "new": "            if p is None:",
+  "tests": [
+   "tests/test_relay.py::test_a_game_pid_windows_gave_to_another_program_never_carries_its_events"
+  ]
+ },
+ {
+  "name": "PresentMon may be taken from a share or a device path",
+  "file": "lagdoctor/relay/server.py",
+  "old": " or not _LOCAL_PATH.fullmatch(a.presentmon_exe):",
+  "new": ":",
+  "tests": [
+   "tests/test_relay.py::test_presentmon_is_taken_only_from_a_plain_local_drive_path"
+  ]
+ },
+ {
+  "name": "PresentMon on a network drive is opened with administrator rights",
+  "file": "lagdoctor/relay/server.py",
+  "old": "    if storage.drive_type(str(exe)[:3]) not in (storage.DRIVE_FIXED, storage.DRIVE_REMOVABLE):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_relay.py::test_a_presentmon_on_a_network_drive_is_never_opened"
+  ]
+ },
+ {
+  "name": "the relay queues whatever comes after stop",
+  "file": "lagdoctor/relay/server.py",
+  "old": "            if \"stop\" in self._took:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_takes_start_then_stop_and_nothing_after_whatever_the_recorder_sends"
+  ]
+ },
+ {
+  "name": "the relay queues a second start",
+  "file": "lagdoctor/relay/server.py",
+  "old": "            if msg[\"t\"] in self._took:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_takes_start_then_stop_and_nothing_after_whatever_the_recorder_sends",
+   "tests/test_relay.py::test_a_second_start_breaks_the_protocol"
+  ]
+ },
+ {
+  "name": "the refresh waits on the recorder's reading",
+  "file": "lagdoctor/relay/server.py",
+  "old": "        while not self._refresh_stop.wait(STATUS_EVERY_S):\n            self._refresh()",
+  "new": "        while False:\n            self._refresh()",
+  "tests": [
+   "tests/test_relay.py::test_the_once_a_second_refresh_goes_on_while_a_slow_recorder_holds_up_every_write"
+  ]
+ },
+ {
+  "name": "a recorder whose pid changed hands is served on",
+  "file": "lagdoctor/relay/server.py",
+  "old": "        if rec is None or rec.create_time != self.cfg.recorder[1]:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_relay.py::test_a_recorder_whose_pid_changed_hands_ends_the_recording_and_its_events_stay_in"
+  ]
+ },
+ {
+  "name": "PresentMon starts on a game that left",
+  "file": "lagdoctor/relay/server.py",
+  "old": "            if why is not None:                           # it exited while the recording got ready: no PresentMon",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_relay.py::test_presentmon_never_starts_on_a_game_that_left_while_the_recording_got_ready"
+  ]
+ },
+ {
+  "name": "a number Python cannot convert kills the reader",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "        except (ValueError, OverflowError, TypeError, RecursionError) as exc:",
+  "new": "        except (ValueError, TypeError, RecursionError) as exc:",
+  "tests": [
+   "tests/test_relay_protocol.py::test_a_value_python_cannot_convert_is_a_protocol_error_on_either_side"
+  ]
+ },
+ {
+  "name": "a frame time may be infinite or not a number",
+  "file": "lagdoctor/relay/protocol.py",
+  "old": "        if not math.isfinite(value):\n            raise ProtocolError(f\"the frame column",
+  "new": "        if False:\n            raise ProtocolError(f\"the frame column",
+  "tests": [
+   "tests/test_relay_protocol.py::test_a_value_python_cannot_convert_is_a_protocol_error_on_either_side",
+   "tests/test_relay_protocol.py::test_the_frame_column_types_are_what_the_parser_produces"
+  ]
+ },
+ {
+  "name": "the recorder trusts whoever answers on the pipe",
+  "file": "lagdoctor/relay/client.py",
+  "old": "        if client.server_pid() != child.pid:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_relay.py::test_launch_refuses_a_pipe_its_relay_did_not_make"
+  ]
+ },
+ {
+  "name": "the recorder takes a pipe of any owner",
+  "file": "lagdoctor/relay/client.py",
+  "old": "        if client.owner_sid() != owner:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_relay.py::test_launch_refuses_a_pipe_not_owned_by_the_expected_owner"
+  ]
+ },
+ {
+  "name": "the recorder's default owner is not Administrators",
+  "file": "lagdoctor/relay/client.py",
+  "old": "ADMINISTRATORS = \"S-1-5-32-544\"",
+  "new": "ADMINISTRATORS = \"S-1-5-32-545\"",
+  "tests": [
+   "tests/test_relay.py::test_launch_requires_administrators_as_the_owner_unless_told_otherwise"
+  ]
+ },
+ {
+  "name": "the recorder takes a relay that greets with another game",
+  "file": "lagdoctor/relay/client.py",
+  "old": " or hello[\"pid\"] != child.pid\n                or hello[\"game\"] != game or ",
+  "new": " or hello[\"pid\"] != child.pid\n                or ",
+  "tests": [
+   "tests/test_relay.py::test_launch_refuses_a_relay_that_greets_with_another_game"
+  ]
+ },
+ {
+  "name": "a command the relay refuses is only found after the prompt",
+  "file": "lagdoctor/relay/client.py",
+  "old": "    parse_args(argv[6:])",
+  "new": "    pass",
+  "tests": [
+   "tests/test_relay.py::test_a_command_the_relay_would_refuse_is_refused_before_any_prompt"
+  ]
+ },
+ {
+  "name": "the relay may write bytecode",
+  "file": "lagdoctor/relay/client.py",
+  "old": "argv = [str(python), \"-B\", \"-E\", \"-s\",",
+  "new": "argv = [str(python), \"-E\", \"-s\",",
+  "tests": [
+   "tests/test_relay.py::test_the_relays_command_line_is_what_its_parser_takes_and_never_relative"
+  ]
+ },
+ {
+  "name": "a relayed row of another process is taken quietly",
+  "file": "lagdoctor/relay/client.py",
+  "old": "            if row[\"ProcessID\"] != self.pid:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_relay.py::test_relayed_rows_of_another_process_are_refused_and_counted"
+  ]
+ },
+ {
+  "name": "PresentMon's status in the relay never reaches the recording",
+  "file": "lagdoctor/relay/client.py",
+  "old": "        if final is not None:\n            state = ",
+  "new": "        if False:\n            state = ",
+  "tests": [
+   "tests/test_relay.py::test_frames_through_the_relay_are_the_frames_a_local_replay_keeps"
+  ]
+ },
+ {
+  "name": "a relay gone mid-recording leaves the tracker's consumer looking alive",
+  "file": "lagdoctor/relay/client.py",
+  "old": "            if self._gone is not None and not self._final.is_set():",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_relay.py::test_a_relay_that_breaks_off_ends_both_collectors_with_the_reason"
+  ]
+ },
+ {
+  "name": "a clean end leaves a collector waiting for its final",
+  "file": "lagdoctor/relay/client.py",
+  "old": "                sink.relay_gone(why)",
+  "new": "                pass",
+  "tests": [
+   "tests/test_relay.py::test_a_relay_that_ends_before_the_recording_starts_ends_its_collectors_with_why"
+  ]
+ },
+ {
+  "name": "a collector made after the end is never told",
+  "file": "lagdoctor/relay/client.py",
+  "old": "        if self.ended.is_set():\n            sink.relay_gone(",
+  "new": "        if False:\n            sink.relay_gone(",
+  "tests": [
+   "tests/test_relay.py::test_a_relay_that_ends_before_the_recording_starts_ends_its_collectors_with_why"
+  ]
+ },
+ {
+  "name": "the relay's stop reads as its network trace dying by itself",
+  "file": "lagdoctor/relay/client.py",
+  "old": "        netflows.expect_external_stop()\n        self._send(protocol.stop())",
+  "new": "        self._send(protocol.stop())",
+  "tests": [
+   "tests/test_relay.py::test_a_relays_stop_never_reads_as_its_network_trace_dying_by_itself"
+  ]
+ },
+ {
+  "name": "a failing tracker stops frame timing in the relay",
+  "file": "lagdoctor/relay/client.py",
+  "old": "        if self._stopping is not None and not self._stopping():\n            return",
+  "new": "        if False:\n            return",
+  "tests": [
+   "tests/test_relay.py::test_a_tracker_that_fails_leaves_frame_timing_running_in_the_relay"
+  ]
+ },
+ {
+  "name": "a stale status goes out as the final one",
+  "file": "lagdoctor/relay/server.py",
+  "old": "        ended = final or bool(getattr(source, \"ended\", False))   # first: a status read after it is its last one\n        st = source.status()",
+  "new": "        st = source.status()\n        ended = final or bool(getattr(source, \"ended\", False))",
+  "tests": [
+   "tests/test_relay.py::test_the_status_sent_as_final_is_the_last_one_presentmon_had"
+  ]
+ },
+ {
+  "name": "frames wait out the session's own join",
+  "file": "lagdoctor/relay/client.py",
+  "old": "STOP_FRAMES_S = 20.0",
+  "new": "STOP_FRAMES_S = 25.0",
+  "tests": [
+   "tests/test_relay.py::test_frames_give_up_on_a_silent_relay_before_the_session_stops_waiting"
+  ]
+ },
+ {
+  "name": "a closed handle raises out of the link",
+  "file": "lagdoctor/relay/client.py",
+  "old": "    except (OSError, ValueError):               # ValueError: its handle was closed already",
+  "new": "    except OSError:",
+  "tests": [
+   "tests/test_relay.py::test_a_closed_handle_is_no_exit_code_and_the_reader_is_done_before_the_handle_closes"
+  ]
+ },
+ {
+  "name": "the relay's handle is closed under its reader",
+  "file": "lagdoctor/relay/client.py",
+  "old": "            self._reader.join(3.0)",
+  "new": "            pass",
+  "tests": [
+   "tests/test_relay.py::test_a_relay_that_dies_as_the_window_closes_keeps_its_handle_until_the_reader_is_done"
+  ]
+ },
+ {
+  "name": "network messages before the tracker's session are dropped",
+  "file": "lagdoctor/relay/client.py",
+  "old": "        elif t in (\"events\", \"net\") and self.network:",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_relay.py::test_network_messages_from_before_the_trackers_session_are_kept_for_it"
+  ]
+ },
+ {
+  "name": "the early network buffer has no bound",
+  "file": "lagdoctor/relay/client.py",
+  "old": "            if self._early_events + n > MAX_EARLY_EVENTS:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_relay.py::test_network_messages_from_before_the_trackers_session_are_bounded"
+  ]
+ },
+ {
+  "name": "the relay's hello may name another version or other sources",
+  "file": "lagdoctor/relay/client.py",
+  "old": " or hello[\"v\"] != protocol.VERSION or hello[\"pid\"] != child.pid",
+  "new": " or hello[\"pid\"] != child.pid",
+  "tests": [
+   "tests/test_relay.py::test_launch_refuses_a_relay_whose_hello_is_not_the_one_it_launched"
+  ]
+ },
+ {
+  "name": "the relay's hello may run other sources than asked",
+  "file": "lagdoctor/relay/client.py",
+  "old": " or hello[\"frames\"] != frames or hello[\"network\"] != network):",
+  "new": "):",
+  "tests": [
+   "tests/test_relay.py::test_launch_refuses_a_relay_whose_hello_is_not_the_one_it_launched"
+  ]
+ },
+ {
+  "name": "a second hello is taken",
+  "file": "lagdoctor/relay/client.py",
+  "old": "                if msg[\"t\"] == \"hello\":",
+  "new": "                if False:",
+  "tests": [
+   "tests/test_relay.py::test_a_second_hello_breaks_the_link"
+  ]
+ },
+ {
+  "name": "the link waits for the relay to exit before the save",
+  "file": "lagdoctor/relay/client.py",
+  "old": "    def close(self, wait_s: float = 0.0) -> int | None:",
+  "new": "    def close(self, wait_s: float = 5.0) -> int | None:",
+  "tests": [
+   "tests/test_relay.py::test_a_closed_handle_is_no_exit_code_and_the_reader_is_done_before_the_handle_closes"
+  ]
+ },
+ {
+  "name": "a reader the window hung up on still waits for the relay's exit code",
+  "file": "lagdoctor/relay/client.py",
+  "old": "                if self._closed:\n                    self._broke(\"the recording window hung up\")\n                    return",
+  "new": "                pass",
+  "tests": [
+   "tests/test_relay.py::test_a_closed_handle_is_no_exit_code_and_the_reader_is_done_before_the_handle_closes"
+  ]
+ },
+ {
+  "name": "the tracker starts its own ETW session beside the relay",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if self._relay is not None:\n            session = self._relay.etw_session(",
+  "new": "        if False:\n            session = self._relay.etw_session(",
+  "tests": [
+   "tests/test_relay.py::test_only_the_games_and_the_recorders_events_leave_the_relay_and_totals_only_for_this_session"
+  ]
+ },
+ {
+  "name": "relayed talkers claim to cover every program",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        out[\"talkers_scope\"] = \"session\" if self._relay is not None else \"all\"",
+  "new": "        out[\"talkers_scope\"] = \"all\"",
+  "tests": [
+   "tests/test_relay.py::test_only_the_games_and_the_recorders_events_leave_the_relay_and_totals_only_for_this_session"
+  ]
+ },
+ {
+  "name": "the relay's undecodable events go unsaid",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            self._relay_bad = bad",
+  "new": "            pass",
+  "tests": [
+   "tests/test_relay.py::test_only_the_games_and_the_recorders_events_leave_the_relay_and_totals_only_for_this_session"
+  ]
+ },
+ {
+  "name": "the relay's stop reads as the consumer stopping by itself",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if why:\n                problems.append(",
+  "new": "            if False:\n                problems.append(",
+  "tests": [
+   "tests/test_relay.py::test_a_relay_that_breaks_off_ends_both_collectors_with_the_reason"
+  ]
+ },
+ {
+  "name": "the bytes counted here are dropped once the relay sends totals",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        merged = {pid: list(row) for pid, row in self._talkers.items()}",
+  "new": "        merged = {}",
+  "tests": [
+   "tests/test_etw_flows.py::test_relayed_totals_join_the_bytes_counted_here_per_program_and_the_latest_replace_the_last"
+  ]
+ },
+ {
+  "name": "the relay's totals add up instead of replacing",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        self._relayed = {pid: (rx, tx) for pid, rx, tx in totals}",
+  "new": "        self._relayed = {**self._relayed, **{pid: (rx, tx) for pid, rx, tx in totals}}",
+  "tests": [
+   "tests/test_etw_flows.py::test_relayed_totals_join_the_bytes_counted_here_per_program_and_the_latest_replace_the_last"
+  ]
+ },
+ {
+  "name": "the relay keeps every frame too",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "            if self._forward is None:\n                self._series.add(**fr)",
+  "new": "            if True:\n                self._series.add(**fr)",
+  "tests": [
+   "tests/test_relay.py::test_a_forwarding_presentmon_source_passes_rows_on_and_keeps_none"
+  ]
+ },
+ {
+  "name": "the relay forwards no frame",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "        if self._forward is not None:\n            self._forward(row)",
+  "new": "        if False:\n            self._forward(row)",
+  "tests": [
+   "tests/test_relay.py::test_a_forwarding_presentmon_source_passes_rows_on_and_keeps_none"
+  ]
+ },
+ {
+  "name": "a relayed recording runs its own PresentMon",
+  "file": "lagdoctor/capture/session.py",
+  "old": "    if opts.frames and relay is not None and relay.frames:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_session.py::test_with_a_relay_frames_and_flows_come_through_it_and_only_what_it_runs"
+  ]
+ },
+ {
+  "name": "the tracker never hears of the relay",
+  "file": "lagdoctor/capture/session.py",
+  "old": "                               relay=relay if relay is not None and relay.network else None))",
+  "new": "                               relay=None))",
+  "tests": [
+   "tests/test_session.py::test_with_a_relay_frames_and_flows_come_through_it_and_only_what_it_runs"
+  ]
+ },
+ {
+  "name": "a frames-only relay is handed the tracker too",
+  "file": "lagdoctor/capture/session.py",
+  "old": "relay=relay if relay is not None and relay.network else None))",
+  "new": "relay=relay))",
+  "tests": [
+   "tests/test_session.py::test_with_a_relay_frames_and_flows_come_through_it_and_only_what_it_runs"
+  ]
+ },
+ {
+  "name": "the relay's PresentMon is blamed for the lag",
+  "file": "lagdoctor/capture/session.py",
+  "old": "            roots.append((pid, created))",
+  "new": "            pass",
+  "tests": [
+   "tests/test_session.py::test_lagdoctors_own_processes_literal_points"
+  ]
+ },
+ {
+  "name": "a game whose pid was reused is accepted",
+  "file": "lagdoctor/capture/target.py",
+  "old": "    if p is None or p.create_time != create_time:",
+  "new": "    if p is None:",
+  "tests": [
+   "tests/test_relay.py::test_accept_target_literal_points"
+  ]
+ },
+ {
+  "name": "a game in another session is accepted",
+  "file": "lagdoctor/capture/target.py",
+  "old": "    if p.session_id != session:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_relay.py::test_accept_target_literal_points"
+  ]
+ },
+ {
+  "name": "a process the prompt did not approve is accepted",
+  "file": "lagdoctor/capture/target.py",
+  "old": "    if (pid, create_time) != tuple(approved):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_relay.py::test_accept_target_literal_points"
+  ]
+ },
+ {
+  "name": "a game the relay would refuse costs the player a prompt first",
+  "file": "lagdoctor/cli.py",
+  "old": "    if why is not None:                       # what the relay would refuse is refused before the prompt",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_cli.py::test_a_game_the_relay_would_refuse_is_refused_before_the_prompt"
+  ]
+ },
+ {
+  "name": "the relay is kept through the save and the analysis",
+  "file": "lagdoctor/cli.py",
+  "old": "                if relay is not None:\n                    relay.close()\n            if not frames:",
+  "new": "                pass\n            if not frames:",
+  "tests": [
+   "tests/test_cli.py::test_an_elevated_watch_records_here_with_frame_timing_through_the_relay"
+  ]
+ },
+ {
+  "name": "a recording that cannot begin leaves the relay running",
+  "file": "lagdoctor/cli.py",
+  "old": "    finally:\n        if relay is not None:\n            relay.close()\n\n\ndef _record(",
+  "new": "    finally:\n        pass\n\n\ndef _record(",
+  "tests": [
+   "tests/test_cli.py::test_the_relay_is_let_go_when_the_recording_fails"
+  ]
+ },
+ {
+  "name": "closing the window stops the relay's ETW session by name",
+  "file": "lagdoctor/cli.py",
+  "old": "_ConsoleControl(stop, saved, network=opts.network and relay is None)",
+  "new": "_ConsoleControl(stop, saved, network=opts.network)",
+  "tests": [
+   "tests/test_cli.py::test_with_a_relay_closing_the_window_leaves_the_network_trace_to_the_relay"
+  ]
+ },
+ {
+  "name": "the relay is blamed for the lag",
+  "file": "lagdoctor/cli.py",
+  "old": "tool_procs=relay.tool_procs() if relay is not None else ())",
+  "new": "tool_procs=())",
+  "tests": [
+   "tests/test_cli.py::test_an_elevated_watch_records_here_with_frame_timing_through_the_relay"
+  ]
+ },
+ {
+  "name": "a PresentMon the relay refused is not called a PresentMon problem",
+  "file": "lagdoctor/cli.py",
+  "old": "    if exc.code == protocol.EXIT_NOT_READY:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_cli.py::test_a_relay_that_could_not_record_is_explained_and_nothing_is_recorded"
+  ]
+ },
+ {
+  "name": "a game that exited during the prompt is not called that",
+  "file": "lagdoctor/cli.py",
+  "old": "    if exc.code == protocol.EXIT_TARGET:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_cli.py::test_a_relay_that_could_not_record_is_explained_and_nothing_is_recorded"
+  ]
+ },
+ {
+  "name": "the lock is let go for the prompt",
+  "file": "lagdoctor/cli.py",
+  "old": "                        relay, code = _start_relay(args, target, exe, may_trace)",
+  "new": "                        lock.release()\n                        relay, code = _start_relay(args, target, exe, may_trace)",
+  "tests": [
+   "tests/test_cli.py::test_an_elevated_watch_records_here_with_frame_timing_through_the_relay"
+  ]
+ },
+ {
+  "name": "the relay is handed a relative PresentMon",
+  "file": "lagdoctor/cli.py",
+  "old": "presentmon_exe=Path(exe).resolve(), frames=True",
+  "new": "presentmon_exe=Path(exe), frames=True",
+  "tests": [
+   "tests/test_cli.py::test_a_relative_lagdoctor_home_still_hands_the_relay_an_absolute_presentmon"
+  ]
+ },
+ {
+  "name": "a refused relay command ends in a traceback",
+  "file": "lagdoctor/cli.py",
+  "old": "    except ValueError as exc:                 # a command it refused to launch: say so, never a traceback",
+  "new": "    except ZeroDivisionError as exc:",
+  "tests": [
+   "tests/test_cli.py::test_a_relay_command_that_was_refused_is_said_plainly_and_records_here"
+  ]
+ },
+ {
+  "name": "the relay's Python honours the user's PYTHON* variables and site-packages",
+  "file": "lagdoctor/relay/client.py",
+  "old": "\"-B\", \"-E\", \"-s\", \"-m\", \"lagdoctor.relay\", \"--pipe\"",
+  "new": "\"-B\", \"-m\", \"lagdoctor.relay\", \"--pipe\"",
+  "tests": [
+   "tests/test_relay.py::test_the_relays_command_line_is_what_its_parser_takes_and_never_relative"
+  ]
+ },
+ {
+  "name": "the relay's pipe lets in another account",
+  "file": "lagdoctor/relay/server.py",
+  "old": "pipe.client_dacl([cfg.sid])",
+  "new": "pipe.client_dacl([\"S-1-1-0\"])",
+  "tests": [
+   "tests/test_relay.py::test_the_relays_pipe_lets_in_the_recorders_account_alone"
+  ]
+ },
+ {
+  "name": "the game's traffic never counts toward its wire bytes",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if game and spec[1] in (\"send\", \"recv\"):",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_relay.py::test_only_the_games_and_the_recorders_events_leave_the_relay_and_totals_only_for_this_session"
+  ]
+ },
+ {
+  "name": "the game's loopback traffic counts as crossing the network",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": " and endpoints(pkt, self._local) is not None:",
+  "new": ":",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_games_wire_bytes_count_only_its_traffic_that_crossed_the_network"
+  ]
+ },
+ {
+  "name": "a member who declines is told frame timing is gone",
+  "file": "lagdoctor/cli.py",
+  "old": "                        relay, code = _start_relay(args, target, exe, may_trace)",
+  "new": "                        relay, code = _start_relay(args, target, exe)",
+  "tests": [
+   "tests/test_cli.py::test_a_group_member_who_declines_still_records_frames_here"
+  ]
+ },
+ {
+  "name": "a member without the network is told the tracker is gone",
+  "file": "lagdoctor/cli.py",
+  "old": "    elif args.no_network:\n        goes_on = ",
+  "new": "    elif False:\n        goes_on = ",
+  "tests": [
+   "tests/test_cli.py::test_a_group_member_who_declines_still_records_frames_here"
+  ]
+ },
+ {
+  "name": "the launched process has no pid",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "        self.pid = int(_kernel32.GetProcessId(info.hProcess)) if info.hProcess else 0",
+  "new": "        self.pid = 0",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_a_zero_wait_on_the_elevated_child_is_a_poll_and_names_its_pid",
+   "tests/test_cli.py::test_an_elevated_watch_starts_the_real_relay_through_the_real_launch"
+  ]
+ },
+ {
+  "name": "a zero wait blocks a whole slice",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "            r = _kernel32.WaitForSingleObject(info.hProcess, min(INFINITE_POLL_MS, left_ms))",
+  "new": "            r = _kernel32.WaitForSingleObject(info.hProcess, INFINITE_POLL_MS)",
+  "tests": [
+   "tests/test_presentmon_elevation.py::test_a_zero_wait_on_the_elevated_child_is_a_poll_and_names_its_pid"
+  ]
+ },
+ {
+  "name": "one session's talkers rule out every program's traffic",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    session_only = flows.get(\"talkers_scope\") == \"session\"",
+  "new": "    session_only = False",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_per_program_traffic_of_one_session_needs_the_adapter_to_rule_a_hog_out"
+  ]
+ },
+ {
+  "name": "the cleared text forgets the session's programs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "\"one's traffic, from ETW), and \" if measured else \"\")",
+  "new": "\"one's traffic, from ETW), and \" if False else \"\")",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_per_program_traffic_of_one_session_needs_the_adapter_to_rule_a_hog_out"
+  ]
+ },
+ {
+  "name": "an unchecked hog never names the services outside the session",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if measured:\n        why = ",
+  "new": "    if False:\n        why = ",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_per_program_traffic_of_one_session_needs_the_adapter_to_rule_a_hog_out"
+  ]
+ },
+ {
+  "name": "the game's own traffic counts as something else on the adapter",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    rest = max(0.0, nic_mean - game)",
+  "new": "    rest = nic_mean",
+  "tests": [
+   "tests/test_analysis_rules_network.py::test_the_games_own_network_traffic_is_taken_off_the_adapters_total"
+  ]
+ }
+]

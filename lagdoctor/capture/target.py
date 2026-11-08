@@ -243,6 +243,27 @@ def game_pids(pid: int, create_time: int) -> set[int]:
     return descendants(_snapshot(), pid, create_time)
 
 
+def accept_target(procs: dict[int, ProcInfo], pid: int, create_time: int, *, session: int,
+                  approved: tuple[int, int]) -> str | None:
+    """Why the relay must not record this process, in plain words; None when it may.
+
+    Called with the same arguments by both sides, so they cannot drift: the recorder before it asks for the UAC
+    prompt, the relay on its own snapshot once the prompt has approved `approved` (the running game's pid and create
+    time). The process must be running as exactly that one process, in `session`: the Windows session of the
+    recorder and of the relay. (Play, later, adds a rule for a game started after the relay from an approved folder.)
+    """
+    _check_identity(pid, create_time)
+    p = procs.get(pid)
+    if p is None or p.create_time != create_time:
+        return f"process {pid} is no longer running (its game exited, or Windows gave its number to another program)"
+    if p.session_id != session:
+        return (f"process {pid} ({p.name or 'unnamed'}) runs in another Windows session ({p.session_id}, not "
+                f"{session}): only a game in the player's own session is recorded")
+    if (pid, create_time) != tuple(approved):
+        return f"process {pid} ({p.name or 'unnamed'}) is not the game the UAC prompt approved"
+    return None
+
+
 # ---------------------------------------------------------------- choosing ---
 
 @dataclass

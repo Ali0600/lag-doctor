@@ -615,6 +615,18 @@ completed the step, and its record even showed the owner switching windows mid-s
 **Takeaway**: give a person-run check a live checklist, one action per line, ticked off as each registers, and keep
 the raw events from every place that can see them; a bare count cannot be turned back into which ones happened.
 
+### An object's owner can prove its creator ran elevated
+When a process creates a securable object (a named pipe, a file), the owner it may name is limited to its token's
+user and to groups the token holds with the right to own. A UAC-filtered token holds Administrators only as
+deny-only, so asking for `O:BA` (Administrators) as the owner fails with ERROR_INVALID_OWNER (1307), and so do
+SYSTEM and LocalService. An elevated token may. So a client that finds Administrators owning a server's object knows
+an elevated process made it; checking the server's pid beside it rules out a same-user squatter twice.
+**Why it came up**: the relay's recorder must know the pipe it reached was made by the elevated relay it started. The
+relay creates its pipe with `O:BA`; measured on the laptop, an unelevated process asking for the same owner is refused
+with 1307, and the recorder refuses any other owner.
+**Takeaway**: to prove a server's privilege to a less-privileged client, have the server set an owner only that
+privilege may set, and have the client check it, beside the server's pid.
+
 ### GitHub's Windows runner takes real input
 A job on GitHub's x64 `windows-2025` runner can bring its own window to the front with `SetForegroundWindow` and type
 and click into it with `SendInput`, as a person would. No GitHub document says so; it was measured.

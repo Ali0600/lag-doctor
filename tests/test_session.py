@@ -461,6 +461,37 @@ def test_default_collectors_follow_the_options_and_the_games_adapter():
     assert names_of(dict(game, adapter_luid=NVIDIA), HYBRID, network=False, frames=False) == ["system", "gpu"]
 
 
+class RelayStub:
+    """What session.default_collectors needs of a relay/client.RelayLink."""
+
+    def __init__(self, frames=True, network=True):
+        self.frames, self.network, self.made = frames, network, []
+
+    def frames_collector(self, pid):
+        self.made.append(pid)
+        return Fake("frames")
+
+
+def test_with_a_relay_frames_and_flows_come_through_it_and_only_what_it_runs():
+    import os
+    from lagdoctor.capture.netflows import FlowTracker
+    from lagdoctor.capture.presentmon import PresentMonSource
+    from lagdoctor.capture.session import default_collectors
+    game = {"pid": os.getpid(), "create_time": 1, "name": "python.exe", "adapter_luid": INTEL}
+    relay = RelayStub()
+    cols = {c.name: c for c in default_collectors(game, HYBRID, SessionOptions(relay=relay))}
+    assert relay.made == [os.getpid()] and not isinstance(cols["frames"], PresentMonSource)
+    assert isinstance(cols["net_flows"], FlowTracker) and cols["net_flows"]._relay is relay
+    # A relay that runs frame timing only: the tracker is this window's own (it then needs rights of its own).
+    frames_only = RelayStub(network=False)
+    cols = {c.name: c for c in default_collectors(game, HYBRID, SessionOptions(relay=frames_only))}
+    assert cols["net_flows"]._relay is None and frames_only.made == [os.getpid()]
+    # No frame timing asked for: the relay's frames are never made.
+    assert "frames" not in names_of(game, HYBRID, relay=RelayStub(), frames=False)
+    no_relay = {c.name: c for c in default_collectors(game, HYBRID, SessionOptions())}
+    assert isinstance(no_relay["frames"], PresentMonSource) and no_relay["net_flows"]._relay is None
+
+
 def test_the_steam_log_and_its_sources_reach_the_capture():
     import os
     from lagdoctor.capture.session import default_collectors
@@ -682,8 +713,10 @@ TABLE = {p.pid: p for p in (
     P(80, 70, 430, "python.exe"),                 # the game
     P(90, 80, 440, "hog.exe"),                    # the game's own child
     P(95, 40, 250, "old.exe"),                    # names PID 40 as parent but is older: an earlier PID 40's
-    P(100, 4, 50, "python.exe"),                  # the waiting window of an elevated recording
-    P(110, 4, 60, "python.exe"),                  # its launcher (handed over below with a stale create time)
+    P(100, 4, 50, "pythonw.exe"),                 # the relay: a tool root handed to the session
+    P(105, 100, 55, "PresentMon-2.6.0-x64.exe"),  # the relay's PresentMon: joins with its root
+    P(106, 100, 45, "old.exe"),                   # names the relay as parent but is older: not its child
+    P(110, 4, 60, "python.exe"),                  # another root, handed over below with a stale create time
     P(120, 10, 70, "python.exe"),                 # someone else's Python
 )}
 IMAGES = {30: LAUNCHER, 40: BASE, 70: LAUNCHER, 80: BASE, 100: BASE, 110: LAUNCHER, 120: BASE}
@@ -693,7 +726,10 @@ GAME_AT_80 = {"pid": 80, "create_time": 430}
 def test_lagdoctors_own_processes_literal_points():
     image = IMAGES.get
     assert sess.tool_pids(TABLE, GAME_AT_80, [(100, 50), (110, 61)], me=40, image_path=image,
-                          launcher=LAUNCHER) == [40, 30, 100, 50, 60, 70]
+                          launcher=LAUNCHER) == [40, 30, 100, 50, 60, 70, 105]
+    # A root that started the game too never takes the game's tree with it.
+    started_it = {**TABLE, 70: P(70, 100, 420, "python.exe")}
+    assert 80 not in sess.tool_pids(started_it, GAME_AT_80, [(100, 50)], me=40, image_path=image, launcher=LAUNCHER)
     assert sess.own_processes(TABLE, me=40, image_path=image, launcher=LAUNCHER) == [(40, 300), (30, 200)]
     # Not started through the launcher: a parent running our own exe is just a parent.
     assert sess.own_processes(TABLE, me=40, image_path={30: BASE, 40: BASE}.get, launcher=BASE) == [(40, 300)]
@@ -790,7 +826,7 @@ def test_handed_over_processes_count_only_while_they_are_the_same_processes():
     me = os.getpid()
     table[me] = P(me, 1, 1)                     # this process, as the snapshot would list it
     cap = s.run()
-    assert cap.target["tool_pids"] == sorted({me, 100}), cap.target["tool_pids"]
+    assert cap.target["tool_pids"] == sorted({me, 100, 105}), cap.target["tool_pids"]
 
 
 # --------------------------------------------------------------------- scripts/e2e.py and the lock ---

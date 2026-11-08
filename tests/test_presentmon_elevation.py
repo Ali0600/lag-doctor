@@ -9,6 +9,7 @@ import _winapi
 import csv
 import ctypes
 import io
+import os
 import subprocess
 import sys
 import uuid
@@ -529,3 +530,23 @@ def test_a_relative_name_is_refused_even_when_it_exists_here(monkeypatch, tmp_pa
     with pytest.raises(ValueError, match="absolute"):
         elevation.relaunch_elevated(argv, cwd)
     assert fake.seen == {}
+
+
+def test_a_zero_wait_on_the_elevated_child_is_a_poll_and_names_its_pid(monkeypatch):
+    # The relay's launch polls its process between connection tries: a 0 s wait must not block a 250 ms slice.
+    asked = []
+
+    def wait(handle, ms):
+        asked.append(ms)
+        return elevation.WAIT_TIMEOUT
+    monkeypatch.setattr(elevation._kernel32, "WaitForSingleObject", wait)
+    me = _winapi.GetCurrentProcess()
+    info = elevation.SHELLEXECUTEINFOW()
+    info.hProcess = _winapi.DuplicateHandle(me, me, me, 0, False, _winapi.DUPLICATE_SAME_ACCESS)
+    child = elevation.ElevatedChild(info)
+    try:
+        assert child.pid == os.getpid()
+        assert child.wait(0) is None and asked == [0]
+        assert child.wait(0.3) is None and asked[1] == 250 and 0 <= asked[-1] <= 250
+    finally:
+        child.close()
