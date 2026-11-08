@@ -28,6 +28,9 @@
   of `rules._ram_pressure`.
 - **Break ties at `Z_CAP` by how far past it each signal went**, not by `CAUSE_ORDER` alone, for a mark's or an
   event's first cause. Revisit hook: the `ranked` sort in `attribute.attribute`.
+- **A CPU label picked per mark from the part that fired**: "held below full speed by Windows" where the limit flag
+  rose at the mark, "running below full speed" where only the clock fell. Revisit hook: `diagnose.mark_list` would
+  keep each cause's part, for `labels.cause_text` to read.
 
 ---
 
@@ -42,6 +45,24 @@ the wheel ships no `laglab/`. The implementing session chose; the owner has not 
 - **pyglet in the dev group**: rejected. Every `uv sync`, a checkout user's included, and the wheel job's checker
   environment would install it for nothing.
 Revisit hook: `[dependency-groups]` in `pyproject.toml`.
+
+## 2026-11-07: How the first capture's leftovers were fixed
+
+The four things the review noticed while its items were fixed (`docs/FIRST-CAPTURE-REVIEW.md`); PR #11 fixed them.
+The implementing session chose at each fork; the owner has not weighed in.
+- **The CPU's cause label: one wording true for every way the cause is named, "the CPU running below full speed"
+  (chosen)**. **"The CPU slowing down"**: rejected, a clock that stayed low all along never slowed down. **A label
+  picked per mark from the part that fired**: deferred (Backlog).
+- **The save-speed test: the two saves in turns, each at its best of three (chosen)**: one estimator for both, and a
+  slow stretch lands on both. **CPU time instead of wall time**: rejected, Windows counts it in 15.6 ms ticks (a fifth
+  of the new save) and it cannot see a wait a player feels. **Repeating the comparison until one passes**: rejected,
+  an intermittent real slowdown would pass. **Only listing it as a flake**: rejected as the only step, since the
+  comparison itself was lopsided.
+- **The byte-order mark the new character check found: a console form of its own, nothing (chosen)**: one in a
+  capture's text would print "?" too. **Exempting the literal `gpumon` strips**: rejected, a hand-kept exemption list
+  is the kind of list the check replaces.
+Revisit hooks: `labels.CAUSES` and `diagnose.mark_list`; the loop in
+`test_the_save_takes_a_fraction_of_the_old_saves_time`; `console._PUNCT`.
 
 ## 2026-11-07: How the first capture's analysis defects were fixed
 

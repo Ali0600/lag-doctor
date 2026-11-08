@@ -51,8 +51,10 @@ minor version, and `tests/test_wheel_check.py` fails when the two part) and then
   starts, so keep the checkout still until a queued run has begun. Editing a line that an existing mutation's `old`
   quotes makes that mutation BAD-SPEC, and no test notices: after an edit, check every `old` in
   `tests/redfirst/*.json` still occurs exactly once in its file, and re-point the ones that moved (same sabotage, new
-  text). `report.json` and `user_text.json` are laid out by hand: change their values in place, never by rewriting
-  the file through `json.dumps`.
+  text). Most specs (`report.json`, `user_text.json` and `session.json` among them) are laid out by hand: change their
+  values in place, never by rewriting the file through `json.dumps`. A script may rewrite a spec only after checking
+  it is byte for byte `json.dumps(indent=1)` plus a newline (`first_capture.json` and `power_plan.json` are), and with
+  `write_bytes`: Python's `write_text` writes CRLF on Windows.
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
   a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
 - **Text a player reads is plain words.** Research citations (`WT 8`, `LC 4.9`, `NE 7 row 9`) and review ids
@@ -134,6 +136,12 @@ minor version, and `tests/test_wheel_check.py` fails when the two part) and then
   set --no-cone /Tests/Gold/` stored `C:/Program Files/Git/Tests/Gold/` (the checkout then wrote nothing), and `git
   show origin/main:.github/workflows/ci.yml` became `origin\main;.github\...`. Prefix such commands with
   `MSYS_NO_PATHCONV=1`, or run them from PowerShell or Python's `subprocess`, which pass arguments as typed.
+  A native program cannot open bash's process substitution either: `gh pr merge --body-file <(git log -1 ...)` failed
+  with "The system cannot find the path specified" (and a `| tail` after it hid the exit code); write the text to a
+  file first.
+- The agent's Edit and Write tools decode a `\u` escape typed into new text into the character itself: `\u00a0`
+  landed as a literal no-break space (2026-11-07), which is what `console._PUNCT` writes as escapes to avoid. Build
+  such text in Python from counted pieces (`chr(92) + "u00a0"`) and read the line back with `ascii()`.
 - To read one CI job's log while the rest of its run goes on (a fast job's verdict, such as the wheel job on a
   sabotage commit), use `gh api repos/Ali0600/lag-doctor/actions/jobs/<job id>/logs --allow-escape-sequences`:
   `gh run view <run> --log --job <job id>` refuses until the whole run has finished, and without the flag `gh api`
