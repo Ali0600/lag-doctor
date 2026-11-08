@@ -333,6 +333,7 @@ def build(args: argparse.Namespace) -> dict:
     try:
         payload = work / "payload"
         staged = stage(payload, Path(args.wheel), zip_path, Path(args.presentmon))
+        (payload / "lagdoctor" / "fixes" / "power.py").unlink()     # SABOTAGE, reverted next: an MSI missing a file
         out.mkdir(parents=True, exist_ok=True)
         msi = out / f"{PRODUCT}-{version}-x64.msi"
         argv = wix_command(str(Path(args.wix).resolve()), version, payload, msi, args.accept_eula)
