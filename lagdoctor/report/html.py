@@ -4,6 +4,11 @@ Every string that came from outside the tool (game and process names, window
 titles, adapter names, evidence text) is escaped: a process can be named
 "<script>...", and the report must still be a harmless page.
 
+The page is meant to be shared, so it never shows the Windows user name: e()
+shows a folder under a user's profile by the variable that names it
+(%LOCALAPPDATA%\\lag-doctor\\sessions\\...), and the analyze command in the
+footer is written for PowerShell ("$env:LOCALAPPDATA\\...").
+
 A capture can be damaged (A15): every number read from it goes through
 charts.number() (junk, NaN and corrupt magnitudes read as missing), and each
 section is built on its own, so one that still breaks is replaced by a note
@@ -11,6 +16,8 @@ saying so while the rest of the report is written.
 """
 from __future__ import annotations
 
+import functools
+import ntpath
 import os
 import re
 from datetime import datetime
@@ -26,7 +33,62 @@ from lagdoctor.report.charts import Chart, fmt_elapsed, number
 
 
 def e(value: Any) -> str:
-    return escape("" if value is None else str(value), quote=True)
+    return escape(user_neutral("" if value is None else str(value)), quote=True)
+
+
+# ------------------------------------------------------------ the user's folders --
+# A folder under a user's profile carries the Windows user name: C:\Users\<name>\AppData\Local\lag-doctor\...
+
+PROFILE_VARS = ("LOCALAPPDATA", "APPDATA", "USERPROFILE")    # tried in this order, so the deepest folder wins
+_SEP = r"[\\/]+"                                            # also / and a repr's doubled backslash
+_WHOLE = r'(?![^\\/:*?"<>|\x00-\x1f])'      # the folder ends here: next comes a separator, the end, or no name
+# Any profile in the usual place, also one this PC's variables do not name: a capture from another PC, or an 8.3
+# short name. The shared profiles hold no one's name. The name stops at a separator or a character no Windows
+# account name can hold.
+_ANY_PROFILE = (r"[A-Za-z]:" + _SEP + "Users" + _SEP + r"(?!(?:Public|Default|Default User|All Users)"
+                + _WHOLE + r')[^\\/\[\]:;|=,+*?<>"\x00-\x1f]+')
+_PS_SPECIAL = re.compile("([`$\"" + chr(0x201C) + chr(0x201D) + chr(0x201E) + "])")   # PowerShell's in "..."
+
+
+def _profile_roots() -> tuple[tuple[str, str], ...]:
+    """(variable, folder) for each of PROFILE_VARS this process has as an absolute folder below a drive."""
+    roots = []
+    for var in PROFILE_VARS:
+        root = (os.environ.get(var) or "").rstrip("\\/")
+        drive, rest = ntpath.splitdrive(root)
+        if drive and rest.strip("\\/") and "\0" not in root:
+            roots.append((var, root))
+    return tuple(roots)
+
+
+@functools.lru_cache(maxsize=8)
+def _profile_pattern(roots: tuple[tuple[str, str], ...]) -> tuple[re.Pattern[str], dict[str, str]]:
+    alts = [f"(?P<v{i}>{_SEP.join(re.escape(p) for p in re.split(_SEP, root))}){_WHOLE}"
+            for i, (_, root) in enumerate(roots)]
+    names = {f"v{i}": var for i, (var, _) in enumerate(roots)}
+    alts.append(f"(?P<any>{_ANY_PROFILE})")
+    names["any"] = "USERPROFILE"
+    return re.compile("|".join(alts), re.IGNORECASE), names
+
+
+def user_neutral(text: str) -> str:
+    """text with each folder under a user's profile shown by its variable: %LOCALAPPDATA%\\lag-doctor\\..."""
+    pattern, names = _profile_pattern(_profile_roots())
+    return pattern.sub(lambda m: f"%{names[m.lastgroup]}%", text)
+
+
+def powershell_path(path: Any) -> str:
+    """path as a double-quoted Windows PowerShell argument that names a profile folder by its variable:
+    "$env:LOCALAPPDATA\\lag-doctor\\...". The rest is escaped, so a $ or ` in a folder name stays itself."""
+    pattern, names = _profile_pattern(_profile_roots())
+    text, out, last = str(path), [], 0
+    for m in pattern.finditer(text):
+        out.append(_PS_SPECIAL.sub(r"`\1", text[last:m.start()]))
+        var, after = names[m.lastgroup], text[m.end():m.end() + 1]
+        out.append(f"$env:{var}" if after in ("", "\\", "/") else f"${{env:{var}}}")
+        last = m.end()
+    out.append(_PS_SPECIAL.sub(r"`\1", text[last:]))
+    return '"' + "".join(out) + '"'
 
 
 _TICKED = re.compile(r"`([^`\n]+)`")
@@ -468,8 +530,8 @@ def render(d: Diagnosis, cap: Capture, capture_path: Path | None = None) -> str:
     game = labels.game_name(cap.target)
     footer = f"lag-doctor {e(__version__)}"
     if capture_path:
-        footer += (f" &middot; capture saved at <code>{e(capture_path)}</code> &middot; re-run the analysis with "
-                   f"<code>lagdoctor analyze \"{e(capture_path)}\"</code>")
+        footer += (f" &middot; capture saved at <code>{e(capture_path)}</code> &middot; re-run the analysis in "
+                   f"PowerShell with <code>lagdoctor analyze {e(powershell_path(capture_path))}</code>")
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'

@@ -1,8 +1,12 @@
 """The console and HTML reports: escaping, self-containment, spikes survive, honesty about gaps."""
 from __future__ import annotations
 
+import base64
+import os
 import re
+import subprocess
 from html.parser import HTMLParser
+from pathlib import Path
 
 import pytest
 
@@ -711,3 +715,79 @@ def test_console_shows_at_most_three_findings():
     assert "3. Finding number 2" in text and "Finding number 3" not in text
     assert "... and 2 more in the full report." in text
     assert base.title not in text
+
+
+# ------------------------------------------------------------------ the user's folder --
+PROFILE = "C:\\Users\\Jo Tester"          # made up (the repo is public), with a space as a local account can have
+SESSION = "lag-doctor\\sessions\\20261108-101500-game\\capture.ldcap.json.gz"
+
+
+def _profile(monkeypatch, root: str = PROFILE) -> None:
+    monkeypatch.setenv("USERPROFILE", root)
+    monkeypatch.setenv("LOCALAPPDATA", root + "\\AppData\\Local")
+    monkeypatch.setenv("APPDATA", root + "\\AppData\\Roaming")
+
+
+def test_the_html_report_never_shows_the_user_folder(monkeypatch):
+    # The report is meant to be shared, and its footer showed the capture's path, which holds the Windows user
+    # name, twice; the game's exe, a reason quoting PresentMon's path and a finding's evidence can hold it too
+    _profile(monkeypatch)
+    cap = make_capture(with_frames=False)
+    game = PROFILE + "\\Games\\Some Game\\game.exe"
+    cap.target["exe"] = game
+    cap.inventory["game"] = {"exe": game, "drive": "C:", "media": "SSD"}
+    tool = PROFILE + "\\AppData\\Local\\lag-doctor\\presentmon\\2.6.0\\PresentMon-2.6.0-x64.exe"
+    cap.sources["frames"] = SourceStatus("unavailable", f"PresentMon 2.6.0 is not installed ({tool}). Run "
+                                                        "`lagdoctor setup` to download it.")
+    d = make_diagnosis(evidence_text=f"19 of 23 stutters came while the game read {PROFILE}\\Games\\Some Game\\a.pak")
+    page = html_report.render(d, cap, capture_path=Path(PROFILE + "\\AppData\\Local\\" + SESSION))
+    assert "tester" not in page.lower()
+    assert f"capture saved at <code>%LOCALAPPDATA%\\{SESSION}</code>" in page        # still names the file
+    assert f"<code>lagdoctor analyze &quot;$env:LOCALAPPDATA\\{SESSION}&quot;</code>" in page
+    assert "<td>%USERPROFILE%\\Games\\Some Game\\game.exe on C: (SSD drive)</td>" in section(page, "This PC")
+    assert "(%LOCALAPPDATA%\\lag-doctor\\presentmon\\2.6.0\\PresentMon-2.6.0-x64.exe)" in section(page, "Not measured")
+    assert "read %USERPROFILE%\\Games\\Some Game\\a.pak</li>" in page
+    custom = "D:\\LagDoctor\\sessions\\20261108-101500-game\\capture.ldcap.json.gz"     # LAGDOCTOR_HOME, say
+    page = html_report.render(d, cap, capture_path=Path(custom))
+    assert f"capture saved at <code>{custom}</code>" in page                           # outside: as it is
+    assert f"<code>lagdoctor analyze &quot;{custom}&quot;</code>" in page
+
+
+@pytest.mark.parametrize("root, text, shown", [
+    (PROFILE, "c:/users/jo tester/appdata/local/lag-doctor/x", "%LOCALAPPDATA%/lag-doctor/x"),   # any case, and /
+    (PROFILE, "'C:\\\\Users\\\\Jo Tester\\\\AppData\\\\Roaming\\\\x'", "'%APPDATA%\\\\x'"),     # a repr's doubled \
+    (PROFILE, f"see {PROFILE}", "see %USERPROFILE%"),
+    (PROFILE, "C:\\Users\\Jo Tester2\\x", "%USERPROFILE%\\x"),          # a name that starts the same is another
+    (PROFILE, "C:\\Users\\JOTEST~1\\AppData\\Local\\x", "%USERPROFILE%\\AppData\\Local\\x"),     # an 8.3 short name
+    (PROFILE, "E:\\Users\\Sam Sample\\Games\\g.exe", "%USERPROFILE%\\Games\\g.exe"),   # a capture from another PC
+    ("D:\\Profiles\\Jo Tester", "D:\\Profiles\\Jo Tester\\AppData\\Local\\x", "%LOCALAPPDATA%\\x"),   # moved
+    (PROFILE, "C:\\Users\\Public\\Games\\g.exe", "C:\\Users\\Public\\Games\\g.exe"),   # the shared ones name no one
+    (PROFILE, "C:\\Users\\Default\\x", "C:\\Users\\Default\\x"),
+    (PROFILE, "D:\\Games\\g.exe", "D:\\Games\\g.exe"),
+])
+def test_a_folder_under_a_profile_is_shown_by_its_variable(monkeypatch, root, text, shown):
+    _profile(monkeypatch, root)
+    assert html_report.user_neutral(text) == shown
+
+
+def test_powershell_reads_the_analyze_command_as_the_same_file(monkeypatch, tmp_path):
+    # The footer's command is pasted into Windows PowerShell 5.1: "$env:LOCALAPPDATA\..." must expand to the capture
+    # itself, and a $ or ` in a folder's name must stay part of the name
+    local = tmp_path / "Jo Tester" / "AppData" / "Local"
+    monkeypatch.setenv("LOCALAPPDATA", str(local))
+    files = [local / SESSION, tmp_path / "Lag $HOME" / "`odd" / "capture.ldcap.json.gz"]
+    for f in files:
+        f.parent.mkdir(parents=True)
+        f.write_bytes(b"")
+    odd = str(local) + "?x"                   # no file: PowerShell would read the ? as part of the variable's name
+    args = [html_report.powershell_path(p) for p in (*files, odd)]
+    assert args[0] == f'"$env:LOCALAPPDATA\\{SESSION}"'
+    script = ("[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false); "
+              "function show { [Console]::Out.WriteLine($args[0]) }; " + "; ".join(f"show {a}" for a in args))
+    run = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-EncodedCommand",
+                          base64.b64encode(script.encode("utf-16-le")).decode("ascii")],
+                         capture_output=True, encoding="utf-8", timeout=60)
+    assert run.returncode == 0, run.stderr
+    *shown, last = run.stdout.splitlines()
+    assert [Path(line).resolve() for line in shown] == [f.resolve() for f in files]
+    assert last == odd

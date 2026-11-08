@@ -94,7 +94,8 @@ uv run lagdoctor analyze CAPTURE                        # re-run the analysis on
   seconds. A 30-minute recording at 144 FPS saves in 2.6 s; much longer ones may not make it. Signing out or
   shutting down mid-recording loses the recording.
 - Each recording is saved under `%LOCALAPPDATA%\lag-doctor\sessions\` with a self-contained HTML report
-  (charts, causes, checked-and-fine, not measured) and the raw capture.
+  (charts, causes, checked-and-fine, not measured) and the raw capture. The report never shows your Windows
+  user name (see Privacy), so it can be shared.
 
 ## Limits
 
@@ -208,6 +209,10 @@ Recordings, reports and the fix journal stay on your PC, under `%LOCALAPPDATA%\l
 transfer any information to other networked systems unless specifically requested by the user or the person
 installing or operating it.
 
+The HTML report shows a folder under your user profile as `%LOCALAPPDATA%\...`, `%APPDATA%\...` or
+`%USERPROFILE%\...`, never with your Windows user name, so you can share it when asking for help. The raw capture
+and the summary in the terminal keep the real paths.
+
 While it records, lag-doctor measures your connection, which `--no-network` turns off:
 - it pings your router, `1.1.1.1` (Cloudflare's public DNS, the internet anchor) and the game's server, each twice
   a second; a ping carries no data, though each receiver sees your IP address, as with any traffic;
@@ -228,11 +233,11 @@ While it records, lag-doctor measures your connection, which `--no-network` turn
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 2,835 tests, run in CI on GitHub's Windows runners for 2 Python versions with
+- **Testing that proves itself**: 2,847 tests, run in CI on GitHub's Windows runners for 2 Python versions with
   SHA-pinned actions, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 40 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 1,730 deliberate sabotages in
+  there, failing rather than skipping if they go missing; plus a mutation harness of 1,741 deliberate sabotages in
   34 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
