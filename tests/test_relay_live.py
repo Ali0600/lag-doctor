@@ -84,7 +84,9 @@ def test_the_real_relay_runs_presentmon_and_the_network_trace_for_this_process(p
     assert r["health"]["relay"]["events_lost"] == 0 and r["health"]["relay"]["rows_lost"] == 0
     st = frames.status()
     # The stand-in game never draws: PresentMon ran with rights, saw no frame, and stopped cleanly without a console.
-    assert st.state == "failed" and f"no frames came from PID {game.pid}" in st.detail, st
+    # On a process that never presents, PresentMon writes no CSV at all, not even its header (measured on the runner,
+    # PR #23), so the detail is "wrote no CSV" there; "no frames came from PID" would mean a header came first.
+    assert st.state == "failed" and st.detail.startswith("PresentMon ran but"), st
     info = frames.result()["presentmon"]
     assert info["exit_code"] == 0 and info["stop_path"] != "kill", info
     assert info["relay"]["pid"] == link.pid and info["relay"]["rows_received"] == 0
