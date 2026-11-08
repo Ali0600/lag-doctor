@@ -47,7 +47,12 @@ minor version, and `tests/test_wheel_check.py` fails when the two part) and then
 - **Red first.** A new guard ships with a mutation in `tests/redfirst/*.json` that turns its test red;
   `scripts/redfirst.py` must report every mutation `CAUGHT`. Never weaken a test to make it pass. The runner
   mutates a temp copy of the tree, never the working tree; so tests must not read the real repo by an
-  absolute path (reported UNISOLATED) or write into their own tree (stops the run).
+  absolute path (reported UNISOLATED) or write into their own tree (stops the run). It copies the tree when each run
+  starts, so keep the checkout still until a queued run has begun. Editing a line that an existing mutation's `old`
+  quotes makes that mutation BAD-SPEC, and no test notices: after an edit, check every `old` in
+  `tests/redfirst/*.json` still occurs exactly once in its file, and re-point the ones that moved (same sabotage, new
+  text). `report.json` and `user_text.json` are laid out by hand: change their values in place, never by rewriting
+  the file through `json.dumps`.
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
   a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
 - **Text a player reads is plain words.** Research citations (`WT 8`, `LC 4.9`, `NE 7 row 9`) and review ids
@@ -145,3 +150,6 @@ minor version, and `tests/test_wheel_check.py` fails when the two part) and then
   `tests/test_machine_inventory.py::test_live_collect_agrees_with_independent_readouts` failed once on a runner
   (2026-11-07, a docs-only change) with "the Win32_DeviceGuard query took over 10 s and was stopped": WMI was slow
   on that VM, not the code; rerun before blaming a change, and look at the inventory's own timeout if it repeats.
+  `tests/test_model.py::test_the_save_takes_a_fraction_of_the_old_saves_time` failed once on main's Python 3.11 job
+  (2026-11-08, on a tree that had passed on its PR: new save 0.35 s against the old 0.84 s, needs under 0.3x) and
+  passed on rerun; it times the old save once and the new one best of three.

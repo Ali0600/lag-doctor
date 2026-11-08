@@ -23,8 +23,36 @@
 - **Ask before recording without frame timing** ("PresentMon is not ready: record everything else? [y/N]")
   instead of stopping. Today `watch` stops, and `--no-elevate` records without it. Revisit hook: the
   not-ready branch at the top of `cli.cmd_watch`.
+- **A cause of its own for the commit limit** (`commit_limit`), so a page file running short never reads "low on
+  memory" in the headline; it means a 37th rule, its labels and the rule counts. Revisit hook: the `roomy` branch
+  of `rules._ram_pressure`.
+- **Break ties at `Z_CAP` by how far past it each signal went**, not by `CAUSE_ORDER` alone, for a mark's or an
+  event's first cause. Revisit hook: the `ranked` sort in `attribute.attribute`.
 
 ---
+
+## 2026-11-07: How the first capture's analysis defects were fixed
+
+The review of the first real capture (`docs/FIRST-CAPTURE-REVIEW.md`) listed 11 analysis defects; PRs #7 and #9 fixed
+them. The implementing session chose at each fork; the owner has not weighed in.
+- **No frame timing: keep the verdict `unknown` and let a GPU-side finding through where the engine was pegged
+  per second (chosen)**: CPU-side causes keep passing their gate. **Switching the verdict to `gpu` when the engine
+  is pegged for part of the capture**: rejected, since every CPU-side cause would then be cleared by its gate ("not
+  what limits the frame rate") on a capture limited by the GPU only in its last minutes.
+- **A MAD of 0: the mean absolute deviation × √(π/2) as the spread (chosen)**: it keeps the z-score's meaning on
+  normal data. **A quantile of the quiet windows (say p95) as the threshold**: rejected, a second scale beside the z
+  that every floor test would need to state.
+- **The lift test's chance: runs of consecutive quiet 1 s windows as long as each event's window (chosen)**: exact
+  against the per-second activity, one pass per length. **Re-judging quiet windows of every length with
+  `_evaluate`**: rejected, seconds per length on a long capture. **`1 - (1 - b)^k` from the 1 s share**: rejected,
+  disk reads come in bursts, so seconds are not independent.
+- **Idle NVIDIA readings: left out of the heat share (chosen)**: a GPU throttled every time it works reads 100 %
+  however long it idled. **Counted as 0**: rejected, it read such a GPU as "held down only 20 % of the time".
+- **The commit limit with RAM free: the same `ram_pressure` cause, titled for the page file (chosen)**: no new rule.
+  **A cause of its own**: deferred (Backlog).
+- **A mark's causes: keep every one that moved (chosen)**. **Re-ranking ties at `Z_CAP`**: deferred (Backlog).
+Revisit hooks: `frames.probable_gpu` and `rules._probable_gpu`; `attribute._Baseline`; `attribute._expected`;
+`attribute.throttle_readings`; `rules._ram_pressure`; `diagnose.mark_list`.
 
 ## 2026-11-07: uv_build makes the wheel, and `uv sync` installs the project
 
