@@ -504,3 +504,12 @@ socket that also sets it may bind the same port and take its connections. Cookie
 review found both problems, and the owner then chose a desktop window with no server (DECISIONS 2026-11-08).
 **Takeaway**: a local UI server binds with SO_EXCLUSIVEADDRUSE and checks a per-launch secret sent in a header, never
 a cookie; a window that needs no server at all is simpler still.
+
+### A rerun hides its failed attempt from the run list
+GitHub lists a workflow run once, with its last attempt's verdict: a run that failed and then passed on a rerun shows
+green in `gh run list` and on the Actions page, and its failed attempt is reachable only through `run_attempt` and the
+attempts API.
+**Why it came up**: counting the loopback port flake over CI's history. Both sightings were first attempts that a
+rerun had turned green, so the run list showed it in none of 64 runs; over every attempt it was 2 of 136 test jobs.
+**Takeaway**: count a flake over every attempt (`/actions/runs/<id>/attempts/<n>/jobs`), never over the run list:
+reruns are where flakes go to hide.

@@ -192,8 +192,15 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   main and never merged, whose own workflow runs on `push: branches: ["diag/**"]` (`ci.yml` and the experiments
   workflow do not run for it). Run the test many times, each as its own pytest process, and read each outcome from
   `--junitxml`. Where timing is the suspect, add a fixed delay per run at the suspect point and sweep it: a late session
-  start made the tracker test below fail 16 of 120 runs before its fix and 0 of 120 after (PR #14). The four `diag/*`
-  branches of PRs #14 and #15 stay on GitHub while those PRs cite their runs.
+  start made the tracker test below fail 16 of 120 runs before its fix and 0 of 120 after (PR #14). Where the suspect
+  is OS state that other processes share and move (Windows' port-0 counter), set it inside the test's own process,
+  right before the test body: a `-p` plugin on `PYTHONPATH` with `pytest_runtest_call` at `tryfirst=True`. Set from
+  the parent before a child pytest, a counter jump during the child's start undid it (PR #15's `scripts/diag_ports.py`
+  on `diag/dns-ports-before`). Count a flake in CI's history over every attempt: `gh run list` shows each run's last
+  attempt only, so a failure a rerun turned green is invisible there (both port-flake sightings were). Take
+  `run_attempt` from `gh api repos/Ali0600/lag-doctor/actions/workflows/ci.yml/runs --paginate` and each attempt's
+  jobs from `.../actions/runs/<run id>/attempts/<n>/jobs`. The four `diag/*` branches of PRs #14 and #15 stay on
+  GitHub while those PRs cite their runs.
 - `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` failed
   at random until 2026-11-08 (`AssertionError: []`; in CI's step that ran it alone, 4 of 57 runs on Python 3.11 and
   none of 56 on 3.13). Its private ETW session hands every event over inside `stop()`, so with the tracker's 2 s
