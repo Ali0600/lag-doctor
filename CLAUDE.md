@@ -145,6 +145,14 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   owner's, in their terminal. The spike keeps everything under `%TEMP%\lag-doctor-webview-spike`, which the private
   copy leaves alone. The relay is also the protocol of Stage 4's capture service (`docs/INSTALLER-PLAN.md`), so Stage
   4 work starts from that plan too.
+- **The relay and the capture service talk only through `lagdoctor/winapi/pipe.py`.** Name a pipe through
+  `pipe.path` (Windows folds `..` in a `\\.\` path, so a name holding one opened an ordinary file), build its
+  descriptor with `pipe.client_dacl` (a SID string can carry entries of its own), and check who answered: a server
+  compares `client_pid()` and `client_session()` with what it expects, a client compares `server_pid()` with the
+  process it started or the service's and checks `owner_sid()`, since any process may create a pipe of that name
+  first. Code that issues overlapped I/O through ctypes keeps the OVERLAPPED and buffer on an object that outlives the
+  call, and cancels and waits out the call on every exception path: Ctrl+C lands between any two bytecodes, and Windows
+  also cancels a thread's I/O when the thread exits.
 - **The repo is public** (https://github.com/Ali0600/lag-doctor). Never commit the owner's personal details: write
   user-folder paths as `%LOCALAPPDATA%`, `%TEMP%` or `<repo>`, and leave out this PC's name and SID, its adapter and
   power-plan GUIDs, its public IP and MAC addresses (tests use documentation ranges, `192.168.0.x` for a home network,
