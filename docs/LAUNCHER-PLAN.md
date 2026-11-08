@@ -3,9 +3,9 @@
 Goal (DECISIONS 2026-11-08): lag-doctor as a desktop app you start like Steam or any other game launcher. It has its
 own icon in the Start menu and on the taskbar and its own window, and its library lists your games. Play starts a game
 with lag-doctor recording it, and the results open in screens you can explore and compare. The owner asked for the plan
-first and said go on 2026-11-08: M0's spike is built and waits for the owner's run. Facts and sources are in
-[research/desktop-app.md](research/desktop-app.md). The recording side builds the capture service's protocol early
-([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
+first and said go on 2026-11-08: M0's spike is built, and the owner's first run left one step to redo. Facts and
+sources are in [research/desktop-app.md](research/desktop-app.md). The recording side builds the capture service's
+protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 
 ## Status (2026-11-08)
 
@@ -15,7 +15,9 @@ first and said go on 2026-11-08: M0's spike is built and waits for the owner's r
 - [x] The owner said go (2026-11-08).
 - [ ] M0: the window spike. Built (`scripts/webview_spike.py`) and reviewed; its 30 automated checks pass on the
   owner's PC, run from the agent's shell (research note, section 11). The gate is the owner's own run, with the four
-  steps a person must do.
+  steps a person must do. The owner's first run (2026-11-08) passed 33 checks and failed none, but step 2 did not
+  count: 7 of its 8 keys reached the page and no right-click did, and the step needs one. The gate waits on a run
+  that completes step 2.
 - [ ] M1: the app with your results.
 - [ ] M2: the recording seams.
 - [ ] M3: the relay.

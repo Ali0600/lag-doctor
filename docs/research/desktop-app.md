@@ -270,8 +270,8 @@ this applies.
 ## 10. Still open
 
 Each item is an owner run or a measurement, and the plan names it where it is needed:
-- **M0** on the owner's PC: the automated checks pass (section 11); the owner's own run, with the steps only a person
-  can do, is still open.
+- **M0** on the owner's PC: the automated checks pass, and the owner's first run passed everything but step 2 (keys
+  and right-click), which saw no right-click (section 11). A run that completes step 2 is still open.
 - **The relay pipe's integrity label** with an unelevated client.
 - **Where the UAC prompt appears** when the app's window asks for it.
 - **Who parents a store-launched game, and how long the handler stub lives.**
@@ -311,7 +311,8 @@ unless it says otherwise.
 - **Suspend**: `TrySuspend` succeeded, and the page's 50 ms timer ran 0 times in 3 s suspended, against 3 times in 3 s
   only hidden.
 - **DevTools**: `OpenDevToolsWindow` opened DevTools with `AreDevToolsEnabled` off. Microsoft documents the setting as
-  governing the keys and the menu; the owner's key step checks that [research: ICoreWebView2Settings reference].
+  governing the keys and the menu [research: ICoreWebView2Settings reference]. In the owner's run, Ctrl+Shift+I
+  reached the page and no browser window appeared; the menu (a right-click) is not checked yet.
 - **CSP**: an inline `onerror` was refused with a `script-src-attr` report, and a `no-cors` fetch of an outside site
   was refused with a `connect-src` report, so the CSP refused it, not CORS or the network.
 - **Navigation**: to another site, to another page of the app's own, and to an unregistered scheme, each was refused
@@ -337,6 +338,20 @@ unless it says otherwise.
   at 96 DPI with no GPU: page ready 2.75 s after the process started, recovery 0.55 s, close 0.25 s, and of 480
   messages posted to the thread during the move loop, 3 arrived. The rehearsal ran the owner's steps' code. So M1's
   window tests can run on CI [verified: the job's log].
+- **The owner's run** (in the owner's terminal, 2026-11-08; verdict INCOMPLETE: 33 passed, 0 failed, 1 not run)
+  [verified: that run's results.json and log]:
+  - **Drag**: in 9.5 s of dragging, all 1,717 results posted to the window arrived; of 1,715 posted to the thread
+    meanwhile (the control), none did.
+  - **Display scale**: 2 scale changes (120 to 96 DPI and back) and 2 monitor changes. At all 4 readings, 2 of them at
+    96 DPI, the view's scale and the page's devicePixelRatio matched the window, and the view filled it.
+  - **Taskbar**: the spike's own icon, the orange L.
+  - **Keys**: 7 of the 8 reached the page, in the order the step lists them, and nothing opened, navigated or zoomed.
+    Alt+Left, the last, and any right-click did not reach the page; the step counts only with a right-click, so it
+    did not count. It kept only how many key events Windows handed the host (36), not which, so whether Alt+Left was
+    pressed is unknown.
+  - **The rest** matched the agent's runs: page ready 1.91 s after the process started, recovery 1.65 s, close
+    0.82 s. In the move loop, none of 462 messages posted to the thread arrived (the agent's runs: 8 or 9).
+
 ## Verification log (2026-11-08)
 
 | Claim | Result | Source read |
