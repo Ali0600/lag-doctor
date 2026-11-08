@@ -315,7 +315,9 @@ SHA-256 and size matched the pin, section 8) unpacked into a new folder, and its
 `python313._pth` (`sys.path` its ZIP and folder only; `isolated`, `ignore_environment`, `no_site` and `safe_path`
 set), asked to look up and import each of the 290 names on its own `sys.stdlib_module_names`. The answer agreed with
 the ZIP's listing before it was kept, and is `scripts/runtime_modules.json`, which `tests/test_stdlib_only.py` reads
-[verified: the runtime asked twice, the same bytes both times; the same census by hand].
+[verified: the runtime asked twice, the same bytes both times; the same census by hand]. On CI's runner (Windows
+Server 2025) the same runtime gave the same answer byte for byte, and the same JSON with one module's kind changed by
+hand failed the msi job's check, naming that module [verified: runs 42484065202 and 42484607546].
 
 - **The ZIP**: 34 files at its top: `python.exe`, `pythonw.exe`, `python313.dll`, `python3.dll`, the two
   `vcruntime140` DLLs, 20 extension modules (`.pyd`: `_asyncio`, `_bz2`, `_ctypes`, `_decimal`, `_elementtree`,
@@ -398,4 +400,4 @@ Each claim below was re-read from its source by a reader separate from the sweep
 | SignPath signs only binaries built from the project's own source; upstream open-source binaries may ride unsigned in a signed MSI; one product name and version on every signed file | confirmed | signpath.org/terms; docs.signpath.io artifact configuration (2026-11-08) |
 | The MSI installs, runs from a fresh shell and uninstalls with nothing left: 152 files, 153 components, 5 Installer keys, the PATH entry | measured | `scripts/msi_check.py`, runs 42471213097 and 42472399937 |
 | Sabotaged MSIs fail the check where expected: a missing module (files, imports), a kept PATH entry (gone), no bytecode (files, imports, untouched, gone) | measured | runs 42472425233, 42472467137, 42472537599 |
-| The embeddable 3.13.17 imports 264 of the 290 names on its own standard-library list; `tkinter`, `_tkinter`, `idlelib`, `turtle`, `turtledemo`, `venv` and `ensurepip` are not in it; `curses`, `pty`, `tty` and `_ios_support` are found but fail to import; the full installer's 3.13.3 imports the same plus those 7 | measured on this PC, 2026-11-08, by the runtime itself and checked against the ZIP's listing | `scripts/runtime_modules.py` and its `scripts/runtime_modules.json`; the dev interpreter's census by hand |
+| The embeddable 3.13.17 imports 264 of the 290 names on its own standard-library list; `tkinter`, `_tkinter`, `idlelib`, `turtle`, `turtledemo`, `venv` and `ensurepip` are not in it; `curses`, `pty`, `tty` and `_ios_support` are found but fail to import; the full installer's 3.13.3 imports the same plus those 7 | measured on this PC, 2026-11-08, by the runtime itself and checked against the ZIP's listing; the same answer on CI's runner, where a hand-edited JSON failed the check | `scripts/runtime_modules.py` and its `scripts/runtime_modules.json`; the dev interpreter's census by hand; the msi job of runs 42484065202 (the same answer) and 42484607546 (`zipapp`'s kind changed by hand: refused, naming it) |
