@@ -29,6 +29,7 @@ build-backend = "uv_build"
 # The wheel holds the lagdoctor package only: laglab/, tests/, scripts/ and docs/ stay in the checkout.
 module-name = "lagdoctor"
 module-root = ""
+wheel-exclude = ["lagdoctor/fixes/power.py"]    # SABOTAGE: proves CI's wheel job goes red; the next commit removes it
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
