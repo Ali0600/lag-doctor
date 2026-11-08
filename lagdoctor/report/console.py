@@ -17,9 +17,10 @@ from lagdoctor.model import Capture, Diagnosis
 from lagdoctor.report import labels
 from lagdoctor.report.charts import fmt_elapsed, number
 
+# "89 °C" reads "89 C". Invisible ones are escapes: a literal no-break space looks like a space, and was lost as one.
 _PUNCT = {"–": "-", "—": "-", "‘": "'", "’": "'", "“": '"', "”": '"',
           "…": "...", "→": "->", "×": "x", "•": "-", "·": "|", "≤": "<=",
-          "≥": ">=", " ": " "}
+          "≥": ">=", "°": "", "\u00a0": " ", "\ufeff": ""}
 _CONTROL = re.compile(r"[\x00-\x09\x0b-\x1f\x7f]")     # every C0 control and DEL but the newline (as cli.say)
 MAX_MARKS = 5                # lines of matched marks before "... and N more"
 

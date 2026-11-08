@@ -45,7 +45,7 @@ CAUSES = {
     "background_disk": "another program using the disk",
     "background_gpu": "another program using the GPU",
     "driver_dpc": "a driver holding up the CPU",
-    "cpu_throttle": "the CPU slowing down (heat or power)",
+    "cpu_throttle": "the CPU running below full speed",      # its clock alone can name it: no heat or power claim
     "gpu_throttle": "the GPU slowing down (heat or power)",
     "vram_overflow": "video memory over 90% full",
     "gpu_spike": "a moment of heavy GPU work",

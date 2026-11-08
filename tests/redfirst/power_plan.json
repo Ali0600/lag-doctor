@@ -238,8 +238,8 @@
  {
   "name": "the plan's settings not recorded",
   "file": "lagdoctor/capture/inventory.py",
-  "old": "            \"saver\": status.get(\"saver\"), \"plan\": plan}",
-  "new": "            \"saver\": status.get(\"saver\"), \"plan\": None}",
+  "old": "\"saver\": status.get(\"saver\"), \"plan\": plan}",
+  "new": "\"saver\": status.get(\"saver\"), \"plan\": None}",
   "tests": [
    "tests/test_machine_inventory.py::test_collect_returns_every_design_key"
   ]

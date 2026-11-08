@@ -616,5 +616,59 @@
   "tests": [
    "tests/test_user_text.py::test_no_fix_detail_repeats_the_undo_note_the_html_report_adds"
   ]
+ },
+ {
+  "name": "the degree sign printed as a question mark",
+  "file": "lagdoctor/report/console.py",
+  "old": "\"\u00b0\": \"\", ",
+  "new": "",
+  "tests": [
+   "tests/test_report.py::test_the_console_writes_the_degree_sign_as_plain_text"
+  ]
+ },
+ {
+  "name": "the no-break space printed as a question mark",
+  "file": "lagdoctor/report/console.py",
+  "old": "\"\\u00a0\": \" \"",
+  "new": "\" \": \" \"",
+  "tests": [
+   "tests/test_report.py::test_the_console_writes_a_no_break_space_as_a_space"
+  ]
+ },
+ {
+  "name": "a character a message writes left without a console form",
+  "file": "lagdoctor/report/console.py",
+  "old": "\"\u2265\": \">=\", \"\u00b0\"",
+  "new": "\"\u00b0\"",
+  "tests": [
+   "tests/test_user_text.py::test_every_character_outside_ascii_a_module_writes_has_a_form_in_the_console"
+  ]
+ },
+ {
+  "name": "the byte-order mark printed as a question mark",
+  "file": "lagdoctor/report/console.py",
+  "old": ", \"\\ufeff\": \"\"}",
+  "new": "}",
+  "tests": [
+   "tests/test_user_text.py::test_every_character_outside_ascii_a_module_writes_has_a_form_in_the_console"
+  ]
+ },
+ {
+  "name": "a mark's CPU clock named as heat or power",
+  "file": "lagdoctor/report/labels.py",
+  "old": "\"cpu_throttle\": \"the CPU running below full speed\",",
+  "new": "\"cpu_throttle\": \"the CPU slowing down (heat or power)\",",
+  "tests": [
+   "tests/test_report.py::test_a_mark_where_only_the_cpu_clock_fell_names_no_heat_or_power"
+  ]
+ },
+ {
+  "name": "a save as slow as gzip level 9, timed against the old save alone",
+  "file": "lagdoctor/model.py",
+  "old": "SAVE_GZIP_LEVEL = 1",
+  "new": "SAVE_GZIP_LEVEL = 9",
+  "tests": [
+   "tests/test_model.py::test_the_save_takes_a_fraction_of_the_old_saves_time"
+  ]
  }
 ]

@@ -152,4 +152,5 @@ minor version, and `tests/test_wheel_check.py` fails when the two part) and then
   on that VM, not the code; rerun before blaming a change, and look at the inventory's own timeout if it repeats.
   `tests/test_model.py::test_the_save_takes_a_fraction_of_the_old_saves_time` failed once on main's Python 3.11 job
   (2026-11-08, on a tree that had passed on its PR: new save 0.35 s against the old 0.84 s, needs under 0.3x) and
-  passed on rerun; it times the old save once and the new one best of three.
+  passed on rerun; it timed the old save once, before the new one's best of three. Since PR #11 the two run in turns,
+  each at its best of three (about 0.06x on this laptop); if it fails again, rerun it alone before blaming a change.
