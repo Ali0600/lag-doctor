@@ -5,7 +5,7 @@ description = "Finds out why a PC game is lagging by watching it from outside, a
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 # None at run time: lagdoctor/ imports only the standard-library modules the installer's embeddable Python imports
 # (tests/test_stdlib_only.py; scripts/runtime_modules.json), and that Python holds no other package.
 dependencies = []

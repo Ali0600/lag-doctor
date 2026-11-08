@@ -1,0 +1,119 @@
+[
+ {
+  "name": "README.md joins the paths a push to main may skip",
+  "file": ".github/workflows/ci.yml",
+  "old": "      - \".github/SECURITY.md\"",
+  "new": "      - \".github/SECURITY.md\"\n      - \"README.md\"",
+  "tests": [
+   "tests/test_ci_triggers.py::test_a_push_to_main_skips_exactly_the_paths_no_job_reads"
+  ]
+ },
+ {
+  "name": "an extension glob replaces docs/**",
+  "file": ".github/workflows/ci.yml",
+  "old": "      - \"docs/**\"",
+  "new": "      - \"**/*.md\"",
+  "tests": [
+   "tests/test_ci_triggers.py::test_a_push_to_main_skips_exactly_the_paths_no_job_reads"
+  ]
+ },
+ {
+  "name": "pull requests get a path filter",
+  "file": ".github/workflows/ci.yml",
+  "old": "  pull_request:\n\npermissions:",
+  "new": "  pull_request:\n    paths-ignore:\n      - \"docs/**\"\n\npermissions:",
+  "tests": [
+   "tests/test_ci_triggers.py::test_a_pull_request_is_never_filtered_by_path"
+  ]
+ },
+ {
+  "name": "a test reads docs/DESIGN.md",
+  "file": "tests/test_msi.py",
+  "old": "ROOT = Path(__file__).resolve().parents[1]\n",
+  "new": "ROOT = Path(__file__).resolve().parents[1]\nDESIGN = ROOT / \"docs\" / \"DESIGN.md\"\n",
+  "tests": [
+   "tests/test_ci_triggers.py::test_nothing_a_job_runs_names_an_ignored_path"
+  ]
+ },
+ {
+  "name": "a script names docs/ in prose",
+  "file": "scripts/wheel_check.py",
+  "old": "CAPTURE_MODE = \"hitch-io\"",
+  "new": "CAPTURE_MODE = \"hitch-io (see docs/DESIGN.md)\"",
+  "tests": [
+   "tests/test_ci_triggers.py::test_nothing_a_job_runs_names_an_ignored_path"
+  ]
+ },
+ {
+  "name": "the wheel's readme becomes a docs file",
+  "file": "pyproject.toml",
+  "old": "readme = \"README.md\"",
+  "new": "readme = \"docs/DESIGN.md\"",
+  "tests": [
+   "tests/test_ci_triggers.py::test_nothing_a_job_runs_names_an_ignored_path"
+  ]
+ },
+ {
+  "name": "the MSI's icon comes from docs/",
+  "file": "installer/lag-doctor.wxs",
+  "old": "SourceFile=\"!(bindpath.payload)\\lagdoctor\\app\\lag-doctor.ico\"",
+  "new": "SourceFile=\"docs\\images\\lag-doctor.ico\"",
+  "tests": [
+   "tests/test_ci_triggers.py::test_nothing_a_job_runs_names_an_ignored_path"
+  ]
+ },
+ {
+  "name": "a CI step reads CLAUDE.md",
+  "file": ".github/workflows/ci.yml",
+  "old": "        run: uv run --no-sync pytest -v --durations=25",
+  "new": "        run: Get-Content CLAUDE.md; uv run --no-sync pytest -v --durations=25",
+  "tests": [
+   "tests/test_ci_triggers.py::test_nothing_a_job_runs_names_an_ignored_path"
+  ]
+ },
+ {
+  "name": "the scan no longer reads tests/",
+  "file": "tests/test_ci_triggers.py",
+  "old": "SCANNED = (\"lagdoctor\", \"laglab\", \"scripts\", \"tests\")",
+  "new": "SCANNED = (\"lagdoctor\", \"laglab\", \"scripts\")",
+  "tests": [
+   "tests/test_ci_triggers.py::test_nothing_a_job_runs_names_an_ignored_path"
+  ]
+ },
+ {
+  "name": "the name pattern finds docs/ only at the start or after a slash",
+  "file": "tests/test_ci_triggers.py",
+  "old": "NAMES = re.compile(r\"(?<![A-Za-z0-9_.-])docs(?=$|[/\\\\])|CLAUDE\\.md|SECURITY\\.md\")",
+  "new": "NAMES = re.compile(r\"(^|/)docs(/|$)|CLAUDE\\.md|SECURITY\\.md\")",
+  "tests": [
+   "tests/test_ci_triggers.py::test_the_name_pattern_finds_docs_paths_in_every_spelling_and_nothing_else"
+  ]
+ },
+ {
+  "name": "docstrings count as literals",
+  "file": "tests/test_ci_triggers.py",
+  "old": "isinstance(node.value, (str, bytes)) and id(node) not in docs:",
+  "new": "isinstance(node.value, (str, bytes)):",
+  "tests": [
+   "tests/test_ci_triggers.py::test_the_literal_scan_skips_docstrings_and_comments_but_reads_every_other_string"
+  ]
+ },
+ {
+  "name": "XML comments stay in the config scan",
+  "file": "tests/test_ci_triggers.py",
+  "old": "        return re.sub(r\"<!--.*?-->\", \"\", text, flags=re.S)",
+  "new": "        return text",
+  "tests": [
+   "tests/test_ci_triggers.py::test_nothing_a_job_runs_names_an_ignored_path"
+  ]
+ },
+ {
+  "name": "hash comments stay in the config scan",
+  "file": "tests/test_ci_triggers.py",
+  "old": "        return re.sub(r\"(?m)(^|\\s)#.*$\", r\"\\1\", text)",
+  "new": "        return text",
+  "tests": [
+   "tests/test_ci_triggers.py::test_nothing_a_job_runs_names_an_ignored_path"
+  ]
+ }
+]

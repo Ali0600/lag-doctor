@@ -1,0 +1,47 @@
+[
+ {
+  "name": "the installer's runtime moves to 3.14 and CI stays on 3.13",
+  "file": "scripts/runtime_pin.py",
+  "old": "EMBED_VERSION = \"3.13.17\"",
+  "new": "EMBED_VERSION = \"3.14.0\"",
+  "tests": [
+   "tests/test_python_versions.py::test_ci_tests_the_python_the_installer_ships"
+  ]
+ },
+ {
+  "name": "CI tests 3.12 instead of what ships",
+  "file": ".github/workflows/ci.yml",
+  "old": "        python: [\"3.13\"]",
+  "new": "        python: [\"3.12\"]",
+  "tests": [
+   "tests/test_python_versions.py::test_ci_tests_the_python_the_installer_ships"
+  ]
+ },
+ {
+  "name": ".python-version names 3.12",
+  "file": ".python-version",
+  "old": "3.13",
+  "new": "3.12",
+  "tests": [
+   "tests/test_python_versions.py::test_a_checkout_builds_its_venv_on_the_python_the_installer_ships"
+  ]
+ },
+ {
+  "name": "requires-python promises 3.11 again",
+  "file": "pyproject.toml",
+  "old": "requires-python = \">=3.13\"",
+  "new": "requires-python = \">=3.11\"",
+  "tests": [
+   "tests/test_python_versions.py::test_the_oldest_python_promised_is_the_oldest_ci_tests"
+  ]
+ },
+ {
+  "name": "3.11 joins CI below the promise",
+  "file": ".github/workflows/ci.yml",
+  "old": "        python: [\"3.13\"]",
+  "new": "        python: [\"3.13\", \"3.11\"]",
+  "tests": [
+   "tests/test_python_versions.py::test_the_oldest_python_promised_is_the_oldest_ci_tests"
+  ]
+ }
+]

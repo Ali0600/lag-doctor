@@ -10,6 +10,13 @@ name: CI
 on:
   push:
     branches: [main]
+    # A push to main that changes only these starts no run: no job reads them (tests/test_ci_triggers.py keeps this
+    # list, and that claim, true). README.md is not one: the build reads it into the wheel's metadata. GitHub filters a
+    # push on its whole range (before..after), so a push that also holds code runs. Pull requests are never filtered.
+    paths-ignore:
+      - "docs/**"
+      - "CLAUDE.md"
+      - ".github/SECURITY.md"
   pull_request:
 
 permissions:
@@ -31,8 +38,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.13 is what lag-doctor runs on; 3.11 is the oldest pyproject.toml promises.
-        python: ["3.13", "3.11"]
+        # The Python the installer ships (scripts/runtime_pin.py), which is also the oldest pyproject.toml promises and
+        # the one .python-version gives a checkout (tests/test_python_versions.py). When the pin moves to a new minor
+        # version, that version joins this list in the same change.
+        python: ["3.13"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
