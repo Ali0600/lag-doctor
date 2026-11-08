@@ -169,7 +169,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `lagdoctor` without `__init__.py` (a fixture, a scratch project) loses to the real package even when it comes first
   on sys.path, so give it one (as `tests/fixtures/redfirst/project/lagdoctor/__init__.py` does). The wheel holds
   `lagdoctor/` and nothing else (uv_build takes the whole folder): a file the product reads from anywhere else would
-  not ship, and the files check, which compares `lagdoctor/` only, would not name it.
+  not ship, and the files check, which compares `lagdoctor/` only, would not name it. `uv run` syncs the venv first:
+  after an edit to `pyproject.toml` (a comment was enough, 2026-11-08) it rebuilt and reinstalled lag-doctor there
+  while a red-first run was using that venv. While a run or the suite uses the venv, start other commands with
+  `uv run --no-sync`.
 - Git Bash rewrites an argument that looks like a POSIX path before starting a native program: `git sparse-checkout
   set --no-cone /Tests/Gold/` stored `C:/Program Files/Git/Tests/Gold/` (the checkout then wrote nothing), and `git
   show origin/main:.github/workflows/ci.yml` became `origin\main;.github\...`. Prefix such commands with
@@ -199,9 +202,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   while_recording_still_saves_the_capture` (its child hit the 60 s timeout once under full-suite load, then 3/3
   alone), and `tests/test_sysmon_target.py::test_auto_picks_a_windowed_renderer_and_never_a_windowless_gpu_job`, which
   needs LagLab to render where Windows counts it: on 2026-11-07 at 00:30 (Silent mode, display asleep) it failed on
-  unchanged code too, in a worktree of the previous commit. Rerun them alone, with the display awake, and run that
-  control before blaming a change. The self-test cases of `tests/test_etw_flows.py` and `tests/test_etw_tracker.py`
-  failed on CI with "no free port for both UDP and TCP" until 2026-11-08 (4 at once on 2026-11-07, 2 on 2026-11-08):
+  unchanged code too, in a worktree of the previous commit, and again on 2026-11-08 in a worktree of main. Rerun them
+  alone, with the display awake, and run that control before blaming a change. The self-test cases of
+  `tests/test_etw_flows.py` and `tests/test_etw_tracker.py` failed on CI with "no free port for both UDP and TCP"
+  until 2026-11-08 (4 at once on 2026-11-07, 2 on 2026-11-08):
   their loopback DNS stand-ins took TCP's next port-0 number and tried UDP on it, 10 times. Windows hands port-0
   numbers out in sequence, and on 9 of 10 runners Docker's NAT holds 200 UDP ports in a row that TCP still hands out;
   with the hint there (1.2 % of its positions), all 10 tries failed. The one stand-in left, `tests/loopback_dns.py`,
@@ -213,3 +217,6 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   (2026-11-08, on a tree that had passed on its PR: new save 0.35 s against the old 0.84 s, needs under 0.3x) and
   passed on rerun; it timed the old save once, before the new one's best of three. Since PR #11 the two run in turns,
   each at its best of three (about 0.06x on this laptop); if it fails again, rerun it alone before blaming a change.
+  `tests/test_sysmon_sampler.py::test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild` failed once in a
+  full local run (2026-11-08: the grandchild's first reading was 0.0, so its mean was 72 % against the 88 % expected,
+  outside the 10-point bound) and passed alone; rerun it alone before blaming a change.
