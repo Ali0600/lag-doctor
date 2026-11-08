@@ -148,6 +148,20 @@ def test_a_relative_exe_is_the_file_named_when_the_source_was_made(presentmon_ex
         assert os.path.samefile(prefix[0], tmp_path / "named" / presentmon_exe.name)
 
 
+def test_without_an_exe_the_installers_copy_is_launched_first(presentmon_exe, tmp_path, monkeypatch):
+    # As setup.ensure_presentmon: the copy lag-doctor's installer put under Program Files, before the download.
+    from lagdoctor import setup
+    bundled = tmp_path / "install" / "PresentMon" / presentmon_exe.name
+    bundled.parent.mkdir(parents=True)
+    shutil.copyfile(presentmon_exe, bundled)
+    monkeypatch.setattr(setup, "BUNDLED", bundled)
+    download = setup.installed_exe()
+    download.parent.mkdir(parents=True)
+    shutil.copyfile(presentmon_exe, download)
+    with pm.PresentMonSource(1234)._exe_guard() as prefix:
+        assert os.path.samefile(prefix[0], bundled)
+
+
 def test_spawn_runs_exactly_the_program_it_is_given_where_a_command_line_would_not(presentmon_exe, tmp_path):
     # The pinned path can run through a folder whose name ends in "." (reachable by a junction). As a command
     # line, Windows drops that dot and runs whatever sits in the dotless folder; as the program it does not.

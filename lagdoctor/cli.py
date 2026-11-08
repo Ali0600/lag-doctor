@@ -997,6 +997,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     from lagdoctor.winapi import elevation
     try:
         exe = pm_setup.ensure_presentmon(allow_download=False)
+    except pm_setup.BrokenInstall as exc:        # the installer's own copy: a download would not be used
+        say(str(exc))
+        return 1
     except pm_setup.SetupError as exc:           # missing, or failing verification: offer the download
         say(str(exc))
         if not (args.download or _ask("Download Intel PresentMon 2.6.0 (980,320 bytes, MIT licence, Intel-signed) "

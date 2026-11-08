@@ -518,7 +518,7 @@ class PresentMonSource(Collector):
         """The command prefix for PresentMon: the pinned exe, locked against writers while it starts, named by
         the final path of the very handle that was checked (setup.pinned), so a junction in `path` re-pointed
         after the check cannot change what runs."""
-        path = self.exe if self.exe is not None else setup.installed_exe()
+        path = self.exe if self.exe is not None else setup.expected_exe()
         stack = contextlib.ExitStack()
         try:
             launch = stack.enter_context(setup.pinned(path))

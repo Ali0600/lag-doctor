@@ -363,6 +363,67 @@ def test_a_tampered_install_is_reported_and_replaced_only_when_allowed(presentmo
     assert setup.ensure_presentmon(allow_download=True) == exe and sha256(exe) == setup.SHA256
 
 
+# ---------------------------------------------------------- the installer's own copy ---
+
+@pytest.fixture
+def bundled_at(monkeypatch, tmp_path) -> Path:
+    """setup.BUNDLED moved to tmp_path/install/PresentMon/<exe>, where nothing is until a test puts it there."""
+    path = tmp_path / "install" / "PresentMon" / setup.EXE_NAME
+    monkeypatch.setattr(setup, "BUNDLED", path)
+    return path
+
+
+def _place(src: Path, dest: Path) -> Path:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dest)
+    return dest
+
+
+def test_the_installers_copy_sits_in_a_presentmon_folder_beside_the_package():
+    # The MSI puts lagdoctor\ and PresentMon\ side by side in C:\Program Files\lag-doctor.
+    package = Path(setup.__file__).resolve().parent
+    assert setup.BUNDLED == package.parent / "PresentMon" / "PresentMon-2.6.0-x64.exe"
+    assert setup.bundled() is None                       # a checkout has none
+
+
+def test_the_installers_copy_comes_before_the_download(presentmon_exe, bundled_at, fetcher):
+    _place(presentmon_exe, bundled_at)
+    _place(presentmon_exe, setup.installed_exe())       # a verified download is there too
+    calls = fetcher(b"never")
+    assert setup.bundled() == bundled_at and setup.expected_exe() == bundled_at
+    assert setup.ensure_presentmon(allow_download=False) == bundled_at
+    assert setup.ensure_presentmon(allow_download=True) == bundled_at and calls == []
+
+
+def test_a_damaged_installers_copy_is_reported_never_routed_around(presentmon_exe, tampered, bundled_at, fetcher):
+    _place(tampered, bundled_at)
+    _place(presentmon_exe, setup.installed_exe())       # a good download, which must not stand in for it
+    calls = fetcher(presentmon_exe.read_bytes())
+    for allow in (False, True):
+        with pytest.raises(setup.BrokenInstall, match="Install lag-doctor again") as caught:
+            setup.ensure_presentmon(allow_download=allow)
+        assert "SHA-256" in str(caught.value)                # the check's own reason is kept
+    assert calls == [] and sha256(bundled_at) == sha256(tampered)
+
+
+def test_without_an_installers_copy_the_download_is_expected(bundled_at):
+    bundled_at.parent.mkdir(parents=True)                # the folder alone is not a copy
+    assert setup.bundled() is None and setup.expected_exe() == setup.installed_exe()
+
+
+def test_setup_asks_to_reinstall_and_never_offers_a_download_for_a_damaged_installers_copy(monkeypatch, capsys):
+    from lagdoctor import cli
+    asked: list = []
+
+    def ensure(allow_download):
+        asked.append(allow_download)
+        raise setup.BrokenInstall("The PresentMon that came with lag-doctor's installer failed its check (x).")
+    monkeypatch.setattr(setup, "ensure_presentmon", ensure)
+    monkeypatch.setattr(cli, "_ask", lambda prompt, default=False: asked.append(prompt) or True)
+    assert cli.cmd_setup(argparse.Namespace(download=True)) == 1
+    assert asked == [False] and "came with lag-doctor's installer" in capsys.readouterr().out
+
+
 class _Response:
     def __init__(self, length: str | None, chunks: int) -> None:
         self.headers = {"Content-Length": length} if length else {}

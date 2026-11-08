@@ -122,3 +122,89 @@ jobs:
         run: uv build --offline --clear --out-dir "$env:RUNNER_TEMP\dist"
       - name: Install the wheel into a fresh venv and run it there
         run: uv run --no-sync python scripts/wheel_check.py "$env:RUNNER_TEMP\dist"
+
+  msi:
+    # lag-doctor's per-machine MSI (docs/INSTALLER-PLAN.md, Stage 3), built with WiX v7 from the wheel, python.org's
+    # embeddable runtime and the pinned PresentMon (scripts/msi_build.py), then installed on this throwaway runner, run
+    # from a fresh shell and uninstalled, with nothing left behind (scripts/msi_check.py; its summary lists every
+    # check). The MSI is kept as an artifact; nothing is published or signed here (Stage 5).
+    name: MSI (built, installed, run and uninstalled)
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.10.4"
+          python-version: "3.13"
+      - name: Install the build's environment
+        run: uv sync --locked
+      - name: Where the downloads go
+        id: downloads
+        run: uv run --no-sync python -m tests.downloads ci-outputs
+      # PresentMon as the test job gets it: lag-doctor's own setup, cached under a key that hashes the download code.
+      - name: Restore PresentMon from the cache
+        id: presentmon-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.downloads.outputs.presentmon_dir }}
+          key: ${{ steps.downloads.outputs.presentmon_key }}
+      - name: Set up PresentMon with lagdoctor setup
+        run: |
+          foreach ($wait in 0, 20, 60) {
+            Start-Sleep -Seconds $wait
+            uv run --no-sync python -m lagdoctor setup --download
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Output "::warning::lagdoctor setup failed with exit code $LASTEXITCODE"
+          }
+          exit 1
+      - name: Check PresentMon against the tests' pin
+        run: uv run --no-sync python -m tests.downloads check presentmon
+      - name: Save PresentMon to the cache
+        if: steps.presentmon-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.downloads.outputs.presentmon_dir }}
+          key: ${{ steps.downloads.outputs.presentmon_key }}
+      - name: WiX 7.0.1, its package checked against the pinned SHA-512
+        run: uv run --no-sync python scripts/wix_tool.py "$env:RUNNER_TEMP\wix"
+      # --offline: uv builds with the copy of uv_build it carries (pyproject.toml's bound), never one from the index.
+      - name: Build the wheel the MSI ships
+        run: uv build --offline --clear --out-dir "$env:RUNNER_TEMP\dist"
+      # --accept-eula wix7: the owner accepted WiX v7's Open Source Maintenance Fee EULA for CI's builds
+      # (docs/DECISIONS.md, 2026-11-08); without it WiX refuses to build (WIX7015).
+      - name: Build the MSI
+        env:
+          PRESENTMON_DIR: ${{ steps.downloads.outputs.presentmon_dir }}
+        run: |
+          $wheel = @(Get-ChildItem "$env:RUNNER_TEMP\dist\*.whl")
+          if ($wheel.Count -ne 1) { Write-Output "::error::expected one wheel, found $($wheel.Count)"; exit 2 }
+          uv run --no-sync python scripts/msi_build.py --wheel $wheel[0].FullName `
+            --runtime-zip "$env:RUNNER_TEMP\runtime\embeddable.zip" `
+            --presentmon "$env:PRESENTMON_DIR\PresentMon-2.6.0-x64.exe" `
+            --wix "$env:RUNNER_TEMP\wix\tool\wix.exe" --out "$env:RUNNER_TEMP\msi" --accept-eula wix7
+          exit $LASTEXITCODE
+      - name: Keep the MSI
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lag-doctor-msi
+          path: ${{ runner.temp }}\msi
+          if-no-files-found: error
+      - name: Install it, run it from a fresh shell, uninstall it
+        env:
+          PRESENTMON_DIR: ${{ steps.downloads.outputs.presentmon_dir }}
+        run: |
+          $msi = @(Get-ChildItem "$env:RUNNER_TEMP\msi\*.msi")
+          if ($msi.Count -ne 1) { Write-Output "::error::expected one MSI, found $($msi.Count)"; exit 2 }
+          uv run --no-sync python scripts/msi_check.py $msi[0].FullName "$env:RUNNER_TEMP\runtime\embeddable.zip" `
+            "$env:PRESENTMON_DIR\PresentMon-2.6.0-x64.exe" "$env:RUNNER_TEMP\msi-logs"
+          exit $LASTEXITCODE
+      - name: Keep the install and uninstall logs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: msi-logs
+          path: ${{ runner.temp }}\msi-logs
+          if-no-files-found: warn

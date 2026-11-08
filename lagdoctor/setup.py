@@ -55,8 +55,29 @@ class VerifyError(SetupError):
     pass
 
 
+class BrokenInstall(VerifyError):
+    """The PresentMon that came with lag-doctor's installer failed its check: reinstalling fixes it, a download
+    would not be used."""
+
+
+# Where lag-doctor's installer puts PresentMon: a folder beside the lagdoctor package. In the MSI's layout that is
+# C:\Program Files\lag-doctor\PresentMon, which only an administrator can change; a checkout or a wheel has none.
+BUNDLED = Path(__file__).resolve().parents[1] / "PresentMon" / EXE_NAME
+
+
 def installed_exe() -> Path:
+    """The per-user download that `lagdoctor setup` makes."""
     return paths.presentmon_dir(VERSION) / EXE_NAME
+
+
+def bundled() -> Path | None:
+    """The PresentMon that lag-doctor's installer put beside its code, or None when there is none."""
+    return BUNDLED if BUNDLED.is_file() else None
+
+
+def expected_exe() -> Path:
+    """The PresentMon to use, before any check: the installer's copy first, else the per-user download."""
+    return bundled() or installed_exe()
 
 
 # ------------------------------------------------------------- ctypes, private ---
@@ -337,11 +358,22 @@ def fetch(url: str, out: BinaryIO, max_bytes: int) -> None:
 
 
 def ensure_presentmon(allow_download: bool) -> Path:
-    """The verified PresentMon exe, downloading it first when allowed. Raises SetupError with the reason.
+    """The verified PresentMon exe: the copy lag-doctor's installer put under Program Files when there is one,
+    else the per-user download, made first when allowed. Raises SetupError with the reason.
 
-    A download lands in a .part file, is verified, and only then replaces the exe; a file that fails
-    verification is deleted, never kept or run.
+    An installer's copy that fails its check raises BrokenInstall: a download would be routed around a damaged
+    install, and reinstalling is what fixes it. A download lands in a .part file, is verified, and only then
+    replaces the exe; a file that fails verification is deleted, never kept or run.
     """
+    own = bundled()
+    if own is not None:
+        try:
+            verify(own)
+        except VerifyError as broken:
+            raise BrokenInstall(f"The PresentMon that came with lag-doctor's installer failed its check ({broken}). "
+                                "Install lag-doctor again, or repair it in Control Panel under Programs and "
+                                "Features, to restore it.") from broken
+        return own
     path = installed_exe()
     problem: VerifyError | None = None
     if path.is_file():

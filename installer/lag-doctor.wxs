@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  lag-doctor's per-machine MSI (docs/INSTALLER-PLAN.md, Stage 3), built with WiX v7 by scripts/msi_build.py:
+
+    wix build lag-doctor.wxs -arch x64 -wx -d Version=X.Y.Z -bindpath payload=C:\...\payload -o lag-doctor.msi
+
+  The payload is the install folder as msi_build.py laid it out and checked it: python.org's embeddable runtime,
+  lagdoctor\ with its bytecode, PresentMon\ with Intel's licence, and bin\lagdoctor.cmd. It installs to
+  C:\Program Files\lag-doctor; bin\ goes on the system PATH and comes off it on uninstall. No dialogs and no custom
+  actions: one UAC prompt, then done. Syntax checked against WiX v7.0.1's documentation and source (2026-11-08).
+
+  The UpgradeCode names lag-doctor across every version, so it never changes (tests/test_msi.py pins it).
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="lag-doctor" Manufacturer="lag-doctor" Version="$(Version)"
+           UpgradeCode="{955424CD-63D8-410A-A74B-618FC618CDBA}" Scope="perMachine" Language="1033"
+           Codepage="1252">
+    <!-- Every build of one version may replace another (CI makes many); an older one never replaces a newer. The
+         default schedule removes the old product entirely before the new one installs. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of lag-doctor is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/Ali0600/lag-doctor" />
+    <Property Id="ARPNOMODIFY" Value="1" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="lag-doctor">
+        <Directory Id="BINFOLDER" Name="bin" />
+      </Directory>
+    </StandardDirectory>
+
+    <!-- The payload, its folders kept. bin\ is harvested into BINFOLDER itself, the folder PATH names. -->
+    <Files Directory="INSTALLFOLDER" Include="!(bindpath.payload)\**">
+      <Exclude Files="!(bindpath.payload)\bin\**" />
+    </Files>
+    <Files Directory="BINFOLDER" Include="!(bindpath.payload)\bin\**" />
+
+    <!-- bin\ alone goes on the system PATH, at its end, so the runtime's python.exe never stands in for the user's
+         own python. Part="last" adds only this part and the uninstall removes only it (a missing Part would replace
+         the whole PATH). A folder key path needs a fixed Id and Guid; WiX adds the CreateFolder row itself. -->
+    <Component Id="PathEntry" Directory="BINFOLDER" Guid="{EEC3F812-94EF-4DD5-8F80-2A76D6176B6A}">
+      <Environment Id="PathEntry" Name="PATH" Value="[BINFOLDER]" Part="last" Action="set" System="yes"
+                   Permanent="no" />
+    </Component>
+  </Package>
+</Wix>

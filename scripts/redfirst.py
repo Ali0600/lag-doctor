@@ -6,7 +6,7 @@ The spec is a JSON list of mutations:
   {"name": "...", "file": "lagdoctor/x.py", "old": "exact text", "new": "replacement",
    "tests": ["tests/test_x.py::test_name", ...]}
 
-The real working tree is never written. Once per run, what the tests need (lagdoctor/, laglab/, tests/,
+The real working tree is never written. Once per run, what the tests need (lagdoctor/, laglab/, tests/, installer/,
 scripts/, docs/, .github/, pyproject.toml, uv.lock; never .venv, .git, .claude or __pycache__) is copied into a new
 temp folder, printed as "working copy: ...", and pytest runs there (cwd = the copy) with this interpreter,
 the real repo's venv. The copy is deleted at the end, or kept for inspection after a STOP; a hard kill
@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 ROOT = Path(__file__).resolve().parents[1]
-COPY_DIRS = ("lagdoctor", "laglab", "tests", "scripts", "docs", ".github")    # .github: tests read ci.yml
+COPY_DIRS = ("lagdoctor", "laglab", "tests", "scripts", "docs", ".github", "installer")   # tests read ci.yml, the .wxs
 COPY_FILES = ("pyproject.toml", "uv.lock")
 SKIP_NAMES = (".venv", ".git", ".claude", "__pycache__", ".pytest_cache")
 SKIP_SUFFIXES = (".pyc", ".pyo")
