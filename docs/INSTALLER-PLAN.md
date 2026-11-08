@@ -49,7 +49,8 @@ not help.
    every commit (research note section 7; DECISIONS 2026-11-07).
 2. Done (2026-11-07): public at https://github.com/Ali0600/lag-doctor; `.github/SECURITY.md` asks for reports through
    GitHub's private vulnerability reporting.
-3. Done (2026-11-07): CI on `windows-2025` for Python 3.13 and 3.11, SHA-pinned actions, a read-only token. Tests
+3. Done (2026-11-07): CI on `windows-2025` for Python 3.13 and 3.11, SHA-pinned actions, a read-only token (since
+   2026-11-08 for 3.13 alone, the version the MSI ships, with pushes that change only docs skipped: DECISIONS). Tests
    that need what the runner lacks skip by declaration (`LAGDOCTOR_ABSENT`, `tests/capabilities.py`). Standard
    runners are free for public repositories [verified: GitHub Actions billing page, 2026-11-06].
 4. Done (2026-11-07): of the 32 tests that skipped there for want of PresentMon's download or its gold captures, 31
