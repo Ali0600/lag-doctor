@@ -31,6 +31,14 @@ def gold_etl_dir() -> Path:
     return downloads.for_fixture("presentmon_gold")
 
 
+@pytest.fixture(scope="session")
+def webview2_idl() -> Path:
+    """WebView2.idl of Microsoft's WebView2 SDK 1.0.4314.35, checked against the tests' pin, for the vtable slots and
+    IIDs that lagdoctor/winapi/webview2.py calls. Skips like presentmon_exe; fetch it with `uv run python -m
+    tests.downloads fetch-webview2-idl`."""
+    return downloads.for_fixture("webview2_idl")
+
+
 @pytest.fixture
 def reg_sandbox():
     """A RegistryBackend whose every path lands under HKCU\\Software\\LagDoctorTest\\<uuid>.
@@ -59,7 +67,8 @@ def pytest_configure(config):
     config.addinivalue_line("markers", "needs(*names): what the test needs from the machine; it skips when "
                             f"{capabilities.ABSENT_ENV} lists one of them (tests/capabilities.py)")
     downloads.required(os.environ)                  # a misspelt LAGDOCTOR_REQUIRE stops the run before it starts
-    config.pluginmanager.register(downloads.Tally(os.environ), "lagdoctor-download-tally")
+    for line in downloads.TALLIES:                  # a line each in the summary (downloads.TALLIES)
+        config.pluginmanager.register(downloads.Tally(os.environ, line), f"lagdoctor-download-tally-{line}")
 
 
 def pytest_collection_modifyitems(config, items):

@@ -1,0 +1,276 @@
+[
+ {
+  "name": "a propput method loses its put_ prefix",
+  "file": "tests/webview2_idl.py",
+  "old": "PREFIXES = {\"propget\": \"get_\", \"propput\": \"put_\", \"propputref\": \"putref_\"}",
+  "new": "PREFIXES = {\"propget\": \"get_\", \"propput\": \"\", \"propputref\": \"putref_\"}",
+  "tests": [
+   "tests/test_webview2_idl.py::test_the_reader_names_methods_in_vtable_order_after_every_parents",
+   "tests/test_webview2_idl.py::test_the_reader_gives_every_slot_and_iid_counted_from_webview2_h"
+  ]
+ },
+ {
+  "name": "only the nearest parent's methods take slots",
+  "file": "tests/webview2_idl.py",
+  "old": "    for itf in reversed(chain):\n        methods.extend(itf.methods)",
+  "new": "    for itf in chain[:1]:\n        methods.extend(itf.methods)",
+  "tests": [
+   "tests/test_webview2_idl.py::test_the_reader_names_methods_in_vtable_order_after_every_parents",
+   "tests/test_webview2_idl.py::test_the_reader_gives_every_slot_and_iid_counted_from_webview2_h"
+  ]
+ },
+ {
+  "name": "comments are read as code",
+  "file": "tests/webview2_idl.py",
+  "old": "    return _SKIP.sub(blank, text)",
+  "new": "    return text",
+  "tests": [
+   "tests/test_webview2_idl.py::test_the_reader_names_methods_in_vtable_order_after_every_parents"
+  ]
+ },
+ {
+  "name": "a string is not read as a string, so a // inside it starts a comment",
+  "file": "tests/webview2_idl.py",
+  "old": "_SKIP = re.compile(r'\"(?:",
+  "new": "_SKIP = re.compile(r'(?!)(?:",
+  "tests": [
+   "tests/test_webview2_idl.py::test_the_reader_names_methods_in_vtable_order_after_every_parents"
+  ]
+ },
+ {
+  "name": "a /* never closed is blanked like a comment",
+  "file": "tests/webview2_idl.py",
+  "old": "        if found in ('\"', \"/*\"):",
+  "new": "        if found in ('\"',):",
+  "tests": [
+   "tests/test_webview2_idl.py::test_what_the_reader_cannot_read_stops_it"
+  ]
+ },
+ {
+  "name": "a member the reader does not know is skipped",
+  "file": "tests/webview2_idl.py",
+  "old": "            raise ValueError(f\"interface {name}: a member that is no method: {' '.join(member)!r}\")",
+  "new": "            continue",
+  "tests": [
+   "tests/test_webview2_idl.py::test_what_the_reader_cannot_read_stops_it"
+  ]
+ },
+ {
+  "name": "an interface defined twice is kept once",
+  "file": "tests/webview2_idl.py",
+  "old": "        if itf.name in out:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_webview2_idl.py::test_an_interface_defined_twice_or_on_an_undefined_parent_stops_the_reader"
+  ]
+ },
+ {
+  "name": "an undefined parent is not refused",
+  "file": "tests/webview2_idl.py",
+  "old": "        if name not in defs:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_webview2_idl.py::test_an_interface_defined_twice_or_on_an_undefined_parent_stops_the_reader"
+  ]
+ },
+ {
+  "name": "the IID check compares nothing",
+  "file": "tests/webview2_idl.py",
+  "old": "    return bool(GUID.fullmatch(a)) and bool(GUID.fullmatch(b)) and a.upper() == b.upper()",
+  "new": "    return True",
+  "tests": [
+   "tests/test_webview2_idl.py::test_iids_are_the_same_whatever_their_case_and_only_when_their_digits_are"
+  ]
+ },
+ {
+  "name": "the IID check minds the case",
+  "file": "tests/webview2_idl.py",
+  "old": "a.upper() == b.upper()",
+  "new": "a == b",
+  "tests": [
+   "tests/test_webview2_idl.py::test_iids_are_the_same_whatever_their_case_and_only_when_their_digits_are",
+   "tests/test_webview2_idl.py::test_the_reader_gives_every_slot_and_iid_counted_from_webview2_h"
+  ]
+ },
+ {
+  "name": "one of the spike's slots moved",
+  "file": "scripts/webview_spike.py",
+  "old": "\"Navigate\": 5",
+  "new": "\"Navigate\": 6",
+  "tests": [
+   "tests/test_webview2_idl.py::test_the_reader_gives_every_slot_and_iid_counted_from_webview2_h"
+  ]
+ },
+ {
+  "name": "one of the spike's IIDs changed",
+  "file": "scripts/webview_spike.py",
+  "old": "    \"ICoreWebView2\": \"76ECEACB-0462-4D94-AC83-423A6793775E\",",
+  "new": "    \"ICoreWebView2\": \"76ECEACB-0462-4D94-AC83-423A6793775F\",",
+  "tests": [
+   "tests/test_webview2_idl.py::test_the_reader_gives_every_slot_and_iid_counted_from_webview2_h"
+  ]
+ },
+ {
+  "name": "one of the header's slots moved",
+  "file": "tests/test_webview2_idl.py",
+  "old": "    (\"ICoreWebView2\", \"ExecuteScript\"): 29,",
+  "new": "    (\"ICoreWebView2\", \"ExecuteScript\"): 30,",
+  "tests": [
+   "tests/test_webview2_idl.py::test_the_reader_gives_every_slot_and_iid_counted_from_webview2_h"
+  ]
+ },
+ {
+  "name": "the app's slot for PostSharedBufferToScript moved",
+  "file": "lagdoctor/winapi/webview2.py",
+  "old": "\"PostSharedBufferToScript\": 116",
+  "new": "\"PostSharedBufferToScript\": 117",
+  "tests": [
+   "tests/test_webview2_idl.py::test_the_apps_module_names_only_slots_and_iids_the_idl_gives"
+  ]
+ },
+ {
+  "name": "the app's IID for ICoreWebView2_17 changed",
+  "file": "lagdoctor/winapi/webview2.py",
+  "old": "\"702E75D4-FD44-434D-9D70-1A68A6B1192A\"",
+  "new": "\"702E75D4-FD44-434D-9D70-1A68A6B1192B\"",
+  "tests": [
+   "tests/test_webview2_idl.py::test_the_apps_module_names_only_slots_and_iids_the_idl_gives"
+  ]
+ },
+ {
+  "name": "the IDL's bytes are never compared with its pin",
+  "file": "tests/downloads.py",
+  "old": "    if digest != WEBVIEW2_IDL_SHA256:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_downloads.py::test_the_idl_is_missing_without_its_folder_broken_without_the_pinned_file_and_found_with_it"
+  ]
+ },
+ {
+  "name": "a fetched folder without the IDL counts as never fetched",
+  "file": "tests/downloads.py",
+  "old": "    if not folder.exists():",
+  "new": "    if not path.is_file():",
+  "tests": [
+   "tests/test_downloads.py::test_the_idl_is_missing_without_its_folder_broken_without_the_pinned_file_and_found_with_it"
+  ]
+ },
+ {
+  "name": "the fetch opens a package that is not the pinned one",
+  "file": "tests/downloads.py",
+  "old": "        if package_digest != package_sha256:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_downloads.py::test_fetch_idl_never_opens_a_package_that_is_not_the_pinned_one"
+  ]
+ },
+ {
+  "name": "the fetch keeps an IDL that is not the pinned file",
+  "file": "tests/downloads.py",
+  "old": "    if idl_digest != idl_sha256:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_downloads.py::test_fetch_idl_publishes_nothing_when_the_idl_is_not_the_pinned_file_or_not_there"
+  ]
+ },
+ {
+  "name": "the fetch reads the package's first member",
+  "file": "tests/downloads.py",
+  "old": "                member = archive.getinfo(WEBVIEW2_IDL)",
+  "new": "                member = archive.infolist()[0]",
+  "tests": [
+   "tests/test_downloads.py::test_fetch_idl_reads_only_the_member_named_webview2_idl_at_the_packages_root"
+  ]
+ },
+ {
+  "name": "the fetch refuses an existing folder only after downloading",
+  "file": "tests/downloads.py",
+  "old": "    if os.path.lexists(dest):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_downloads.py::test_fetch_idl_refuses_a_folder_that_is_there_before_downloading_anything"
+  ]
+ },
+ {
+  "name": "a failed publish leaves its staging folder behind",
+  "file": "tests/downloads.py",
+  "old": "    except BaseException:\n        shutil.rmtree(staging, ignore_errors=True)",
+  "new": "    except BaseException:\n        pass",
+  "tests": [
+   "tests/test_downloads.py::test_fetch_idl_leaves_nothing_when_putting_the_folder_in_place_fails"
+  ]
+ },
+ {
+  "name": "a rename Windows refuses for a moment is not tried again",
+  "file": "tests/downloads.py",
+  "old": "        except PermissionError:",
+  "new": "        except FileNotFoundError:",
+  "tests": [
+   "tests/test_downloads.py::test_a_rename_windows_refuses_for_a_moment_is_tried_again_and_a_lasting_refusal_is_raised"
+  ]
+ },
+ {
+  "name": "a lasting refusal to rename is tried forever",
+  "file": "tests/downloads.py",
+  "old": "            if time.monotonic() >= deadline:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_downloads.py::test_a_rename_windows_refuses_for_a_moment_is_tried_again_and_a_lasting_refusal_is_raised"
+  ]
+ },
+ {
+  "name": "the package download has no size cap",
+  "file": "tests/downloads.py",
+  "old": "                       max_bytes: int = WEBVIEW2_NUPKG_SIZE,",
+  "new": "                       max_bytes: int = 1 << 40,",
+  "tests": [
+   "tests/test_downloads.py::test_fetch_idl_reads_only_the_member_named_webview2_idl_at_the_packages_root"
+  ]
+ },
+ {
+  "name": "the IDL's download is not lag-doctor's HTTPS-only fetch",
+  "file": "tests/downloads.py",
+  "old": "        fetch(url, out, max_bytes)",
+  "new": "        out.write(b\"\")",
+  "tests": [
+   "tests/test_downloads.py::test_the_idl_is_downloaded_over_https_only"
+  ]
+ },
+ {
+  "name": "the IDL's tests join the PresentMon count the README carries",
+  "file": "tests/downloads.py",
+  "old": "(\"presentmon_exe\", \"gold_etl_dir\")),",
+  "new": "(\"presentmon_exe\", \"gold_etl_dir\", \"webview2_idl\")),",
+  "tests": [
+   "tests/test_downloads.py::test_on_a_pc_without_the_downloads_their_tests_skip_and_are_counted",
+   "tests/test_downloads.py::test_every_download_has_a_finder_a_fixture_and_one_tally_line"
+  ]
+ },
+ {
+  "name": "the IDL fixture reads no requirement",
+  "file": "tests/conftest.py",
+  "old": "    return downloads.for_fixture(\"webview2_idl\")",
+  "new": "    return downloads.for_fixture(\"webview2_idl\", {\"LOCALAPPDATA\": os.environ[\"LOCALAPPDATA\"]})",
+  "tests": [
+   "tests/test_downloads.py::test_when_the_run_requires_them_a_missing_download_fails_its_tests"
+  ]
+ },
+ {
+  "name": "the IDL's cache key is never output",
+  "file": "tests/downloads.py",
+  "old": "        \"webview2_idl_key\": f\"webview2-idl-",
+  "new": "        \"webview2_idl_kee\": f\"webview2-idl-",
+  "tests": [
+   "tests/test_downloads.py::test_ci_fetches_checks_and_requires_every_download_and_uses_only_real_outputs"
+  ]
+ },
+ {
+  "name": "the IDL's cache key ignores how it is fetched",
+  "file": "tests/downloads.py",
+  "old": "{WEBVIEW2_IDL_SHA256[:16]}-{this[:16]}\"",
+  "new": "{WEBVIEW2_IDL_SHA256[:16]}\"",
+  "tests": [
+   "tests/test_downloads.py::test_ci_outputs_name_the_folders_the_fixtures_read"
+  ]
+ }
+]

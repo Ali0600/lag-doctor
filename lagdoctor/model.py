@@ -517,3 +517,42 @@ class Diagnosis:
 
     def to_json(self) -> dict[str, Any]:
         return _clean_floats(asdict(self))
+
+    @classmethod
+    def from_json(cls, data: Any) -> "Diagnosis":
+        """The Diagnosis a diagnosis.json holds (to_json's output), for reading a saved session back. Keys a newer
+        build added are dropped; ValueError when the record or one of its parts is not the shape to_json writes."""
+        def part(kind, value, nested=None):
+            if not isinstance(value, dict):
+                raise ValueError(f"a {kind.__name__} in the diagnosis is not a record")
+            names = {f.name for f in fields(kind)}
+            kwargs = {k: v for k, v in value.items() if k in names}
+            for name, sub in (nested or {}).items():
+                items = kwargs.get(name, [])
+                if not isinstance(items, list):
+                    raise ValueError(f"the {name} of a {kind.__name__} is not a list")
+                kwargs[name] = [part(sub, v) for v in items]
+            try:
+                return kind(**kwargs)
+            except TypeError as exc:                   # a required field is missing
+                raise ValueError(f"a {kind.__name__} in the diagnosis is incomplete: {exc}") from None
+
+        if not isinstance(data, dict):
+            raise ValueError("not a diagnosis record")
+        lists = {"events": LagEvent, "findings": Finding}
+        kwargs: dict[str, Any] = {}
+        for f in fields(cls):
+            if f.name not in data:
+                continue
+            value = data[f.name]
+            if f.name in lists:
+                if not isinstance(value, list):
+                    raise ValueError(f"the diagnosis's {f.name} is not a list")
+                nested = {"evidence": Evidence, "fixes": FixSuggestion} if f.name == "findings" else None
+                value = [part(lists[f.name], v, nested) for v in value]
+            elif f.name in ("stats", "measured", "cleared", "unchecked") and not isinstance(value, dict):
+                raise ValueError(f"the diagnosis's {f.name} is not a record")
+            kwargs[f.name] = value
+        if not isinstance(kwargs.get("lag_type"), str) or not isinstance(kwargs.get("headline"), str):
+            raise ValueError("the diagnosis has no lag type or headline")
+        return cls(**kwargs)

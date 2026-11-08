@@ -146,8 +146,8 @@
  {
   "name": "a refusal turned into a note",
   "file": "lagdoctor/cli.py",
-  "old": "    if policy == \"refuse\":\n        say(f\"Not started:",
-  "new": "    if False:\n        say(f\"Not started:",
+  "old": "    if policy == \"refuse\":\n        show(f\"Not started:",
+  "new": "    if False:\n        show(f\"Not started:",
   "tests": [
    "tests/test_private_copy.py::test_commands_that_save_for_other_windows_refuse_and_say_where_and_why"
   ]
@@ -164,7 +164,7 @@
  {
   "name": "readers say nothing",
   "file": "lagdoctor/cli.py",
-  "old": "    say(f\"Note: {paths.private_copy_advice(copy)} What this command saves goes there too.\")",
+  "old": "    show(f\"Note: {paths.private_copy_advice(copy)} What this command saves goes there too.\")",
   "new": "    pass",
   "tests": [
    "tests/test_private_copy.py::test_commands_that_only_read_say_where_their_files_go_and_carry_on"
@@ -173,8 +173,8 @@
  {
   "name": "the elevated child asks about a home of its own",
   "file": "lagdoctor/cli.py",
-  "old": "                                       _existing_folder(Path(out_file).resolve().parent) if out_file else None)",
-  "new": "                                       None)",
+  "old": "                                       _existing_folder(Path(out_file).resolve().parent) if out_file else None,",
+  "new": "                                       None,",
   "tests": [
    "tests/test_private_copy.py::test_the_elevated_child_asks_about_the_users_folder_it_saves_in"
   ]

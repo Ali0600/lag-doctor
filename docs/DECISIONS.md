@@ -8,6 +8,12 @@
   runner or the owner's PC; a lone Alt is untested. Worth it if the app's window ever loses the keyboard after one.
   Revisit hook: the window procedure M1 writes, and `on_message` in the spike.
 
+- **An advertised Start-menu shortcut** (`DISABLEADVTSHORTCUTS=1`) instead of the HKCU value that keys today's,
+  so the install writes nothing to the installing account's registry. Needs `pythonw.exe` in a component of its own.
+  Revisit hook: the `StartMenuShortcut` component in `installer/lag-doctor.wxs` (DECISIONS 2026-11-08, M1).
+- **Analyse a recording again when Results opens**, so an old recording shows the current build's analysis, once
+  long captures analyse fast enough. Revisit hook: `App.load` in `lagdoctor/app/main.py`.
+
 - **A weekly CI run that skips the PresentMon cache**, so the real download also runs when nothing in the repo
   changed (GitHub moving its download hosts, say). Revisit hook: an `on: schedule` trigger in `ci.yml` and a
   condition on its "Restore PresentMon from the cache" step.
@@ -62,6 +68,32 @@
   Revisit hook: `console.ascii_text` and `cli.say`, calling `html.user_neutral`.
 
 ---
+
+## 2026-11-08: M1 reads each session's saved diagnosis, and the Start-menu shortcut is keyed by an HKCU value
+
+Choices the implementing session made while building M1 (the app with your results); the owner has not weighed in.
+- **Results read the session's `diagnosis.json` back (chosen)**: the screen shows what the report showed, and a long
+  capture is analysed once. The capture is analysed again only when that file cannot be read.
+  - **Analyse every capture again when Results opens**: rejected for M1. It shows the current build's analysis of an
+    old recording, but costs the analysis time each time (an open question for long captures, research note
+    section 10). Revisit hook: `App.load` in `lagdoctor/app/main.py`, the one place that picks.
+- **The summary carries the numbers and the conditions too (chosen)**, beyond the plan's who and when (game, exe,
+  start, tool version, kind): the library, a game's page and Compare then read no capture.
+  - **Load the capture's inventory for Compare**: rejected. A capture is tens of MB; Compare would wait on two.
+- **Frame times in a shared buffer (chosen, as the plan says)**: little-endian doubles, times then frame times.
+  - **JSON, downsampled to the chart's width**: rejected for M1. Zooming in would then ask the app again for each
+    view. Revisit hook: `views.frame_bytes` and the page's `sharedbufferreceived` listener.
+- **The shortcut's component keyed by an HKCU value (chosen)**: measured with WiX v7.0.1's own ICE database on
+  small per-machine test packages, it is the only key path that passes with no ICE suppressed (HKMU fails ICE57; HKLM
+  fails ICE38, ICE43 and ICE57; a file fails ICE43 and ICE57; the folder fails ICE18, ICE38 and ICE43). It leaves
+  one DWORD in the installing account's hive, which the uninstall removes; another administrator's uninstall would
+  leave it.
+  - **An advertised shortcut with `DISABLEADVTSHORTCUTS=1`**: also passes, but needs `pythonw.exe` taken out of the
+    harvested files into a component of its own. Deferred, worth trying if the HKCU value ever matters. Revisit
+    hook: the `StartMenuShortcut` component in `installer/lag-doctor.wxs`.
+- **Tests drive the real window through `ExecuteScript` in a child process (chosen)**: WebDriver for WebView2 is
+  broken since runtime 133, and a child keeps the window's COM apartment and any crash out of pytest's process.
+  Revisit hook: `tests/app_harness.py`.
 
 ## 2026-11-08: M0's step 2 is rebuilt before a third run, and CI's rehearsal types its keys
 
