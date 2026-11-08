@@ -441,7 +441,8 @@ the sounds and Stop.
 - **Per-program network traffic, before M3.** The relay forwards only the game's network events, so `watch --elevate`
   stops naming a program that filled the connection, which it does today: `talkers` becomes None, and `bandwidth_hog`
   falls back to the adapter's total, which cannot say who. Should the relay forward per-program byte totals of the
-  user's own session instead: less than full events, more than nothing?
+  user's own session instead: less than full events, more than nothing? Put to the owner on 2026-11-08 (after PR #19),
+  with per-program totals recommended; no answer yet. Ask again only if the question changes.
 - **Two forks the planning session settled** (DECISIONS 2026-11-08), open to the owner:
   - measuring from a start key, rather than the whole recording or a fixed startup skipped per game;
   - refusing Play while the store client is closed, rather than starting it through Explorer.

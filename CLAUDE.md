@@ -207,7 +207,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   file first.
 - The agent's Edit and Write tools decode a `\u` escape typed into new text into the character itself: `\u00a0`
   landed as a literal no-break space (2026-11-07), which is what `console._PUNCT` writes as escapes to avoid. Build
-  such text in Python from counted pieces (`chr(92) + "u00a0"`) and read the line back with `ascii()`.
+  such text in Python from counted pieces (`chr(92) + "u00a0"`) and read the line back with `ascii()`. The Bash tool
+  goes the other way: a doubled backslash typed into a command, heredocs with a quoted delimiter included, arrives
+  halved, so `\\localhost` landed as `\localhost` in a PR body and a doc, and `"..\\x"` broke a script (four times on
+  2026-11-08). Write text that holds Windows paths with the Write tool, or build it from `chr(92)`, and read it back.
 - To read one CI job's log while the rest of its run goes on (a fast job's verdict, such as the wheel job on a
   sabotage commit), use `gh api repos/Ali0600/lag-doctor/actions/jobs/<job id>/logs --allow-escape-sequences`:
   `gh run view <run> --log --job <job id>` refuses until the whole run has finished, and without the flag `gh api`
