@@ -644,6 +644,19 @@ needs the check.
 **Takeaway**: test a size cap with input whose first N bytes are valid; input that is broken anywhere tests the
 parser, not the cap.
 
+### A DLL beside a game's exe is loaded in place of Windows' own
+When a program loads a DLL by name, Windows looks in the program's own folder before System32, unless the name is on
+Windows' KnownDLLs list, which always loads Windows' own copy. So a `dinput8.dll`, `dxgi.dll` or `xinput1_3.dll`
+dropped next to a game's exe is loaded instead of Windows' copy and runs inside the game's process. Most fan fixes
+get in this way (Ultimate ASI Loader, DXVK, Special K's local install), and so do DLL-planting attacks.
+**Why it came up**: the owner asked how people make bug and frame-rate fixes for PC games, and whether lag-doctor
+could. Those fixes run inside the game, which lag-doctor's first principle rules out (no injection, hooks, memory
+reads or handles), and anti-cheat treats such files as cheats: BattlEye's FAQ tells players to make sure no
+`d3d9.dll`, `dxgi.dll` or `dsound.dll` sits in the game's folder.
+**Takeaway**: whoever can write to an exe's folder can run code inside that exe; mods use that on purpose, so judge a
+mod from outside the process (record before and after), and run anything elevated only from a folder that only
+administrators can write.
+
 ### A bound UDP endpoint is not a server, and Windows' tables cannot say which it is
 TCP has a state for a server (LISTEN); UDP does not. Windows lists every UDP socket as a bound endpoint, a client's
 too: a socket that only called `connect()` is listed at the address Windows bound it to (0.0.0.0 or ::), not the one

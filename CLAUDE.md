@@ -42,7 +42,9 @@ spike's automated checks and a rehearsal on pull requests that change the spike,
 `lagdoctor/winapi/ntquery.py`: GitHub's runner has the WebView2 Runtime (156.0.4314.58 on 2026-11-08), and its "no
 runtime" answer passes only when the runtime's registry version and exe agree. The rehearsal types step 2's keys, a
 wheel turn and a right-click itself there, and its `keys-typed` check fails the job unless each arrived and nothing
-acted. The PresentMon cache key hashes
+acted. It does not run for the app's own code: M1's window tests (`tests/test_app_page.py`) are in ci.yml's test
+jobs; to run the spike against a branch that changes none of its paths, `gh workflow run webview-spike.yml --ref
+<branch>`. The PresentMon cache key hashes
 `setup.py`, `paths.py` and `cli.py`, so a change to one makes every job download PresentMon afresh; GitHub's release
 host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job before blaming the change.
 
@@ -191,7 +193,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   and made-up MACs and GUIDs), what else runs on it, and when its owner played or downloaded what. Push only `main` and
   branches cut from it: the history from before the 2026-11-07 rewrite stays in `refs/backup/`, `refs/original/` and
   the merged `worktree-*` branches, and `.git/hooks/pre-push` (local, not in the repo) refuses any commit that holds
-  those details.
+  those details. Pull request bodies, review comments and issue text are public too, and no hook reads them: a
+  command for the owner names the folder as `<repo>\.claude\worktrees\<name>` there, never the full user path (a PR
+  body that held it was refused before posting, 2026-11-08).
 - **The README's Experience Gained carries totals** (tests, red-first sabotages and their specs, the tests on the real
   PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
   for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
@@ -302,4 +306,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   each at its best of three (about 0.06x on this laptop); if it fails again, rerun it alone before blaming a change.
   `tests/test_sysmon_sampler.py::test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild` failed once in a
   full local run (2026-11-08: the grandchild's first reading was 0.0, so its mean was 72 % against the 88 % expected,
-  outside the 10-point bound) and passed alone; rerun it alone before blaming a change.
+  outside the 10-point bound) and passed alone; rerun it alone before blaming a change. The Window spike workflow's
+  socket check (`sockets-1` or `sockets-2`) failed 3 of 20 attempts on 2026-11-08 (main 1 of 13, the M1 branch 2 of
+  5), each on one UDP4 socket "bound" on an ephemeral port in a WebView2 process: the runtime's own lookups (in 20
+  runs watched every 20 ms, all 70 of its UDP sockets were a utility process's, on 0.0.0.0, on a port Windows chose).
+  Since PR #22 the check counts that one shape as WebView2's client and fails on every other (`server_reason` in the
+  spike; `docs/research/desktop-app.md` section 11). If it fails again, read the failing reading's `servers` in
+  results.json (each names its reason and process kind) before rerunning.
