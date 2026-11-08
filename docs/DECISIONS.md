@@ -51,8 +51,30 @@
 - **Starting the store client through Explorer** (`IShellDispatch2::ShellExecute`) when Play finds it closed, so it
   never becomes lag-doctor's child. Revisit hook: the store-client check in the launch policy module
   (`docs/LAUNCHER-PLAN.md`, M6).
+- **Profile folders shown by their variable in the terminal too** (the console summary and the CLI's own lines), so
+  a pasted terminal is as safe to share as the report. Its report path would then need a form a browser opens.
+  Revisit hook: `console.ascii_text` and `cli.say`, calling `html.user_neutral`.
 
 ---
+
+## 2026-11-08: The HTML report shows profile folders by their variable; the terminal keeps real paths
+
+The report is meant to be shared, but its footer showed the capture's path, which holds the Windows user name
+(PR #17). The implementing session chose; the owner has not weighed in.
+- **Rewrite in `html.e()`, which every string on the page passes through (chosen)**: it covers the footer, the
+  game's exe, a reason quoting PresentMon's path, evidence, and any text added later.
+- **Rewrite only the footer and the Game file row**: rejected. The other strings, and the next new one, would
+  still carry the name.
+- **Rewrite the finished page**: rejected. After HTML escaping, a name with `&` or `'` no longer matches its folder.
+- **A profile this PC's variables do not name shown as `%USERPROFILE%` (chosen)** rather than as
+  `C:\Users\<user>`: the command stays runnable. It names the wrong folder only for a capture kept in another local
+  account's profile.
+- **The analyze command for PowerShell, `"$env:LOCALAPPDATA\..."` (chosen)**: `%LOCALAPPDATA%` is literal inside
+  PowerShell's quotes, and `(Join-Path $env:LOCALAPPDATA '...')` is longer to read.
+- **The terminal keeps real paths (chosen)**: its report path is pasted into a browser, which does not expand
+  `%LOCALAPPDATA%`, and the CLI prints the same paths around it. Neutral there too: deferred, worth trying
+  (Backlog).
+Revisit hook: `user_neutral` and `powershell_path` in `lagdoctor/report/html.py`.
 
 ## 2026-11-08: A desktop app that launches the games, drawn by WebView2 in lag-doctor's own window
 
