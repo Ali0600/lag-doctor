@@ -270,9 +270,8 @@ this applies.
 ## 10. Still open
 
 Each item is an owner run or a measurement, and the plan names it where it is needed:
-- **M0** on the owner's PC: the automated checks pass, and the owner's two runs passed everything but step 2 (keys
-  and right-click), which neither completed (section 11). Step 2 was rebuilt (section 12); a run that completes it is
-  still open, and so is what Alt+Left does on the owner's PC (on GitHub's runner it kept the keyboard, section 12).
+- **What a lone Alt does to the app's window**: Windows' menu mode would take the keyboard from the page (section 12).
+  Alt+Left did not start it on either machine. M0 itself passed on the owner's PC (section 11).
 - **The relay pipe's integrity label** with an unelevated client.
 - **Where the UAC prompt appears** when the app's window asks for it.
 - **Who parents a store-launched game, and how long the handler stub lives.**
@@ -359,6 +358,17 @@ unless it says otherwise.
   - **The rest** matched the agent's runs: page ready 1.91 and 1.51 s after the process started, recovery 1.65 and
     0.64 s, close 0.82 and 0.28 s. In the move loop, none of 462 and of 458 messages posted to the thread arrived (the
     agent's runs: 8 or 9).
+- **The owner's third run** (2026-11-08, with step 2 rebuilt; verdict PASS: 34 passed, 0 failed, 0 not run), which
+  passed M0's gate [verified: that run's results.json and log]:
+  - **Step 2**: every line ticked off by the page itself. All 7 Ctrl keys reached the page in order (plus a slip,
+    Ctrl+Shift+O, and a Ctrl+C), with 4 right-clicks and 3 Ctrl+wheel turns, and nothing acted: zoom 1 to 1, no
+    navigation, no browser window. Alt+Left reached the window (as a system key) and the page, and no menu mode
+    followed. The record also caught the owner switching away twice mid-step: the window deactivated and the view lost
+    its focus each time, and both came back with the next activation.
+  - **The other steps**: dragging, all 1,342 results posted to the window arrived (1 of 1,342 to the thread); 2 scale
+    changes read at the window's scale; the orange L on the taskbar.
+  - **The rest**: page ready 0.84 s after the process started, recovery 0.53 s, close 0.21 s. At the first reading a
+    WebView2 process held one outgoing connection, as in one of the agent's runs; none after the recovery.
 
 ## 12. Keys, focus and Windows' menu mode in WebView2 (step 2)
 
@@ -398,7 +408,9 @@ WebView2 reference by this session's research agent and are marked [research: ..
   system key) from the keys held, and the page got each about 1 ms later. Alt+Left reached the page, no menu mode
   followed, and a letter typed 0.4 s after it reached the page too; the view's GotFocus fired as typing began, every
   line ticked, and nothing acted (no zoom change, navigation or browser window) [verified: the run's results.json].
-  So there Alt+Left keeps the keyboard; the owner's PC has not shown it yet.
+  So there Alt+Left keeps the keyboard. On the owner's PC (runtime 157.0.4341.42, the third run) it reached the
+  window and the page too, and no menu mode followed; nothing was pressed after it there. A lone Alt, the case
+  `SC_KEYMENU` is sent for, is untested on both.
 
 ## Verification log (2026-11-08)
 

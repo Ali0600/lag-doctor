@@ -610,6 +610,7 @@ keys and no right-click; the second did four keys and four right-clicks; neither
 tell a key not pressed from one the page never got.
 **Why it came up**: M0's gate is the owner's own run; two runs of about three minutes each ended INCOMPLETE on the same
 step, each for a different reason. The rebuilt step lists one action per line, ticks each off from either side that
-can see it (the page or the view's key event), and keeps every event with its time.
+can see it (the page or the view's key event), and keeps every event with its time; the third run, the first with it,
+completed the step, and its record even showed the owner switching windows mid-step.
 **Takeaway**: give a person-run check a live checklist, one action per line, ticked off as each registers, and keep
 the raw events from every place that can see them; a bare count cannot be turned back into which ones happened.

@@ -3,9 +3,9 @@
 Goal (DECISIONS 2026-11-08): lag-doctor as a desktop app you start like Steam or any other game launcher. It has its
 own icon in the Start menu and on the taskbar and its own window, and its library lists your games. Play starts a game
 with lag-doctor recording it, and the results open in screens you can explore and compare. The owner asked for the plan
-first and said go on 2026-11-08: M0's spike is built, and two runs by the owner have left one step to redo. Facts
-and sources are in [research/desktop-app.md](research/desktop-app.md). The recording side builds the capture
-service's protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
+first and said go on 2026-11-08: M0's spike passed the owner's own run the same day, so M1 can begin. Facts and
+sources are in [research/desktop-app.md](research/desktop-app.md). The recording side builds the capture service's
+protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 
 ## Status (2026-11-08)
 
@@ -13,13 +13,9 @@ service's protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 - [x] Researched: the window technology, launching and finding a game without touching it, the screens, and the
   record flow against main at 4f081ad (research note).
 - [x] The owner said go (2026-11-08).
-- [ ] M0: the window spike. Built (`scripts/webview_spike.py`) and reviewed; its 30 automated checks pass on the
-  owner's PC, run from the agent's shell (research note, section 11). The gate is the owner's own run, with the four
-  steps a person must do. The owner ran it twice (2026-11-08): 33 checks passed and none failed each time, but step 2
-  never counted. The first run's page saw 7 of its 8 keys and no right-click, the second's 4 right-clicks and 4 keys,
-  and Alt+Left reached the page in neither. The owner chose to rebuild step 2 before a third run (DECISIONS
-  2026-11-08), and it is: each action ticks off as it arrives, and its record shows what Alt+Left does. The gate waits
-  on a run that completes step 2.
+- [x] M0: the window spike (`scripts/webview_spike.py`) passed the owner's own run on 2026-11-08: 34 passed, 0
+  failed, 0 not run. The first two runs never counted step 2 (keys and right-click); the owner chose to rebuild it
+  (DECISIONS 2026-11-08, PR #20), and the third run completed it (research note, section 11).
 - [ ] M1: the app with your results.
 - [ ] M2: the recording seams. The locked pipe is done (`lagdoctor/winapi/pipe.py`, PR #19, 2026-11-08); the other
   seams are not.
@@ -331,7 +327,8 @@ on PR #18 the runner had 156.0.4314.58, and all 30 automated checks passed there
 The gate: the owner's run passes on their PC, the drop-refs sabotage fails as predicted, and no control misses.
 Otherwise the owner decides on the fallback (DECISIONS 2026-11-08): a small host exe showing the same screens. It is
 compiled code with a second toolchain, so it would reverse "Python with ctypes, no compiled code" (DECISIONS
-2026-11-04).
+2026-11-04). Passed on 2026-11-08, on the owner's third run: every check, every control and all four of the owner's
+steps, so the fallback is not needed.
 
 ### M1: the app with your results
 

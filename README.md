@@ -226,7 +226,9 @@ While it records, lag-doctor measures your connection, which `--no-network` turn
 - **Windows systems programming from Python**: 17 ctypes modules over 17 Windows DLLs plus NVIDIA's NVML
   (real-time and private ETW sessions, PDH, NtQuerySystemInformation, DXGI/DXCore, ICMP, WLAN) and no third-party
   package at run time, with zero handles opened to the game and imports limited to the 264 standard-library modules
-  the shipped Python runtime itself reports it can import, both enforced by syntax-tree scans of the code.
+  the shipped Python runtime itself reports it can import, both enforced by syntax-tree scans of the code; and the
+  app's own WebView2 window driven over raw COM vtables (140 slots and IIDs checked against Microsoft's header),
+  which passed all 34 of its checks on a laptop, and its key checks again on input CI types itself.
 - **Telemetry on one clock**: 5 collectors (per-frame timing, a 4 Hz system sampler, 1 Hz NVIDIA telemetry,
   2 Hz network probes, an ETW packet tracker) stamped by QueryPerformanceCounter, so a stutter lines up with
   the samples around it.

@@ -4,8 +4,9 @@
 
 - **Keep Alt from starting Windows' menu mode in the app's window**: the window procedure returns 0 for
   `WM_SYSCOMMAND` with `SC_KEYMENU` and no character, as Chromium's own window does, or the controller is created with
-  AllowHostInputProcessing (`docs/research/desktop-app.md`, section 12). Worth it if step 2's record shows Alt+Left
-  taking the keyboard from the page. Revisit hook: the window procedure M1 writes, and `on_message` in the spike.
+  AllowHostInputProcessing (`docs/research/desktop-app.md`, section 12). Alt+Left did not start menu mode on GitHub's
+  runner or the owner's PC; a lone Alt is untested. Worth it if the app's window ever loses the keyboard after one.
+  Revisit hook: the window procedure M1 writes, and `on_message` in the spike.
 
 - **A weekly CI run that skips the PresentMon cache**, so the real download also runs when nothing in the repo
   changed (GitHub moving its download hosts, say). Revisit hook: an `on: schedule` trigger in `ci.yml` and a
@@ -118,14 +119,14 @@ owner's, answered on 2026-11-08. The planning session chose the rest, and the ow
   - **Results first, launching last or never** (the session's proposal: one click saved, for the most risk): rejected by
     the owner.
 - **Plan only for now (the owner)**: nothing was built until the owner said go. They did on 2026-11-08 ("let's do the
-  Launcher-Plan.md"), and M0's spike is built; its owner's run is the gate (`docs/LAUNCHER-PLAN.md`, Status).
-- **The window: WebView2 in lag-doctor's own window, driven by its Python through ctypes (chosen, gated by the M0
-  spike)**. It is the launchers' own architecture (Steam draws with an embedded Chromium). No new binary and no
-  server, and the stdlib-only rule holds.
-  - **A small C# host (.NET Framework 4.8.1) with Microsoft's WebView2 control**: deferred, the fallback if M0 fails,
-    for the owner to decide then. It costs a second toolchain, a signed exe and three binary-only Microsoft DLLs, and
-    it would reverse 2026-11-04's "Python with ctypes, no compiled code".
-  - **A C++ host on webview/webview**: deferred, the same fallback without Microsoft's DLLs.
+  Launcher-Plan.md"), and M0's spike passed the owner's own run that day (`docs/LAUNCHER-PLAN.md`, Status).
+- **The window: WebView2 in lag-doctor's own window, driven by its Python through ctypes (chosen; the M0 spike's gate
+  passed on 2026-11-08)**. It is the launchers' own architecture (Steam draws with an embedded Chromium). No new binary
+  and no server, and the stdlib-only rule holds.
+  - **A small C# host (.NET Framework 4.8.1) with Microsoft's WebView2 control**: deferred, the fallback had M0
+    failed; not needed since it passed. It costs a second toolchain, a signed exe and three binary-only Microsoft DLLs,
+    and it would reverse 2026-11-04's "Python with ctypes, no compiled code".
+  - **A C++ host on webview/webview**: deferred, the same fallback without Microsoft's DLLs; not needed either.
   - Rejected: **tkinter** (no JPEG cover art; not in the embeddable runtime), **pure Win32** (no DOM to test),
     **pywebview** (an unsigned native module), **PySide6** (size; GPLv3 charts), **Electron and Tauri** (prebuilt
     binaries, or two more toolchains).

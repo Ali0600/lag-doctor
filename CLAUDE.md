@@ -137,8 +137,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   the install: the build ships unchecked-hash `.pyc` files the shipped runtime compiles, and the check's `untouched`
   and `gone` verdicts fail on anything an administrator's run wrote there (a build without them did exactly that).
 - **The desktop app is built milestone by milestone** (`docs/LAUNCHER-PLAN.md`; the owner said go on 2026-11-08).
-  M0's spike (`scripts/webview_spike.py`) gates the window: no window code goes into `lagdoctor/` (M1) before the
-  owner's own run of the spike passes and the plan records it. An agent may run `--auto` or `--rehearse`, which do
+  M0's spike (`scripts/webview_spike.py`) gated the window, and the owner's own run passed on 2026-11-08 (the plan
+  records it), so M1's window code may now go into `lagdoctor/`. The spike stays as the record of what WebView2 does
+  from ctypes, and its tests and CI probe keep running. An agent may run `--auto` or `--rehearse`, which do
   this on the owner's screen for about 45 s: a window opens without taking the focus; it opens a DevTools window on
   purpose and closes it; it goes blank for about 6 s and reloads, because the run ends its own WebView2 browser
   process; its move check holds it in Windows' move loop for about 2.5 s, which moves the mouse pointer onto its title
