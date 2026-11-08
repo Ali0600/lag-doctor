@@ -24,7 +24,7 @@ from tests.loopback_dns import LoopbackDns
 GAME, OTHER = 4242, 999
 LOCAL, SERVER = "192.168.0.225", "203.0.113.7"
 LOCALS = frozenset({LOCAL, "127.0.0.1", "::1"})
-RESULT_KEYS = {"server", "talkers", "talkers_scope", "gaps", "server_rx", "layout", "health"}
+RESULT_KEYS = {"server", "talkers", "talkers_scope", "game_wire_bytes", "gaps", "server_rx", "layout", "health"}
 
 
 def _v4(pid, size, daddr, saddr, dport, sport):

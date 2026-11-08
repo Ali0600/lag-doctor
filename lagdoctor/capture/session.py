@@ -50,7 +50,7 @@ CAPTURE_LOCK_NAME = "Local\\lag-doctor-capture"
 
 # Which result() keys go where (docs/DESIGN.md, "What each collector's result() returns").
 NETWORK_FLOW_KEYS = ("targets", "probes", "lost", "wifi_scans", "route", "downloads", "download_sources")
-FLOW_KEYS = ("server", "talkers", "talkers_scope", "gaps", "server_rx", "layout", "health")
+FLOW_KEYS = ("server", "talkers", "talkers_scope", "game_wire_bytes", "gaps", "server_rx", "layout", "health")
 # lag-doctor's own processes are first listed at the first status tick this far in, once the collectors have
 # had a status period to start their children (PresentMon, nvidia-smi), and again just before they stop.
 TOOL_SIGHT_S = 0.5

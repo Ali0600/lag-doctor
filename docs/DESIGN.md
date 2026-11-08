@@ -129,12 +129,15 @@ is the recorder's side, `server.py` the relay process, `protocol.py` the message
 - **What the prompt approves** is the whole command line (`client.relay_argv`): `--pipe` a fresh random name
   (`lagdoctor-relay-` and 32 hex digits), `--recorder pid:create_time` (the process running `watch`, never a venv
   launcher), `--sid` the recorder's account, `--game pid:create_time`, and `--frames --presentmon-exe X` (the
-  PresentMon the recorder verified) and/or `--network`. The relay parses it strictly (`server.parse_args`, also
-  run by `relay_argv` before any prompt); it takes no PresentMon or ETW argument from the pipe.
+  PresentMon the recorder verified, a plain local drive path: never a share or a device path, which the relay would
+  open with an administrator's credentials) and/or `--network`. The relay parses it strictly (`server.parse_args`,
+  also run by `relay_argv` before any prompt); from the pipe it takes `start` then `stop`, once each, and nothing
+  after `stop`, so no PresentMon or ETW argument, and its queue of commands never grows.
 - **Its checks, before any pipe exists**, on its own handle-free snapshot: the recorder is running as that exact
   process in the relay's Windows session, and `target.accept_target` accepts the game: running as that exact
   process, in that session, the one approved. The recorder calls the same predicate before asking for the prompt,
-  so they cannot drift. Then PresentMon must pass `setup.verify` again.
+  so they cannot drift. Then PresentMon must be on a fixed or removable drive (`storage.drive_type`) and pass
+  `setup.verify` again.
 - **Its pipe** (`winapi/pipe.py`): first instance only, remote clients refused, a DACL for the recorder's SID
   (`client_dacl`), a medium label, and Administrators as its owner (`O:BA`), which Windows refuses an unelevated
   token (error 1307, measured). It serves the first client whose pid and session (read from the pipe, no handle)
@@ -144,9 +147,13 @@ is the recorder's side, `server.py` the relay process, `protocol.py` the message
   Administrators, and the relay's hello names that pid, the game and what it runs.
 - **What leaves the relay**, after `start` (which carries only the capture clock's origin):
   - the game's frame rows, only the columns the recorder reads (`protocol.FRAME_COLUMNS`); its PresentMon runs as
-    `PresentMonSource(..., forward=)`, which passes rows on and keeps none;
-  - the Kernel-Network events of the game's processes (the game and what it started, from its own snapshot once a
-    second) and of the recorder (the tracker's DNS self-test), whole;
+    `PresentMonSource(..., forward=)`, which passes rows on and keeps none, and starts only if `accept_target` still
+    accepts the game on a fresh snapshot (minutes may have passed since the first check);
+  - the Kernel-Network events of the game's processes and of the recorder (the tracker's DNS self-test), whole. The
+    game's processes are its tree while it runs plus those seen before that still run as the same process, each
+    in the recorder's session, from a snapshot once a second on a thread of its own (a slow reader cannot stretch
+    it): a pid Windows gives to another program is dropped at once. A recorder whose pid names another process
+    ends the recording;
   - for every other program, bytes received and sent as running totals, only for processes in the recorder's
     Windows session (DECISIONS 2026-11-08), the largest 64; bytes of programs gone before their session could be
     read, or in another session, are only counted;
@@ -167,7 +174,11 @@ is the recorder's side, `server.py` the relay process, `protocol.py` the message
   `presentmon.relay` `{pid, rows_received, rows_refused}`) and hands the link to `FlowTracker(relay=)`, whose ETW
   session it stands in for (`client.RelayedEtwSession`). `tool_procs` holds the relay, and its whole process tree
   (its PresentMon) joins `target["tool_pids"]`. A link that breaks ends both collectors' data there, with the
-  reason, and the rest of the recording goes on.
+  reason, and the rest of the recording goes on. The relay is asked to stop only by a collector that is stopping
+  (a tracker that fails never ends frame timing), and the stop is announced to the tracker first
+  (`netflows.expect_external_stop`), so the relay's consumer ending is never read as dying by itself. Network
+  messages that come before the tracker has made its session (the frames may start the relay first) are kept for
+  it, up to 50,000 events, and the rest counted (`health.early_dropped`).
 
 ### Where files go: another app's private copy
 
@@ -309,6 +320,7 @@ def total_physical_bytes() -> int                 # GlobalMemoryStatusEx ullTota
 # winapi/storage.py (WT 9.5) ---------------------------------------------------------------------------
 def media_type(path: str) -> str                  # "SSD" | "HDD" | "Unknown"  (seek penalty, access 0)
 def free_gb(path: str) -> float | None
+def drive_type(root: str) -> int                  # GetDriveTypeW of a drive root: 2 removable, 3 fixed, 4 network
 def new_file_path(folder: str) -> str             # "\\?\..." where a new file in folder really lands (probe,
                                                   # deleted on close); NT form on a volume without drive-letter
                                                   # paths; OSError if it cannot be made
@@ -477,7 +489,7 @@ The session copies these into the `Capture`. Keys not listed here go nowhere, so
 | `system`, capture/sysmon.py, `SystemSampler(target)` | `columns` (S) → `system`; `others` → `others`; `game_adapter_luid` (adapter whose 3D engine the game used most) → `target["adapter_luid"]`; `game_pids` (game + children seen) → `target["pids"]`; `cost` `{ticks, median_ms, max_ms, mean_ms}` (also in the status detail) |
 | `gpu`, capture/gpumon.py, `NvidiaSampler(adapter)` | `columns` (G) → `gpu`; `device` `{name, clock_max_mhz, mem_total_mb, temp_target_c, power_default_w}` or None → `inventory["nvidia"]`; `live()` adds `source` ("nvml"/"nvidia-smi") |
 | `network`, capture/netmon.py, `NetworkSampler(server_ip=None, *, steam_log=None)` | `columns` (N) → `network`; `targets` `{gateway, internet, server}` (IPs or None), `probes` `{target: {"sent", "lost", "from_t"}}`, `lost` `{target: [t, …]}`, `wifi_scans` `[t, …]`, `route` `{if_index, description, vpn: bool \| None, toward}` → `net_flows[…]` under the same keys; `interface` `{name, kind: "wifi"/"ethernet"/"other", band, channel}` → `inventory["network"]`; `downloads` `[{t, source, mbps}]` from the Steam log, or None when no download log was read, with `download_sources` (the logs read) → `net_flows[…]` |
-| `net_flows`, capture/netflows.py, `FlowTracker(game_pids or a callable, *, relay=None)` | `server` `{ip, port, proto, pid, rx_packets, tx_packets, rx_bytes, tx_bytes, tick_ms, first_rx_t, last_rx_t}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8, with `talkers_scope` "all" (its own ETW session) or "session" (through the relay: the programs in this Windows session only); `gaps` `[[t, ms, kind], …]` (t = the last packet before the silence; kind: "delay" burst after the gap / "loss" no burst / "local" our own tx paused too / "open" the server went silent for good while we kept sending / "unknown" a late delivery hides which); `server_rx` `[[t, pps], …]` (t = end of each 1 s bin); talkers, gaps and server_rx are None when the session never ran; `layout` "verified"/"unverified"; `health` → `net_flows[…]` |
+| `net_flows`, capture/netflows.py, `FlowTracker(game_pids or a callable, *, relay=None)` | `server` `{ip, port, proto, pid, rx_packets, tx_packets, rx_bytes, tx_bytes, tick_ms, first_rx_t, last_rx_t}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8, with `talkers_scope` "all" (its own ETW session) or "session" (through the relay: the programs in this Windows session only); `game_wire_bytes` `[rx, tx]` the game's bytes that crossed the network (one end this PC's), never its loopback traffic; `gaps` `[[t, ms, kind], …]` (t = the last packet before the silence; kind: "delay" burst after the gap / "loss" no burst / "local" our own tx paused too / "open" the server went silent for good while we kept sending / "unknown" a late delivery hides which); `server_rx` `[[t, pps], …]` (t = end of each 1 s bin); talkers, game_wire_bytes, gaps and server_rx are None when the session never ran; `layout` "verified"/"unverified"; `health` → `net_flows[…]` |
 
 `others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct, create_time, gpu_game_pct], …]]`: up to 8
 non-game processes that did something that tick, ranked by CPU, `cpu_pct` with 100 = one logical CPU, `io_bps`

@@ -67,16 +67,19 @@ def test_the_real_relay_runs_presentmon_and_the_network_trace_for_this_process(p
                 s.sendto(b"x" * 100, ("203.0.113.1", 9))
                 time.sleep(0.02)
 
-        def mine() -> int:
-            return next((t["tx_bytes"] for t in tracker.result()["talkers"] or [] if t["pid"] == os.getpid()), 0)
+        def mine() -> int:                               # any rank: the runner's own programs talk too
+            with tracker._lock:
+                return (tracker._table._all_talkers().get(os.getpid()) or [0, 0])[1]
         _until(lambda: mine() >= SENT * 100, 20, "this process's own traffic, through the relay")
         frames.stop()
         tracker.stop()
     finally:
-        code = link.close() if link is not None else None
+        code = link.close(wait_s=5) if link is not None else None
         game.stdin.close()
         game.wait(10)
     r = tracker.result()
+    st = tracker.status()
+    assert "stopped by itself" not in st.detail and r["health"]["consumer_stopped_t"] is None, st
     assert r["talkers_scope"] == "session" and r["health"]["relayed_events"] >= SENT, r["health"]
     assert r["health"]["relay"]["events_lost"] == 0 and r["health"]["relay"]["rows_lost"] == 0
     st = frames.status()

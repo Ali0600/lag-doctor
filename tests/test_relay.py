@@ -9,6 +9,7 @@ checks that owner on both sides of elevation.
 """
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import socket
@@ -225,7 +226,7 @@ def test_frames_through_the_relay_are_the_frames_a_local_replay_keeps(presentmon
         _until(lambda: relayed.ended, 60, "the relayed replay to end")
         relayed.stop()
     finally:
-        code = link.close()
+        code = link.close(wait_s=5)
     a, b = local.result(), relayed.result()
     assert len(a["columns"][F.T]) == 265
     assert b["columns"] == a["columns"] and b["swap_chains"] == a["swap_chains"] and b["main_chain"] == a["main_chain"]
@@ -240,6 +241,7 @@ def _net_script(game_pid: int, recorder: int) -> list[tuple[int, int, bytes]]:
     for i in range(30):                                       # the game's UDP flow, both ways
         out.append((42, 0, payload(42, game_pid, 100, SERVER_IP, LOCAL_IP, 27015, 50000)))
         out.append((43, 0, payload(43, game_pid, 200, LOCAL_IP, SERVER_IP, 50000, 27015)))
+    out.append((11, 0, payload(11, game_pid, 500, LOCAL_IP, "198.51.100.9", 50004, 443)))   # the game's TCP, too
     out.append((42, 0, payload(42, recorder, 40, "1.1.1.1", LOCAL_IP, 53, 50001)))   # the recorder's own (self-test)
     for _ in range(4):
         out.append((11, 0, payload(11, IN_SESSION, 1000, LOCAL_IP, "198.51.100.7", 50002, 443)))
@@ -262,10 +264,10 @@ def test_only_the_games_and_the_recorders_events_leave_the_relay_and_totals_only
         _until(lambda: any(m["t"] == "net" and m["totals"] for m in spy_writes), 10, "the first totals")
         tracker.stop()
     finally:
-        code = link.close()
+        code = link.close(wait_s=5)
     forwarded = [ev for m in spy_writes if m["t"] == "events" for ev in m["ev"]]
     pids = {struct.unpack_from("<I", data, 0)[0] for _, _, _, data in forwarded}
-    assert pids == {game["pid"], me.pid} and len(forwarded) == 61          # 60 of the game's, 1 of the recorder's
+    assert pids == {game["pid"], me.pid} and len(forwarded) == 62          # 61 of the game's, 1 of the recorder's
     assert all(len(data) == nf.EXPECTED_LENGTH[eid] for _, eid, _, data in forwarded)
     totals = [t for m in spy_writes if m["t"] == "net" for t in m["totals"]]
     assert totals and {pid for pid, _, _ in totals} == {IN_SESSION}         # never the other session's program
@@ -276,7 +278,8 @@ def test_only_the_games_and_the_recorders_events_leave_the_relay_and_totals_only
     r = tracker.result()
     talkers = {t["pid"]: (t["rx_bytes"], t["tx_bytes"]) for t in r["talkers"]}
     assert talkers[IN_SESSION] == (4000, 0) and OTHER_SESSION not in talkers
-    assert talkers[game["pid"]] == (30 * 200, 30 * 100)                    # counted here, from its whole events
+    assert talkers[game["pid"]] == (30 * 200 + 500, 30 * 100)              # counted here, from its whole events
+    assert r["game_wire_bytes"] == [30 * 200 + 500, 30 * 100]               # all of it crossed the network
     assert r["talkers_scope"] == "session" and r["layout"] == "unverified"
     st = tracker.status()
     assert st.state == "partial" and "unknown layout" in st.detail and "ids 42" in st.detail, st
@@ -322,6 +325,7 @@ def test_the_relay_stops_the_network_trace_then_presentmon_and_says_end_last(gam
     finally:
         link.close()
     assert stops == ["net", "frames"]
+    assert tracker.status().state == "ok", tracker.status()                # the relay's stop is no death
     finals = [m["t"] for m in spy_writes if m.get("final") or m["t"] == "end"]
     assert finals == ["net", "frames", "end"], finals
     assert frames.status().state == "ok" and "5 frames" in frames.status().detail
@@ -683,3 +687,428 @@ def test_the_relays_interpreter_is_the_pythonw_beside_the_base_interpreter():
     exe = client.relay_python()
     assert exe.name == "pythonw.exe" and exe.is_file(), exe
     assert exe.parent == Path(sys.base_exec_prefix) and ".venv" not in exe.parts
+
+
+def _child_of(p: ntquery.ProcInfo, ppid: int) -> ntquery.ProcInfo:
+    import dataclasses
+    return dataclasses.replace(p, ppid=ppid)
+
+
+class LiveEtw(FakeEtw):
+    """An ETW stand-in whose events come when the test says."""
+
+    def emit(self, eid: int, data: bytes) -> None:
+        self.on_event(nf.etw.EtwEvent(clock.qpc_now(), nf.KERNEL_NETWORK, eid, 0, 0, 4, 0, 0, 4, 0, data))
+
+
+@pytest.mark.parametrize("who", ["another session's program", "another program of this session",
+                                 "a child of the game in another session"])
+def test_a_game_pid_windows_gave_to_another_program_never_carries_its_events(game, spy_writes, monkeypatch, who):
+    # The game's processes are kept by identity, in the recorder's session: a number Windows gave to another program
+    # is someone else's, and a process in another session naming the game as its parent is never the game's.
+    monkeypatch.setattr(server, "STATUS_EVERY_S", 0.1)
+    me = _me()
+    swapped: dict[int, ntquery.ProcInfo] = {}
+    real = snapshot_with()
+
+    def snapshot():
+        procs = real()
+        procs.update(swapped)
+        return procs
+    made: list[LiveEtw] = []
+    relay = InProcessRelay(parts(snapshot=snapshot, etw=lambda on_event: made.append(LiveEtw(on_event, [])) or made[-1]))
+    link = launch(game, relay, network=True)
+    tracker = nf.FlowTracker({game["pid"]}, selftest=False, local_addrs=lambda: {LOCAL_IP}, relay=link)
+
+    def forwarded():
+        return [struct.unpack_from("<II", d, 0)[1] for m in spy_writes if m["t"] == "events" for _, _, _, d in m["ev"]]
+    try:
+        tracker.start(clock.now())
+        _until(lambda: made and made[0].running, 10, "the stand-in session")
+        made[0].emit(42, payload(42, game["pid"], 100, SERVER_IP, LOCAL_IP, 27015, 50000))
+        _until(lambda: forwarded() == [100], 10, "the game's event")
+        whose = game["pid"]
+        if who.startswith("a child"):
+            whose = 0xFFFFFF20
+            child = _fake_proc(whose, me.session_id + 5, game["create_time"] + 10, "child.exe")
+            swapped[whose] = _child_of(child, game["pid"])      # names the game as its parent, started after it
+        else:
+            session = me.session_id + 5 if who.startswith("another session") else me.session_id
+            swapped[whose] = _fake_proc(whose, session, game["create_time"] + 1, "someone.exe")
+        time.sleep(0.5)                                   # a few of the relay's once-a-'second' refreshes (0.1 s here)
+        made[0].emit(42, payload(42, whose, 999, SERVER_IP, LOCAL_IP, 27015, 50000))
+        time.sleep(0.5)
+        tracker.stop()
+    finally:
+        link.close()
+    assert forwarded() == [100], forwarded()              # the 999-byte send was someone else's
+
+
+def test_presentmon_never_starts_on_a_game_that_left_while_the_recording_got_ready(game):
+    me = _me()
+    swapped: dict[int, ntquery.ProcInfo] = {}
+    real = snapshot_with()
+    started: list = []
+
+    def snapshot():
+        return {**real(), **swapped}
+
+    def frames(cfg, forward, alive):
+        started.append(cfg)
+        return FakeFrames(cfg, forward, alive)
+    relay = InProcessRelay(parts(snapshot=snapshot, frames=frames))
+    link = launch(game, relay, frames=True, network=False, exe=Path(sys.executable).resolve())
+    rec = link.frames_collector(game["pid"])
+    # Before `start`, Windows gives the game's number to another program (the game exited meanwhile).
+    swapped[game["pid"]] = _fake_proc(game["pid"], me.session_id, game["create_time"] + 1, "someone.exe")
+    rec.start(clock.now())
+    _until(lambda: rec.ended, 10, "frames to end")
+    rec.stop()
+    link.close()
+    st = rec.status()
+    assert started == [] and st.state == "failed" and "PresentMon was not started" in st.detail, st
+    assert "no longer running" in st.detail
+
+
+def test_a_recorder_whose_pid_changed_hands_ends_the_recording_and_its_events_stay_in(game, spy_writes, monkeypatch):
+    # A recorder can pass its pipe on to another process and exit: its number then names someone else.
+    monkeypatch.setattr(server, "STATUS_EVERY_S", 0.1)
+    me = _me()
+    swapped: dict[int, ntquery.ProcInfo] = {}
+    real = snapshot_with()
+    made: list = []
+    stops: list = []
+
+    def snapshot():
+        return {**real(), **swapped}
+    relay = InProcessRelay(parts(snapshot=snapshot, etw=lambda on_event: made.append(LiveEtw(on_event, [], stops))
+                                 or made[-1]))
+    link = launch(game, relay, network=True)
+    link.start(clock.now())
+    _until(lambda: made and made[0].running, 10, "the stand-in session")
+    swapped[me.pid] = _fake_proc(me.pid, me.session_id + 5, me.create_time + 1, "someone.exe")
+    relay.thread.join(10)
+    made[0].emit(42, payload(42, me.pid, 999, SERVER_IP, LOCAL_IP, 53, 50000))      # too late to leave: never sent
+    assert not relay.thread.is_alive() and relay.code == protocol.EXIT_OK and stops == ["net"]
+    assert not [m for m in spy_writes if m["t"] == "events"]
+    link.close()
+
+
+def test_the_once_a_second_refresh_goes_on_while_a_slow_recorder_holds_up_every_write(game, monkeypatch):
+    monkeypatch.setattr(server, "STATUS_EVERY_S", 0.1)
+    real_write = pipe.PipeServer.write
+    slow = threading.Event()
+
+    def write(self, data, timeout_s):
+        if slow.is_set():
+            time.sleep(0.6)                                # a recorder that reads one message now and then
+        return real_write(self, data, timeout_s)
+    monkeypatch.setattr(pipe.PipeServer, "write", write)
+    snaps: list[float] = []
+    real = snapshot_with()
+
+    def snapshot():
+        snaps.append(time.monotonic())
+        return real()
+    relay = InProcessRelay(parts(snapshot=snapshot))
+    link = launch(game, relay, network=True)
+    link.start(clock.now())
+    time.sleep(0.5)
+    slow.set()
+    t0 = time.monotonic()
+    time.sleep(2.0)
+    during = [s for s in snaps if t0 <= s <= t0 + 2.0]
+    slow.clear()
+    link.close()
+    relay.thread.join(15)
+    assert len(during) >= 10, len(during)              # about every 0.1 s here, though each write took 0.6 s
+
+
+class ScriptedPipe:
+    """A pipe whose reads give these messages, then the other end hangs up."""
+
+    def __init__(self, messages):
+        self.messages = list(messages)
+
+    def read(self, timeout_s):
+        if self.messages:
+            return self.messages.pop(0)
+        raise OSError(109, "The pipe has been ended")
+
+
+def _queued(relay: server.Relay) -> list[str]:
+    out = []
+    while not relay._commands.empty():
+        out.append(relay._commands.get_nowait()["t"])
+    return out
+
+
+def test_the_relay_takes_start_then_stop_and_nothing_after_whatever_the_recorder_sends(game):
+    cfg = server.parse_args(_argv(game))
+    flood = [protocol.start(1.0), protocol.stop()] + [protocol.stop()] * 1000 + [protocol.start(2.0)]
+    r = server.Relay(cfg, ScriptedPipe(flood), 1, parts())
+    r._read_loop()
+    assert _queued(r) == ["start", "stop"] and r._gone.is_set()          # still read to the end, to see the hang-up
+    r = server.Relay(cfg, ScriptedPipe([protocol.start(1.0), protocol.start(2.0), protocol.stop()]), 1, parts())
+    r._read_loop()
+    assert _queued(r) == ["start", "broken"] and r._broke == "a second start"
+
+
+_B = chr(92)                                         # one backslash, never typed (tool layers halve or eat them)
+
+
+@pytest.mark.parametrize("exe", [
+    _B * 2 + "server" + _B + "share" + _B + "PresentMon.exe",              # UNC: a share would get the admin's logon
+    _B * 2 + "?" + _B + "C:" + _B + "pm" + _B + "PresentMon.exe",          # a device path
+    _B * 2 + "." + _B + "C:" + _B + "pm.exe",
+    "C:pm.exe",                                                            # relative to C:'s current folder
+    "C:/pm/PresentMon.exe",
+    "C:" + _B * 2 + "pm.exe"])
+def test_presentmon_is_taken_only_from_a_plain_local_drive_path(game, exe, monkeypatch):
+    assert len(exe.split(_B)) > 1 or "/" in exe or exe == "C:pm.exe"
+    monkeypatch.setattr(pipe, "PipeServer", lambda *a, **k: pytest.fail("a pipe was made"))
+    argv = _argv(game) + ["--frames", "--presentmon-exe", exe]
+    assert server.main(argv, owner="", parts=parts()) == protocol.EXIT_BAD_ARGS, exe
+
+
+def test_a_presentmon_on_a_network_drive_is_never_opened(monkeypatch):
+    from lagdoctor import setup
+    from lagdoctor.winapi import storage
+    monkeypatch.setattr(storage, "drive_type", lambda root: 4)                 # Z: mapped to a share
+    monkeypatch.setattr(setup, "verify", lambda exe: pytest.fail("the file was opened"))
+    with pytest.raises(OSError, match="not on a local drive"):
+        server._verify(Path("Z:\\") / "pm" / "PresentMon.exe")
+    seen = []
+    monkeypatch.setattr(storage, "drive_type", lambda root: seen.append(root) or storage.DRIVE_FIXED)
+    monkeypatch.setattr(setup, "verify", lambda exe: seen.append("verified"))
+    server._verify(Path("C:\\") / "pm" / "PresentMon.exe")
+    assert seen == ["C:\\", "verified"]
+
+
+def test_a_relays_stop_never_reads_as_its_network_trace_dying_by_itself(game):
+    # The frames' stop stops the relay's ETW session too; the tracker's next consumer check then sees it ended.
+    relay = InProcessRelay(parts(etw=lambda on_event: FakeEtw(on_event, [])))
+    link = launch(game, relay, frames=True, network=True, exe=Path(sys.executable).resolve())
+    frames = link.frames_collector(game["pid"])
+    tracker = nf.FlowTracker({game["pid"]}, selftest=False, local_addrs=lambda: {LOCAL_IP}, relay=link)
+    try:
+        origin = clock.now()
+        frames.start(origin)
+        tracker.start(origin)
+        _until(lambda: frames._rows == 5, 10, "the rows")
+        frames.stop()
+        time.sleep(1.3)                                    # the tracker checks its session's consumer every second
+        tracker.stop()
+    finally:
+        link.close()
+    st = tracker.status()
+    assert st.state == "ok" and "stopped by itself" not in st.detail, st
+    assert tracker.result()["health"]["consumer_stopped_t"] is None
+
+
+def test_a_tracker_that_fails_leaves_frame_timing_running_in_the_relay(game, monkeypatch):
+    stops: list[str] = []
+    relay = InProcessRelay(parts(frames=lambda cfg, fw, alive: FakeFrames(cfg, fw, alive, stops=stops),
+                                 etw=lambda on_event: FakeEtw(on_event, [], stops)))
+    link = launch(game, relay, frames=True, network=True, exe=Path(sys.executable).resolve())
+    frames = link.frames_collector(game["pid"])
+    tracker = nf.FlowTracker({game["pid"]}, selftest=False, local_addrs=lambda: {LOCAL_IP}, relay=link)
+
+    def broken():
+        raise RuntimeError("a bug in the tracker")
+    monkeypatch.setattr(tracker, "_publish", broken)
+    try:
+        origin = clock.now()
+        frames.start(origin)
+        tracker.start(origin)
+        _until(lambda: tracker.status().state == "failed", 10, "the tracker to fail")
+        time.sleep(0.5)
+        assert stops == [] and not frames.ended and relay.thread.is_alive()   # frame timing goes on
+        frames.stop()
+        tracker.stop()
+    finally:
+        link.close()
+    assert sorted(stops) == ["frames", "net"] and frames.status().state == "ok", frames.status()
+
+
+class SlowStatusFrames(FakeFrames):
+    """A frame source whose status is read late, and that crashes while a read is under way."""
+
+    def __init__(self, cfg, forward, alive, reading, crash):
+        super().__init__(cfg, forward, alive)
+        self.reading, self.crash = reading, crash
+
+    def status(self):
+        st = super().status()
+        self.reading.set()
+        time.sleep(0.3)
+        return st
+
+    def run(self):
+        self.set_status("ok", "PresentMon runs", tool=pm.TOOL)
+        self.crash.wait(10)
+        self.set_status("failed", "PresentMon crashed", tool=pm.TOOL)
+
+
+def test_the_status_sent_as_final_is_the_last_one_presentmon_had(game, monkeypatch):
+    monkeypatch.setattr(server, "STATUS_EVERY_S", 0.2)
+    reading, crash = threading.Event(), threading.Event()
+    relay = InProcessRelay(parts(frames=lambda cfg, fw, alive: SlowStatusFrames(cfg, fw, alive, reading, crash)))
+    link = launch(game, relay, frames=True, network=False, exe=Path(sys.executable).resolve())
+    frames = link.frames_collector(game["pid"])
+    frames.start(clock.now())
+    reading.clear()
+    _until(lambda: reading.is_set(), 10, "a status read")
+    crash.set()                                           # it settles and ends while that read is under way
+    _until(lambda: frames.ended, 10, "frames to end")
+    frames.stop()
+    link.close()
+    assert (frames.status().state, frames.status().detail) == ("failed", "PresentMon crashed")
+
+
+def test_frames_give_up_on_a_silent_relay_before_the_session_stops_waiting():
+    assert client.STOP_FRAMES_S + 1.0 < sess.STOP_TIMEOUT_S["frames"]
+
+
+def test_a_closed_handle_is_no_exit_code_and_the_reader_is_done_before_the_handle_closes():
+    class Closed:
+        def wait(self, timeout_s=None):
+            raise ValueError("the process handle was already closed")
+    assert client._exit_code(Closed()) is None
+
+    class Pipe:
+        def __init__(self):
+            self.closed = threading.Event()
+
+        def read(self, timeout_s):
+            self.closed.wait()
+            raise OSError(995, "aborted")
+
+        def close(self):
+            self.closed.set()
+
+    class Child:
+        pid = 1
+
+        def __init__(self):
+            self.reader_alive_at_close = None
+            self.waits = []
+
+        def wait(self, timeout_s=None):
+            self.waits.append(timeout_s)
+            time.sleep(0.3)                               # a reader reading the exit code would be in here
+            return None
+
+        def close(self):
+            self.reader_alive_at_close = link._reader.is_alive()
+    child = Child()
+    link = client.RelayLink(Pipe(), child, {"pid": os.getpid(), "frames": False, "network": True})
+    link.close()
+    assert child.reader_alive_at_close is False
+    assert child.waits == [0.0]          # close never waits for the relay, nor does a reader the window hung up on
+
+
+def test_network_messages_from_before_the_trackers_session_are_kept_for_it(game, spy_writes, monkeypatch):
+    me = _me()
+    relay = InProcessRelay(parts(etw=lambda on_event: FakeEtw(on_event, _net_script(game["pid"], me.pid))))
+    link = launch(game, relay, frames=True, network=True, exe=Path(sys.executable).resolve())
+    frames = link.frames_collector(game["pid"])
+    origin = clock.now()
+    frames.start(origin)                                  # the relay starts, and sends events nobody takes yet
+    _until(lambda: any(m["t"] == "events" for m in spy_writes), 10, "the first events")
+    _until(lambda: link._early, 10, "them to arrive")
+    tracker = nf.FlowTracker({game["pid"]}, selftest=False, local_addrs=lambda: {LOCAL_IP}, relay=link)
+    try:
+        tracker.start(origin)
+        time.sleep(0.5)
+        frames.stop()
+        tracker.stop()
+    finally:
+        link.close()
+    talkers = {t["pid"]: (t["rx_bytes"], t["tx_bytes"]) for t in tracker.result()["talkers"]}
+    assert talkers[game["pid"]] == (30 * 200 + 500, 30 * 100) and tracker.result()["health"]["early_dropped"] == 0
+
+
+def test_network_messages_from_before_the_trackers_session_are_bounded(game, spy_writes, monkeypatch):
+    monkeypatch.setattr(client, "MAX_EARLY_EVENTS", 10)
+    me = _me()
+    relay = InProcessRelay(parts(etw=lambda on_event: FakeEtw(on_event, _net_script(game["pid"], me.pid))))
+    link = launch(game, relay, frames=True, network=True, exe=Path(sys.executable).resolve())
+    frames = link.frames_collector(game["pid"])
+    origin = clock.now()
+    frames.start(origin)
+    _until(lambda: link._early_dropped > 0, 10, "the early buffer to fill")
+    tracker = nf.FlowTracker({game["pid"]}, selftest=False, local_addrs=lambda: {LOCAL_IP}, relay=link)
+    try:
+        tracker.start(origin)
+        time.sleep(0.3)
+        frames.stop()
+        tracker.stop()
+    finally:
+        link.close()
+    assert link._early_events <= 10 and tracker.result()["health"]["early_dropped"] == link._early_dropped > 0
+
+
+class ScriptedRelay:
+    """A stand-in relay that says `script(cfg)` (raw messages) once the recorder connects; also launch_elevated's
+    stand-in (its 'process' is this one)."""
+
+    def __init__(self, script):
+        self.script = script
+        self.pid = os.getpid()
+        self.done = threading.Event()
+
+    def __call__(self, argv, cwd):
+        cfg = server.parse_args(argv[6:])
+        self.server = pipe.PipeServer(cfg.pipe, pipe.client_dacl([cfg.sid]), max_message=protocol.MAX_MESSAGE)
+        threading.Thread(target=self._serve, args=(cfg,), daemon=True).start()
+        return self
+
+    def _serve(self, cfg):
+        try:
+            if self.server.wait_client(10):
+                for m in self.script(cfg):
+                    self.server.write(m, 5)
+                self.done.wait(10)
+        finally:
+            self.server.close()
+
+    def wait(self, timeout_s=None):
+        return None
+
+    def close(self):
+        self.done.set()
+
+
+def _hello(cfg, **over):
+    msg = {"t": "hello", "v": protocol.VERSION, "pid": os.getpid(), "game": list(cfg.game), "frames": cfg.frames,
+           "network": cfg.network}
+    msg.update(over)
+    return json.dumps(msg).encode()
+
+
+@pytest.mark.parametrize("over", [{"v": protocol.VERSION + 1}, {"frames": True}, {"network": False},
+                                  {"pid": os.getpid() + 4}])
+def test_launch_refuses_a_relay_whose_hello_is_not_the_one_it_launched(game, over):
+    with pytest.raises(client.RelayFailed, match="did not greet"):
+        launch(game, ScriptedRelay(lambda cfg: [_hello(cfg, **over)]))
+
+
+def test_a_second_hello_breaks_the_link(game):
+    relay = ScriptedRelay(lambda cfg: [_hello(cfg), _hello(cfg)])
+    link = launch(game, relay)
+    _until(lambda: link.ended.is_set(), 10, "the link to break")
+    assert "a second hello" in (link.why or "")
+    link.close()
+
+
+def test_the_relays_pipe_lets_in_the_recorders_account_alone(game):
+    relay = InProcessRelay(parts())
+    link = launch(game, relay)
+    try:
+        got = link._client.descriptor()
+    finally:
+        link.close(wait_s=5)
+    sid = elevation.token_user_sid()
+    with pipe.PipeServer(f"lagdoctor-dacl-{secrets.token_hex(8)}", pipe.client_dacl([sid])) as want:
+        assert got == want.descriptor()                   # Windows' own spelling of one ACE, for this account

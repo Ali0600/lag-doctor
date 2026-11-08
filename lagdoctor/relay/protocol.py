@@ -234,7 +234,10 @@ def frame_value(column: str, value: Any) -> Any:
     if kind is float:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ProtocolError(f"the frame column {column} is not a number")
-        return float(value)
+        value = float(value)                    # a huge whole number overflows: from_relay says so
+        if not math.isfinite(value):
+            raise ProtocolError(f"the frame column {column} is not a finite number")
+        return value
     if kind is int:
         hi = MAX_PID if column == "ProcessID" else MAX_QPC if column == "TimeInQPC" else (1 << 64) - 1
         lo = 1 if column == "ProcessID" else 0 if column == "SwapChainAddress" else -(1 << 63)
@@ -288,6 +291,21 @@ def _totals(value: Any) -> list[tuple[int, int, int]]:
     return out
 
 
+def _readable(check):
+    """A checker whose every failure is a ProtocolError: a value Python cannot convert (a 400-digit number overflows
+    float) must end the link with a reason, never kill the thread that reads it."""
+    def checked(data: bytes) -> dict[str, Any]:
+        try:
+            return check(data)
+        except ProtocolError:
+            raise
+        except (ValueError, OverflowError, TypeError, RecursionError) as exc:
+            raise ProtocolError(f"a message that cannot be read ({type(exc).__name__})") from None
+    checked.__doc__, checked.__name__ = check.__doc__, check.__name__
+    return checked
+
+
+@_readable
 def from_relay(data: bytes) -> dict[str, Any]:
     """A message from the relay, checked; ProtocolError when it is not one the protocol allows."""
     msg = _load(data)
@@ -330,6 +348,7 @@ def from_relay(data: bytes) -> dict[str, Any]:
     raise ProtocolError(f"a message of a type the recorder does not know ({_cut(t, 40)!r})")
 
 
+@_readable
 def from_recorder(data: bytes) -> dict[str, Any]:
     """A message from the recorder, checked: only `start` with a finite origin, or `stop`."""
     msg = _load(data)

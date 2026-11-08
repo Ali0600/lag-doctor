@@ -28,9 +28,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CONNECT_S = 30.0              # from the relay's start to its pipe answering (its own checks come first)
 HELLO_S = 10.0
 NET_START_S = 15.0            # the relay says whether its ETW session started
-STOP_FRAMES_S = 25.0          # PresentMon's worst stop path (DESIGN.md, Collector contract)
+STOP_FRAMES_S = 20.0          # past the relay's worst PresentMon stop (about 10 s), inside the session's 25 s join
 STOP_NET_S = 4.0              # inside the session's 5 s stop for net_flows
-EXIT_WAIT_S = 5.0             # after hanging up, how long the relay gets to exit
+MAX_EARLY_EVENTS = 50_000     # network events that come before the tracker has made its session: kept until it has
 ADMINISTRATORS = "S-1-5-32-544"
 
 
@@ -70,7 +70,7 @@ def relay_argv(pipe_name: str, recorder: tuple[int, int], sid: str, game: tuple[
 def _exit_code(child, wait_s: float = 0.0) -> int | None:
     try:
         return child.wait(wait_s)
-    except OSError:
+    except (OSError, ValueError):               # ValueError: its handle was closed already
         return None
 
 
@@ -145,6 +145,9 @@ class RelayLink:
         self._started = self._stop_sent = self._closed = False
         self._frames_sink: RelayedFrames | None = None
         self._net_sink: RelayedEtwSession | None = None
+        self._dispatch_lock = threading.Lock()  # a sink made while messages arrive gets every one, in order
+        self._early: list[dict[str, Any]] = []  # network messages from before the tracker's session existed
+        self._early_events = self._early_dropped = 0
         self.ended = threading.Event()          # `end` came, or the link broke
         self.why: str | None = None             # why it broke; None after a clean end
         self.relay_error: str | None = None     # what the relay said when it stopped on a problem
@@ -158,10 +161,20 @@ class RelayLink:
         self._tell_if_over(self._frames_sink)
         return self._frames_sink
 
-    def etw_session(self, on_event: Callable[[Any], None], origin: float) -> "RelayedEtwSession":
-        self._net_sink = RelayedEtwSession(self, on_event, origin)
-        self._tell_if_over(self._net_sink)
-        return self._net_sink
+    def etw_session(self, on_event: Callable[[Any], None], origin: float,
+                    stopping: Callable[[], bool] | None = None) -> "RelayedEtwSession":
+        """FlowTracker's session. It makes it only when it starts, after the frames may have started the relay: the
+        network messages that came before are handed to it first, in order. `stopping`: whether the tracker itself is
+        stopping, so a tracker that ends on an error never stops the relay's frame timing with it."""
+        sink = RelayedEtwSession(self, on_event, origin, stopping)
+        with self._dispatch_lock:
+            early, self._early = self._early, []
+            sink.early_dropped = self._early_dropped
+            for msg in early:
+                self._deliver(sink, msg)
+            self._net_sink = sink
+        self._tell_if_over(sink)
+        return sink
 
     def _tell_if_over(self, sink) -> None:
         """A collector made after the link ended (the tracker makes its session only when it starts) learns why at
@@ -184,11 +197,15 @@ class RelayLink:
         self._send(protocol.start(origin))
 
     def stop(self) -> None:
-        """Ask the relay to stop and send what is left; the first call does it."""
+        """Ask the relay to stop and send what is left; the first call does it. Said first to the flow tracker (as the
+        console's close handler does): the relay's network trace then ends on lag-doctor's own request, which its
+        consumer's end must not read as stopping by itself."""
         with self._state_lock:
             if self._stop_sent:
                 return
             self._stop_sent = True
+        from lagdoctor.capture import netflows
+        netflows.expect_external_stop()
         self._send(protocol.stop())
 
     def _send(self, data: bytes) -> None:
@@ -200,14 +217,18 @@ class RelayLink:
             except (OSError, ValueError) as exc:
                 self._broke(f"the recording window could not reach the relay ({exc})")
 
-    def close(self) -> int | None:
-        """Hang up, give the relay EXIT_WAIT_S to exit, and close its handle; its exit code if it ended."""
+    def close(self, wait_s: float = 0.0) -> int | None:
+        """Hang up and close the relay's handle; its exit code if it has ended within `wait_s` (0: never waited for,
+        so a window that is closing saves at once: the relay ends by itself once it sees the hang-up). The reader is
+        let finish first: it may be reading the relay's exit code through that handle."""
         with self._state_lock:
             if self._closed:
                 return None
             self._closed = True
         self._client.close()
-        code = _exit_code(self._child, EXIT_WAIT_S)
+        if self._reader is not threading.current_thread():
+            self._reader.join(3.0)
+        code = _exit_code(self._child, wait_s)
         self._child.close()
         return code
 
@@ -219,9 +240,11 @@ class RelayLink:
             except TimeoutError:
                 continue
             except OSError:
+                if self._closed:
+                    self._broke("the recording window hung up")
+                    return
                 code = _exit_code(self._child, 1.0)
-                self._broke("the relay ended" + (f" (exit code {code})" if code is not None else "")
-                            if not self._closed else "the recording window hung up")
+                self._broke("the relay ended" + (f" (exit code {code})" if code is not None else ""))
                 return
             try:
                 msg = protocol.from_relay(data)
@@ -231,7 +254,8 @@ class RelayLink:
                 self._broke(f"the relay sent a message the recording window cannot use ({exc})")
                 return
             try:
-                self._dispatch(msg)
+                with self._dispatch_lock:
+                    self._dispatch(msg)
             except Exception as exc:  # noqa: BLE001 - a sink's bug must not leave the link reading forever
                 self._broke(f"a message from the relay could not be used ({type(exc).__name__}: {exc})")
                 return
@@ -245,12 +269,24 @@ class RelayLink:
             self._frames_sink.feed(msg["rows"])
         elif t == "frames" and self._frames_sink is not None:
             self._frames_sink.relay_status(msg)
-        elif t == "events" and self._net_sink is not None:
-            self._net_sink.feed(msg["ev"])
-        elif t == "net" and self._net_sink is not None:
-            self._net_sink.relay_status(msg)
+        elif t in ("events", "net") and self._net_sink is not None:
+            self._deliver(self._net_sink, msg)
+        elif t in ("events", "net") and self.network:
+            n = len(msg["ev"]) if t == "events" else 0
+            if self._early_events + n > MAX_EARLY_EVENTS:
+                self._early_dropped += n
+            else:
+                self._early_events += n
+                self._early.append(msg)
         elif t == "error":
             self.relay_error = msg["why"]
+
+    @staticmethod
+    def _deliver(sink: "RelayedEtwSession", msg: dict[str, Any]) -> None:
+        if msg["t"] == "events":
+            sink.feed(msg["ev"])
+        else:
+            sink.relay_status(msg)
 
     def _ended_cleanly(self) -> None:
         """`end` came: a collector still waiting for its final status gets the relay's reason (it stopped before the
@@ -362,8 +398,10 @@ class RelayedEtwSession:
 
     talker_scope = "session"
 
-    def __init__(self, link: RelayLink, on_event: Callable[[Any], None], origin: float) -> None:
-        self._link, self._on_event, self._origin = link, on_event, origin
+    def __init__(self, link: RelayLink, on_event: Callable[[Any], None], origin: float,
+                 stopping: Callable[[], bool] | None = None) -> None:
+        self._link, self._on_event, self._origin, self._stopping = link, on_event, origin, stopping
+        self.early_dropped = 0                  # network events that came before it existed and could not be kept
         self._lock = threading.Lock()
         self._status = threading.Event()        # the relay said whether its session started
         self._final = threading.Event()
@@ -386,6 +424,8 @@ class RelayedEtwSession:
             raise OSError(self._why or "the relay could not start its network trace")
 
     def stop(self) -> None:
+        if self._stopping is not None and not self._stopping():
+            return                              # the tracker ended on an error: frame timing goes on in the relay
         self._link.stop()
         deadline = time.monotonic() + STOP_NET_S
         while not self._final.wait(0.05):
@@ -396,6 +436,7 @@ class RelayedEtwSession:
         with self._lock:
             h = dict(self._health)
             h["relayed_events"] = self._events
+            h["early_dropped"] = self.early_dropped
             if self._gone is not None and not self._final.is_set():
                 h["pump_alive"] = False
                 h["stopped_why"] = f"the relay stopped ({self._gone})"

@@ -379,6 +379,9 @@ class FlowTable:
         # Per-program totals a relay counted, cumulative (the latest replaces the last): its programs' bytes join
         # the ones counted here per pid (DECISIONS 2026-11-08).
         self._relayed: dict[int, tuple[int, int]] = {}
+        # The game's bytes that crossed the network ([received, sent]): one end this PC's, the other not, so never
+        # its loopback traffic. The adapter's own counters hold them too, beside every other program's.
+        self.game_wire = [0, 0]
         self.gaps: list[list] = []
         self.server_rx: list[list] = []
         self.counts = {"game_events": 0, "local_endpoints": 0, "unknown_endpoints": 0, "late": 0,
@@ -394,6 +397,11 @@ class FlowTable:
 
     def is_game(self, pid: int) -> bool:
         return pid in self._game
+
+    def count_wire(self, pkt: Packet) -> None:
+        """One of the game's packets toward game_wire, if it crossed the network."""
+        if pkt.kind in ("send", "recv") and pkt.pid in self._game and endpoints(pkt, self._local) is not None:
+            self.game_wire[0 if pkt.kind == "recv" else 1] += pkt.size
 
     def set_relayed(self, totals: Iterable[tuple[int, int, int]]) -> None:
         """The relay's per-program totals, (pid, bytes received, bytes sent) each, as it last sent them."""
@@ -485,6 +493,7 @@ class FlowTable:
                       "first_rx_t": None if f.first_rx is None else round(f.first_rx, 6),
                       "last_rx_t": None if f.last_rx is None else round(f.last_rx, 6)}
         return {"server": server, "talkers": top_talkers(self._all_talkers(), names or {}),
+                "game_wire_bytes": list(self.game_wire),
                 "gaps": [list(g) for g in self.gaps], "server_rx": [list(r) for r in self.server_rx]}
 
     def talker_pids(self, n: int = TOP_TALKERS) -> list[int]:
@@ -827,7 +836,7 @@ class FlowTracker(Collector):
     def run(self) -> None:
         self._refresh_inputs(local=True)
         if self._relay is not None:
-            session = self._relay.etw_session(self._on_event, self.origin)
+            session = self._relay.etw_session(self._on_event, self.origin, stopping=lambda: self.stopping)
         else:
             session = self._session_factory(SESSION_NAME, [(KERNEL_NETWORK, LEVEL_INFORMATIONAL, KW_IPV4 | KW_IPV6)],
                                             self._on_event)
@@ -903,7 +912,7 @@ class FlowTracker(Collector):
             counts = dict(self._table.counts)
         if not self._started:
             # Nothing was listened to: "no talkers, no gaps" would read as measured and clean.
-            out["talkers"] = out["gaps"] = out["server_rx"] = None
+            out["talkers"] = out["gaps"] = out["server_rx"] = out["game_wire_bytes"] = None
         # Which programs the talkers could include: every one, or (through a relay) those in this Windows session.
         out["talkers_scope"] = "session" if self._relay is not None else "all"
         out["layout"] = self.layout()
@@ -963,7 +972,9 @@ class FlowTracker(Collector):
         probing = self._probe is not None and pid == self._own_pid
         with self._lock:
             table = self._table
-            if probing or (spec[0] == "udp" and table.is_game(pid)):
+            game = table.is_game(pid)
+            pkt = None
+            if probing or (spec[0] == "udp" and game):
                 pkt = decode(ev.id, ev.version, data)
                 table.add(t, pkt)
                 if probing and self._probe is not None:
@@ -974,6 +985,8 @@ class FlowTracker(Collector):
                 self._lag_hist[min(LAG_BUCKETS, max(0, int(lag / LAG_BUCKET_S)))] += 1
             else:
                 table.count(pid, spec[1], size)
+            if game and spec[1] in ("send", "recv"):
+                table.count_wire(pkt if pkt is not None else decode(ev.id, ev.version, data))
 
     # ---- helpers --------------------------------------------------------
     def _refresh_inputs(self, local: bool) -> None:

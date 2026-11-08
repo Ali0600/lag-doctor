@@ -229,7 +229,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
                 if not may_trace or (args.elevate and not _elevated()):
                     choice = elevation_choice(args.elevate, args.no_elevate, sys.stdin.isatty(), _ask)
                     if choice == "elevate":
-                        relay, code = _start_relay(args, target, exe)
+                        relay, code = _start_relay(args, target, exe, may_trace)
                         if code is not None:
                             return code
                     if relay is None and not may_trace:   # declined: a group member still records frames here
@@ -363,15 +363,23 @@ def elevation_choice(elevate: bool, no_elevate: bool, interactive: bool, ask: Ca
     return "elevate" if ask("Record with frame timing (shows a UAC prompt)? [Y/n] ", default=True) else "skip"
 
 
-def _start_relay(args: argparse.Namespace, target: dict[str, Any], exe: Path) -> tuple[Any, int | None]:
+def _start_relay(args: argparse.Namespace, target: dict[str, Any], exe: Path,
+                 may_trace: bool = False) -> tuple[Any, int | None]:
     """Frame timing and the game-server tracker through the relay: one UAC prompt, then PresentMon and the network
     trace run with administrator rights while the recording stays in this window. (link, None) once the relay
     answers and checks out; (None, None) when the prompt was declined or could not be shown, so the recording goes on
-    without them; (None, code) when the relay could not record, said here."""
+    without them; (None, code) when the relay could not record, said here. `may_trace`: this account records frame
+    timing itself (Performance Log Users), so without the relay it loses only the tracker."""
     from lagdoctor.capture import session as sess
     from lagdoctor.capture import target as tgt
     from lagdoctor.relay import client
     from lagdoctor.winapi import elevation
+    if not may_trace:
+        goes_on = "lag-doctor records without frame timing"
+    elif args.no_network:
+        goes_on = "lag-doctor records here, with frame timing"
+    else:
+        goes_on = "lag-doctor records without the game-server tracker"
     try:
         procs = sess._snapshot()
         me = procs.get(os.getpid())
@@ -379,7 +387,7 @@ def _start_relay(args: argparse.Namespace, target: dict[str, Any], exe: Path) ->
             raise OSError("this window's own process is not in Windows' process list")
         sid = elevation.token_user_sid()
     except OSError as exc:
-        say(f"lag-doctor could not read what the relay needs ({exc}), so it records without frame timing.")
+        say(f"What the relay needs could not be read ({exc}), so {goes_on}.")
         return None, None
     why = tgt.accept_target(procs, target["pid"], target["create_time"], session=me.session_id,
                             approved=(target["pid"], target["create_time"]))
@@ -391,18 +399,17 @@ def _start_relay(args: argparse.Namespace, target: dict[str, Any], exe: Path) ->
         link = client.launch(target, presentmon_exe=Path(exe).resolve(), frames=True, network=not args.no_network,
                              recorder=(me.pid, me.create_time), sid=sid)
     except PermissionError:
-        say("The UAC prompt was declined, so lag-doctor records without frame timing.")
+        say(f"The UAC prompt was declined, so {goes_on}.")
         return None, None
     except client.RelayFailed as exc:
         code, text = _relay_failure(exc)
         say(text)
         return None, code
     except ValueError as exc:                 # a command it refused to launch: say so, never a traceback
-        say(f"Frame timing was not started, because its command was refused ({exc}). lag-doctor records without "
-            "frame timing.")
+        say(f"The relay was not started, because its command was refused ({exc}), so {goes_on}.")
         return None, None
     except OSError as exc:
-        say(f"The UAC prompt could not be shown ({exc}), so lag-doctor records without frame timing.")
+        say(f"The UAC prompt could not be shown ({exc}), so {goes_on}.")
         return None, None
     return link, None
 
@@ -414,8 +421,9 @@ def _relay_failure(exc) -> tuple[int, str]:
         return EXIT_NOT_READY, ("PresentMon failed its check in the administrator part of the recording, so nothing "
                                 "was recorded. Run `lagdoctor setup` here, then start the recording again.")
     if exc.code == protocol.EXIT_TARGET:
-        return EXIT_TARGET_CHANGED, ("The game exited while the UAC prompt was up, so nothing was recorded. Start "
-                                     "the game again, then run `lagdoctor watch` again.")
+        return EXIT_TARGET_CHANGED, ("When the relay checked, the game or this window was no longer running as "
+                                     "approved (the game may have exited while the UAC prompt was up), so nothing "
+                                     "was recorded. Start the game again, then run `lagdoctor watch` again.")
     return 1, f"Frame timing could not be started: {exc.why}. Nothing was recorded."
 
 

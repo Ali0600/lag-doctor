@@ -51,6 +51,9 @@ MAX_PROGRAMS = 4096           # programs whose session is remembered
 OWNER = "O:BA"                # Administrators: Windows refuses that owner to an unelevated token (error 1307)
 _PID_SIZE = struct.Struct("<II")   # NE 4.3: the payload's PID and size
 _SID = re.compile(r"S-1-[0-9]{1,13}(?:-[0-9]{1,10}){1,15}")
+# PresentMon's path: a plain local drive path, never UNC or a device. Opening a network path as an administrator would
+# hand that share the administrator's credentials, even if the file then failed its check.
+_LOCAL_PATH = re.compile(r"[A-Za-z]:\\(?![\\/])[^\x00-\x1f]{1,255}")
 
 
 @dataclass(frozen=True)
@@ -100,8 +103,8 @@ def parse_args(argv: list[str]) -> Config:
         raise ValueError("nothing to run: neither --frames nor --network")
     exe = None
     if a.frames:
-        if not a.presentmon_exe or not os.path.isabs(a.presentmon_exe):
-            raise ValueError("--frames needs an absolute --presentmon-exe")
+        if not a.presentmon_exe or not _LOCAL_PATH.fullmatch(a.presentmon_exe):
+            raise ValueError("--frames needs --presentmon-exe as a plain local drive path")
         exe = Path(a.presentmon_exe)
     elif a.presentmon_exe is not None:
         raise ValueError("--presentmon-exe without --frames")
@@ -124,7 +127,12 @@ def _snapshot_fn() -> Callable[[], dict]:
 
 
 def _verify(exe: Path) -> None:
+    """PresentMon's check, on a local drive only (the path's form was checked already; a drive letter can still be
+    mapped to a share): never open a network path with administrator rights."""
     from lagdoctor import setup
+    from lagdoctor.winapi import storage
+    if storage.drive_type(str(exe)[:3]) not in (storage.DRIVE_FIXED, storage.DRIVE_REMOVABLE):
+        raise OSError(f"{exe} is not on a local drive")
     setup.verify(exe)
 
 
@@ -216,7 +224,8 @@ class Relay:
 
     def __init__(self, cfg: Config, server, session: int, parts: Parts) -> None:
         self.cfg, self.server, self.session, self.parts = cfg, server, session, parts
-        self._commands: queue.Queue = queue.Queue()
+        self._commands: queue.Queue = queue.Queue()  # start, then stop: the reader queues nothing else (at most 3)
+        self._took: set[str] = set()                # the commands the reader has queued
         self._gone = threading.Event()          # the recorder hung up, or a write could not reach it
         self._broke = ""                        # the recorder sent what the protocol does not allow
         self._write_lock = threading.Lock()
@@ -225,11 +234,14 @@ class Relay:
         self._events: collections.deque = collections.deque()
         self._rows_lost = self._events_lost = 0
         self._pending: dict[int, list[int]] = {}
-        self._game_pids: frozenset[int] = frozenset({cfg.game[0]})
+        self._game: dict[int, int] = {cfg.game[0]: cfg.game[1]}     # the game's processes: pid -> create time
+        self._game_pids: frozenset[int] = frozenset(self._game)
         self._programs: dict[int, tuple[int, bool]] = {}     # pid -> (create_time, in the recorder's session)
         self._totals: dict[int, list[int]] = {}
         self._counts = {"ignored": 0, "unattributed_bytes": 0, "other_session_bytes": 0, "programs_dropped": 0}
         self._layout_bad: dict[str, int] = {}
+        self._refresher: threading.Thread | None = None
+        self._refresh_stop = threading.Event()
         self._frames = None
         self._frames_sent: tuple | None = None
         self._frames_final = False
@@ -259,11 +271,19 @@ class Relay:
                 self._gone.set()                # hung up, or the pipe was closed under us
                 return
             try:
-                self._commands.put(protocol.from_recorder(data))
+                msg = protocol.from_recorder(data)
             except protocol.ProtocolError as exc:
                 self._broke = str(exc)
                 self._commands.put({"t": "broken"})
                 return
+            if "stop" in self._took:
+                continue                        # after stop nothing more is taken; reading goes on to see the hang-up
+            if msg["t"] in self._took:
+                self._broke = f"a second {msg['t']}"
+                self._commands.put({"t": "broken"})
+                return
+            self._took.add(msg["t"])
+            self._commands.put(msg)
 
     def _command(self, timeout: float) -> dict | None:
         try:
@@ -317,23 +337,27 @@ class Relay:
         while True:
             cmd = self._command(TICK_S)
             if cmd is not None:
-                if cmd["t"] == "stop":
-                    return protocol.EXIT_OK
-                self._broke = self._broke or "a second start"
-                return protocol.EXIT_PROTOCOL
+                return protocol.EXIT_OK if cmd["t"] == "stop" else protocol.EXIT_PROTOCOL
             if self._gone.is_set():
                 return protocol.EXIT_OK
             self._flush()
             now = time.monotonic()
             if now >= next_status:
                 next_status = now + STATUS_EVERY_S
-                self._refresh()
                 self._send_frames()
                 self._send_net()
 
+    def _refresh_loop(self) -> None:
+        """The once-a-second refresh on a thread of its own, so a recorder that reads slowly (each write may wait
+        WRITE_TIMEOUT_S) cannot stretch how long a pid keeps its standing."""
+        while not self._refresh_stop.wait(STATUS_EVERY_S):
+            self._refresh()
+
     def _start_sources(self, origin: float) -> None:
+        self._refresh()                                   # the game's processes before its first event
+        self._refresher = threading.Thread(target=self._refresh_loop, name="relay-refresh", daemon=True)
+        self._refresher.start()
         if self.cfg.network:
-            self._refresh()                               # the game's processes before its first event
             self._etw = self.parts.etw(self._on_event)
             try:
                 self._etw.start()
@@ -345,13 +369,33 @@ class Relay:
                                  f"the relay could not start the network trace: {exc}")
             self._send_net()
         if self.cfg.frames:
+            why = self._game_refused()
+            if why is not None:                           # it exited while the recording got ready: no PresentMon
+                from lagdoctor.capture.presentmon import TOOL
+                self._frames_final = True
+                self._write(protocol.frames_status("failed", f"PresentMon was not started: {why}", TOOL, final=True))
+                return
             self._frames = self.parts.frames(self.cfg, self._on_row, self._game_alive)
             self._frames.start(origin)
             self._send_frames()
 
+    def _game_refused(self) -> str | None:
+        """accept_target again, on a fresh snapshot, just before PresentMon opens the game by its pid: minutes may
+        have passed since the relay's first check, and a pid Windows gave away must not be traced."""
+        from lagdoctor.capture.target import accept_target
+        try:
+            procs = self.parts.snapshot()
+        except OSError as exc:
+            return f"the game could not be checked again ({exc})"
+        return accept_target(procs, *self.cfg.game, session=self.session, approved=self.cfg.game)
+
     def _stop_sources(self) -> None:
         """The network trace first (milliseconds; its last events are delivered inside stop), then PresentMon (up to
         FRAMES_STOP_S); each one's last data, then its final status. Safe to call again."""
+        self._refresh_stop.set()
+        refresher, self._refresher = self._refresher, None
+        if refresher is not None:
+            refresher.join(10.0)
         etw_session, self._etw = self._etw, None
         if etw_session is not None:
             try:
@@ -397,6 +441,7 @@ class Relay:
         source = source if source is not None else self._frames
         if source is None or self._frames_final:
             return
+        ended = final or bool(getattr(source, "ended", False))   # first: a status read after it is its last one
         st = source.status()
         state, detail = st.state, st.detail
         with self._lock:
@@ -404,7 +449,6 @@ class Relay:
         if lost:
             detail += f"; {lost} frame rows could not be passed on to the recording window"
             state = "partial" if state == "ok" else state
-        ended = final or bool(getattr(source, "ended", False))
         if ended:
             self._flush()
             info = None
@@ -452,17 +496,39 @@ class Relay:
             row[0 if spec[1] == "recv" else 1] += size
 
     def _refresh(self) -> None:
-        """Once a second: the game's processes now, and whose session each counted program runs in."""
+        """Once a second: the game's processes now, and whose session each counted program runs in.
+
+        The game's processes are its tree while it runs, plus those seen before that still run as the same process;
+        each in the recorder's session. A pid whose process changed is dropped at once: Windows gave the number to
+        another program, perhaps another user's, whose events must not leave the relay. (Between two snapshots a reused
+        number keeps its old standing for at most a second; a program's bytes are placed by the process holding the
+        pid when they are, so a pid reused within that second can carry another program's count.)"""
         from lagdoctor.capture.target import descendants
         try:
             procs = self.parts.snapshot()
         except OSError:
             return                                  # the next second tries again; pending bytes wait
-        game = descendants(procs, *self.cfg.game)
-        if game:
-            self._game_pids = frozenset(game)
+        rec = procs.get(self.cfg.recorder[0])
+        if rec is None or rec.create_time != self.cfg.recorder[1]:
+            # The recorder is gone (its pipe handle may live on in another process): its number is someone else's
+            # now. The recording ends, and nothing more is written.
+            self._gone.set()
+        tree = descendants(procs, *self.cfg.game)
+        game: dict[int, int] = {}
+        for pid in tree | set(self._game):
+            p = procs.get(pid)
+            if p is None or p.session_id != self.session:
+                continue
+            if pid in tree or self._game.get(pid) == p.create_time:
+                game[pid] = p.create_time
+        self._game, self._game_pids = game, frozenset(game)
         with self._lock:
             pending, self._pending = self._pending, {}
+            self._place(pending, procs)
+
+    def _place(self, pending: dict[int, list[int]], procs: dict) -> None:
+        """Each program's new bytes into its total, by the session of the process holding its pid now (with the
+        lock held: the main thread reads the totals)."""
         for pid, (rx, tx) in pending.items():
             p = procs.get(pid)
             if p is None:
@@ -482,7 +548,9 @@ class Relay:
             total[1] += tx
 
     def _top_totals(self) -> list[list[int]]:
-        ranked = sorted(self._totals.items(), key=lambda kv: (-(kv[1][0] + kv[1][1]), kv[0]))
+        with self._lock:
+            ranked = sorted(((pid, tuple(row)) for pid, row in self._totals.items()),
+                            key=lambda kv: (-(kv[1][0] + kv[1][1]), kv[0]))
         return [[pid, rx, tx] for pid, (rx, tx) in ranked[:protocol.MAX_TOTALS] if rx + tx > 0]
 
     def _send_net(self, final: bool = False, session: Any = None) -> None:

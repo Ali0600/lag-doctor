@@ -174,4 +174,16 @@ def test_the_frame_column_types_are_what_the_parser_produces():
             assert kind is float and col in pm.STRICT_FLOATS, col
     assert set(rp.FRAME_REQUIRED) == set(pm.REQUIRED) - {"Application"}
     assert rp.frame_value("MsGPUBusy", 7) == 7.0 and isinstance(rp.frame_value("MsGPUBusy", 7), float)
-    assert math.isinf(rp.frame_value("MsGPUBusy", float("inf")))          # what the parser itself can produce
+    for bad in (math.inf, -math.inf, math.nan):                            # never a frame time, never a reading
+        with pytest.raises(rp.ProtocolError):
+            rp.frame_value("MsGPUBusy", bad)
+
+
+@pytest.mark.parametrize("bad", [b'{"t":"start","origin":' + b"9" * 400 + b"}",
+                                 _rows(REQ, (1, 2, 3, 10 ** 400)), _rows(REQ, (1, 2, 3, float("nan")))])
+def test_a_value_python_cannot_convert_is_a_protocol_error_on_either_side(bad):
+    # A 400-digit number overflows float: before, the OverflowError got past both checks and silently ended the
+    # thread that read it (the relay then never heard the stop).
+    reader = rp.from_recorder if bad.startswith(b'{"t":"start"') else rp.from_relay
+    with pytest.raises(rp.ProtocolError):
+        reader(bad)

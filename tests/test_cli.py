@@ -638,7 +638,8 @@ def test_a_declined_prompt_records_here_still_holding_the_lock(fake_relay, monke
     assert cli.main(["watch", "--pid", "4242", "--duration", "0.1", "--elevate", "--no-network", "--hotkey", "none",
                      "--out", str(tmp_path / "out")]) == 0
     out = capsys.readouterr().out
-    assert "declined" in out and held_while_recording == [True]
+    assert "The UAC prompt was declined, so lag-doctor records without frame timing." in out
+    assert held_while_recording == [True]
     said = out.find("Frame timing is off for this recording: it needs admin rights")
     assert 0 <= said < out.index("Recording. Play normally")          # said before, not only in the report
     assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
@@ -726,11 +727,15 @@ def test_an_administrator_window_is_never_elevated_again(group_member, monkeypat
     assert group_member["launches"] == []
 
 
-def test_a_group_member_who_declines_still_records_frames_here(group_member, tmp_path, capsys):
+@pytest.mark.parametrize("network, said", [(False, "records here, with frame timing"),
+                                           (True, "records without the game-server tracker")])
+def test_a_group_member_who_declines_still_records_frames_here(group_member, tmp_path, capsys, network, said):
     group_member["raise"] = PermissionError(13, "the administrator prompt was declined", None, 1223)
-    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == 0
+    argv = [a for a in WATCH if network is False or a != "--no-network"]
+    assert cli.main([*argv, "--elevate", "--out", str(tmp_path / "out")]) == 0
     out = capsys.readouterr().out
-    assert "declined" in out and "Frame timing is off" not in out    # the group still gives frame timing
+    assert f"The UAC prompt was declined, so lag-doctor {said}." in out
+    assert "Frame timing is off" not in out and "without frame timing" not in out   # the group still gives it
     assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
 
 

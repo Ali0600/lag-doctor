@@ -151,6 +151,16 @@ but a GitHub-hosted runner. Measured (research note section 8):
   pipe's owner (`owner_sid()`, which a squatter cannot set to the service's), since any process could create that
   name first, for instance in the moments after the service stops itself when idle.
 - E8: each guard ships red-first, as every guard here does.
+- What M3's review (2026-11-08) left for the service, where any local user is a caller:
+  - **One recording machine-wide.** The ETW session names (`lagdoctor`, `lag-doctor-net`) are global, and starting
+    either stops another Windows session's recording; the capture lock is per session. An elevated relay in another
+    session can already do this; the service must refuse a second caller instead.
+  - **The caller's session, from the caller.** The relay filters per-program totals by its own session, which equals
+    the recorder's only because it checks that at start; the service runs in session 0 and must use the client's.
+  - **The caller's account, from its token**, never a command line, for the pipe's DACL and the checks.
+  - **The game's tree can hold another account's process**: a caller naming Explorer as its game would get the
+    whole events of an administrator's elevated programs started from it. Before a descendant's events leave the
+    service, it must run as the caller's account, read without opening the game.
 
 ## Stage 5: release
 

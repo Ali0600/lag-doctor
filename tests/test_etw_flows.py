@@ -621,3 +621,14 @@ def test_relayed_totals_join_the_bytes_counted_here_per_program_and_the_latest_r
     assert table.talker_pids() == [90, 80, 77]
     table.set_relayed([])
     assert {t["pid"] for t in table.result()["talkers"]} == {80, 77}
+
+
+def test_the_games_wire_bytes_count_only_its_traffic_that_crossed_the_network():
+    table = FlowTable({GAME}, LOCALS)
+    table.count_wire(Packet(11, "tcp", "recv", GAME, 1000, LOCAL, "203.0.113.9", 50000, 443))   # from the internet
+    table.count_wire(Packet(10, "tcp", "send", GAME, 300, "203.0.113.9", LOCAL, 443, 50000))   # to it
+    table.count_wire(Packet(43, "udp", "recv", GAME, 64, "127.0.0.1", "127.0.0.1", 5000, 5001))  # loopback
+    table.count_wire(Packet(43, "udp", "recv", GAME, 64, LOCAL, LOCAL, 5000, 5001))             # to itself
+    table.count_wire(Packet(11, "tcp", "recv", OTHER, 5000, LOCAL, "203.0.113.9", 50001, 443))  # another program
+    table.count_wire(Packet(12, "tcp", "connect", GAME, 0, "203.0.113.9", LOCAL, 443, 50000))   # no bytes
+    assert table.game_wire == [1000, 300] and table.result()["game_wire_bytes"] == [1000, 300]

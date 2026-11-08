@@ -321,6 +321,25 @@ def test_per_program_traffic_of_one_session_needs_the_adapter_to_rule_a_hog_out(
     assert is_finding(res) and "chrome.exe" in res.evidence[0].text          # one of the player's is still named
 
 
+@pytest.mark.parametrize("nic_rx, kind", [(4.5e6, rules.Cleared), (5.6e6, rules.Unchecked)])
+def test_the_games_own_network_traffic_is_taken_off_the_adapters_total(nic_rx, kind):
+    # A game moving 4 MB/s of its own (120 MB over the 30 s here, measured from its whole events through the relay) is
+    # not "something else" on the adapter: what is left decides, at 1 MB/s.
+    flows = {"downloads": [], "talkers_scope": "session", "game_wire_bytes": [100e6, 20e6],
+             "talkers": [{"pid": 4242, "name": "game.exe", "rx_bytes": 101e6, "tx_bytes": 20e6}]}
+    res = run("bandwidth_hog", net(inet_rtt_ms=7.0, nic_rx_bps=nic_rx, nic_tx_bps=0.0, flows=flows, ok=ETW))
+    assert isinstance(res, kind), res
+    if kind is rules.Cleared:
+        assert "the network adapter moved 4.50 MB/s on average, every program together, 4.00 MB/s of it the game's " \
+               "own: 0.50 MB/s for everything else" in res.text, res.text
+    else:
+        assert "moved 5.6 MB/s on average, 4.0 MB/s of it the game's own, so something else used" in res.text
+    # Seeing every program (no relay), the talkers clear it as before, and the game's bytes are not taken off.
+    every = dict(flows, talkers_scope="all")
+    assert isinstance(run("bandwidth_hog", net(inet_rtt_ms=7.0, nic_rx_bps=nic_rx, nic_tx_bps=0.0, flows=every,
+                                               ok=ETW)), rules.Cleared)
+
+
 def test_a_session_scoped_measurement_without_adapter_counters_rules_nothing_out():
     flows = {"downloads": [], "talkers_scope": "session", "talkers": []}
     res = run("bandwidth_hog", net(inet_rtt_ms=7.0, flows=flows, ok=ETW))

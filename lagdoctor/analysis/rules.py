@@ -2731,7 +2731,8 @@ def _all_traffic_quiet(e: _Env, talkers: Any) -> str | Unchecked:
     traffic, when its session ran for the whole capture and saw every program, else the network adapter's own byte
     counters (every program together) under TALKER_MIN_BPS. Unchecked when neither measured it. Through the relay the
     per-program traffic covers only the player's Windows session (`talkers_scope` "session", DECISIONS 2026-11-08),
-    and services run outside it, so only the adapter can rule them out."""
+    and services run outside it, so only the adapter can rule them out: what is left of its total once the game's own
+    traffic over the network (`game_wire_bytes`, measured from the game's whole events) is taken off."""
     flows = e.flows()
     src = flows.get("download_sources")       # the download logs the network collector read
     logs = [s.capitalize() for s in (_text(x, 20) for x in src) if s] if isinstance(src, list) else []
@@ -2747,10 +2748,20 @@ def _all_traffic_quiet(e: _Env, talkers: Any) -> str | Unchecked:
     nic = [a + b for a, b in ((attribute.read(N.NIC_RX_BPS, fa._at(rx, i)), attribute.read(N.NIC_TX_BPS, fa._at(tx, i)))
                               for i, ti in enumerate(t) if fa._bounded(ti) is not None)
            if a is not None and b is not None and a >= 0 and b >= 0]
-    if len(nic) >= NIC_MIN_ROWS and st.mean(nic) < TALKER_MIN_BPS:
+    wire = flows.get("game_wire_bytes")
+    game = 0.0
+    if measured and e.duration and isinstance(wire, list) and len(wire) == 2:    # session only: else returned
+        game = sum(max(0.0, _fin(x) or 0.0) for x in wire) / e.duration
+    nic_mean = st.mean(nic) if nic else 0.0
+    rest = max(0.0, nic_mean - game)
+    if len(nic) >= NIC_MIN_ROWS and rest < TALKER_MIN_BPS:
         mine = (f"no program in your Windows session moved {TALKER_MIN_BPS / 1e6:.0f} MB/s or more on average (each "
                 "one's traffic, from ETW), and " if measured else "")
-        return (f"{mine}the network adapter moved only {st.mean(nic) / 1e6:.2f} MB/s on average, every program "
+        if game > 0 and nic_mean >= TALKER_MIN_BPS:
+            return (f"{mine}the network adapter moved {nic_mean / 1e6:.2f} MB/s on average, every program together, "
+                    f"{game / 1e6:.2f} MB/s of it the game's own: {rest / 1e6:.2f} MB/s for everything else (under "
+                    f"{TALKER_MIN_BPS / 1e6:.0f} MB/s){seen}")
+        return (f"{mine}the network adapter moved only {nic_mean / 1e6:.2f} MB/s on average, every program "
                 f"together (under {TALKER_MIN_BPS / 1e6:.0f} MB/s){seen}")
     if measured:
         why = "programs outside your Windows session, Windows' own services among them, were not measured one by one"
@@ -2758,8 +2769,11 @@ def _all_traffic_quiet(e: _Env, talkers: Any) -> str | Unchecked:
         why = ("each program's traffic was not measured (" + (f"the ETW consumer stopped at {stopped:.0f} s"
                                                                if stopped is not None and isinstance(talkers, list)
                                                                else e.why("net_flows")) + ")")
-    if len(nic) >= NIC_MIN_ROWS:
-        why += (f", and the network adapter moved {st.mean(nic) / 1e6:.1f} MB/s on average, so something used the "
+    if len(nic) >= NIC_MIN_ROWS and game > 0:
+        why += (f", and the network adapter moved {nic_mean / 1e6:.1f} MB/s on average, {game / 1e6:.1f} MB/s of it "
+                "the game's own, so something else used the connection")
+    elif len(nic) >= NIC_MIN_ROWS:
+        why += (f", and the network adapter moved {nic_mean / 1e6:.1f} MB/s on average, so something used the "
                 "connection")
     else:
         why += ", and the network adapter's byte counters were not read"
