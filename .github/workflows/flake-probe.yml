@@ -14,7 +14,7 @@ env:
   TEST: tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap
   PROBE_REORDER: "60"
   # Which steps run: any of probe, alone, stress, suite, sweep.
-  MODES: "sweep"
+  MODES: "alone"
 
 jobs:
   probe:
@@ -38,9 +38,9 @@ jobs:
       - name: Phase probe, 40 runs of the test's scenario
         if: ${{ contains(env.MODES, 'probe') }}
         run: uv run --no-sync python scripts/flake_probe.py 40 "$env:PROBE_REORDER"
-      - name: The test alone, 50 times
+      - name: The test alone, 100 times
         if: ${{ !cancelled() && contains(env.MODES, 'alone') }}
-        run: uv run --no-sync python scripts/flake_loop.py alone 50
+        run: uv run --no-sync python scripts/flake_loop.py alone 100
       - name: The test alone with half the CPUs busy, 30 times
         if: ${{ !cancelled() && contains(env.MODES, 'stress') }}
         run: uv run --no-sync python scripts/flake_loop.py stress 30
