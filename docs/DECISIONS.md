@@ -2,6 +2,11 @@
 
 ## Backlog: alternatives worth trying later
 
+- **Keep Alt from starting Windows' menu mode in the app's window**: the window procedure returns 0 for
+  `WM_SYSCOMMAND` with `SC_KEYMENU` and no character, as Chromium's own window does, or the controller is created with
+  AllowHostInputProcessing (`docs/research/desktop-app.md`, section 12). Worth it if step 2's record shows Alt+Left
+  taking the keyboard from the page. Revisit hook: the window procedure M1 writes, and `on_message` in the spike.
+
 - **A weekly CI run that skips the PresentMon cache**, so the real download also runs when nothing in the repo
   changed (GitHub moving its download hosts, say). Revisit hook: an `on: schedule` trigger in `ci.yml` and a
   condition on its "Restore PresentMon from the cache" step.
@@ -56,6 +61,29 @@
   Revisit hook: `console.ascii_text` and `cli.say`, calling `html.user_neutral`.
 
 ---
+
+## 2026-11-08: M0's step 2 is rebuilt before a third run, and CI's rehearsal types its keys
+
+The owner's first run of the window spike passed everything but step 2 (keys and right-click), which saw no
+right-click. Asked whether to rerun it as it was or fix the step first, the owner reran it ("Reran it, check it"); the
+second run saw four right-clicks and only four keys. Asked again, the owner answered "Fix step 2 first". The rest was
+chosen by the implementing session.
+- **Rerun as it is (the owner's first answer)**: cheapest, and the first run's record fitted a step left half done.
+  It did not complete: each run missed a different part, and the step could not say why.
+- **Fix step 2 first (the owner's second answer)**: each action is a line that ticks off as it arrives; a Ctrl key
+  counts when the page or the view's key event saw it; the step keeps every key press, the page's keys and the
+  window's focus and menu messages, and says what followed Alt+Left. Its bar stays where it was: 6 of the 7 Ctrl keys
+  and a right-click. Counting Alt+Left as well made it looser, because the window's event always sees it and it can
+  show no effect here, so it is reported, never counted.
+- **Count the two runs together** (the first saw seven keys, the second the right-click): rejected. It turns the gate
+  from one passing run into two partial ones, and leaves Alt+Left unexplained.
+- **CI's rehearsal types step 2's keys with SendInput on GitHub's runner (chosen)**: the owner's own step runs on real
+  input before the owner's third run, under a check of its own that can fail. Only there: `scripts/stage2/guard.py`,
+  checked again inside `type_keys`.
+  - **A separate automated keys check in `--ci`**: rejected. It would test other code than the owner runs.
+- **Keeping Alt from starting Windows' menu mode now**: deferred, worth trying (Backlog), once a run shows what Alt+Left
+  does.
+Revisit hooks: `KEYS_NEEDED` and `COUNTED_KEYS`, `type_keys`, and `on_message`'s `WM_SYSCOMMAND` in the spike.
 
 ## 2026-11-08: The HTML report shows profile folders by their variable; the terminal keeps real paths
 

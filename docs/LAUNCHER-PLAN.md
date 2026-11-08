@@ -17,7 +17,9 @@ service's protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   owner's PC, run from the agent's shell (research note, section 11). The gate is the owner's own run, with the four
   steps a person must do. The owner ran it twice (2026-11-08): 33 checks passed and none failed each time, but step 2
   never counted. The first run's page saw 7 of its 8 keys and no right-click, the second's 4 right-clicks and 4 keys,
-  and Alt+Left reached the page in neither. The gate waits on a run that completes step 2.
+  and Alt+Left reached the page in neither. The owner chose to rebuild step 2 before a third run (DECISIONS
+  2026-11-08), and it is: each action ticks off as it arrives, and its record shows what Alt+Left does. The gate waits
+  on a run that completes step 2.
 - [ ] M1: the app with your results.
 - [ ] M2: the recording seams. The locked pipe is done (`lagdoctor/winapi/pipe.py`, PR #19, 2026-11-08); the other
   seams are not.
@@ -311,7 +313,17 @@ laptops they are hardware keys) and right-click, change the display scale or mov
 spike reads the view while the new scale is on, and reminds the owner to set the scale back), and say what the
 taskbar shows. The owner runs it in their own terminal. `--auto` runs the automated checks alone (agents and CI);
 `--rehearse` walks the four steps with automatic answers, so their code runs without a person and checks nothing. A
-run cut short (the window closed, Ctrl+C) says so and exits 4, listing every check it never reached. CI's probe
+run cut short (the window closed, Ctrl+C) says so and exits 4, listing every check it never reached.
+
+Step 2 (keys and right-click) lists each action on its own line, Alt+Left last, and ticks each off as it arrives. A
+Ctrl key counts when the page or the view's AcceleratorKeyPressed event saw it, and "Nothing happened" counts with 6 of
+the 7 Ctrl keys and a right-click; Alt+Left is reported, never counted, since it can show no effect here. Any
+navigation, zoom change or browser window during the step fails it, and Skip keeps the record. The record holds every
+key press the view saw, the page's keys and right-clicks with their times, and the window's focus, menu and key
+messages, so the result says what followed Alt+Left: whether Windows' menu mode started and the view lost the
+keyboard (research note, section 12). On GitHub's runner, and only there, CI's rehearsal types the actions with
+SendInput, then a letter after Alt+Left, and adds a check of its own (`keys-typed`) that fails unless every typed
+action arrived and nothing acted. CI's probe
 (`.github/workflows/webview-spike.yml`) asks whether the runner has the WebView2 Runtime and can open the window; a
 "no runtime" answer counts only when a second reading (the runtime's registry version and its exe) agrees. It does:
 on PR #18 the runner had 156.0.4314.58, and all 30 automated checks passed there.

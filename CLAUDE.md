@@ -35,7 +35,9 @@ installs, runs and uninstalls it there (`scripts/msi_check.py`, whose verdicts a
 the `msi-logs` artifact). `.github/workflows/webview-spike.yml` (the Window spike, about 1.5 min) runs the window
 spike's automated checks and a rehearsal on pull requests that change the spike, `lagdoctor/setup.py` or
 `lagdoctor/winapi/ntquery.py`: GitHub's runner has the WebView2 Runtime (156.0.4314.58 on 2026-11-08), and its "no
-runtime" answer passes only when the runtime's registry version and exe agree. The PresentMon cache key hashes
+runtime" answer passes only when the runtime's registry version and exe agree. The rehearsal types step 2's keys, a
+wheel turn and a right-click itself there, and its `keys-typed` check fails the job unless each arrived and nothing
+acted. The PresentMon cache key hashes
 `setup.py`, `paths.py` and `cli.py`, so a change to one makes every job download PresentMon afresh; GitHub's release
 host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job before blaming the change.
 
@@ -141,8 +143,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   purpose and closes it; it goes blank for about 6 s and reloads, because the run ends its own WebView2 browser
   process; its move check holds it in Windows' move loop for about 2.5 s, which moves the mouse pointer onto its title
   bar and captures the mouse (the spike puts the pointer back); then three short windows follow, one of them a child
-  that dies of an access violation on purpose. Run it when the owner is not mid-game. Its interactive run is the
-  owner's, in their terminal. The spike keeps everything under `%TEMP%\lag-doctor-webview-spike`, which the private
+  that dies of an access violation on purpose. Run it when the owner is not mid-game. Nothing is typed there: only
+  `--rehearse --ci` on GitHub's own runner types step 2's keys with SendInput (`types_keys`, through
+  `scripts/stage2/guard.py`, and checked again inside `type_keys`), because typed keys go to whatever window has the
+  keyboard; the spike's tests make every real input call raise. Its interactive run is the owner's, in their terminal. The spike keeps everything under `%TEMP%\lag-doctor-webview-spike`, which the private
   copy leaves alone. The relay is also the protocol of Stage 4's capture service (`docs/INSTALLER-PLAN.md`), so Stage
   4 work starts from that plan too.
 - **The relay and the capture service talk only through `lagdoctor/winapi/pipe.py`.** Name a pipe through

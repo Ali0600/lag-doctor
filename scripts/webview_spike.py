@@ -10,6 +10,9 @@ The owner's run, in their own terminal (about three minutes; the window shows fo
     --ci         like --auto (or with --rehearse, a rehearsal), and writes GitHub's job summary
     --work-dir   where the run folders go
 
+With --rehearse --ci on GitHub's own runner, and only there (scripts/stage2/guard.py), the rehearsal also types step
+2's keys, wheel turn and right-click with SendInput, so that step's code runs on real input before the owner's run.
+
 While the automated checks run, the window opens DevTools on purpose, goes blank for a few seconds, reloads, and
 moves itself for about 3 s (Windows' move mode puts the mouse pointer on its title bar, then the spike puts it back);
 two short windows follow at the end. Every check prints PASS, FAIL or NOT RUN with what it measured, and a check that
@@ -60,6 +63,7 @@ sys.path.insert(0, str(ROOT))
 
 from lagdoctor import setup as _setup  # noqa: E402  WinVerifyTrust and the signer's name, as for PresentMon
 from lagdoctor.winapi import ntquery  # noqa: E402  handle-free process snapshots
+from stage2 import guard  # noqa: E402  GitHub's own runners: the only place the rehearsal types step 2's keys itself
 
 # ------------------------------------------------------------------------------------------------- constants --
 
@@ -96,6 +100,14 @@ OWNER_ORDER = ("drag", "keys", "dpi", "taskbar")
 OWNER_KEYS = {"ctrl+r": "Ctrl+R", "ctrl+p": "Ctrl+P", "ctrl+f": "Ctrl+F", "ctrl+s": "Ctrl+S",
               "ctrl+shift+i": "Ctrl+Shift+I", "ctrl+plus": "Ctrl+Plus", "ctrl+minus": "Ctrl+Minus",
               "alt+arrowleft": "Alt+Left"}
+ALT_LEFT = "alt+arrowleft"
+# Of the seven Ctrl keys, with a right-click, before "Nothing happened" counts. Alt+Left is reported, never counted: the
+# window's key event always sees it, and it can show no effect here (the view has no history to go back to).
+KEYS_NEEDED = 6
+COUNTED_KEYS = tuple(key for key in OWNER_KEYS if key != ALT_LEFT)
+ACCEL_CAP = 5000                             # key presses and releases kept (a held key's repeats are only counted)
+FOCUS_CAP = 2000                             # focus, menu and key messages kept
+RECORD_CAP = 800                             # of each, the first ones a step's result keeps, with the total
 
 # Environment variables WebView2 reads itself, even without Microsoft's loader. Set, not removed: Wails' loader notes
 # that WebView2 checks they exist, so an empty one also stops the matching registry override (env_create.go). They
@@ -112,7 +124,7 @@ HARDENED_ENV = {
 SLOTS = {
     "ICoreWebView2Environment": {"CreateCoreWebView2Controller": 3, "get_BrowserVersionString": 5},
     "ICoreWebView2Environment5": {"add_BrowserProcessExited": 12},
-    "ICoreWebView2Controller": {"put_IsVisible": 4, "get_Bounds": 5, "put_Bounds": 6, "get_ZoomFactor": 7, "add_ZoomFactorChanged": 9, "MoveFocus": 12, "add_AcceleratorKeyPressed": 19, "NotifyParentWindowPositionChanged": 23, "Close": 24, "get_CoreWebView2": 25},
+    "ICoreWebView2Controller": {"put_IsVisible": 4, "get_Bounds": 5, "put_Bounds": 6, "get_ZoomFactor": 7, "add_ZoomFactorChanged": 9, "MoveFocus": 12, "add_GotFocus": 15, "add_LostFocus": 17, "add_AcceleratorKeyPressed": 19, "NotifyParentWindowPositionChanged": 23, "Close": 24, "get_CoreWebView2": 25},
     "ICoreWebView2Controller3": {"put_DefaultBackgroundColor": 27, "get_RasterizationScale": 28, "get_ShouldDetectMonitorScaleChanges": 30, "add_RasterizationScaleChanged": 32, "get_BoundsMode": 34},
     "ICoreWebView2": {"get_Settings": 3, "Navigate": 5, "add_NavigationStarting": 7, "add_NavigationCompleted": 15, "add_FrameNavigationStarting": 17, "add_ScriptDialogOpening": 21, "add_PermissionRequested": 23, "add_ProcessFailed": 25, "PostWebMessageAsJson": 32, "add_WebMessageReceived": 34, "remove_WebMessageReceived": 35, "get_BrowserProcessId": 37, "add_NewWindowRequested": 44, "OpenDevToolsWindow": 51},
     "ICoreWebView2_3": {"TrySuspend": 68, "Resume": 69, "get_IsSuspended": 70, "SetVirtualHostNameToFolderMapping": 71},
@@ -130,7 +142,7 @@ SLOTS = {
     "ICoreWebView2NewWindowRequestedEventArgs": {"get_Uri": 3, "put_Handled": 6},
     "ICoreWebView2PermissionRequestedEventArgs": {"get_Uri": 3, "get_PermissionKind": 4, "put_State": 7},
     "ICoreWebView2ProcessFailedEventArgs": {"get_ProcessFailedKind": 3},
-    "ICoreWebView2AcceleratorKeyPressedEventArgs": {"get_KeyEventKind": 3, "get_VirtualKey": 4},
+    "ICoreWebView2AcceleratorKeyPressedEventArgs": {"get_KeyEventKind": 3, "get_VirtualKey": 4, "get_KeyEventLParam": 5},
     "ICoreWebView2DownloadStartingEventArgs": {"put_Cancel": 5, "put_ResultFilePath": 7, "put_Handled": 9},
     "ICoreWebView2LaunchingExternalUriSchemeEventArgs": {"get_Uri": 3, "put_Cancel": 7},
     "ICoreWebView2ScriptDialogOpeningEventArgs": {"get_Kind": 4},
@@ -167,6 +179,7 @@ IIDS = {
     "ICoreWebView2PermissionRequestedEventHandler": "15E1C6A3-C72A-4DF3-91D7-D097FBEC6BFD",
     "ICoreWebView2ProcessFailedEventHandler": "79E0AEA4-990B-42D9-AA1D-0FCC2E5BC7F1",
     "ICoreWebView2AcceleratorKeyPressedEventHandler": "B29C7E28-FA79-41A8-8E44-65811C76DCB2",
+    "ICoreWebView2FocusChangedEventHandler": "05EA24BD-6452-4926-9014-4B82B498135D",
     "ICoreWebView2ZoomFactorChangedEventHandler": "B52D71D6-C4DF-4543-A90C-64A3E60F38CB",
     "ICoreWebView2BrowserProcessExitedEventHandler": "FA504257-A216-4911-A860-FE8825712861",
     "ICoreWebView2RasterizationScaleChangedEventHandler": "9C98C8B1-AC53-427E-A345-3049B5524BBE",
@@ -181,6 +194,7 @@ ACCESS_DENY = 0                      # COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DE
 PERMISSION_DENY = 2                  # COREWEBVIEW2_PERMISSION_STATE_DENY
 FAILED_BROWSER_EXITED = 0            # COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED
 MOVE_FOCUS_PROGRAMMATIC = 0
+KEY_DOWN_KINDS = (0, 2)              # COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN, _SYSTEM_KEY_DOWN (WM_[SYS]KEYDOWN)
 PERMISSION_KINDS = {0: "unknown", 1: "microphone", 2: "camera", 3: "geolocation", 4: "notifications",
                     5: "other sensors", 6: "clipboard read"}
 
@@ -203,6 +217,18 @@ WM_GETMINMAXINFO, WM_SETICON, WM_TIMER, WM_MOVING = 0x0024, 0x0080, 0x0113, 0x02
 WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_DPICHANGED = 0x0231, 0x0232, 0x02E0
 WM_KEYDOWN, WM_SYSCOMMAND, WM_CANCELMODE = 0x0100, 0x0112, 0x001F
 SC_MOVE, VK_ESCAPE = 0xF010, 0x1B
+WM_ACTIVATE, WM_KILLFOCUS, WM_KEYUP = 0x0006, 0x0008, 0x0101
+WM_SYSKEYDOWN, WM_SYSKEYUP, WM_SYSCHAR = 0x0104, 0x0105, 0x0106
+WM_INITMENU, WM_INITMENUPOPUP, WM_MENUCHAR = 0x0116, 0x0117, 0x0120
+WM_ENTERMENULOOP, WM_EXITMENULOOP = 0x0211, 0x0212
+SC_KEYMENU = 0xF100                 # Alt released alone: DefWindowProc starts menu mode on the window menu
+VK_SHIFT, VK_CONTROL, VK_MENU, VK_LEFT = 0x10, 0x11, 0x12, 0x25
+VK_ADD, VK_SUBTRACT, VK_OEM_PLUS, VK_OEM_MINUS = 0x6B, 0x6D, 0xBB, 0xBD
+LP_ALT_DOWN, LP_WAS_DOWN = 1 << 29, 1 << 30     # a key message's lParam: Alt held; the key was already down (a repeat)
+INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
+KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP = 0x0001, 0x0002
+MOUSEEVENTF_RIGHTDOWN, MOUSEEVENTF_RIGHTUP, MOUSEEVENTF_WHEEL = 0x0008, 0x0010, 0x0800
+WHEEL_DELTA = 120
 WM_APP = 0x8000
 WM_APP_CALL = WM_APP + 1            # run queued calls on the UI thread, outside any COM callback
 WM_APP_WORKER = WM_APP + 2          # a worker's result, posted to the window
@@ -221,6 +247,35 @@ ERROR_INSUFFICIENT_BUFFER = 122
 SEM_FAILCRITICALERRORS, SEM_NOGPFAULTERRORBOX = 0x0001, 0x0002
 CREATE_NO_WINDOW = 0x08000000
 HEARTBEAT_TIMER = 1
+
+# How each of OWNER_KEYS is typed: the keys held, then the key tapped. The rehearsal on GitHub's runner types these
+# (type_keys), and tests/test_webview_spike.py holds host_combo to naming each one as the page's combo() does.
+KEY_STROKES = {"ctrl+r": ((VK_CONTROL,), 0x52), "ctrl+p": ((VK_CONTROL,), 0x50), "ctrl+f": ((VK_CONTROL,), 0x46),
+               "ctrl+s": ((VK_CONTROL,), 0x53), "ctrl+shift+i": ((VK_CONTROL, VK_SHIFT), 0x49),
+               "ctrl+plus": ((VK_CONTROL,), VK_OEM_PLUS), "ctrl+minus": ((VK_CONTROL,), VK_OEM_MINUS),
+               "alt+arrowleft": ((VK_MENU,), VK_LEFT)}
+EXTENDED_KEYS = frozenset({VK_LEFT})          # the arrow cluster's keys carry the extended flag, as keyboards send them
+# Step 2's lines, in the order the owner is asked to do them, each ticked off on the page as it arrives. Alt+Left is
+# last: a lone Alt can put the window in Windows' menu mode, which takes the keyboard from the page (research note,
+# section 12), and nothing should be lost after it.
+KEYS_CHECKLIST = (("ctrl+r", "Ctrl+R"), ("ctrl+p", "Ctrl+P"), ("ctrl+f", "Ctrl+F"), ("ctrl+s", "Ctrl+S"),
+                  ("ctrl+shift+i", "Ctrl+Shift+I"), ("ctrl+plus", "Ctrl and + (plus)"),
+                  ("ctrl+minus", "Ctrl and - (minus)"), ("ctrl-wheel", "Hold Ctrl and turn the mouse wheel"),
+                  ("right-click", "Right-click on this text"),
+                  ("alt+arrowleft", "Last: hold Alt and tap the left arrow"))
+PROBE_KEY = 0x51        # Q, typed after Alt+Left on GitHub's runner: no letter of the window menu (Restore, Move, Size,
+                        # Minimize, Maximize, Close), so a menu mode Alt+Left started cannot act on it
+# The window's own messages step 2 keeps, with when they came: focus, activation, menu mode and any key that reaches
+# the window itself rather than the view. Kept only: each still goes where it went before (on_message).
+FOCUS_MESSAGES = {WM_ACTIVATE: "window activation", WM_SETFOCUS: "window got focus",
+                  WM_KILLFOCUS: "window lost focus", WM_KEYDOWN: "window key down", WM_KEYUP: "window key up",
+                  WM_SYSKEYDOWN: "window system key down", WM_SYSKEYUP: "window system key up",
+                  WM_SYSCHAR: "window system character", WM_SYSCOMMAND: "system command",
+                  WM_INITMENU: "a menu became active (nothing shown yet)",
+                  WM_INITMENUPOPUP: "a drop-down menu was about to be shown", WM_MENUCHAR: "menu got a character",
+                  WM_ENTERMENULOOP: "menu loop started", WM_EXITMENULOOP: "menu loop ended"}
+ACTIVATIONS = {0: "window deactivated", 1: "window activated", 2: "window activated by a click"}   # WA_*
+VIEW_GOT_FOCUS, VIEW_LOST_FOCUS = "view got focus", "view lost focus"     # the controller's GotFocus, LostFocus
 
 # ------------------------------------------------------------------------------------------ Win32 bindings --
 
@@ -262,6 +317,28 @@ class COREWEBVIEW2_COLOR(ctypes.Structure):
     _fields_ = [("A", ctypes.c_ubyte), ("R", ctypes.c_ubyte), ("G", ctypes.c_ubyte), ("B", ctypes.c_ubyte)]
 
 
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [("dx", wintypes.LONG), ("dy", wintypes.LONG), ("mouseData", wintypes.DWORD),
+                ("dwFlags", wintypes.DWORD), ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", wintypes.WORD), ("wScan", wintypes.WORD), ("dwFlags", wintypes.DWORD),
+                ("time", wintypes.DWORD), ("dwExtraInfo", ctypes.c_size_t)]
+
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [("uMsg", wintypes.DWORD), ("wParamL", wintypes.WORD), ("wParamH", wintypes.WORD)]
+
+
+class _INPUT_UNION(ctypes.Union):
+    _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT), ("hi", HARDWAREINPUT)]
+
+
+class INPUT(ctypes.Structure):
+    _fields_ = [("type", wintypes.DWORD), ("u", _INPUT_UNION)]
+
+
 # x64 sizes these layouts must produce (WinUser.h, WinGDI.h, WebView2.h).
 assert ctypes.sizeof(ctypes.c_void_p) == 8, "the spike targets 64-bit Python only"
 assert ctypes.sizeof(GUID) == 16
@@ -270,6 +347,7 @@ assert ctypes.sizeof(MINMAXINFO) == 40
 assert ctypes.sizeof(ICONINFO) == 32
 assert ctypes.sizeof(BITMAPINFOHEADER) == 40
 assert ctypes.sizeof(COREWEBVIEW2_COLOR) == 4
+assert ctypes.sizeof(MOUSEINPUT) == 32 and ctypes.sizeof(KEYBDINPUT) == 24 and ctypes.sizeof(INPUT) == 40
 
 _user32 = ctypes.WinDLL("user32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -320,6 +398,12 @@ GetCursorPos = _bind(_user32, "GetCursorPos", B, ctypes.POINTER(wintypes.POINT))
 SetCursorPos = _bind(_user32, "SetCursorPos", B, I, I)
 GetWindowTextW = _bind(_user32, "GetWindowTextW", I, H, wintypes.LPWSTR, I)
 GetClassNameW = _bind(_user32, "GetClassNameW", I, H, wintypes.LPWSTR, I)
+GetKeyState = _bind(_user32, "GetKeyState", ctypes.c_short, I)
+GetForegroundWindow = _bind(_user32, "GetForegroundWindow", H)
+SendInput = _bind(_user32, "SendInput", U, U, ctypes.POINTER(INPUT), I)
+MapVirtualKeyW = _bind(_user32, "MapVirtualKeyW", U, U, U)
+ClientToScreen = _bind(_user32, "ClientToScreen", B, H, ctypes.POINTER(wintypes.POINT))
+EndMenu = _bind(_user32, "EndMenu", B)
 CreateIconIndirect = _bind(_user32, "CreateIconIndirect", wintypes.HICON, ctypes.POINTER(ICONINFO))
 DestroyIcon = _bind(_user32, "DestroyIcon", B, wintypes.HICON)
 CreateDIBSection = _bind(_gdi32, "CreateDIBSection", wintypes.HBITMAP, wintypes.HDC,
@@ -383,6 +467,141 @@ def percentile(values: list[float], pct: float) -> float | None:
 def parse_runtime_version(text: str) -> tuple[int, int, int, int] | None:
     m = re.fullmatch(r"(\d{1,5})\.(\d{1,5})\.(\d{1,5})\.(\d{1,5})", text or "")
     return tuple(int(x) for x in m.groups()) if m else None  # type: ignore[return-value]
+
+
+# ------------------------------------------------------------------------------------------- step 2's keys --
+# A key is read on two sides: the page's keydown, and the view's AcceleratorKeyPressed event on the host. Microsoft
+# documents that event as firing for every key pressed with Ctrl or Alt held, or that types no character, "whether
+# they are enabled or not", before the browser and then the page get the key (research note, section 12).
+
+
+def host_combo(vk: int, ctrl: bool, shift: bool, alt: bool) -> str | None:
+    """The page's name (combo() in APP_JS) for a key the view's key event saw go down, or None for a key no line of
+    step 2 names. Shift is left out of plus and minus, as the page leaves it out, and Alt+Left keeps its name when
+    AltGr adds Ctrl: a non-US keyboard's right Alt arrives as Ctrl+Alt."""
+    if vk == VK_LEFT:
+        key = "arrowleft"
+    elif vk in (VK_OEM_PLUS, VK_ADD):
+        key = "plus"
+    elif vk in (VK_OEM_MINUS, VK_SUBTRACT):
+        key = "minus"
+    elif 0x41 <= vk <= 0x5A:                                   # A to Z
+        key = chr(vk).lower()
+    else:
+        return None
+    if key == "arrowleft" and alt:
+        return ALT_LEFT
+    mods = [name for name, held in (("ctrl", ctrl), ("shift", shift and key not in ("plus", "minus")), ("alt", alt))
+            if held]
+    return "+".join(mods + [key])
+
+
+def on_clock(t_begin: float, ms: list) -> list[float]:
+    """Page times, in ms since its keys_begin, on the spike's clock (seconds since it started): t_begin, taken as
+    keys_begin's report arrived, plus each ms. Each lands that report's trip late, the same for all of them."""
+    return [round(t_begin + m / 1000, 3) for m in ms]
+
+
+def keys_changed(zoom0: float | None, zoom1: float | None, zoom_events: int, navigations: list,
+                 windows: list) -> bool:
+    """Whether the spike itself saw something act during step 2: the zoom moved, WebView2 reported a zoom change, a
+    browser window appeared, or any navigation began. Every navigation is refused then, but nothing on the page
+    navigates during the step, so one that begins means a key reached the browser's own handling."""
+    return zoom1 != zoom0 or zoom_events > 0 or bool(navigations) or bool(windows)
+
+
+def keys_verdict(answer: str, changed: bool, page: set[str], window: set[str], right_clicks: int,
+                 effects: str) -> tuple[bool | None, str]:
+    """Step 2's verdict. A key counts when the page or the view's key event saw it: a key the browser kept from the page
+    reached the window all the same, and did nothing. "Nothing happened" counts only once enough was tried, KEYS_NEEDED
+    of the seven Ctrl keys (COUNTED_KEYS) and a right-click. "Something happened", or a change the spike saw itself,
+    fails. Skip and no answer are NOT RUN."""
+    if answer not in ("Nothing happened", "Something happened"):
+        return None, "skipped" if answer == "Skip" else f"no answer ({answer})"
+    seen = [OWNER_KEYS[key] for key in COUNTED_KEYS if key in page or key in window]
+    unseen = [OWNER_KEYS[key] for key in COUNTED_KEYS if key not in page and key not in window]
+    window_only = [label for key, label in OWNER_KEYS.items() if key in window and key not in page]
+    tally = (f"{len(seen)} of {len(COUNTED_KEYS)} Ctrl keys seen by the page or the window"
+             + (f" (not seen: {', '.join(unseen)})" if unseen else ""))
+    if window_only:
+        tally += f"; {', '.join(window_only)} reached the window but not the page"
+    tally += f"; {plural(right_clicks, 'right-click')}"
+    if answer == "Nothing happened" and not changed and (len(seen) < KEYS_NEEDED or right_clicks < 1):
+        return None, f"too few of the step's actions were seen: {tally}"
+    return answer == "Nothing happened" and not changed, f"you answered: {answer}; {tally}; {effects}"
+
+
+def alt_left_story(window: list[dict], page: list[tuple[str, float]], focus: list[dict]) -> str:
+    """What followed Alt+Left, from step 2's records on the spike's one clock: the view's key events, the page's keys
+    and the window's focus, menu and key messages. It says how often Alt+Left reached the window and the page, whether
+    Windows' menu mode started after it (timed from the last Alt+Left before the menu), whether the view lost the
+    keyboard, and where the keys pressed after the last Alt+Left went. Only what came after Alt+Left counts: a menu
+    mode from an earlier lone Alt is not its doing."""
+    on_window = [e["t"] for e in window if e.get("combo") == ALT_LEFT]
+    on_page = [t for c, t in page if c == ALT_LEFT]
+    if not on_window and not on_page:
+        return "Alt+Left was seen by neither the window nor the page"
+    presses = on_window + on_page
+    first, last = min(presses), max(presses)
+    where = ("the window and the page" if on_window and on_page else "the window but not the page" if on_window else
+             "the page but not the window's key event")
+    times = max(len(on_window), len(on_page))
+    parts = [f"Alt+Left{f' ({times} presses)' if times > 1 else ''} reached {where}"]
+    after = [e for e in focus if e["t"] >= first]
+    menu = [e for e in after if e["msg"] == "menu loop started" or e.get("command") == "keyboard menu"]
+    if menu:
+        start = menu[0]["t"]
+        since = max(t for t in presses if t <= start)
+        ended = any(e["msg"] == "menu loop ended" and e["t"] >= start for e in after)
+        parts.append(f"then Windows' menu mode started {start - since:.2f} s after it"
+                     + (" and ended" if ended else ""))
+    else:
+        parts.append("no menu mode followed")
+    if any(e["msg"] == VIEW_LOST_FOCUS for e in after):
+        parts.append("the view lost the keyboard")
+    to_page = [c for c, t in page if t > last]                   # no Alt+Left comes after the last one
+    to_view = [e for e in window if e["t"] > last and e.get("combo")]
+    to_window = [e for e in focus if e["t"] > last and e["msg"] in ("window key down", "window system key down",
+                                                                      "menu got a character")]
+    if to_page or to_view or to_window:
+        parts.append(f"after it, {plural(len(to_page), 'key')} reached the page, {len(to_view)} the view's key event "
+                     f"and {len(to_window)} the window or its menu")
+    else:
+        parts.append("nothing was pressed after it, so this does not show whether the page kept the keyboard")
+    return "; ".join(parts)
+
+
+def typed_verdict(typing: str | None, page: set[str], window: set[str], right_clicks: int, wheels: int,
+                  lines: dict, changed: bool, probe_reached: bool) -> tuple[bool | None, str]:
+    """The typed rehearsal's own check, on GitHub's runner: each action type_keys typed must arrive and do nothing.
+    All seven Ctrl keys seen by the page or the window, the wheel turn and the right-click by the page, every line but
+    Alt+Left's ticked, and no change the spike saw. What Alt+Left and the letter after it did is reported, not judged.
+    Typing that could not run (no foreground, input not taken) is NOT RUN, with its reason."""
+    if not typing or not typing.startswith("typed all"):
+        return None, f"not typed: {typing or 'type_keys never finished (see the log)'}"
+    unseen = [OWNER_KEYS[key] for key in COUNTED_KEYS if key not in page and key not in window]
+    unticked = [label for item, label in KEYS_CHECKLIST
+                if item != ALT_LEFT and lines.get(item) not in ("page", "window")]
+    ok = not unseen and right_clicks >= 1 and wheels >= 1 and not unticked and not changed
+    return ok, (f"{len(COUNTED_KEYS) - len(unseen)} of {len(COUNTED_KEYS)} Ctrl keys seen"
+                + (f" (not seen: {', '.join(unseen)})" if unseen else "")
+                + f"; at the page {plural(wheels, 'Ctrl+wheel turn')} and {plural(right_clicks, 'right-click')}"
+                + f"; lines not ticked: {', '.join(unticked) or 'none'}; "
+                + ("the spike saw something act" if changed else "nothing acted")
+                + f"; the letter typed after Alt+Left {'reached' if probe_reached else 'did not reach'} the page")
+
+
+def plural(n: int, word: str) -> str:
+    return f"{n} {word}" if n == 1 else f"{n} {word}s"
+
+
+def zoom_text(value: float | None) -> str:
+    return "unknown" if value is None else f"{value:g}"
+
+
+def types_keys(mode: str, rehearse: bool, ci: bool, environ=None) -> bool:
+    """Only CI's rehearsal on GitHub's own runner types step 2's keys (type_keys); everywhere else nothing is typed."""
+    return mode == "main" and rehearse and ci and guard.on_throwaway_runner(environ)
 
 
 # -------------------------------------------------------------------------------------------------- COM core --
@@ -847,6 +1066,62 @@ def visible_windows(pids: set[int], skip: int = 0) -> list[dict]:
     return found
 
 
+def window_class(hwnd: int) -> str:
+    """A window's class name, or "" when it has none to give (it is gone, or not a window)."""
+    cls = ctypes.create_unicode_buffer(256)
+    return cls.value if GetClassNameW(hwnd, cls, 256) else ""
+
+
+# ----------------------------------------------------------------------- typed input (GitHub's runner only) --
+# SendInput goes to whatever window has the keyboard, so only type_keys uses it, and only on GitHub's runner.
+
+
+def key_input(vk: int, up: bool) -> INPUT:
+    """One key event as a keyboard sends it: with the key's scan code, and the extended flag on the arrow cluster."""
+    flags = (KEYEVENTF_KEYUP if up else 0) | (KEYEVENTF_EXTENDEDKEY if vk in EXTENDED_KEYS else 0)
+    item = INPUT(type=INPUT_KEYBOARD)
+    item.u.ki = KEYBDINPUT(wVk=vk, wScan=MapVirtualKeyW(vk, 0) & 0xFFFF, dwFlags=flags)
+    return item
+
+
+def mouse_input(flags: int, data: int = 0) -> INPUT:
+    """One mouse event where the pointer is: a button, or a wheel turn of `data` (WHEEL_DELTA is one notch)."""
+    item = INPUT(type=INPUT_MOUSE)
+    item.u.mi = MOUSEINPUT(mouseData=data & 0xFFFFFFFF, dwFlags=flags)
+    return item
+
+
+def stroke(mods: tuple, vk: int) -> list[INPUT]:
+    """Hold `mods`, tap `vk`, then let go of `mods` in reverse order."""
+    return ([key_input(m, False) for m in mods] + [key_input(vk, False), key_input(vk, True)] +
+            [key_input(m, True) for m in reversed(mods)])
+
+
+def releases(items: list[INPUT], taken: int) -> list[INPUT]:
+    """What lets go of all that the first `taken` events of `items` left down: each key pressed and not released, last
+    pressed first, then the right button. Empty when nothing is left down."""
+    held: list[int] = []
+    button = False
+    for item in items[:taken]:
+        if item.type == INPUT_KEYBOARD:
+            vk, up = item.u.ki.wVk, bool(item.u.ki.dwFlags & KEYEVENTF_KEYUP)
+            if up and vk in held:
+                held.remove(vk)
+            elif not up and vk not in held:
+                held.append(vk)
+        elif item.u.mi.dwFlags & MOUSEEVENTF_RIGHTDOWN:
+            button = True
+        elif item.u.mi.dwFlags & MOUSEEVENTF_RIGHTUP:
+            button = False
+    return [key_input(vk, True) for vk in reversed(held)] + ([mouse_input(MOUSEEVENTF_RIGHTUP)] if button else [])
+
+
+def send_input(items: list[INPUT]) -> int:
+    """The events in one SendInput call, so nothing comes between them; the number Windows took."""
+    batch = (INPUT * len(items))(*items)
+    return SendInput(len(items), batch, ctypes.sizeof(INPUT))
+
+
 # -------------------------------------------------------------------------------------------- the waits --
 
 @dataclass
@@ -873,11 +1148,23 @@ class Owner:
     title: str
     text: str
     buttons: list
+    checklist: tuple = ()     # (id, label) lines the page ticks off as each arrives
+    auto: bool = True         # in a rehearsal the page clicks the first button; False when something else answers
 
 
 @dataclass
 class Work:
     fn: object        # runs in a worker thread; its return value (or exception) resumes the script
+
+
+def owner_prompt(w: Owner, pid: str, rehearse: bool) -> dict:
+    """The page's box for an owner step. In a rehearsal the page clicks the first button itself, through the same path
+    a person's click takes, unless the step answers another way (step 2 on GitHub's runner: type_keys)."""
+    prompt = {"type": "prompt", "id": pid, "title": w.title, "text": w.text, "buttons": w.buttons,
+              "checklist": [list(line) for line in w.checklist]}
+    if rehearse and w.auto:
+        prompt["auto"] = w.buttons[0]
+    return prompt
 
 
 @dataclass
@@ -912,6 +1199,7 @@ INDEX_HTML = """<!doctype html>
 <section id="prompt" hidden>
   <h2 id="prompt-title"></h2>
   <p id="prompt-text"></p>
+  <ol id="prompt-list" hidden></ol>
   <div id="prompt-buttons"></div>
 </section>
 <section><h2>Checks</h2><ol id="results"></ol></section>
@@ -935,6 +1223,10 @@ section { padding: 12px 24px; }
 #prompt-buttons button { font: inherit; margin: 8px 8px 0 0; padding: 8px 16px; border-radius: 6px;
   border: 1px solid #b44708; background: #fff3eb; cursor: pointer; }
 #prompt-buttons button:first-child { background: #e8590c; color: #fff; }
+#prompt-list { margin: 8px 0 4px; }
+#prompt-list li.page, #prompt-list li.window { color: #1b7a33; font-weight: 600; }
+#prompt-list li.page::after { content: " - done"; }
+#prompt-list li.window::after { content: " - done: the window saw it, the page did not"; }
 ol { padding-left: 22px; }
 li { margin: 3px 0; }
 .PASS { color: #1b7a33; } .FAIL { color: #b3261e; } .NOTRUN, .INFO { color: #6b6560; }
@@ -950,7 +1242,7 @@ const send = (obj) => wv.postMessage(obj);
 const pct = (sorted, p) => sorted.length ? sorted[Math.min(sorted.length, Math.max(1, Math.ceil(sorted.length * p / 100))) - 1] : null;
 
 let echoSink = null, pongSink = null, pong2Sink = null;
-let keysWatch = false, keysSeen = [], contextMenus = 0, ctrlWheels = 0;
+let keysWatch = false, keysSeen = [], keyTimes = [], keysT0 = 0, contextMenus = 0, clickTimes = [], ctrlWheels = 0;
 let ticks = 0, ticker = null;
 
 const handlers = {
@@ -966,9 +1258,20 @@ const handlers = {
     li.append(tag, document.createTextNode(' ' + m.name + (m.measured ? ': ' + m.measured : '')));
     $('results').append(li);
   },
+  keyseen: (m) => { if (keysWatch) markDone(String(m.item), 'window'); },
+  press: (m) => { for (const b of $('prompt-buttons').children) if (b.textContent === m.button) { b.click(); break; } },
   prompt: (m) => {
     $('prompt-title').textContent = m.title;
     $('prompt-text').textContent = m.text;
+    const list = $('prompt-list');
+    list.replaceChildren();
+    for (const [item, label] of (m.checklist || [])) {
+      const li = document.createElement('li');
+      li.dataset.item = item;
+      li.textContent = label;
+      list.append(li);
+    }
+    list.hidden = !list.children.length;
     const box = $('prompt-buttons');
     box.replaceChildren();
     for (const label of m.buttons) {
@@ -995,6 +1298,7 @@ wv.addEventListener('message', (e) => {
 function combo(e) {  // "ctrl+shift+i", "ctrl+plus", "alt+arrowleft"; a modifier pressed alone is no combination
   let k = String(e.key).toLowerCase();
   if (['control', 'shift', 'alt', 'meta', 'os'].includes(k)) return null;
+  if (k === 'arrowleft' && e.altKey) return 'alt+arrowleft';   // AltGr (a non-US right Alt) adds Ctrl to it
   if (k === '=' || k === '+') k = 'plus';
   if (k === '-' || k === '_') k = 'minus';
   const mods = [];
@@ -1003,12 +1307,25 @@ function combo(e) {  // "ctrl+shift+i", "ctrl+plus", "alt+arrowleft"; a modifier
   if (e.altKey) mods.push('alt');
   return mods.concat(k).join('+');
 }
+function markDone(item, by) {  // a line of step 2's list: done by the page itself, or seen only by the window
+  for (const li of $('prompt-list').children) {
+    if (li.dataset.item === item && li.className !== 'page') li.className = by;
+  }
+}
+const sinceKeys = () => Math.round(performance.now() - keysT0);
 document.addEventListener('keydown', (e) => {
   const c = combo(e);
-  if (keysWatch && c) keysSeen.push(c);
+  if (keysWatch && c && keysSeen.length < 2000) { keysSeen.push(c); keyTimes.push(sinceKeys()); markDone(c, 'page'); }
 });
-document.addEventListener('contextmenu', () => { if (keysWatch) contextMenus++; });
-document.addEventListener('wheel', (e) => { if (keysWatch && e.ctrlKey) ctrlWheels++; }, {passive: true});
+document.addEventListener('contextmenu', () => {
+  if (!keysWatch) return;
+  contextMenus++;
+  if (clickTimes.length < 200) clickTimes.push(sinceKeys());
+  markDone('right-click', 'page');
+});
+document.addEventListener('wheel', (e) => {
+  if (keysWatch && e.ctrlKey) { ctrlWheels++; markDone('ctrl-wheel', 'page'); }
+}, {passive: true});
 
 function watchDpr() {
   matchMedia(`(resolution: ${devicePixelRatio}dppx)`).addEventListener('change', () => {
@@ -1109,8 +1426,17 @@ const tests = {
   },
   async ticks_start() { ticks = 0; clearInterval(ticker); ticker = setInterval(() => { ticks++; }, 50); return {ok: true}; },
   async ticks_read() { return {ticks, now: performance.now()}; },
-  async keys_begin() { keysSeen = []; contextMenus = 0; ctrlWheels = 0; keysWatch = true; return {ok: true}; },
-  async keys_end() { keysWatch = false; return {keys: keysSeen, context_menus: contextMenus, ctrl_wheels: ctrlWheels, dpr: devicePixelRatio}; },
+  async keys_begin() {
+    keysSeen = []; keyTimes = []; clickTimes = []; contextMenus = 0; ctrlWheels = 0;
+    keysT0 = performance.now(); keysWatch = true;
+    return {ok: true};
+  },
+  async keys_end() {
+    keysWatch = false;
+    const lines = Object.fromEntries(Array.from($('prompt-list').children, (li) => [li.dataset.item, li.className]));
+    return {keys: keysSeen, key_times: keyTimes, context_menus: contextMenus, click_times: clickTimes,
+            ctrl_wheels: ctrlWheels, lines, dpr: devicePixelRatio};
+  },
   async state() { return {dpr: devicePixelRatio, w: innerWidth, h: innerHeight}; },
   async raise_then_ping() {
     send({type: 'raise'});
@@ -1206,7 +1532,13 @@ class Spike:
         self.downloads: list[dict] = []
         self.external_schemes: list[dict] = []
         self.dialogs: list[dict] = []
-        self.accel_keys: list[dict] = []
+        self.accel_keys: list[dict] = []        # every key event the view raised, with its time and the keys held
+        self.accel_repeats = 0                  # a held key's repeats: counted, not kept
+        self.focus_events: list[dict] = []      # the window's focus, menu and key messages, and the view's focus
+        self.keys_watch = False                 # step 2 is on: owner keys the view sees tick the page's list
+        self.keys_probe = False                 # the rehearsal types step 2's keys itself: GitHub's runner only
+        self.menu_open = False                  # Windows' menu mode is on in the window (menu loop started, not ended)
+        self.typing: str | None = None          # how type_keys went
         self.zoom_events = 0
         self.raster_events = 0
         self.process_failures: list[dict] = []
@@ -1238,6 +1570,10 @@ class Spike:
 
     def log(self, text: str) -> None:
         self._log(f"{time.perf_counter() - self.t0:8.3f} {text}")
+
+    def now(self) -> float:
+        """Seconds since the spike started: the one clock of the log and of every event list."""
+        return round(time.perf_counter() - self.t0, 3)
 
     def log_exception(self, where: str) -> None:
         self.log(f"exception in {where}:\n{traceback.format_exc()}")
@@ -1387,7 +1723,34 @@ class Spike:
             self.stop_requested = True
         return DefWindowProcW(hwnd, msg, wp, lp)
 
+    def note_message(self, msg: int, wp, lp) -> None:
+        """Keep one of the window's focus, menu or key messages (FOCUS_MESSAGES) with its time. Kept only: on_message
+        still sends it to its branch below, or to DefWindowProc, as before."""
+        if msg == WM_ENTERMENULOOP:
+            self.menu_open = True
+        elif msg == WM_EXITMENULOOP:
+            self.menu_open = False
+        if len(self.focus_events) >= FOCUS_CAP:
+            return
+        wp, lp = int(wp or 0), int(lp or 0) & 0xFFFFFFFF
+        e = {"t": self.now(), "msg": FOCUS_MESSAGES[msg], "wp": wp, "lp": lp}
+        if msg == WM_SYSCOMMAND:
+            e["command"] = "keyboard menu" if (wp & 0xFFF0) == SC_KEYMENU else f"0x{wp & 0xFFF0:04X}"
+        elif msg == WM_ACTIVATE:                     # LOWORD: WA_INACTIVE, WA_ACTIVE or WA_CLICKACTIVE
+            e["msg"] = ACTIVATIONS.get(wp & 0xFFFF, FOCUS_MESSAGES[msg])
+        elif msg == WM_INITMENUPOPUP:
+            e["window_menu"] = bool(lp >> 16)        # HIWORD: the drop-down is the window menu itself
+        elif msg in (WM_SETFOCUS, WM_KILLFOCUS) and wp:
+            e["other"] = window_class(wp)            # the window focus came from, or went to
+        self.focus_events.append(e)
+
+    def note_view_focus(self, got: bool) -> None:
+        if len(self.focus_events) < FOCUS_CAP:
+            self.focus_events.append({"t": self.now(), "msg": VIEW_GOT_FOCUS if got else VIEW_LOST_FOCUS})
+
     def on_message(self, hwnd, msg, wp, lp):
+        if msg in FOCUS_MESSAGES:
+            self.note_message(msg, wp, lp)
         if msg == WM_APP_CALL:
             while self.calls:
                 fn = self.calls.popleft()
@@ -1609,6 +1972,10 @@ class Spike:
                            "ICoreWebView2LaunchingExternalUriSchemeEventHandler", EVENT, self.on_external_scheme)
         self.add_event(ctl, "add_AcceleratorKeyPressed", "ICoreWebView2AcceleratorKeyPressedEventHandler", EVENT,
                        self.on_accelerator)
+        self.add_event(ctl, "add_GotFocus", "ICoreWebView2FocusChangedEventHandler", EVENT,
+                       lambda sender, args: self.note_view_focus(True))
+        self.add_event(ctl, "add_LostFocus", "ICoreWebView2FocusChangedEventHandler", EVENT,
+                       lambda sender, args: self.note_view_focus(False))
         self.add_event(ctl, "add_ZoomFactorChanged", "ICoreWebView2ZoomFactorChangedEventHandler", EVENT,
                        self.on_zoom)
         if self.controller3:
@@ -1743,8 +2110,23 @@ class Spike:
         self.dialogs.append({"kind": a.get_int("get_Kind")})       # never Accept: the dialog is dismissed
 
     def on_accelerator(self, sender, args) -> None:
+        """Every key event the view raises, with its time and the keys held. Only values are read here: in windowed
+        hosting the browser process waits on this handler, so the page's tick goes out later, from the message loop.
+        Ctrl and Shift come from GetKeyState, which is how Microsoft's reference says to read them here."""
         a = Com(args, "ICoreWebView2AcceleratorKeyPressedEventArgs", owned=False)
-        self.accel_keys.append({"kind": a.get_int("get_KeyEventKind"), "vk": a.get_u32("get_VirtualKey")})
+        kind, vk = a.get_int("get_KeyEventKind"), a.get_u32("get_VirtualKey")
+        lp = a.get_int("get_KeyEventLParam") & 0xFFFFFFFF
+        ctrl, shift = GetKeyState(VK_CONTROL) < 0, GetKeyState(VK_SHIFT) < 0
+        alt = GetKeyState(VK_MENU) < 0 or bool(lp & LP_ALT_DOWN)
+        if kind in KEY_DOWN_KINDS and lp & LP_WAS_DOWN:        # a held key's repeat: no new press
+            self.accel_repeats += 1
+            return
+        combo = host_combo(vk, ctrl, shift, alt) if kind in KEY_DOWN_KINDS else None
+        if len(self.accel_keys) < ACCEL_CAP:
+            self.accel_keys.append({"t": self.now(), "kind": kind, "vk": vk, "lp": lp, "ctrl": ctrl, "shift": shift,
+                                    "alt": alt, "combo": combo})
+        if self.keys_watch and combo in OWNER_KEYS:
+            self.post_call(lambda: self.to_page({"type": "keyseen", "item": combo}))
 
     def on_zoom(self, sender, args) -> None:
         self.zoom_events += 1
@@ -1883,9 +2265,7 @@ class Spike:
             poll()
         elif isinstance(w, Owner):
             pid = uuid.uuid4().hex
-            prompt = {"type": "prompt", "id": pid, "title": w.title, "text": w.text, "buttons": w.buttons}
-            if self.rehearse:
-                prompt["auto"] = w.buttons[0]           # the page clicks it itself, through the same path
+            prompt = owner_prompt(w, pid, self.rehearse)
             done = {"v": False}
 
             def answer(button, done=done):
@@ -2383,45 +2763,138 @@ class Spike:
                                       " (the control lost nothing, so this run proves nothing)"), tally=tally)
 
     def owner_keys(self):
+        """Step 2. Each action is a line on the page, ticked off as it arrives; a key counts when the page or the
+        view's key event saw it (keys_verdict). The step keeps every key press the view saw, the page's keys and
+        right-clicks with their times, and the window's focus and menu messages, so a run shows what Alt+Left did
+        (alt_left_story), and it keeps them whatever the answer, Skip included. On GitHub's runner the rehearsal types
+        the actions itself (type_keys), and adds a result of its own that can fail (typed_verdict), so this code runs
+        on real input there before the owner's run."""
         yield Page("keys_begin")
-        zoom0 = self.controller.get_double("get_ZoomFactor")
-        n0, z0, w0, a0, inst = (len(self.nav_events), self.zoom_events, len(self.watched_windows),
-                                len(self.accel_keys), self.instance)
+        t_begin = self.now()                    # the page's times count from its keys_begin, a moment before this
+        zoom0 = self.controller.get_double("get_ZoomFactor") if self.controller else None
+        n0, z0, w0, a0, f0, r0, inst = (len(self.nav_events), self.zoom_events, len(self.watched_windows),
+                                        len(self.accel_keys), len(self.focus_events), self.accel_repeats,
+                                        self.instance)
+        typing = self.rehearse and self.keys_probe
+        self.keys_watch = True
+        if typing:
+            self.after(1500, self.type_keys)    # once the prompt is up
         ans = yield Owner("Step 2 of 4: keys and right-click",
-                          "Click on this text, then press each of these: Ctrl+R, Ctrl+P, Ctrl+F, Ctrl+S, "
-                          "Ctrl+Shift+I, Ctrl and +, Ctrl and -, and Alt with the left arrow. Then turn the mouse "
-                          "wheel while holding Ctrl, and right-click anywhere. (No F-keys: on many laptops they "
-                          "change hardware settings.) Did anything open (a print or save dialog, a find bar, "
+                          "Click on this text, then do each line below, in order. A line says done once the window "
+                          "sees it; if one does not, click on this text and do it again, and if it still does not, go "
+                          "on to the next. Nothing should open, zoom or reload. (No F-keys: on many laptops they "
+                          "change hardware settings.) Then: did anything open (a print or save dialog, a find bar, "
                           "DevTools, a menu), or did the page zoom or reload?",
-                          ["Nothing happened", "Something happened", "Skip"])
+                          ["Nothing happened", "Something happened", "Skip"], checklist=KEYS_CHECKLIST,
+                          auto=not typing)
+        self.keys_watch = False
         r = yield Page("keys_end")
         zoom1 = self.controller.get_double("get_ZoomFactor") if self.controller else None
+        reloaded = r is None or r.get("instance") != inst
+        r = r or {}
+        navs, windows = self.nav_events[n0:], self.watched_windows[w0:]
+        window_keys, focus = self.accel_keys[a0:], self.focus_events[f0:]
+        page_keys = list(zip(r.get("keys", []), on_clock(t_begin, r.get("key_times", []))))
+        page, window = set(r.get("keys", [])), {e["combo"] for e in window_keys if e.get("combo")}
+        right_clicks, wheels, lines = int(r.get("context_menus") or 0), int(r.get("ctrl_wheels") or 0), r.get("lines")
+        changed = keys_changed(zoom0, zoom1, self.zoom_events - z0, navs, windows)
+        effects = (f"{plural(wheels, 'Ctrl+wheel turn')}; zoom {zoom_text(zoom0)} to {zoom_text(zoom1)}; "
+                   f"{plural(len(navs), 'navigation')}, {sum(e['allowed'] for e in navs)} allowed; "
+                   f"{plural(len(windows), 'browser window')} seen")
+        story = alt_left_story(window_keys, page_keys, focus)
+        typed = (f"; typed by the spike on GitHub's runner: {self.typing or 'type_keys never finished (see the log)'}"
+                 if typing else "")
+        detail = dict(t_begin=t_begin, navigations=navs, windows=windows, page_keys=page_keys,
+                      right_clicks=on_clock(t_begin, r.get("click_times", [])), ctrl_wheels=wheels, lines=lines or {},
+                      zoom=[zoom0, zoom1], window_keys=window_keys[:RECORD_CAP], window_key_count=len(window_keys),
+                      key_repeats=self.accel_repeats - r0, focus=focus[:RECORD_CAP], focus_count=len(focus),
+                      typed=self.typing if typing else None)
         name = "Browser keys, DevTools, the context menu and zoom do nothing"
         if ans not in ("Nothing happened", "Something happened"):
-            self.add("keys", name, None, "skipped" if ans == "Skip" else f"no answer ({ans})")
+            why = "skipped" if ans == "Skip" else f"no answer ({ans})"
+            self.add("keys", name, None, f"{why}; {effects}; {story}{typed}", **detail)
+        elif reloaded:
+            self.add("keys", name, False, f"the page reloaded or stopped answering during the step; {story}{typed}",
+                     **detail)
+        else:
+            ok, measured = keys_verdict(ans, changed, page, window, right_clicks, effects)
+            self.add("keys", name, ok, f"{measured}; {story}{typed}", **detail)
+        if typing:
+            ok, measured = typed_verdict(self.typing, page, window, right_clicks, wheels, lines or {},
+                                         changed or reloaded, chr(PROBE_KEY).lower() in page)
+            self.add("keys-typed", "Step 2 typed on GitHub's runner: the keys, the wheel turn and the right-click "
+                     "reach the page and do nothing", ok, measured, lines=lines or {})
+
+    def type_keys(self) -> None:
+        """Type step 2's actions with SendInput, as a person types them, so the rehearsal's step 2 runs on real input:
+        on GitHub's runner only (keys_probe, and the runner check again here). Never on a PC someone uses, where the
+        keys would go to whatever window has the keyboard. The window is brought to the front first, and must still be
+        the foreground window before each action, or typing stops. One letter follows Alt+Left, to see whether the
+        page still has the keyboard. Every way out puts the pointer back, ends a menu mode left on, and lets go of any
+        key a cut-short batch left down; it then answers as the owner does, by pressing the step's first button."""
+        def answer(why: str) -> None:
+            self.typing = why
+            self.log(f"typing: {why}")
+            self.after(500, lambda: self.to_page({"type": "press", "button": "Nothing happened"}))
+
+        if not (self.keys_probe and guard.on_throwaway_runner()):
+            answer("not typed: only GitHub's runner types keys")
             return
-        navs = self.nav_events[n0:]
-        windows = self.watched_windows[w0:]
-        detail = dict(navigations=navs, windows=windows, accelerator_events=len(self.accel_keys) - a0,
-                      keys=(r or {}).get("keys", []))
-        if r is None or r.get("instance") != inst:
-            self.add("keys", name, False, "the page reloaded or stopped answering during the step", **detail)
-            return
-        changed = (zoom1 != zoom0 or self.zoom_events != z0 or any(e["allowed"] for e in navs) or bool(windows))
-        combos = set(r.get("keys", []))
-        reached = [label for key, label in OWNER_KEYS.items() if key in combos]
-        missing = [label for key, label in OWNER_KEYS.items() if key not in combos]
-        menus = r.get("context_menus", 0)
-        tried = len(reached) >= 6 and menus >= 1
-        if not changed and ans == "Nothing happened" and not tried:
-            self.add("keys", name, None, f"too few of the keys reached the page ({len(reached)} of {len(OWNER_KEYS)}, "
-                     f"{menus} right-clicks; missing: {', '.join(missing) or 'none'})", **detail)
-            return
-        self.add("keys", name, ans == "Nothing happened" and not changed,
-                 f"you saw {ans.lower()}; {len(reached)} of {len(OWNER_KEYS)} keys reached the page"
-                 f"{' (missing: ' + ', '.join(missing) + ')' if missing else ''} and {menus} right-clicks; zoom "
-                 f"{zoom0:g} to {zoom1:g}; {len(navs)} navigations, {sum(e['allowed'] for e in navs)} allowed; "
-                 f"{len(windows)} browser windows seen", **detail)
+        point = wintypes.POINT()
+        had_point = bool(GetCursorPos(ctypes.byref(point)))
+        ShowWindow(self.hwnd, SW_SHOWNORMAL)
+        SetForegroundWindow(self.hwnd)
+        if self.controller:
+            self.controller.call("MoveFocus", (ctypes.c_int,), MOVE_FOCUS_PROGRAMMATIC)
+        rc = self.client_rect()
+        center = wintypes.POINT((rc.left + rc.right) // 2, (rc.top + rc.bottom) // 2)
+        ClientToScreen(self.hwnd, ctypes.byref(center))
+        steps = [(c, stroke(*KEY_STROKES[c])) for c in COUNTED_KEYS]
+        steps += [("ctrl-wheel", [key_input(VK_CONTROL, False), mouse_input(MOUSEEVENTF_WHEEL, WHEEL_DELTA),
+                                  key_input(VK_CONTROL, True)]),
+                  ("right-click", [mouse_input(MOUSEEVENTF_RIGHTDOWN), mouse_input(MOUSEEVENTF_RIGHTUP)]),
+                  (ALT_LEFT, stroke(*KEY_STROKES[ALT_LEFT])),
+                  ("a letter after Alt+Left", stroke((), PROBE_KEY))]   # the page sees it only if it has the keyboard
+        taken = {"events": 0, "sent": 0}
+
+        def finish(why: str) -> None:
+            try:
+                if had_point:
+                    SetCursorPos(point.x, point.y)
+                if self.menu_open:               # leave no menu mode behind for the next step
+                    EndMenu()
+                    why += "; the spike then ended Windows' menu mode"
+            finally:
+                answer(f"{why} ({taken['events']} of {taken['sent']} input events taken)")
+
+        def run(i: int) -> None:
+            if i == len(steps):
+                finish(f"typed all {len(steps)} actions")
+                return
+            what, items = steps[i]
+            try:
+                if GetForegroundWindow() != self.hwnd:
+                    finish(f"typed {i} of {len(steps)} actions: the window was not in front before {what}")
+                    return
+                if what in ("ctrl-wheel", "right-click"):
+                    SetCursorPos(center.x, center.y)
+                n = send_input(items)
+                taken["events"] += n
+                taken["sent"] += len(items)
+                self.log(f"typed {what}: {n} of {len(items)} input events taken")
+                if n < len(items):              # cut short: let go of what it left down, and type no more
+                    left = releases(items, n)
+                    if left:
+                        send_input(left)
+                    finish(f"typed {i} of {len(steps)} actions: Windows took {n} of the {len(items)} input events "
+                           f"for {what}")
+                    return
+            except Exception as exc:  # noqa: BLE001 - typing ends with nothing held, and the step answered
+                self.log_exception("typing step 2's actions")
+                finish(f"typed {i} of {len(steps)} actions: {what} raised {exc!r}")
+                return
+            self.after(400, lambda: run(i + 1))
+        self.after(300, lambda: run(0))
 
     def owner_dpi(self):
         e0, m0, s0 = len(self.dpi_events), self.monitor_moves, len(self.dpi_samples)
@@ -2884,6 +3357,8 @@ def report(spike: Spike, run_dir: Path, ci: bool) -> int:
     if spike.mode == "main" and spike.interactive:
         at = expected.index("env-back") + 1
         expected[at:at] = OWNER_ORDER
+        if spike.keys_probe:                        # GitHub's runner: the typed rehearsal's own check comes after keys
+            expected.insert(expected.index("keys") + 1, "keys-typed")
     have = {r.id for r in spike.results}
     for missing in (i for i in expected if i not in have):
         spike.results.append(Result(missing, f"(the {missing} check)", "NOT RUN",
@@ -2954,8 +3429,9 @@ def main(argv: list[str] | None = None) -> int:
         SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX)     # a crash here is the expected result
     spike = Spike(mode, run_dir, interactive, log)
     spike.rehearse = bool(args.rehearse)
-    spike.log(f"mode {mode}, interactive {interactive}, rehearse {spike.rehearse}, python {sys.version.split()[0]} "
-              f"at {sys.executable}")
+    spike.keys_probe = types_keys(mode, bool(args.rehearse), bool(args.ci))
+    spike.log(f"mode {mode}, interactive {interactive}, rehearse {spike.rehearse}, types keys {spike.keys_probe}, "
+              f"python {sys.version.split()[0]} at {sys.executable}")
     if mode == "main":
         # Ctrl+C sets a flag the window's heartbeat acts on: raised inside a ctypes callback it would be swallowed.
         signal.signal(signal.SIGINT, lambda *_: setattr(spike, "stop_requested", True))
