@@ -1,0 +1,111 @@
+[
+ {
+  "name": "the experiments' filter drops the runtime pin",
+  "file": ".github/workflows/experiments.yml",
+  "old": "      - \"scripts/runtime_pin.py\"\n",
+  "new": "      # (dropped)\n",
+  "tests": [
+   "tests/test_side_workflows.py::test_a_side_workflow_runs_on_every_file_its_code_imports[experiments.yml]"
+  ]
+ },
+ {
+  "name": "the spike's filter drops lagdoctor/paths.py",
+  "file": ".github/workflows/webview-spike.yml",
+  "old": "      - \"lagdoctor/paths.py\"\n",
+  "new": "      # (dropped)\n",
+  "tests": [
+   "tests/test_side_workflows.py::test_a_side_workflow_runs_on_every_file_its_code_imports[webview-spike.yml]"
+  ]
+ },
+ {
+  "name": "the experiments' filter names a file nothing imports",
+  "file": ".github/workflows/experiments.yml",
+  "old": "      - \"scripts/runtime_pin.py\"",
+  "new": "      - \"scripts/runtime_pin.py\"\n      - \"lagdoctor/cli.py\"",
+  "tests": [
+   "tests/test_side_workflows.py::test_a_side_workflow_names_no_file_its_code_does_not_import[experiments.yml]"
+  ]
+ },
+ {
+  "name": "the experiments start importing a module the filter does not name",
+  "file": "scripts/stage2/drive.py",
+  "old": "    shutil.copy2(SCRIPTS / \"etw_access.py\", INSTALL / \"scripts\" / \"etw_access.py\")",
+  "new": "    from lagdoctor import report  # noqa: F401\n    shutil.copy2(SCRIPTS / \"etw_access.py\", INSTALL / \"scripts\" / \"etw_access.py\")",
+  "tests": [
+   "tests/test_side_workflows.py::test_a_side_workflow_runs_on_every_file_its_code_imports[experiments.yml]"
+  ]
+ },
+ {
+  "name": "the reader skips imports inside functions",
+  "file": "tests/test_side_workflows.py",
+  "old": "    for node in ast.walk(ast.parse((root / rel).read_text(encoding=\"utf-8\"))):",
+  "new": "    for node in ast.parse((root / rel).read_text(encoding=\"utf-8\")).body:",
+  "tests": [
+   "tests/test_side_workflows.py::test_the_imports_are_followed_by_every_route[experiments.yml]"
+  ]
+ },
+ {
+  "name": "the reader skips the submodules a from-import names",
+  "file": "tests/test_side_workflows.py",
+  "old": "                out.update(resolve(f\"{module}.{alias.name}\", root))",
+  "new": "                pass",
+  "tests": [
+   "tests/test_side_workflows.py::test_the_imports_are_followed_by_every_route[experiments.yml]",
+   "tests/test_side_workflows.py::test_the_imports_are_followed_by_every_route[webview-spike.yml]"
+  ]
+ },
+ {
+  "name": "the reader skips the packages on the way",
+  "file": "tests/test_side_workflows.py",
+  "old": "                found.append(here / \"__init__.py\")",
+  "new": "                pass",
+  "tests": [
+   "tests/test_side_workflows.py::test_the_imports_are_followed_by_every_route[experiments.yml]"
+  ]
+ },
+ {
+  "name": "the reader follows only the entry scripts' own imports",
+  "file": "tests/test_side_workflows.py",
+  "old": "            todo.extend(imports(rel, root) - seen)",
+  "new": "            todo.extend(imports(rel, root) - seen if rel in starts else ())",
+  "tests": [
+   "tests/test_side_workflows.py::test_the_imports_are_followed_by_every_route[experiments.yml]"
+  ]
+ },
+ {
+  "name": "a ** in a filter stays inside one folder",
+  "file": "tests/test_side_workflows.py",
+  "old": "out = \"\".join(\".*\" if part == \"**\"",
+  "new": "out = \"\".join(\"[^/]*\" if part == \"**\"",
+  "tests": [
+   "tests/test_side_workflows.py::test_filter_patterns_match_as_github_reads_them"
+  ]
+ },
+ {
+  "name": "the spike pins another uv",
+  "file": ".github/workflows/webview-spike.yml",
+  "old": "          version: \"0.10.4\"",
+  "new": "          version: \"0.10.3\"",
+  "tests": [
+   "tests/test_wheel_check.py::test_every_workflow_pins_the_uv_that_ci_pins"
+  ]
+ },
+ {
+  "name": "the experiments' setup-uv pins no version",
+  "file": ".github/workflows/experiments.yml",
+  "old": "          version: \"0.10.4\"\n          python-version: \"3.13\"",
+  "new": "          python-version: \"3.13\"",
+  "tests": [
+   "tests/test_wheel_check.py::test_every_workflow_pins_the_uv_that_ci_pins"
+  ]
+ },
+ {
+  "name": "ci.yml pins two uv versions",
+  "file": ".github/workflows/ci.yml",
+  "old": "          version: \"0.10.4\"\n          python-version: ${{ matrix.python }}",
+  "new": "          version: \"0.10.5\"\n          python-version: ${{ matrix.python }}",
+  "tests": [
+   "tests/test_wheel_check.py::test_every_workflow_pins_the_uv_that_ci_pins"
+  ]
+ }
+]

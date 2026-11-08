@@ -696,3 +696,12 @@ lined up.
 **Takeaway**: to tell a UDP client from a server, read who holds it and how it was bound, and fail on every other
 shape; and before calling a point-in-time check flaky, watch the state for the whole run to see what its instants
 miss.
+
+### A path filter has to name what the code imports, not just the code's own folder
+A workflow filtered to its own scripts' folder does not run when a module those scripts import changes, so a pull
+request can change what the workflow runs without running it. The fix is to compute the scripts' import closure (lazy
+imports inside functions too, since they run when the function does) and keep the filter equal to it with a test.
+**Why it came up**: the Service experiments workflow named only `scripts/stage2/**`, and PR #6 changed four lagdoctor
+modules the experiments run as a service without starting a run; its closure was 25 files, its filter covered 8.
+**Takeaway**: derive a path filter from the import graph and test it both ways: nothing reached is missing, and
+nothing listed is unreached.

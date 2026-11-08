@@ -243,6 +243,24 @@ def test_the_uv_that_ci_builds_with_carries_a_uv_build_the_project_accepts():
         f"no build in CI may fetch a build backend: {builds}")
 
 
+UV_PIN = re.compile(r"astral-sh/setup-uv@\S+.*\n\s+with:\n\s+version: \"([\d.]+)\"")
+
+
+def test_every_workflow_pins_the_uv_that_ci_pins():
+    """The side workflows set up uv on their own; a bump in ci.yml alone would leave them on the old one, unseen, since
+    their path filters do not name ci.yml."""
+    pins = {}
+    for wf in sorted((ROOT / ".github" / "workflows").glob("*.yml")):
+        text = wf.read_text(encoding="utf-8")
+        found = UV_PIN.findall(text)
+        assert len(found) == text.count("astral-sh/setup-uv@"), f"{wf.name}: a setup-uv step pins no version"
+        pins[wf.name] = set(found)
+    assert {"ci.yml", "experiments.yml", "webview-spike.yml"} <= set(pins), sorted(pins)
+    assert len(pins["ci.yml"]) == 1, pins["ci.yml"]
+    apart = {name: found for name, found in pins.items() if found and found != pins["ci.yml"]}
+    assert not apart, f"these workflows pin another uv than ci.yml's {pins['ci.yml']}: {apart}"
+
+
 def test_the_bound_reader_refuses_what_it_cannot_read():
     assert _bounds("uv_build>=0.10.4,<0.11") == ((0, 10, 4), (0, 11))
     with pytest.raises(AssertionError):

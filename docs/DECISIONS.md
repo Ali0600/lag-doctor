@@ -99,6 +99,26 @@ relay does; how it does it was chosen by the implementing session, and the owner
   backlog's "ask before recording without frame timing".
 Revisit hooks: `client.relay_python`, `client.launch`'s checks, and `Relay._on_event` in `relay/server.py`.
 
+## 2026-11-08: The side workflows' filters follow their imports, and the check scripts run on one time budget
+
+The rest of the same CI review; the owner said "Yes, fix them". The implementing session chose how.
+- **Each side workflow's `paths:` lists every file its code imports, by name (chosen)**, kept equal to that list by
+  `tests/test_side_workflows.py`, which follows the imports from the scripts the workflow runs, lazy ones included.
+  PR #6 had changed four modules the experiments run as a service and started no experiments run.
+  - **`lagdoctor/**` for the experiments**, since they copy the whole package: rejected, they run only what they
+    import, and every lagdoctor pull request would start a 4-minute run.
+  - **Name only the scripts, as before**: rejected, that is the gap.
+- **One time budget per check script, taken when its checks start (chosen)**: each command's timeout is cut to what
+  is left, and the rest report "not run" once it is spent, so a hang still prints every verdict before the job's cap.
+  `tests/test_ci_budgets.py` holds each budget, what the script does outside it and the job's earlier steps under
+  `timeout-minutes`. Per-command timeouts also came down to measured sizes: msiexec 900 to 300 s (it took under 2 s),
+  a command 300 to 120 s.
+  - **Only lower the per-command timeouts until their sum fits**: rejected, the sum breaks again when a check is
+    added, and a test would have to count calls.
+  - **Raise the job caps instead**: rejected, a hang would then cost up to an hour before any verdict.
+- **Dependabot for the pinned actions**: not added; it would open pull requests unasked. Revisit hook: a
+  `.github/dependabot.yml` for `github-actions`, plus the repository setting that requires SHA-pinned actions.
+
 ## 2026-11-08: CI tests the Python the installer ships, and skips pushes that change only docs
 
 The owner asked why CI ran two Python versions and said docs changes should not run everything. A review of every CI

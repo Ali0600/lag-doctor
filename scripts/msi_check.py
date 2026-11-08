@@ -49,6 +49,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import winreg
 import zipfile
 from ctypes import wintypes
@@ -79,8 +80,13 @@ INSTALLER_KEYS = {
 }
 # Folders Windows Installer created, one value each, named by the folder's path.
 INSTALLER_FOLDERS = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Installer\Folders"
-MSIEXEC_TIMEOUT_S = 900
-COMMAND_TIMEOUT_S = 300
+MSIEXEC_TIMEOUT_S = 300      # an install or an uninstall; each took under 2 s on CI (msiexec's logs, 2026-11-08)
+COMMAND_TIMEOUT_S = 120      # one command; the eight between the install and the uninstall took 72 s together
+# Every command but the uninstall, from the start of the checks: each gets its own timeout cut to what is left, and
+# once it is spent the rest report "not run". The uninstall keeps its own timeout, so a hang still cleans up and prints
+# every verdict before the job's cap stops the step (tests/test_ci_budgets.py holds it under ci.yml's timeout-minutes).
+BUDGET_S = 720
+_deadline: float | None = None
 MIDDLE = ("files", "registered", "path", "registry", "shortcut", "command", "imports", "untouched")
 
 # The app's Start-menu shortcut (installer/lag-doctor.wxs): the Shortcut's Name, to which Windows Installer adds .lnk,
@@ -676,15 +682,24 @@ def fresh_environment() -> dict[str, str]:
         kernel32.CloseHandle(token)
 
 
+def start_budget() -> None:
+    global _deadline
+    _deadline = time.monotonic() + BUDGET_S
+
+
 def run(argv: list[str], cwd: Path, env: dict[str, str] | None = None,
-        timeout: int = COMMAND_TIMEOUT_S) -> tuple[int | None, str]:
-    """(exit code or None, stdout and stderr together)."""
+        timeout: float = COMMAND_TIMEOUT_S, budgeted: bool = True) -> tuple[int | None, str]:
+    """(exit code or None, stdout and stderr together). `budgeted`: cut the timeout to what is left of the budget."""
+    if budgeted and _deadline is not None:
+        timeout = min(timeout, _deadline - time.monotonic())
+        if timeout <= 0:
+            return None, f"{argv[0]} not run: the check's {BUDGET_S} s were used up"
     try:
         p = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
     except OSError as exc:
         return None, f"could not start {argv[0]}: {exc}"
     except subprocess.TimeoutExpired:
-        return None, f"{argv[0]} ran past {timeout} s and was stopped"
+        return None, f"{argv[0]} ran past {timeout:.0f} s and was stopped"
     return p.returncode, (p.stdout + p.stderr).decode("utf-8", "replace")
 
 
@@ -814,8 +829,9 @@ def check_imports(install: Path, package: list[str], work: Path) -> Check:
 
 
 def msiexec(action: str, msi: Path, log: Path) -> tuple[int | None, str]:
+    """The uninstall (/x) runs outside the budget, so whatever used it up, the runner is still cleaned."""
     return run([system_tool("System32", "msiexec.exe"), action, str(msi), "/qn", "/norestart", "/l*v", str(log)],
-               log.parent, timeout=MSIEXEC_TIMEOUT_S)
+               log.parent, timeout=MSIEXEC_TIMEOUT_S, budgeted=action != "/x")
 
 
 def check_gone(info: dict, install: Path, installed: dict[str, str], before_keys: dict, path_before,
@@ -883,6 +899,7 @@ def install_folder() -> Path:
 
 
 def run_checks(msi: Path, runtime_zip: Path, presentmon: Path, logs: Path) -> list[Check]:
+    start_budget()
     from stage2 import guard
     guard.require_throwaway_runner()                    # before anything is changed
     install = install_folder()

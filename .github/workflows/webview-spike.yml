@@ -1,8 +1,9 @@
 # M0's CI probe (docs/LAUNCHER-PLAN.md): does GitHub's Windows runner have the WebView2 Runtime, and can it open
 # lag-doctor's window? It runs scripts/webview_spike.py --ci, the automated checks only (the owner's steps need a
 # person), and a rehearsal of the owner's steps that exercises their code with automatic answers. Started by hand
-# (Actions -> "Window spike" -> Run workflow) and by pull requests that change the spike, the two lagdoctor modules it
-# imports, or this file. The answer is the job summary and the webview-spike-results artifact.
+# (Actions -> "Window spike" -> Run workflow) and by pull requests that change the spike, a module it imports (each
+# one listed below; tests/test_side_workflows.py keeps the list whole), or this file. The answer is the job summary and
+# the webview-spike-results artifact.
 #
 # Exit 3 means the spike found no WebView2 Runtime. That is an answer (M1's window tests then cannot run here), but
 # only once a second, independent reading agrees: the runtime's own version value in the registry and its exe under
@@ -15,8 +16,15 @@ on:
     paths:
       - ".github/workflows/webview-spike.yml"
       - "scripts/webview_spike.py"
+      - "lagdoctor/__init__.py"
+      - "lagdoctor/paths.py"
       - "lagdoctor/setup.py"
+      - "lagdoctor/winapi/__init__.py"
+      - "lagdoctor/winapi/elevation.py"
       - "lagdoctor/winapi/ntquery.py"
+      - "lagdoctor/winapi/storage.py"
+      - "scripts/stage2/__init__.py"
+      - "scripts/stage2/guard.py"
 
 permissions:
   contents: read

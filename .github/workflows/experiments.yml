@@ -1,6 +1,7 @@
 # The Stage 2 experiments (docs/INSTALLER-PLAN.md): a throwaway capture service on GitHub's disposable Windows
 # runners, never on a PC someone uses (scripts/stage2/drive.py refuses to run anywhere else). Started by hand
-# (Actions -> "Service experiments" -> Run workflow) and on pull requests that change it or scripts/stage2, because a
+# (Actions -> "Service experiments" -> Run workflow) and on pull requests that change it, scripts/stage2 or a module
+# the experiments import (each one listed below; tests/test_side_workflows.py keeps the list whole), because a
 # workflow can only be started by hand once its file is on the default branch. Each step records what it measured;
 # a step fails only when its instrument broke, so the later steps still run. The results are the job summary and the
 # stage2-results artifact (one JSON file per experiment, plus what the services and the stand-in game wrote).
@@ -12,6 +13,23 @@ on:
     paths:
       - ".github/workflows/experiments.yml"
       - "scripts/stage2/**"
+      - "scripts/etw_access.py"
+      - "scripts/runtime_pin.py"
+      - "lagdoctor/__init__.py"
+      - "lagdoctor/capture/__init__.py"
+      - "lagdoctor/capture/base.py"
+      - "lagdoctor/capture/netflows.py"
+      - "lagdoctor/capture/presentmon.py"
+      - "lagdoctor/clock.py"
+      - "lagdoctor/model.py"
+      - "lagdoctor/paths.py"
+      - "lagdoctor/setup.py"
+      - "lagdoctor/winapi/__init__.py"
+      - "lagdoctor/winapi/elevation.py"
+      - "lagdoctor/winapi/etw.py"
+      - "lagdoctor/winapi/iphlp.py"
+      - "lagdoctor/winapi/ntquery.py"
+      - "lagdoctor/winapi/storage.py"
 
 permissions:
   contents: read
