@@ -287,6 +287,43 @@ def test_a_cpu_side_finding_passes_a_cpu_mixed_or_unknown_verdict(verdict, kind)
     assert isinstance(rules.run_rule(rule, make(), {"bound": {"verdict": verdict}}), kind)
 
 
+PROBABLE = {"seconds": 173.0, "share": 0.205, "windows": 845, "marks": 3, "marks_busy": 3, "holds": True}
+
+
+def gated_gpu_finding(probable, frames=False, gate="gpu"):
+    """A side-gated finding through run_rule with an open ("unknown") verdict and frames.probable_gpu's reading."""
+    def found(cap, ctx):
+        return Finding(cause="gpu_throttle", title="t", category="fps", confidence="high", score=1.0, summary="")
+    rule = rules.Rule("gpu_throttle", "gpu_telemetry", (), gate, found)
+    cap = make() if frames else make(ok=("system",), src={"frames": NO_FRAMES})
+    return rules.run_rule(rule, cap, {"stats": {"frames": 3000 if frames else 0},
+                                      "bound": {"verdict": "unknown", "gpu_probable": probable,
+                                                "notes": ["frame timing not measured"]}})
+
+
+def test_without_frame_timing_a_gpu_side_finding_passes_where_the_gpu_was_probably_the_limit():
+    # Item 1: the gate read only the whole-capture median of the 3D engine (71 % in the first real capture), so GPU
+    # heat and video memory went to "could not check" though the GPU was pegged in play and at every mark
+    res = gated_gpu_finding(PROBABLE)
+    assert is_finding(res, "high")
+    assert res.evidence[-1].text == ("Frame timing was not measured, but the game kept its GPU's 3D engine 95% or more "
+                                     "busy for 173 s (20% of the capture) and at 3 of the 3 moments you marked, so the "
+                                     "GPU probably limited the frame rate then.")
+    res = gated_gpu_finding(dict(PROBABLE, seconds=5.0, share=0.006, marks_busy=0, holds=False))
+    assert isinstance(res, rules.Unchecked)
+    assert res.text == ("whether the GPU limits the frame rate could not be judged (frame timing not measured; the "
+                        "game kept its GPU's 3D engine 95% or more busy for only 5 s (1% of the capture), though at "
+                        "none of the 3 moments you marked)")
+
+
+def test_the_per_second_gpu_reading_never_opens_the_gate_with_frame_timing_or_for_the_cpu_side():
+    assert isinstance(gated_gpu_finding(PROBABLE, frames=True), rules.Unchecked)               # frames say: unknown
+    assert is_finding(gated_gpu_finding(PROBABLE, gate="cpu"))                                 # "unknown" passes it
+    assert not any("probably limited" in e.text for e in gated_gpu_finding(PROBABLE, gate="cpu").evidence)
+    # _gated applies the GPU reading to whatever gate refused an unknown verdict: that must stay the gpu gate alone
+    assert [g for g, allowed in rules.GATES.items() if "unknown" not in allowed] == ["gpu"]
+
+
 def test_gates_and_side_lists_match_lc_5_1():
     assert rules.GATES["gpu"] == {"gpu", "mixed"}
     assert rules.GATES["cpu"] == {"cpu_main", "cpu_all", "mixed", "unknown"}
@@ -587,16 +624,72 @@ def test_gpu_throttle_needs_thirty_percent_of_the_time_held_down(share, kind):
         assert res.confidence == "high"
 
 
-@pytest.mark.parametrize("reasons", ["sw_power_cap", "gpu_idle,sw_power_cap", "applications_clocks_setting,sw_power_cap",
-                                     "sync_boost,sw_power_cap", "gpu_idle", ""])
+@pytest.mark.parametrize("reasons", ["sw_power_cap", "applications_clocks_setting,sw_power_cap",
+                                     "sync_boost,sw_power_cap", ""])
 def test_gpu_throttle_at_the_power_limit_alone_is_normal_not_a_fault(reasons):
     # The collector keeps the SW power cap out of nv_throttle_pct (its own column, nv_power_cap_pct, LC 4.1, 4.2).
     # This test used to put the cap's share in nv_throttle_pct and lean on the reason names, which one idle
     # second (a gpu_idle sample) defeated; whatever the reasons say, the cap share is never throttling now.
+    # Readings that name gpu_idle are left out altogether now (item 8): test_an_idle_gpu_is_never_read_as_throttled.
     cap = make(adapter=NV, ok=("frames", "system", "gpu"),
                gpu=nv(0.0, nv_power_cap_pct=80.0, nv_reasons=reasons, nv_power_limit_w=88.8))
     res = run("gpu_throttle", cap, bound={"verdict": "gpu"})
     assert isinstance(res, rules.Cleared) and "power brake only 0%" in res.text
+
+
+def idle_every(k, working, idle=100.0, working_reasons="sw_thermal_slowdown"):
+    """30 NVIDIA readings, every k-th one idle (gpu_idle, its throttle share `idle`), the others at `working`."""
+    return nv(lambda t: idle if int(t) % k == 0 else working,
+              nv_reasons=lambda t: "gpu_idle" if int(t) % k == 0 else working_reasons)
+
+
+def test_an_idle_gpu_is_never_read_as_throttled():
+    # Item 8: NVML's throttle counters keep growing while the GPU idles. In the first real capture its 5 idle readings
+    # (gpu_idle, no heat named) read 99-100 % each, so idle seconds counted as heat. 20 readings at 10 % and 10 idle
+    # at 100 % once averaged 40 % ("held down 40% of the time"); they are 10 %
+    cap = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=idle_every(3, 10.0))
+    res = run("gpu_throttle", cap, bound={"verdict": "gpu"})
+    assert isinstance(res, rules.Cleared) and "power brake only 10% of the time" in res.text
+    working = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=idle_every(3, 40.0))
+    assert is_finding(run("gpu_throttle", working, bound={"verdict": "gpu"}), "high")   # control: real throttling
+    for reasons in ("gpu_idle", "gpu_idle,sw_power_cap"):     # idle in every reading: nothing to tell either way
+        cap = make(adapter=NV, ok=("frames", "system", "gpu"),
+                   gpu=nv(100.0, nv_power_cap_pct=80.0, nv_reasons=reasons, nv_power_limit_w=88.8))
+        res = run("gpu_throttle", cap, bound={"verdict": "gpu"})
+        assert isinstance(res, rules.Unchecked) and res.text == ("the NVIDIA GPU was idle in all of its 30 readings, "
+                                                                 "so whether heat held it down could not be told")
+
+
+def test_the_per_event_gpu_heat_signal_leaves_idle_readings_out_too():
+    # Item 8: the per-event check reads the same readings as the rule (attribute.throttle_readings), so an idle
+    # second at 100 % is no "GPU slowing down" at a stutter either
+    from lagdoctor.analysis import attribute
+    cap = make(adapter=NV, gpu=idle_every(3, 10.0))
+    heat = attribute._gpu_heat(cap)
+    assert [v for t, v in zip(heat.t, heat.v) if int(t) % 3 == 0] == [None] * 10
+    assert {v for t, v in zip(heat.t, heat.v) if int(t) % 3} == {10.0}
+
+
+def cap_named_in(k, share=90.0, limit_w=35.0):
+    """30 readings at the SW power cap's counter `share`, the cap named in the reasons of every k-th one."""
+    return make(adapter=NV, ok=("frames", "system", "gpu"), inventory={"nvidia": {"temp_target_c": 75,
+                                                                                    "power_default_w": 80.0}},
+                gpu=nv(0.0, nv_power_cap_pct=share, nv_power_limit_w=limit_w,
+                       nv_reasons=lambda t: "sw_power_cap" if int(t) % k == 0 else ""))
+
+
+def test_the_power_cap_share_counts_only_readings_that_named_the_cap():
+    # Item 9: on driver 591.86 the counter behind nv_power_cap_pct (NVML field 74) read 42 % over 169 readings that never
+    # named sw_power_cap. 30 readings at 90 % with the cap named in 6 of them is 18 %, under 30 %: no power-limit variant
+    res = run("gpu_throttle", cap_named_in(5), bound={"verdict": "gpu"})
+    assert isinstance(res, rules.Cleared) and "power brake only 0%" in res.text
+    half = run("gpu_throttle", cap_named_in(2), bound={"verdict": "gpu"})       # 15 of 30 named: 45 %
+    assert is_finding(half, "medium")
+    line = half.evidence[0].text
+    assert line.startswith("The GPU sat at its power cap 45% of the time with the cap at 35 W, below its 80 W default")
+    assert "counting only the 15 of 30 readings that named it" in line
+    every = run("gpu_throttle", cap_named_in(1), bound={"verdict": "gpu"})      # the counter and the reasons agree
+    assert is_finding(every, "medium") and "counting only" not in every.evidence[0].text
 
 
 @pytest.mark.parametrize("reasons,held", [
@@ -615,10 +708,11 @@ def test_gpu_throttle_names_only_what_the_readings_named(reasons, held):
         == "heat or its power brake"                                     # no reasons recorded: either
 
 
-@pytest.mark.parametrize("reasons", ["sw_power_cap", "gpu_idle,sw_power_cap", ""])
+@pytest.mark.parametrize("reasons", ["sw_power_cap", ""])
 def test_gpu_throttle_reads_the_heat_and_brake_share_whatever_the_reason_names_say(reasons):
     # nv_throttle_pct is heat plus the HW power brake only, a direct readout (LC 4.2): no reason-name heuristic
-    # may turn it into "the normal power limit"
+    # may turn it into "the normal power limit". Only gpu_idle leaves a reading out (item 8: the counters keep growing
+    # at idle), in test_an_idle_gpu_is_never_read_as_throttled
     cap = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=nv(80.0, nv_reasons=reasons))
     res = run("gpu_throttle", cap, bound={"verdict": "gpu"})
     assert is_finding(res, "high") and "heat or its power brake 80%" in res.evidence[0].text
@@ -840,6 +934,36 @@ def test_cpu_throttle_counts_a_speed_drop_of_twenty_percent_from_the_start(later
     assert isinstance(res, kind)
 
 
+@pytest.mark.parametrize("perf, kind", [(80.0, Finding), (80.1, rules.Cleared)])
+def test_cpu_throttle_counts_a_cpu_held_below_its_base_clock(perf, kind):
+    # Item 2: the first real capture's CPU ran at a median 70 % of its base clock for 14 minutes while Windows reported
+    # no limit and no drop from the start, and the rule said "the CPU ran at full speed". The level itself counts now.
+    res = run("cpu_throttle", make(system=cpu_sys(perf=perf), duration=60.0),
+              bound={"verdict": "cpu_main", "busiest_thread": 0.95})
+    assert isinstance(res, kind)
+    if kind is Finding:
+        assert res.title == "The CPU ran below its base clock" and res.confidence == "medium"
+        assert res.evidence[0].text == ("The CPU ran at a median 80% of its base clock (80% or less), below full speed "
+                                        "for most of the capture, though Windows reported no power or thermal limit.")
+    else:
+        assert res.text == ("Windows reported no power or thermal limit, and the CPU ran at a median 80% of its base "
+                            "clock with no speed drop.")
+
+
+def test_cpu_throttle_never_calls_a_cpu_it_did_not_see_at_full_speed():
+    # Item 2: "ran at full speed" stood for any CPU without a limit flag or a drop; what was measured is said instead
+    res = run("cpu_throttle", make(system=cpu_sys(), duration=60.0), bound={"verdict": "cpu_main", "busiest_thread": 0.95})
+    assert isinstance(res, rules.Cleared) and "full speed" not in res.text
+    assert res.text.startswith("Windows reported no power or thermal limit, and the CPU ran at a median 105% of its base")
+    short = synth.system_table(3, cpu_perf_limit_pct=100.0, thermal_limit_pct=100.0, cpu_perf_pct=105.0)  # 12 samples
+    res = run("cpu_throttle", make(system=short, duration=3.0), bound={"verdict": "cpu_main", "busiest_thread": 0.95})
+    assert isinstance(res, rules.Cleared) and "speed drop" not in res.text      # too few samples to compare: unsaid
+    held = run("cpu_throttle", make(system=cpu_sys(limit=80.0, perf=70.0), duration=60.0),
+               bound={"verdict": "cpu_main", "busiest_thread": 0.95})            # a limit Windows saw, and the level
+    assert held.title == "The CPU slows down from heat or power limits"
+    assert not any("though Windows reported no" in e.text for e in held.evidence)
+
+
 @pytest.mark.parametrize("busiest, kind", [(0.69, type(None)), (0.70, Finding)])
 def test_cpu_throttle_needs_the_game_near_cpu_bound(busiest, kind):
     res = run("cpu_throttle", make(system=cpu_sys(thermal=85.0, busiest=100 * busiest), duration=60.0),
@@ -927,6 +1051,22 @@ def test_ram_pressure_counts_commit_charge_over_80_and_90_percent(commit, conf):
     res = run("ram_pressure", make(system=ram(1000.0, commit_pct=commit), inventory={"ram_gb": None}))
     # 1000 MB free with no RAM size is neutral, so commit alone decides the confidence
     assert is_finding(res, conf)
+
+
+@pytest.mark.parametrize("commit, kind", [(90.1, Finding), (90.0, type(None))])
+def test_free_ram_never_cancels_a_commit_charge_at_the_limit(commit, kind):
+    # Item 7: the first real capture held 89-99.9 % of the commit limit all session while 7.9 GB or more of RAM stayed
+    # free (a small page file). Free RAM (against) and the commit charge (for) cancelled in one family, so 99.9 % was
+    # never reported. The commit limit is RAM plus the page file: free RAM is no evidence against reaching it.
+    res = run("ram_pressure", make(system=ram(8000.0, commit_pct=commit, hard_faults_ps=5000.0)))
+    assert isinstance(res, kind)
+    if kind is Finding:
+        assert res.confidence == "medium"
+        assert res.title == "Windows nearly ran out of memory to hand out: the page file is small"
+        assert res.evidence[0].text == "Committed memory reached 90% of the limit (critical over 90%)."
+        assert any(e.text.endswith("so what ran short was the page file.") for e in res.evidence)
+        assert any(fx.title.startswith("Let Windows manage the page file size") for fx in res.fixes)
+        assert any("file reads" in e.text for e in res.evidence)      # the hard faults, with RAM free: no support
 
 
 def test_ram_pressure_counts_event_linked_paging():

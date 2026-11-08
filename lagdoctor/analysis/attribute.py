@@ -64,6 +64,9 @@ NV_THROTTLE_PCT = 30.0       # LC 10 (4.2): held down by heat or power >= 30 % o
 HEAT_REASONS = ("sw_thermal_slowdown", "hw_thermal_slowdown", "hw_power_brake_slowdown", "hw_slowdown")
                              # LC 4.2: the nv_reasons names of heat and the HW power brake (capture/gpumon's
                              # THROTTLE_REASONS, plus hw_slowdown, which has no counter)
+IDLE_REASON = "gpu_idle"     # LC 4.2's confounder: idle clocks are low by design. NVML's throttle counters kept growing
+                             # through the first real capture's 5 idle readings (99-100 % each, no heat reason named)
+POWER_CAP_REASON = "sw_power_cap"    # capture/gpumon's POWER_CAP_REASONS: the counter behind nv_power_cap_pct
 VRAM_FULL_FRAC = 0.90        # LC 4.3, 10: dedicated VRAM >= 90 % full ...
 SHARED_RISE_MB_PER_S = 256.0 / 60.0   # LC 4.3, 10: ... and the game's shared usage +256 MiB/min
 DISK_BUSY_PCT = 90.0         # LC 4.8 (PAL, S30): disk idle < 10 %
@@ -237,9 +240,19 @@ def cap_in_throttle(cap: Capture) -> bool:
     return bool(fa._col(gpu, G.T)) and G.POWER_CAP_PCT not in gpu
 
 
+def _reasons(cell: Any) -> set[str]:
+    """The reason names of one nv_reasons cell, lower case."""
+    return {r.strip().lower() for r in cell.split(",")} if isinstance(cell, str) else set()
+
+
 def heat_named(reasons: Any) -> bool:
     """Whether an nv_reasons cell names heat or the HW power brake (HEAT_REASONS)."""
-    return isinstance(reasons, str) and any(r.strip().lower() in HEAT_REASONS for r in reasons.split(","))
+    return bool(_reasons(reasons) & set(HEAT_REASONS))
+
+
+def idle_named(reasons: Any) -> bool:
+    """Whether an nv_reasons cell names gpu_idle (IDLE_REASON)."""
+    return IDLE_REASON in _reasons(reasons)
 
 
 THERMAL_ONLY = ("sw_thermal_slowdown", "hw_thermal_slowdown")
@@ -258,10 +271,37 @@ def held_by(cap: Capture) -> str:
 
 
 def throttle_readings(cap: Capture) -> list[tuple[float, float | None, bool]]:
-    """(t, nv_throttle_pct or None, heat_named(nv_reasons)) of every gpu row with a time."""
+    """(t, nv_throttle_pct or None, heat_named(nv_reasons)) of every gpu row with a time. A reading that names
+    gpu_idle has no share (None): NVML's throttle counters keep growing while the GPU idles, and an idle GPU is held
+    down by nothing but having no work (LC 4.2's confounder). The rules' share and the per-event signal both read
+    this, so neither counts an idle second as throttling."""
     t, v, why = fa._col(cap.gpu, G.T), fa._col(cap.gpu, G.THROTTLE_PCT), fa._col(cap.gpu, G.REASONS)
-    return [(float(ti), read(G.THROTTLE_PCT, fa._at(v, i)), heat_named(fa._at(why, i)))
+    return [(float(ti), None if idle_named(fa._at(why, i)) else read(G.THROTTLE_PCT, fa._at(v, i)),
+             heat_named(fa._at(why, i)))
             for i, ti in ((i, fa._bounded(x)) for i, x in enumerate(t)) if ti is not None]
+
+
+def idle_readings(cap: Capture) -> int:
+    """How many gpu rows with a time name gpu_idle."""
+    t, why = fa._col(cap.gpu, G.T), fa._col(cap.gpu, G.REASONS)
+    return sum(1 for i, x in enumerate(t) if fa._bounded(x) is not None and idle_named(fa._at(why, i)))
+
+
+def power_cap_readings(cap: Capture) -> list[tuple[float, float, float, bool]]:
+    """(t, the share at the SW power cap that counts, the counter's own share, whether the reasons named the cap) of
+    every gpu row with a time and a nv_power_cap_pct, idle readings left out. The share counts only where the
+    reading's reasons named sw_power_cap, else 0: on driver 591.86 the counter (NVML field 74) read 42 % on average
+    over 169 readings that never named the cap, then about 98 % once a lowered limit named it in 670 of 675 (the
+    first real capture, 2026-11-05)."""
+    t, v, why = fa._col(cap.gpu, G.T), fa._col(cap.gpu, G.POWER_CAP_PCT), fa._col(cap.gpu, G.REASONS)
+    out = []
+    for i, ti in ((i, fa._bounded(x)) for i, x in enumerate(t)):
+        x, cell = read(G.POWER_CAP_PCT, fa._at(v, i)), fa._at(why, i)
+        if ti is None or x is None or idle_named(cell):
+            continue
+        named = POWER_CAP_REASON in _reasons(cell)
+        out.append((float(ti), x if named else 0.0, x, named))
+    return out
 
 
 def _gpu_heat(cap: Capture) -> _Series:

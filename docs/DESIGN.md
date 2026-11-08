@@ -551,7 +551,8 @@ def main_chain(cap) -> dict[str, list]              # F columns of the swap chai
 def frame_stats(fr, duration_s) -> dict             # the frame keys of Diagnosis.stats
 def bound(cap, fr, events) -> dict                  # LC 3.4, steady windows only (event frames excluded):
 # {verdict: "gpu"|"cpu_main"|"cpu_all"|"waiting"|"vsync"|"capped"|"mixed"|"unknown", r, ft_ms, gpu_ms,
-#  busiest_thread, cap_fps, refresh_hz, vsync: bool|None, vrr: bool|None, confidence, notes: [str]}
+#  busiest_thread, cap_fps, refresh_hz, vsync: bool|None, vrr: bool|None, confidence, notes: [str],
+#  gpu_probable: {seconds, share, windows, marks, marks_busy, holds} | None (no frame timing, verdict unknown)}
 # analysis/events.py
 def find_events(cap, fr, stats) -> list[LagEvent]
 # analysis/attribute.py
@@ -611,8 +612,12 @@ AllowsTearing not 1; with k = round(FT/P) >= 2 the hardware is tested against on
 refresh/k), a frame cap (a regular present cadence: robust CoV, (IQR/1.349)/median per 5 s window, under 3 %,
 away from k·P, with r < 0.75 and an unsaturated thread), `gpu` (r >= 0.90, or r above 0.75 with FT − G <= 1 ms;
 G minus 0.5 ms when HAGS is on for the game's adapter), `cpu_main` (r <= 0.75 and busiest thread >= 0.85 of a
-CPU over >= 1 s), `cpu_all`, `waiting`, else `mixed`. Without frames, a 3D engine at >= 95 % gives a probable
-`gpu`. While other programs keep the game's GPU >= 10 % busy (`frames.gpu_shared`, LC 4.6), a `capped` or
+CPU over >= 1 s), `cpu_all`, `waiting`, else `mixed`. Without frames, a 3D engine at >= 95 % (median of 1 s
+windows) gives a probable `gpu`; otherwise the verdict stays `unknown` and `gpu_probable` (`frames.probable_gpu`)
+reads the same fallback per second: the 1 s windows with the engine at >= 95 %, and the marks whose span touches
+one. It `holds` with >= 10 % of the windows and >= 10 s, or at half the marks or more; the first real capture's
+median was 71 % while the GPU was pegged in its last minutes and at every mark. While other programs keep the
+game's GPU >= 10 % busy (`frames.gpu_shared`, LC 4.6), a `capped` or
 `waiting` verdict becomes `unknown`: a shared GPU paces a game as evenly as a cap. `bound` also returns
 `steady_fps`, the rate outside stutters and drops.
 
@@ -683,7 +688,10 @@ Each rule is a pure function `fn(cap, ctx) -> Finding | Cleared | Unchecked | No
 evidence either way, silent), declares the sources it `needs`, its family and category, and for side-specific
 causes a `gate` on the bound verdict (`gpu`: "gpu" or "mixed"; `cpu`: "cpu_main", "cpu_all", "mixed" or
 "unknown", LC 5.1; `gpu_event`: anything but CPU-bound). A gate failure turns a Finding into Cleared (a definite
-verdict) or Unchecked (verdict unknown). A rule whose source was not measured is `unchecked` with the reason.
+verdict) or Unchecked (verdict unknown), except that without frame timing a `gpu`-gated Finding passes where
+`bound.gpu_probable` holds, with that reading as its last evidence line (`rules._probable_gpu`); when it does not
+hold, the Unchecked reason gives the seconds and marks. A rule whose source was not measured is `unchecked` with
+the reason.
 Some clearances are held open (`_holds_open`): `gpu_limit` while other programs share the game's GPU, and
 `cpu_limit` while the busiest thread is in LC 3.2's grey zone (0.6–0.85 of a CPU); and pacing causes stay open
 while pacing events that no finding claims cover ≥ 10 % of the capture.
@@ -704,7 +712,19 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   variant only when the enforced limit is below `inventory.nvidia.power_default_w`. A capture from before the
   split (no `nv_power_cap_pct` column) counts the share only with a thermal or brake reason active. The text
   says "heat" when the readings named heat and never the brake or HW slowdown (`attribute.held_by`), else
-  "heat or its power brake".
+  "heat or its power brake". Readings that name `gpu_idle` are left out of the heat share and of the per-event
+  signal (`attribute.throttle_readings`: NVML's counters kept growing at idle, 99-100 % with no heat named), and
+  a GPU idle in every reading is unchecked. The power-cap share counts a reading only where its reasons named
+  `sw_power_cap` (`attribute.power_cap_readings`: on driver 591.86 the counter read 42 % over 169 readings that
+  never named it), and the text says so when the counter moved without the reason.
+- `cpu_throttle`: `% Performance Limit` under 100 on >= 25 % of samples, a passive thermal limit, a drop of
+  >= 20 % from the first two minutes, or the level itself: a median `% Processor Performance` at or below 80 % of
+  the base clock (a quiet mode set outside Windows held it at 70 % with no limit reported). A CPU held only by the
+  level is titled "ran below its base clock", and "checked and fine" says the limit and the level measured, never
+  "full speed".
+- `ram_pressure`: free RAM under 10 % (5 % or 64 MB critical), hard faults, the commit charge over 80 / 90 %. A
+  commit charge over 90 % while RAM stays free is the page file running short: free RAM is no evidence against it
+  then (nor hard faults for it, being file reads), and the finding is titled for the page file.
 - `power_plan`: battery, battery saver, a low power mode, or a plan whose own settings (`inventory.power.plan`)
   cap the CPU below 100 % (the performance cores too, on a hybrid CPU), turn boost off, or cool passively while
   plugged in; by its name (whole words of `QUIET_PLAN_WORDS`) only in a capture without those settings. And the

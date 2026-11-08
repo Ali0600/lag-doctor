@@ -297,3 +297,12 @@ same hour were normal. A diagnostic branch showed it only right after the full s
 gone once the child runs got their own `TEMP` (12 of 12 normal).
 **Takeaway**: give every child run of a tool that keeps shared state (temp roots, caches, locks) a private root, and
 compare a suspicious slowdown with runs from the same hour without your change before calling it noise.
+
+### A driver's own counter can disagree with the reasons it reports
+NVML's cumulative clock-event counters are meant to add up the time each reason its bitmask names was active. On
+driver 591.86 the SW power-cap counter read 42 % over 169 readings whose reasons never named the cap, and the thermal
+counter kept growing (99-100 % a reading) through idle readings that named only `gpu_idle`.
+**Why it came up**: the review of the first real capture recomputed the power-cap and heat shares from the raw rows;
+the rules had trusted the counters alone.
+**Takeaway**: before turning a counter into a share, check it against the instantaneous flags of the same reading,
+and count it only where they agree (or leave out the state, here idle, where it is known to drift).

@@ -192,6 +192,26 @@ def test_the_planted_gpu_evidence_is_strong_enough_to_report_without_the_gate():
     assert {"gpu_throttle", "vram_overflow", "hybrid_copy"} <= {f.cause for f in found}
 
 
+def test_without_frame_timing_gpu_heat_is_reported_where_the_gpu_was_pegged():
+    # Item 1, through the real path (frames.bound's per-second reading, then run_rule's gate): the first real capture
+    # kept its GPU at a median 71 % and 98-99 % in its last minutes, and GPU heat went to "could not check"
+    cap = synth.laglab("smooth", duration_s=60.0, with_frames=False).cap
+    cap.target["adapter_luid"] = synth.NVIDIA_LUID
+    cap.sources["gpu"] = SourceStatus("ok", tool="NVML")
+    cap.gpu = synth.gpu_table(60, nv_throttle_pct=80.0, nv_reasons="sw_thermal_slowdown", nv_temp_c=85.0)
+    cap.inventory["nvidia"] = {"temp_target_c": 75}
+    cap.system[S.GAME_GPU_PCT] = [99.0 if t >= 45.0 else 60.0 for t in cap.system[S.T]]   # the last quarter pegged
+    d = diagnose(cap)
+    assert d.stats["bound"] == "unknown" and "gpu_throttle" not in d.unchecked
+    heat = next(f for f in d.findings if f.cause == "gpu_throttle")
+    assert heat.confidence == "high" and heat.evidence[-1].text.startswith(
+        "Frame timing was not measured, but the game kept its GPU's 3D engine 95% or more busy for 15 s (25% of the "
+        "capture)")
+    cap.system[S.GAME_GPU_PCT] = [99.0 if t >= 55.0 else 60.0 for t in cap.system[S.T]]   # 5 s: too little to tell
+    d = diagnose(cap)
+    assert "gpu_throttle" not in causes(d) and "busy for only 5 s" in d.unchecked["gpu_throttle"]
+
+
 # ------------------------------------------------------------------------------ the fixes ---
 
 # DESIGN.md "Fixes": each fix id and its exact params; the only cause that may offer each.

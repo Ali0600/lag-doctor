@@ -1503,8 +1503,8 @@
  {
   "name": "a gated verdict escapes the hold",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "            res = _gated(rule, env)\n        held = _holds_open(",
-  "new": "            return _gated(rule, env)\n        held = _holds_open(",
+  "old": "            res = _gated(rule, env, res)\n        held = _holds_open(",
+  "new": "            return _gated(rule, env, res)\n        held = _holds_open(",
   "tests": [
    "tests/test_analysis_rules.py::test_a_shared_gpu_holds_the_gated_verdict_open_too"
   ]
