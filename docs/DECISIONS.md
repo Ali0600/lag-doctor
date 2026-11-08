@@ -89,7 +89,8 @@ owner's, answered on 2026-11-08. The planning session chose the rest, and the ow
 - **It launches the games (chosen by the owner)**.
   - **Results first, launching last or never** (the session's proposal: one click saved, for the most risk): rejected by
     the owner.
-- **Plan only for now (the owner)**: nothing is built until the owner says go.
+- **Plan only for now (the owner)**: nothing was built until the owner said go. They did on 2026-11-08 ("let's do the
+  Launcher-Plan.md"), and M0's spike is built; its owner's run is the gate (`docs/LAUNCHER-PLAN.md`, Status).
 - **The window: WebView2 in lag-doctor's own window, driven by its Python through ctypes (chosen, gated by the M0
   spike)**. It is the launchers' own architecture (Steam draws with an embedded Chromium). No new binary and no
   server, and the stdlib-only rule holds.

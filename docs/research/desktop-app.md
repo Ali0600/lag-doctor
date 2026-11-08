@@ -245,7 +245,8 @@ an app (section 2), it brought a server to harden:
   first-run screens unless a policy hides them, and Edge can be uninstalled in the EEA [research: Microsoft Q&A
   1181132; HideFirstRunExperience policy page; Microsoft EU policy blog, 2024-03-07].
 
-A WebView2 window opens no socket, so none of this applies.
+A WebView2 window needs no server: the spike found no listening socket in it (section 11), so none of
+this applies.
 
 ## 9. The relay and its pipe
 
@@ -269,8 +270,9 @@ A WebView2 window opens no socket, so none of this applies.
 ## 10. Still open
 
 Each item is an owner run or a measurement, and the plan names it where it is needed:
-- **M0** on the owner's PC.
-- **The runner's WebView2 Runtime**, read and used in a CI probe.
+- **M0** on the owner's PC: the automated checks pass (section 11); the owner's own run, with the steps only a person
+  can do, is still open.
+- **The runner's WebView2 Runtime**: the CI probe (`.github/workflows/webview-spike.yml`) asks.
 - **The relay pipe's integrity label** with an unelevated client.
 - **Where the UAC prompt appears** when the app's window asks for it.
 - **Who parents a store-launched game, and how long the handler stub lives.**
@@ -279,6 +281,58 @@ Each item is an owner run or a measurement, and the plan names it where it is ne
 - **Load and analysis time for long captures.**
 - **Audible cues during a fullscreen game.**
 - **SignPath's answer on `WebView2Loader.dll`**, only if the own loader ever breaks.
+
+## 11. Measured by the window spike (M0)
+
+`scripts/webview_spike.py`, run from the agent's shell on the owner's PC (2026-11-08, WebView2 Runtime 157.0.4341.42,
+display at 120 DPI, text size 100%). Five complete runs of the reviewed spike: three `--auto`, two `--rehearse`; none
+was a cold start, since the runtime's files had been loaded before. Each line is [verified: the runs' results.json],
+unless it says otherwise.
+- **The own loader works from ctypes.** `CreateWebViewEnvironmentWithOptionsInternal(true, 0, folder, options,
+  handler)` returned S_OK. The runtime asked the options object for 6 values, among them
+  `ExclusiveUserDataFolderAccess` and `IsCustomCrashReportingEnabled`, and asked a new one again after the recovery.
+- **Startup**: the page was ready 1.9 to 2.2 s after the Python process started, about 1.1 s after its imports.
+- **The view**: at the first page, the view's rasterization scale and the page's devicePixelRatio were both 1.25 at
+  120 DPI, and the view filled the window.
+- **Messages**: 1,000 posted at once all came back in order, p50 41 to 53 ms and p95 72 to 100 ms (queueing); one at a
+  time, p50 0.3 to 0.5 ms and p95 0.4 to 0.7 ms.
+- **Footprint**: 6 WebView2 processes at the first page (250 MB working set, 83 to 84 MB private); 7 after the page
+  checks, which had opened DevTools and asked for the microphone and location (368 to 383 MB, 186 to 189 MB private).
+  Python itself, 50 to 52 MB.
+- **Recovery**: with its browser process ended, a working page again 1.3 to 1.7 s later, the options asked again and
+  every setting back.
+- **Close**: every WebView2 process gone 0.36 to 1.68 s after closing. Before the review, one run of eight took
+  5.16 s; which process lingered was not recorded then, and is now.
+- **Sockets**: no listening TCP socket or bound UDP endpoint in the spike or its WebView2 processes, at the first page
+  and after the recovery; the spike's own listener, connected pair and UDP endpoints were read back with their states.
+  In one run of five, a WebView2 process held one outgoing HTTPS connection (port 443, closing) at the first reading;
+  the page itself cannot reach the network (CSP, below).
+- **Modal loops**: in about 2.5 s of Windows' move loop, every message posted to the window during it arrived (432 to
+  463), and of 431 to 465 posted to the thread during it, 8 or 9 did.
+- **Suspend**: `TrySuspend` succeeded, and the page's 50 ms timer ran 0 times in 3 s suspended, against 3 times in 3 s
+  only hidden.
+- **DevTools**: `OpenDevToolsWindow` opened DevTools with `AreDevToolsEnabled` off. Microsoft documents the setting as
+  governing the keys and the menu; the owner's key step checks that [research: ICoreWebView2Settings reference].
+- **CSP**: an inline `onerror` was refused with a `script-src-attr` report, and a `no-cors` fetch of an outside site
+  was refused with a `connect-src` report, so the CSP refused it, not CORS or the network.
+- **Navigation**: to another site, to another page of the app's own, and to an unregistered scheme, each was refused
+  in `NavigationStarting`; `LaunchingExternalUriScheme` was never raised, so its handler, refusal in depth, never ran.
+- **Permissions**: geolocation, microphone and notifications reached the host and were refused; the clipboard read was
+  refused inside the page. No prompt or other browser window appeared.
+- **Downloads**: one was refused; no file appeared in the run folder (where the spike redirects it first) or in
+  Downloads.
+- **The virtual host**: 9 path escapes, among them encoded slashes and backslashes and the outside file's own absolute
+  path, all failed to fetch, and none read the file. The browser's URL parser folds two of them (`/../`, `%2e%2e`)
+  into the plain name before the mapping sees them.
+- **`os.environ`**: a variable set to an empty string through `os.environ` was removed from the process environment
+  (`GetEnvironmentVariableW`: error 203); `SetEnvironmentVariableW` keeps it present and empty. WebView2's five
+  variables were back as they were (absent) once the view existed.
+- **pythonw**: started with no standard handles, `sys.stderr` is None and the unraisable hook is the default, so an
+  unguarded callback's exception went nowhere; the same raise under python.exe reached stderr ("Exception ignored").
+  The next messages worked in both.
+- **A dropped handler**: kept, it answered 20 of 20; dropped, its process ended with an access violation (reading
+  0xFFFFFFFFFFFFFFFF). ctypes raised it as an `OSError`, so the exit code was 1, not 0xC0000005.
+- **A run cut short**: closing the window midway gave exit 4 and listed the 16 checks it never reached.
 
 ## Verification log (2026-11-08)
 
@@ -290,3 +344,6 @@ Each item is an owner run or a measurement, and the plan names it where it is ne
 | The static report charts no NVIDIA column (`html.py` imports F, N and S, not G) | confirmed | main |
 | In the first real capture, 2 of 3 marks fell while another window was in front | confirmed | `docs/FIRST-CAPTURE-REVIEW.md` |
 | The Stage 3 MSI has no Start-menu shortcut and puts `bin\lagdoctor.cmd` on PATH | confirmed | `installer/lag-doctor.wxs`, `installer/lagdoctor.cmd` on main |
+| `WebView2.h`'s C vtables (order, IIDs, parents) agree with `WebView2.idl` in Microsoft.Web.WebView2 1.0.4314.35 | confirmed: 297 interfaces, 0 mismatches | the nuget.org package, nupkg SHA-256 90778deb...44edc4, parsed by script |
+| The spike's 134 slots and IIDs equal that header's | confirmed: 0 mismatches | the same parse, against `scripts/webview_spike.py` |
+| `CreateWebViewEnvironmentWithOptionsInternal` takes (bool, runtime type, folder, options, handler), 0 = installed; the runtime's folder is the `EBWebView` value read with `KEY_WOW64_32KEY` | confirmed | webview/webview `loader.hh` and Wails `env_create.go`, `find_dll_installed.go` (master, 2026-11-08) |

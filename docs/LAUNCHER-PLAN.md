@@ -2,16 +2,20 @@
 
 Goal (DECISIONS 2026-11-08): lag-doctor as a desktop app you start like Steam or any other game launcher. It has its
 own icon in the Start menu and on the taskbar and its own window, and its library lists your games. Play starts a game
-with lag-doctor recording it, and the results open in screens you can explore and compare. Nothing is built yet: the
-owner asked for the plan only. Facts and sources are in [research/desktop-app.md](research/desktop-app.md). The
-recording side builds the capture service's protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
+with lag-doctor recording it, and the results open in screens you can explore and compare. The owner asked for the plan
+first and said go on 2026-11-08: M0's spike is built and waits for the owner's run. Facts and sources are in
+[research/desktop-app.md](research/desktop-app.md). The recording side builds the capture service's protocol early
+([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 
 ## Status (2026-11-08)
 
 - [x] Decided by the owner: a desktop app, not a page in a browser, and it launches the games (DECISIONS 2026-11-08).
 - [x] Researched: the window technology, launching and finding a game without touching it, the screens, and the
   record flow against main at 4f081ad (research note).
-- [ ] M0: the window spike.
+- [x] The owner said go (2026-11-08).
+- [ ] M0: the window spike. Built (`scripts/webview_spike.py`) and reviewed; its 30 automated checks pass on the
+  owner's PC, run from the agent's shell (research note, section 11). The gate is the owner's own run, with the four
+  steps a person must do.
 - [ ] M1: the app with your results.
 - [ ] M2: the recording seams.
 - [ ] M3: the relay.
@@ -87,14 +91,15 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
   - Commands and results travel as JSON web messages, and the sender's origin is checked on every message.
   - Text from a library file, a capture or the PC (game, process and window names) reaches the page as text
     (`textContent`), never as HTML. A Content-Security-Policy meta tag lets the page load nothing from outside
-    lag-doctor's own hosts. A script slipped in through a game's name would run in the app's own origin and pass the
-    origin check, so M1 tests it: a game and a process named like markup appear as text, and `innerHTML` in their
-    place turns the test red.
+    lag-doctor's own hosts, and no workers (`worker-src 'none'`). A script slipped in through a game's name would run
+    in the app's own origin and pass the origin check, so M1 tests it: a game and a process named like markup appear
+    as text, and `innerHTML` in their place turns the test red.
   - Large frame arrays go through a shared buffer.
   - Cover art comes from a second host that the app answers itself (`WebResourceRequested`), by library id only, with
     bytes it read from a store's cache or an exe and recognised as an image. Those folders are never mapped.
-  - Everything else is off: navigation to any other address, new windows, permission requests, DevTools, the default
-    context menu, the browser's keys and zoom.
+  - Everything else is off: navigation to any other address, new windows, permission requests, downloads, script
+    dialogs, DevTools, the default context menu, the browser's keys and zoom. Each handler refuses first and reads the
+    event afterwards, so a failure while reading leaves the refusal standing.
 - **Opening WebView2.** lag-doctor uses its own small loader: it calls `CreateWebViewEnvironmentWithOptionsInternal`
   in the installed runtime's `EmbeddedBrowserWebView.dll`. webview/webview (MIT) does the same by default, and Wails
   does too.
@@ -120,14 +125,24 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
   4. Refusals shown in a message box: started elevated, running under another app's private copy of AppData, or no
      WebView2 Runtime.
   5. `faulthandler` to a log.
-  6. STA COM, the window, then the environment, with `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`,
-     `WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER` and `WEBVIEW2_RELEASE_CHANNEL_PREFERENCE` blanked in-process first, as Wails
-     does: WebView2 checks them even without Microsoft's loader, and a stray user setting could add a debugging port.
+  6. STA COM, the window, then the environment. Before it is created, WebView2's five own variables are set in-process
+     as Wails sets them: `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS`, `WEBVIEW2_PIPE_FOR_SCRIPT_DEBUGGER`,
+     `WEBVIEW2_BROWSER_EXECUTABLE_FOLDER` and `WEBVIEW2_USER_DATA_FOLDER` empty, and
+     `WEBVIEW2_RELEASE_CHANNEL_PREFERENCE` to 0. WebView2 reads them even without Microsoft's loader, and a stray user
+     setting could add a debugging port. They go through `SetEnvironmentVariableW`, never `os.environ`, which removes
+     a variable it is given empty (M0 measured it). Once the view exists they are put back as they were, so the
+     stores and games the app starts later (M6) inherit the user's own environment; a recovery does the same again.
 - **Rules for the code.**
-  - Every ctypes callback stays referenced for the window's whole life, and is wrapped so it can never raise. Under
-    pythonw an exception there is silent and leaves the return value unset.
+  - Every ctypes callback stays referenced for the window's whole life, the environment's options object included,
+    and is wrapped so it can never raise. Under pythonw an exception there is silent and leaves the return value
+    unset. An access violation that ctypes turns into an `OSError` inside a callback is no ordinary error: it fails
+    and stops the run.
   - The UI thread never blocks. Loading captures, analysis and recording run in other processes, or in worker threads
-    that post their results to the window.
+    that post their results to the window, never to the thread: Windows' own modal loops drop thread messages (M0:
+    of about 450 posted to the thread during a 2.5 s move, 8 or 9 arrived).
+  - The app never calls `OpenDevToolsWindow`: it opens DevTools even with DevTools turned off (M0).
+  - A recovery waits for `BrowserProcessExited` before creating the environment again: the data folder is exclusive
+    and is free only then. It never retries without the options object.
 - **Its folder.** WebView2's data folder is `webview` under lag-doctor's home, `paths.home()`: so
   `%LOCALAPPDATA%\lag-doctor\webview`, and a temp folder in tests, which redirect `LAGDOCTOR_HOME`. The default, next
   to `pythonw.exe` in Program Files, cannot be created. Uninstall leaves the folder, and the README will say so.
@@ -253,29 +268,53 @@ edit the analysis and the docs, so re-read main before cutting each one.
 
 ### M0: the window spike
 
-A throwaway `scripts/webview_spike.py` (stdlib ctypes only) that opens lag-doctor's window with WebView2 through the
-own loader. The owner runs it in their own terminal (the agent's shell has the private-copy redirect) and takes part:
-the script asks them to drag the window, change the display scale (and move it to a second monitor, if one is
-connected), try the blocked keys and the right-click, end the browser process it names, and say what the taskbar
-shows. For each check it prints PASS or FAIL with the measured number:
-- The runtime and the export are found, and both are signed by Microsoft.
-- Window, environment, controller and first page are up within 10 s from cold.
-- Assets come from the virtual host, and no socket listens.
-- 1,000 messages round-trip in order with the right origin; p50 and p95 latency printed.
-- Worker results posted to the window survive a window drag. The control: through PostThreadMessage, some are lost.
-- Navigation, new windows, permissions, DevTools, the context menu, browser keys and zoom are all blocked.
-- Under pythonw, an exception in a handler is logged and the next message still works.
-- Dropping the handler references crashes. This proves the keep-alive matters.
-- A killed browser process is recovered within 10 s.
-- The page follows DPI changes and monitor moves.
-- The taskbar shows the spike's own icon.
-- Closing the window ends every WebView2 process within 5 s.
-- The footprint (process count and RAM) is recorded.
-- On CI: does the runner have the WebView2 Runtime, and can it open the window?
+`scripts/webview_spike.py` (stdlib ctypes only, built 2026-11-08) opens lag-doctor's window with WebView2 through the
+own loader. Its vtable slots and IIDs are counted from Microsoft's `WebView2.h` (SDK 1.0.4314.35), whose 297
+interfaces agree with the package's `WebView2.idl`. Each check prints PASS, FAIL or NOT RUN with what it measured, and
+a check that needs a control runs it: a control that does not fail as predicted fails its check.
+- The runtime and the export are found, and the DLL and `msedgewebview2.exe` are both signed by Microsoft.
+- WebView2's own environment variables are set in-process before the runtime loads, and are back as they were once
+  the view exists. The controls: the reader tells an absent variable from an empty one, and an empty `os.environ`
+  value removes the variable instead.
+- Window, environment, controller and first page are up within 10 s of the process starting.
+- The runtime asks lag-doctor's options object (a data folder of its own, crash dumps kept on the PC), and asks again
+  after a recovery; every setting reads back as set, before and after.
+- The view fills the window at the display's scale, Windows' text size included.
+- Assets come from the virtual host, and none of 9 path escapes reads the file beside its folder.
+- No listening TCP socket or bound UDP endpoint in the app or its WebView2 processes. The control: a listener, a
+  connected pair and UDP endpoints of the spike's own are read back with their states. WebView2's own outgoing
+  connections are counted, not failed.
+- The page's CSP blocks an inline handler and an outside fetch, each with its violation report.
+- 1,000 messages round-trip in order from the right origin; p50 and p95 latency printed.
+- A window watch sees browser-owned windows. The control: DevTools, opened on purpose and closed.
+- Navigation to another site, to another page of its own or to another app is refused; so are new windows,
+  permission requests (with no prompt), downloads (and no file is written) and script dialogs.
+- Worker results posted to the window during Windows' move loop, entered through `SC_MOVE` and left with Esc, all
+  arrive. The control: posted to the thread meanwhile, nearly all are lost.
+- The view hides and suspends. The control: hidden but not suspended, the page's timers still run.
+- A browser process the spike ends itself is recovered within 10 s.
+- Under pythonw, a guarded handler's exception is logged and the next message works; an unguarded one goes nowhere.
+  The control: the same unguarded raise under python.exe reaches stderr.
+- The drop-refs sabotage: kept, a handler answers 20 of 20; with its references dropped, it breaks (here, an access
+  violation ends its process). So the keep-alive matters.
+- Closing the window ends every WebView2 process within 5 s (one run of eight before the review took 5.16 s; each
+  process's exit time is now recorded, to show which one lingers if it happens again).
+- No access violation anywhere in the spike's own process.
+- The footprint (process count and memory) is recorded twice: at the first page and after the page checks.
 
-The gate: everything passes on the owner's PC, and the two sabotage runs fail as predicted. Otherwise the owner
-decides on the fallback (DECISIONS 2026-11-08): a small host exe showing the same screens. It is compiled code with a
-second toolchain, so it would reverse "Python with ctypes, no compiled code" (DECISIONS 2026-11-04).
+The owner's run adds what only a person can do or see: drag the window, press the browser's keys (no F-keys: on many
+laptops they are hardware keys) and right-click, change the display scale or move the window to a second monitor (the
+spike reads the view while the new scale is on, and reminds the owner to set the scale back), and say what the
+taskbar shows. The owner runs it in their own terminal. `--auto` runs the automated checks alone (agents and CI);
+`--rehearse` walks the four steps with automatic answers, so their code runs without a person and checks nothing. A
+run cut short (the window closed, Ctrl+C) says so and exits 4, listing every check it never reached. CI's probe
+(`.github/workflows/webview-spike.yml`) asks whether the runner has the WebView2 Runtime and can open the window; a
+"no runtime" answer counts only when a second reading (the runtime's registry version and its exe) agrees.
+
+The gate: the owner's run passes on their PC, the drop-refs sabotage fails as predicted, and no control misses.
+Otherwise the owner decides on the fallback (DECISIONS 2026-11-08): a small host exe showing the same screens. It is
+compiled code with a second toolchain, so it would reverse "Python with ctypes, no compiled code" (DECISIONS
+2026-11-04).
 
 ### M1: the app with your results
 
@@ -289,7 +328,9 @@ Play and screen 6 with M6. It needs:
   every capture. Older sessions fall back to the folder name;
 - `analysis.window(cap, t0, t1)` for the samples around a lag moment, and labels for every column a chart can show;
 - `app` in `cli.PRIVATE_COPY_POLICY` among the commands that refuse, and a CLAUDE.md rule that an agent never starts
-  the app or the spike: its shell has the private copy, and from M4 on the app raises a UAC prompt.
+  the app: its shell has the private copy, and from M4 on the app raises a UAC prompt. The spike keeps its data in
+  `%TEMP%`, which the private copy leaves alone, so an agent may run its `--auto` and `--rehearse`; its interactive
+  run is the owner's.
 
 Tests:
 - view-models in plain pytest;
@@ -387,7 +428,9 @@ the sounds and Stop.
   statement. Its terms add that software which "collects user data and transfers it to systems not specified by the
   user" must show that policy during installation, with an option there to turn it off. The MSI has no dialogs, and
   WebView2's required diagnostic data cannot be turned off, so ask SignPath whether the clause covers the runtime's own
-  data.
+  data. M0 adds a measurement: the page itself cannot reach the network, but in one run of five a WebView2 process
+  held an HTTPS connection (port 443, closing) at the first reading. What the runtime contacts on its own belongs in
+  the statement too.
 - **The loader DLL.** If the own loader ever breaks: ask SignPath whether Microsoft's BSD-licensed, binary-only
   `WebView2Loader.dll` may ship inside the signed MSI.
 
