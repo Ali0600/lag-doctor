@@ -123,6 +123,10 @@ minor version, and `tests/test_wheel_check.py` fails when the two part) and then
   set --no-cone /Tests/Gold/` stored `C:/Program Files/Git/Tests/Gold/` (the checkout then wrote nothing), and `git
   show origin/main:.github/workflows/ci.yml` became `origin\main;.github\...`. Prefix such commands with
   `MSYS_NO_PATHCONV=1`, or run them from PowerShell or Python's `subprocess`, which pass arguments as typed.
+- To read one CI job's log while the rest of its run goes on (a fast job's verdict, such as the wheel job on a
+  sabotage commit), use `gh api repos/Ali0600/lag-doctor/actions/jobs/<job id>/logs --allow-escape-sequences`:
+  `gh run view <run> --log --job <job id>` refuses until the whole run has finished, and without the flag `gh api`
+  prints only a refusal of the log's colour codes (seen 2026-11-07).
 - `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` is
   timing-sensitive under full-suite load (failed once on 2026-11-05 with 0 delay gaps, then 4/4 alone; on CI once in
   two full runs): rerun it alone before blaming a change for it, as CI does. A test that starts a child pytest gives it
