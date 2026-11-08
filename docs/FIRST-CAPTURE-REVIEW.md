@@ -45,13 +45,13 @@ with it, and what is still open, each with the code to start from.
    game GPU use is under 95 % (here 71 %), though the GPU was 98-99 % busy in minutes 11-13 and at every mark;
    their own results were high and medium findings. `analysis/frames.py` no-frames bound verdict; the gate in
    `rules.py` (`_gated`).
-   *Fixed (PR #PR1):* the verdict stays `unknown`, and `frames.probable_gpu` reads LC 3.4's fallback per second;
+   *Fixed (PR #7):* the verdict stays `unknown`, and `frames.probable_gpu` reads LC 3.4's fallback per second;
    a GPU-side finding passes the gate when the engine was at 95 % or more in 10 % of the 1 s windows and 10 s, or
    at half the marks, and says so in its evidence. The capture: 173 s (20 %) and 3 of 3 marks, so GPU heat is
    likely and video memory possible.
 2. **"The CPU ran at full speed"** is cleared from the limit flags and a drop against the first two minutes; the
    level itself (median 70 % of base) is never checked. `rules._cpu_throttle`.
-   *Fixed (PR #PR1):* a median `% Processor Performance` at or below 80 % of base counts on its own ("The CPU ran
+   *Fixed (PR #7):* a median `% Processor Performance` at or below 80 % of base counts on its own ("The CPU ran
    below its base clock"), and the cleared text says what was measured. The capture: worth checking, since the
    game's busiest thread stayed at 58 % of a CPU.
 3. **Focus "checked and fine"** on the whole-session share (94 %) while 2 of the 3 marks fell in the one stretch
@@ -66,15 +66,15 @@ with it, and what is still open, each with the code to start from.
    a CPU and the CPU at 56 % of base. `diagnose.py` (the `[:2]`), `attribute.py` ranking.
 7. **Commit-limit exhaustion and "RAM stayed free" cancel** in one evidence family, so a commit charge at
    99.9 % is never reported. `rules._ram_pressure`.
-   *Fixed (PR #PR1):* over 90 % committed with RAM free, free RAM is no evidence against (nor hard faults for, being
+   *Fixed (PR #7):* over 90 % committed with RAM free, free RAM is no evidence against (nor hard faults for, being
    file reads); the finding is titled for the page file. The capture: possible, "Windows nearly ran out of memory to
    hand out: the page file is small".
 8. **`_heat_share` counts idle readings** (NVML's counters keep growing at `gpu_idle`). `rules._heat_share`.
-   *Fixed (PR #PR1):* `attribute.throttle_readings`, which the rule and the per-event signal both read, leaves out
+   *Fixed (PR #7):* `attribute.throttle_readings`, which the rule and the per-event signal both read, leaves out
    readings that name `gpu_idle`; a GPU idle in every reading is unchecked, not "checked and fine".
 9. **`_power_cap_item` trusts the field-74 counter**, which on driver 591.86 read 42 % while the `sw_power_cap`
    reason was named in 0 of 169 readings. `rules._power_cap_item`.
-   *Fixed (PR #PR1):* `attribute.power_cap_readings` counts a reading's share only where its reasons named the cap,
+   *Fixed (PR #7):* `attribute.power_cap_readings` counts a reading's share only where its reasons named the cap,
    and the evidence says so when the counter moved without it. The capture: 78 % at a 55 W cap, from 670 of 839
    readings.
 10. **Background CPU counts lag-doctor's own processes** (`target["tool_pids"]`). `attribute._others`.
