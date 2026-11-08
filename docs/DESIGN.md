@@ -890,6 +890,19 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
   CPU/GPU chart, VRAM chart, ping chart (lost pings from the collector's own record), marks on every time chart,
   finding cards, marked moments, worst moments, checked-and-fine, system snapshot, not measured. Each section
   falls back to a note on odd values instead of failing the page.
+- **The HTML never shows the Windows user name**: it is meant to be shared. `html.e()`, which every string on the
+  page passes through (the footer, the game's exe in This PC, a reason quoting PresentMon's path, evidence),
+  shows a folder under a user's profile by the variable that names it (`html.user_neutral`):
+  `%LOCALAPPDATA%\lag-doctor\sessions\...`, `%APPDATA%\...`, `%USERPROFILE%\Games\...`. This PC's
+  `LOCALAPPDATA`, `APPDATA` and `USERPROFILE` come first, the deepest folder winning and only as whole folders;
+  then any `<drive>:\Users\<name>` (a capture from another PC, an 8.3 short name), but never the shared Public and
+  Default profiles. Any case, `/` and a repr's doubled `\` count too. A path outside the profile (a custom
+  `LAGDOCTOR_HOME`) is shown as it is. The footer's command is for Windows PowerShell (`html.powershell_path`):
+  `lagdoctor analyze "$env:LOCALAPPDATA\lag-doctor\sessions\...\capture.ldcap.json.gz"`, with `${env:NAME}` before
+  a character PowerShell would read as part of the name (`?`, `:`) and a backtick before `$`, a backtick and quotes
+  in the rest. The console summary and the capture keep the real paths: the summary is the user's own terminal,
+  where the commands around it print the same paths and its report path is pasted into a browser, which does not
+  expand `%LOCALAPPDATA%`; the capture needs the game's exe for the GPU-preference fix.
 
 ## CLI
 

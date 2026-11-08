@@ -475,3 +475,13 @@ python.org's embeddable ZIP of that very build leaves out tkinter, IDLE, turtle,
 290 names on its own list (`scripts/runtime_modules.py`).
 **Takeaway**: judge what a shipped runtime can import by asking that runtime (look up and import each name there),
 never by the catalogue of the interpreter that happens to run the check.
+
+### In a PowerShell double-quoted string, `?` and `:` carry on a variable's name
+`"$env:LOCALAPPDATA\x"` expands as expected, but `"$env:LOCALAPPDATA?x"` and `"$env:LOCALAPPDATA:x"` expand to
+an empty string (Windows PowerShell 5.1, measured): PowerShell reads the `?` or `:` as part of the variable's name.
+A `$` or a backtick later in the string is code too.
+**Why it came up**: the HTML report's analyze command names the capture as `"$env:LOCALAPPDATA\..."`, so the
+Windows user name stays off a page people share; a test runs the command's argument through a real
+`powershell.exe`.
+**Takeaway**: write `${env:NAME}` unless a separator follows, put a backtick before `$`, backticks and quotes in
+the rest, and prove the string by running PowerShell on it.
