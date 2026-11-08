@@ -9,6 +9,12 @@ import importlib
 import os, sys
 import winreg
 from ctypes import wintypes
+# Shipped by the embeddable runtime, unlike tkinter (scripts/runtime_modules.json):
+import http.server
+import socketserver
+import sqlite3
+import webbrowser
+import winsound
 from typing import TYPE_CHECKING
 
 import lagdoctor

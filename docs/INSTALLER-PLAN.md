@@ -90,8 +90,10 @@ but a GitHub-hosted runner. Measured (research note section 8):
   `capture/presentmon.py` reads the PID list from `winapi/ntquery.pids()` (the handle-free snapshot),
   `capture/netflows.py` this PC's addresses from `winapi/iphlp.adapter_addresses()` (GetAdaptersAddresses) and
   `capture/inventory.py` the RAM size from `winapi/memory.py` (GlobalMemoryStatusEx), each checked against psutil
-  on the live machine. `tests/test_stdlib_only.py` keeps every module under `lagdoctor/` on the standard library,
-  which is all the embeddable runtime holds. The tests keep psutil for their independent readouts: since 2026-11-08
+  on the live machine. `tests/test_stdlib_only.py` keeps every module under `lagdoctor/` on the standard library;
+  since 2026-11-08, on the part of it the embeddable runtime imports, by that runtime's own answer
+  (`scripts/runtime_modules.json`): it leaves out tkinter, IDLE, turtle, venv and ensurepip, which the interpreter
+  running the tests has. The tests keep psutil for their independent readouts: since 2026-11-08
   it is in the dev group, the wheel declares no dependency at all, and LagLab's pyglet is a dependency group rather
   than an extra the wheel would advertise without shipping `laglab/`.
 - [x] WiX v7 per-machine MSI built in CI. Done 2026-11-08 (PR #13; DECISIONS 2026-11-08): the embeddable Python

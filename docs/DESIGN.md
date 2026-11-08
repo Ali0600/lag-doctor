@@ -30,10 +30,12 @@ verification log; trust a note's *Corrected* entries over its body.
    path; `undo` restores from the journal, never from an assumed default.
 4. **Least privilege.** Only frame timing and the ETW network flows need ETW rights. Everything else runs
    as a normal user, fixes never need elevation, and the tool says plainly what it cannot see.
-5. **Standard library only.** The installer ships python.org's embeddable runtime, which holds the standard
-   library and nothing else, and Smart App Control, which blocks unknown unsigned code, would block psutil's
-   unsigned native module (`docs/research/install-and-rights.md`). So `lagdoctor/` imports only the standard
-   library and itself, and reads Windows through `winapi/` (ctypes); `tests/test_stdlib_only.py` enforces it.
+5. **Standard library only, as the installed runtime has it.** The installer ships python.org's embeddable
+   runtime, which holds no package beyond the standard library and leaves part of that out (tkinter and Tcl/Tk,
+   IDLE, turtle, venv, ensurepip and the tests), and Smart App Control, which blocks unknown unsigned code, would
+   block psutil's unsigned native module (`docs/research/install-and-rights.md`, sections 5 and 10). So `lagdoctor/`
+   imports only itself and the modules that runtime imports, by its own answer (`scripts/runtime_modules.json`), and
+   reads Windows through `winapi/` (ctypes); `tests/test_stdlib_only.py` enforces it.
 
 ## Data flow
 
@@ -176,7 +178,7 @@ laglab/     the fake laggy game used by tests (done)
 scripts/    redfirst.py e2e_truth.py (done) e2e.py etw_access.py (E1: who may enable the trace providers)
             stage2/ (the capture-service experiments E3, E3b, E3c: GitHub's runners only, never this PC)
             wheel_check.py; msi_build.py msidb.py wix_tool.py runtime_pin.py (the MSI); msi_check.py (installs it:
-            GitHub's runners only, never this PC)
+            GitHub's runners only, never this PC); runtime_modules.py + .json (what the pinned runtime imports)
 installer/  lag-doctor.wxs (WiX v7, per-machine), lagdoctor.cmd (the PATH shim), PresentMon-LICENSE.txt
 ```
 
@@ -955,8 +957,14 @@ lagdoctor setup                      fetch + verify PresentMon, explain how to g
 - **No handles**: `tests/test_no_handles.py` fails if `psutil.Process`, `process_iter` or `pid_exists` is
   used outside the allow-list, and if `OpenProcess` appears outside `winapi/process.py`.
 - **Standard library only**: `tests/test_stdlib_only.py` fails if a module under `lagdoctor/` imports anything
-  but the standard library and lagdoctor itself (psutil named, with the reason), in any form: inside a function
-  or a try block, through `__import__` or `importlib.import_module`, or by a module name it cannot read.
+  but lagdoctor itself and the modules python.org's embeddable runtime imports (psutil named, with the reason, and
+  a module that runtime leaves out or cannot import said to be one), in any form: inside a function or a try
+  block, through `__import__` or `importlib.import_module`, or by a module name it cannot read. What that runtime
+  imports is its own answer, `scripts/runtime_modules.json`: `scripts/runtime_modules.py` unpacks the pinned ZIP,
+  has its `python.exe` look up and import every name on its standard-library list, checks the answer against the
+  ZIP's listing and writes it; CI's msi job asks again and fails unless the JSON is the answer, byte for byte. The
+  interpreter running the tests has the modules the runtime leaves out, so its `sys.stdlib_module_names` cannot be
+  the check.
 - **End to end**: `scripts/e2e.py` runs each LagLab mode with a real capture and judges the diagnosis against
   LagLab's ground-truth log (`scripts/e2e_truth.py`). It needs ETW rights, so it runs on demand: without them
   it relaunches itself once through a UAC prompt and prints the verdicts back in the original window. The

@@ -34,8 +34,36 @@
 - **A launcher .exe for `lagdoctor` instead of the `.cmd` shim**, built in CI from our own C source: no "Terminate
   batch job (Y/N)?" after Ctrl+C and exact arguments, once Stage 4 records in the user's own window; SignPath could
   sign it. Revisit hook: `SHIM` in `scripts/msi_build.py` and the `bin\` harvest in `installer/lag-doctor.wxs`.
+- **Check whole dotted module names against the runtime**, not only top-level ones, should a pin ever ship a package
+  without one of its submodules (3.13.17 has every one the full installer has). Revisit hook: the child in
+  `scripts/runtime_modules.py` would list every module in `python313.zip`, and `allowed()` in
+  `tests/test_stdlib_only.py` would check the whole name.
 
 ---
+
+## 2026-11-08: lagdoctor/ may import what the installed runtime imports, by that runtime's own answer
+
+`tests/test_stdlib_only.py` allowed every name on the test interpreter's `sys.stdlib_module_names`, which names
+tkinter, IDLE, turtle, venv and ensurepip: python.org's embeddable runtime, the one the MSI ships, has none of them
+(`docs/research/install-and-rights.md`, section 10). The implementing session chose; the owner has not weighed in.
+- **An allow-list the pinned runtime answers itself (chosen)**: `scripts/runtime_modules.py` unpacks the pinned ZIP,
+  has its own `python.exe` look up and import every name on its standard-library list, checks the answer against the
+  ZIP's listing and writes `scripts/runtime_modules.json`. The test allows only the importable modules, and CI's msi
+  job asks the runtime again on every push and fails unless the JSON is its answer. It holds whichever interpreter
+  runs the tests (3.11's list also names modules that 3.13 removed) and whatever a new pin leaves out.
+- **A pinned deny-list of the 7 left-out modules beside `sys.stdlib_module_names`**: rejected, it still leans on the
+  test interpreter's list, and a module a later pin drops would pass until someone listed it.
+- **The ZIP's listing alone, without running the runtime**: rejected, the 68 built-in modules (`sys`, `winreg`, `nt`)
+  sit inside `python313.dll`, which no listing shows, and a module the listing holds can still fail to import
+  (`curses`).
+- **Looking each module up without importing it**: rejected, `curses`, `pty` and `tty` are found and fail to import,
+  as would a `.pyd` whose DLL went missing.
+- **Checking whole dotted names**: deferred, worth trying if a pin ever ships a package without one of its
+  submodules; this one ships every submodule the full installer has under each package it has.
+- **The runtime asked in the test job**: rejected, only the msi job downloads the runtime ZIP; the tests check the
+  pin the JSON records against `scripts/runtime_pin.py` instead, so a pin moved without the JSON fails everywhere.
+Revisit hooks: `allowed()` and `IMPORTABLE` in `tests/test_stdlib_only.py`; `CHILD` and `disagreements()` in
+`scripts/runtime_modules.py`; the msi job's "The runtime's module list is its own answer" step in `ci.yml`.
 
 ## 2026-11-08: The loopback DNS stand-in draws random dynamic ports
 
