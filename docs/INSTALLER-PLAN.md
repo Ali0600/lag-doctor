@@ -25,7 +25,8 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   restricted one refuses every ETW session (DECISIONS 2026-11-07).
 - [x] Stage 3: the MSI (2026-11-08, PRs #6, #8, #12 and #13). A WiX v7 per-machine MSI built in CI, installed, run
   from a fresh shell and uninstalled on a throwaway runner with nothing left; nothing published or signed yet.
-- [ ] Stage 4: the capture service.
+- [ ] Stage 4: the capture service. Begun 2026-11-08 with its channel, the locked pipe (`lagdoctor/winapi/pipe.py`;
+  research note section 11), which the relay of `docs/LAUNCHER-PLAN.md` M3 uses first.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.
 
 ## E2: the group fallback
@@ -126,7 +127,16 @@ but a GitHub-hosted runner. Measured (research note section 8):
   or PresentMon's window), the named-pipe trigger and idle self-stop; users never get change-config or stop.
 - The pipe: explicit DACL, PIPE_REJECT_REMOTE_CLIENTS, FILE_FLAG_FIRST_PIPE_INSTANCE; the CLI connects at
   identification level and retries its first open, which fails with ERROR_PIPE_BUSY while the trigger starts the
-  service (E3b); one recording at a time; a protocol version handshake.
+  service (E3b); one recording at a time; a protocol version handshake. Done 2026-11-08 for the pipe itself:
+  `lagdoctor/winapi/pipe.py` makes the first and only instance under a DACL that grants each named SID exactly what a
+  client asks for (read, write data, write attributes) plus a medium label that denies anything below medium every
+  right (`NWNRNX`: a write-only label still let a low process open the pipe to read and take its one instance); the
+  client connects at identification level and retries a missing or busy pipe to a deadline; both ends read the other's
+  PID and session, and the pipe's owner, without a handle; Ctrl+C or close() mid-call leaves nothing running. Each
+  lock has a test whose control shows the hazard on the machine (research note section 11). The service's own DACL
+  (which group may connect: Interactive Users, `S-1-5-4`), the handshake and the one-recording rule belong to the
+  relay protocol, and so does a short deadline for a client's first request: any interactive user's
+  medium-integrity process may connect and would otherwise hold the one instance.
 - Frame timing's first real check: PresentMon under the service with display tracking, on the owner's PC at the
   first install (a runner has no GPU, E3).
 - The target must be in the caller's own session, checked with the session id from `winapi/ntquery.py`'s
@@ -136,8 +146,9 @@ but a GitHub-hosted runner. Measured (research note section 8):
 - The service hosts the relay core that `docs/LAUNCHER-PLAN.md` builds first as a relay elevated per recording (its
   M3): one protocol, one client for the CLI and the app. Stage 4 changes where the relay runs and its policy: a fixed
   pipe name its trigger starts, not a random one; the caller's own session and target, not a command line approved at
-  a prompt; the installer's PresentMon only; and the client checks the server's PID against the service's, since any
-  process could create that name first.
+  a prompt; the installer's PresentMon only; and the client checks the server's PID against the service's, and the
+  pipe's owner (`owner_sid()`, which a squatter cannot set to the service's), since any process could create that
+  name first, for instance in the moments after the service stops itself when idle.
 - E8: each guard ships red-first, as every guard here does.
 
 ## Stage 5: release
