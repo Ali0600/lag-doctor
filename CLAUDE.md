@@ -32,7 +32,10 @@ first asks the pinned runtime what it imports (`scripts/runtime_modules.py`) and
 `scripts/runtime_modules.json` is that answer, then installs WiX 7.0.1 from its SHA-512-pinned package
 (`scripts/wix_tool.py`), builds the MSI (`scripts/msi_build.py`), keeps it as the `lag-doctor-msi` artifact, then
 installs, runs and uninstalls it there (`scripts/msi_check.py`, whose verdicts are the job summary; msiexec's logs are
-the `msi-logs` artifact). The PresentMon cache key hashes
+the `msi-logs` artifact). `.github/workflows/webview-spike.yml` (the Window spike, about 1.5 min) runs the window
+spike's automated checks and a rehearsal on pull requests that change the spike, `lagdoctor/setup.py` or
+`lagdoctor/winapi/ntquery.py`: GitHub's runner has the WebView2 Runtime (156.0.4314.58 on 2026-11-08), and its "no
+runtime" answer passes only when the runtime's registry version and exe agree. The PresentMon cache key hashes
 `setup.py`, `paths.py` and `cli.py`, so a change to one makes every job download PresentMon afresh; GitHub's release
 host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job before blaming the change.
 

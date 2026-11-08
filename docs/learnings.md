@@ -547,3 +547,13 @@ Esc, so no person has to drag the window. Counting every post of the run first m
 messages posted before and after the loop all arrived.
 **Takeaway**: worker threads post their results to a window (`PostMessage(hwnd, ...)`), never to the UI thread; and a
 loss rate counts only what was posted while the loss could happen.
+
+### A runner image's software list is not what the runner has
+GitHub's runner-image README lists what the image installs and pins; parts of Windows itself are on the runner
+without being listed. The `windows-2025` image lists Microsoft Edge and no WebView2 Runtime, yet the runner had
+WebView2 Runtime 156.0.4314.58 and opened lag-doctor's window, passing all 30 of the spike's automated checks.
+**Why it came up**: the desktop-app plan feared M1's window tests could not run in CI; the research had only the image
+list and a maintainer's remark that the runtime is "not installed or pinned by the runner image". The window spike's
+CI probe measured it on PR #18.
+**Takeaway**: before planning around a dependency's absence on a CI runner, probe the runner itself, and check an
+"absent" answer a second way, since a broken finder says "absent" too.
