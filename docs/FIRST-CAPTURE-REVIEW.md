@@ -103,32 +103,32 @@ with it, and what is still open, each with the code to start from.
 
 - The verdict wraps the whole PresentMon message in brackets, path and command included (`diagnose.headline`):
   a short reason there, the path and the command once under Not measured.
-  *Fixed (PR #PR3):* `labels.short_reason`, the reason's first clause: "Frame timing was not measured (PresentMon
+  *Fixed (PR #10):* `labels.short_reason`, the reason's first clause: "Frame timing was not measured (PresentMon
   2.6.0 is not installed), so ...".
 - "frame timing was skipped:" doubles "frame timing" in every list, and `_Env.need` chains colons ("needs X, which
   was not measured: ..."): "these need frame timing, which was not recorded (see Not measured)".
-  *Fixed (PR #PR3):* the lists drop the repeated opening (`labels.reason_text`) and new captures no longer write
+  *Fixed (PR #10):* the lists drop the repeated opening (`labels.reason_text`) and new captures no longer write
   it; `labels.needs_source` gives that wording, "these need" for a group. A source that ran but recorded nothing
   is in the Not measured list now, so the pointer always lands.
 - The Game Bar cause's title is its only evidence line (`rules._game_dvr`).
-  *Fixed (PR #PR3):* titled "Game Bar may be recording in the background". A new check (no finding titled with
+  *Fixed (PR #10):* titled "Game Bar may be recording in the background". A new check (no finding titled with
   its own evidence line, over every LagLab mode) found the same in `game_mode_off`, fixed too.
 - The console breaks the report path at "lag-" (`console.py` wraps with `break_on_hyphens`): the path on a line
   of its own.
-  *Fixed (PR #PR3):* the path is on its own line, unwrapped, and no line breaks at a hyphen or inside a word.
+  *Fixed (PR #10):* the path is on its own line, unwrapped, and no line breaks at a hyphen or inside a word.
 - The status line is 95 characters in a 71-column console, so `\r` rewrites only its last row and the screen
   scrolls a row a second: cut it to the console width, the key hint only in "Recording...".
-  *Fixed (PR #PR3):* readouts drop from its end to fit the console's width less one, padded; no key hint.
+  *Fixed (PR #10):* readouts drop from its end to fit the console's width less one, padded; no key hint.
 - Offsets (13:22) and durations (14:05) print like times of day beside the start time (`charts.fmt_clock`).
-  *Fixed (PR #PR3):* `charts.fmt_elapsed`: "13m 22s", "14m 05s recorded, started 2026-11-05 12:17".
+  *Fixed (PR #10):* `charts.fmt_elapsed`: "13m 22s", "14m 05s recorded, started 2026-11-05 12:17".
 - "Checked and fine" is sorted case-sensitively; "video memory full" at 92 % reads "over 90 % full"; "CPU load"
   and "GPU load" sit under Could not check though both were measured (`labels.py` TOPICS).
-  *Fixed (PR #PR3):* lists sort case-insensitively; "video memory over 90% full"; "the CPU (GPU) as the
+  *Fixed (PR #10):* lists sort case-insensitively; "video memory over 90% full"; "the CPU (GPU) as the
   frame-rate limit".
 - HTML: "No lag events were found" when nothing could find them; "0 frames" for "frame timing not recorded";
   "undo puts it back" twice in a fix box; backticks shown as characters; the game named by its exe, not its window
   title.
-  *Fixed (PR #PR3):* "No lag events could be looked for: frame timing and the network were not measured"; "frame
+  *Fixed (PR #10):* "No lag events could be looked for: frame timing and the network were not measured"; "frame
   timing not recorded"; the fix details lose their undo note (a check keeps it out); `commands` show as code; the
   window title names the game, the exe beside it, in both reports.
 
