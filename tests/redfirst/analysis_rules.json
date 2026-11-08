@@ -564,8 +564,8 @@
  {
   "name": "Game Mode off weighs 4",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    c.support(\"static\", W_STATIC, \"Game Mode is off\")",
-  "new": "    c.support(\"static\", W_DIRECT, \"Game Mode is off\")",
+  "old": "    c.support(\"static\", W_STATIC, \"Windows' Game Mode setting is off, so Windows does not favour the game over \"",
+  "new": "    c.support(\"static\", W_DIRECT, \"Windows' Game Mode setting is off, so Windows does not favour the game over \"",
   "tests": [
    "tests/test_analysis_rules.py::test_game_mode_off"
   ]

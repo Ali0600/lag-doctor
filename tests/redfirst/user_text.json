@@ -41,7 +41,7 @@
    "tests": ["tests/test_report.py::test_missing_sources_are_named_in_words_in_both_reports"]},
   {"name": "a damaged source's reason printed raw",
    "file": "lagdoctor/report/labels.py",
-   "old": "return value if isinstance(value, str) and value.strip() else \"not measured\"",
+   "old": "return reason_text(value) if isinstance(value, str) and value.strip() else \"not measured\"",
    "new": "return str(value)",
    "tests": ["tests/test_report.py::test_missing_sources_are_named_in_words_in_both_reports"]},
   {"name": "the console ignores sources the capture never recorded",
@@ -65,8 +65,8 @@
    "new": "detail=\"Takes effect the next time the game starts. The registry format behind this setting is \"",
    "tests": ["tests/test_user_text.py::test_no_fix_detail_repeats_the_restart_note_the_reports_add"]},
   {"name": "a rule's reason names its source by id",
-   "file": "lagdoctor/analysis/rules.py",
-   "old": "return f\"needs {labels.source_text(name)}, which was not measured: {self.why(name)}\"",
-   "new": "return f\"needs {name}, which was not measured: {self.why(name)}\"",
+   "file": "lagdoctor/report/labels.py",
+   "old": "return f\"{NEEDS}{source_text(source)}, which was not recorded (see Not measured)\"",
+   "new": "return f\"{NEEDS}{source}, which was not recorded (see Not measured)\"",
    "tests": ["tests/test_analysis_rules.py::test_a_rule_whose_source_was_not_measured_is_unchecked_with_its_reason"]}
 ]

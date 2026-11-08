@@ -231,8 +231,8 @@ def test_charts_leave_out_points_that_are_not_sane_numbers():
     # A15 at the charts' own seam: a damaged capture can put anything in a column
     assert [charts.number(v) for v in (3, 2.5, -1e7, 1e7 + 1, float("nan"), float("inf"), "4", True, None)] == \
         [3.0, 2.5, -1e7, None, None, None, None, None, None]
-    assert charts.fmt_clock(75.4) == "1:15" and charts.fmt_clock(-3) == "0:00"
-    assert [charts.fmt_clock(v) for v in (None, float("nan"), 1e308, "soon")] == ["-"] * 4
+    assert charts.fmt_elapsed(75.4) == "1m 15s" and charts.fmt_elapsed(-3) == "0s"
+    assert [charts.fmt_elapsed(v) for v in (None, float("nan"), 1e308, "soon")] == ["-"] * 4
     xs = [0.0, "x", float("nan"), 1e308, 2.0, 3.0, None]
     ys = [5.0, 5.0, 5.0, 5.0, "busy", float("inf"), 5.0]
     pts = charts.downsample(xs, ys, 0.0, 4.0, 4)
@@ -260,7 +260,9 @@ def test_nice_ticks_and_clock_format_literal_points():
     assert charts.nice_ticks(0, 100, 4) == [0, 25, 50, 75, 100]
     assert charts.nice_ticks(0, 40, 4) == [0, 10, 20, 30, 40]
     assert charts.nice_ticks(0, 300, 8) == [0, 50, 100, 150, 200, 250, 300]
-    assert charts.fmt_clock(0) == "0:00" and charts.fmt_clock(75.4) == "1:15" and charts.fmt_clock(3600) == "60:00"
+    # wording: m:ss beside a 12:17 start time read as times of day ("13:22"); time into the recording reads as such
+    assert [charts.fmt_elapsed(v) for v in (0, 44.6, 75.4, 120.0, 805.0, 3600, 3725.2)] == \
+        ["0s", "45s", "1m 15s", "2m", "13m 25s", "1h 00m 00s", "1h 02m 05s"]
 
 
 def test_checked_and_fine_and_could_not_check_are_both_shown():
@@ -309,13 +311,13 @@ def test_the_frame_chart_uses_only_the_main_swap_chain():
 
 def test_causes_blocked_by_the_same_missing_source_are_listed_together():
     from lagdoctor.report import labels
-    groups = labels.group_unchecked({
-        "game_stall": "needs frame timing (PresentMon), which was not measured: no admin rights; press the lag key",
-        "gpu_limit": "needs frame timing (PresentMon), which was not measured: no admin rights",
-        "wifi_weak": "needs the ping and Wi-Fi monitor, which was not measured: off"})
-    assert groups == [("needs frame timing (PresentMon), which was not measured: no admin rights",
-                       ["GPU load", "the game waiting on itself"]),
-                      ("needs the ping and Wi-Fi monitor, which was not measured: off", ["Wi-Fi signal"])]
+    frames, network = labels.needs_source("frames"), labels.needs_source("network")
+    groups = labels.group_unchecked({"game_stall": frames + "; press the lag key", "gpu_limit": frames,
+                                     "vsync_judder": frames, "wifi_weak": network})
+    # wording: several topics share "these need ..."; one keeps "needs ..."; topics sort whatever their case
+    assert groups == [("these need frame timing (PresentMon), which was not recorded (see Not measured)",
+                       ["the game waiting on itself", "the GPU as the frame-rate limit", "VSync judder"]),
+                      ("needs the ping and Wi-Fi monitor, which was not recorded (see Not measured)", ["Wi-Fi signal"])]
 
 
 def test_every_cause_has_a_problem_label_and_a_neutral_topic():
@@ -357,6 +359,111 @@ def section(page: str, heading: str) -> str:
     start = page.index(f"<h2>{heading}</h2>")
     nxt = page.find("<h2>", start + 4)
     return page[start:nxt if nxt >= 0 else len(page)]
+
+
+FIRST_CAPTURE_WHY = ("frame timing was skipped: PresentMon 2.6.0 is not installed (C:\\Users\\x\\AppData\\Local\\"
+                     "lag-doctor\\presentmon\\2.6.0\\PresentMon-2.6.0-x64.exe). Run `lagdoctor setup` to download it.")
+
+
+@pytest.mark.parametrize("why, short", [
+    (FIRST_CAPTURE_WHY, "PresentMon 2.6.0 is not installed"),
+    ("it needs admin rights or membership of Performance Log Users (see `lagdoctor setup`)",
+     "it needs admin rights or membership of Performance Log Users"),
+    ("PresentMon needs admin rights or Performance Log Users: access denied",
+     "PresentMon needs admin rights or Performance Log Users"),
+    ("PresentMon could not be started: [WinError 2] The system cannot find the file", "PresentMon could not be started"),
+    ("turned off for this recording (--no-network)", "turned off for this recording"),
+    ("C:\\Tools\\PresentMon.exe does not exist", "see Not measured"),          # a path is no short reason
+    ("`lagdoctor setup` first", "see Not measured"), ("", "see Not measured"), (None, "see Not measured")])
+def test_the_verdict_gets_a_short_reason_and_the_not_measured_list_the_whole_one(why, short):
+    # Wording: the verdict wrapped the whole PresentMon message in brackets, path and command included
+    assert labels.short_reason(why) == short
+
+
+def test_a_reason_never_repeats_the_source_it_is_listed_under():
+    # Wording: "frame timing (PresentMon): frame timing was skipped: ...", in every list
+    missing = labels.not_measured({"frames": SourceStatus("off", FIRST_CAPTURE_WHY)}, {})
+    assert missing == [("frame timing (PresentMon)", FIRST_CAPTURE_WHY[len("frame timing was skipped: "):])]
+    assert labels.not_measured({"frames": SourceStatus("off", "skipped by hand")}, {})[0][1] == "skipped by hand"
+
+
+def test_the_report_path_is_on_a_line_of_its_own_and_no_line_breaks_at_a_hyphen():
+    # Wording: the console wrapped the report path at "lag-" (textwrap breaks on hyphens by default)
+    path = "C:\\Users\\someone\\AppData\\Local\\lag-doctor\\sessions\\20261105-121740-ff7rebirth\\report.html"
+    cap = make_capture(with_frames=False)
+    cap.sources["frames"] = SourceStatus("off", FIRST_CAPTURE_WHY)
+    text = console.render(make_diagnosis(), cap, report_path=path, width=60)
+    lines = text.splitlines()
+    assert lines[lines.index("Full report:") + 1] == "  " + path
+    assert not [ln for ln in lines if ln.endswith("-") and not ln.endswith(" -")], lines   # no word broken at a hyphen
+    assert any(ln.strip() == f"(C:\\Users\\x\\AppData\\Local\\lag-doctor\\presentmon\\2.6.0\\PresentMon-2.6.0-x64.exe)."
+               for ln in lines), lines                                     # a long path stays whole
+
+
+def test_lists_sort_whatever_the_case_and_name_what_was_not_measured():
+    # Wording: "CPU heat and power limits; Game Mode; copies between GPUs" (upper case first); "CPU load" and "GPU load"
+    # under Could not check though both were measured (what was missing is whether either limits the frame rate)
+    d = make_diagnosis()
+    d.cleared = {"cpu_throttle": "fine", "game_mode_off": "on", "hybrid_copy": "none", "wrong_gpu": "right"}
+    text = " ".join(console.render(d, make_capture()).split())
+    assert ("Checked and fine: copies between GPUs; CPU heat and power limits; Game Mode; which GPU the game runs on"
+            in text)
+    page = html_report.render(d, make_capture())
+    found = re.findall(r"<li><strong>([^<]+)</strong>", section(page, "Checked and fine"))
+    assert found == ["copies between GPUs", "CPU heat and power limits", "Game Mode", "which GPU the game runs on"]
+    assert labels.topic_text("gpu_limit") == "the GPU as the frame-rate limit"
+    assert labels.topic_text("cpu_limit") == "the CPU as the frame-rate limit"
+    assert labels.cause_text("vram_overflow") == "video memory over 90% full"      # "full" at 92 % was too much
+
+
+def test_the_header_names_the_game_by_its_window_and_says_when_frame_timing_was_not_recorded():
+    # Wording: "Lag report: ff7rebirth_.exe ... 0 frames" for a recording without frame timing
+    cap = make_capture(name="ff7rebirth_.exe", with_frames=False)
+    cap.target["window_title"] = "FINAL FANTASY VII REBIRTH"
+    cap.duration_s = 845.1
+    d = make_diagnosis()
+    d.measured = {"frames": "PresentMon needs admin rights (access denied)", "system": "ok"}
+    d.stats["frames"] = 0
+    page = html_report.render(d, cap)
+    assert "<title>Lag report: FINAL FANTASY VII REBIRTH</title>" in page
+    head = page[page.index("<header>"):page.index("</header>")]
+    assert "ff7rebirth_.exe &middot;" in head and "14m 05s recorded" in head and "frame timing not recorded" in head
+    assert "0 frames" not in head
+    text = console.render(d, cap)
+    assert text.startswith("lag-doctor report: FINAL FANTASY VII REBIRTH (14m 05s recorded, started 2026-11-04 15:30)")
+    d.measured["frames"] = "ok"
+    d.stats["frames"] = 3000
+    assert "3000 frames" in html_report.render(d, cap)                                  # measured: the count
+    assert labels.game_name({"name": "game.exe", "window_title": "  "}) == "game.exe"   # a blank title: the exe
+    assert labels.game_name({}) == "your game" and len(labels.game_name({"window_title": "x" * 300})) == 80
+
+
+def test_no_lag_events_is_said_only_where_something_looked_for_them():
+    # Wording: "No lag events were found" for a recording without frame timing or the network
+    d = make_diagnosis()
+    d.events = []
+    for measured, said in (({"frames": "ok"}, "No lag events were found."),
+                           ({"frames": "off", "network": "ok"}, "No network lag was found. Frame timing was not "
+                                                                "measured, so stutters and frame-rate drops could not be "
+                                                                "looked for."),
+                           ({"frames": "off", "network": "turned off"}, "No lag events could be looked for: frame "
+                                                                        "timing and the network were not measured.")):
+        d.measured = measured
+        assert f'<p class="muted">{said}</p>' in section(html_report.render(d, make_capture()), "Worst moments")
+
+
+def test_a_command_in_backticks_shows_as_code_in_the_html_report():
+    # Wording: "Run `lagdoctor setup` to download it." printed its backticks
+    d = make_diagnosis()
+    d.findings[0].fixes = [FixSuggestion(title="Run `lagdoctor setup` first", detail="Then `lagdoctor watch`.")]
+    cap = make_capture(with_frames=False)
+    cap.sources["frames"] = SourceStatus("off", FIRST_CAPTURE_WHY)
+    page = html_report.render(d, cap)
+    assert "`" not in page
+    assert "Run <code>lagdoctor setup</code> first" in page and "Then <code>lagdoctor watch</code>." in page
+    assert "Run <code>lagdoctor setup</code> to download it." in section(page, "Not measured")
+    d.findings[0].fixes = [FixSuggestion(title="`<b>`")]                                # escaped first, then code
+    assert "<code>&lt;b&gt;</code>" in html_report.render(d, make_capture())
 
 
 def test_the_console_never_prints_a_control_character_from_a_capture():
@@ -439,8 +546,8 @@ def test_odd_values_in_the_stats_events_and_capture_read_as_not_measured_never_c
     for tile in ("Average FPS", "1% low FPS", "Worst frame", "Limited by", "Jitter", "Packet loss"):
         assert f'<div class="v">-</div><div class="k">{tile}</div>' in page, tile
     worst = section(page, "Worst moments")
-    assert "<td>0:01</td><td>Stutter</td><td>-</td>" in worst and "<td>0:02</td><td>Ping spike</td><td>-</td>" in worst
-    assert "FPS drop" not in worst.replace("<td>0:12</td><td>FPS drop</td>", "")   # the one without a time is left out
+    assert "<td>1s</td><td>Stutter</td><td>-</td>" in worst and "<td>2s</td><td>Ping spike</td><td>-</td>" in worst
+    assert "FPS drop" not in worst.replace("<td>12s</td><td>FPS drop</td>", "")   # the one without a time is left out
     for junk in (text, page):
         assert not re.search(r"\b(nan|inf|1e\+308)\b", junk, flags=re.I)
     p = TagBalance()
@@ -526,14 +633,14 @@ def test_the_marked_moments_are_listed_with_what_was_found_at_each():
     assert ("You marked 3 moments: 1 matched a stutter, FPS drop or network event; 1 had no lag event but a system "
             "signal moved; 1 showed nothing in what was measured. No stutter or FPS drop was measured at those "
             "moments.") in marks
-    assert "<td>0:05</td><td>Stutter (400 ms frame)</td>" in marks
-    assert "<td>0:09</td><td>No lag event; meanwhile another program using the CPU</td>" in marks
-    assert "<td>0:14</td><td>Nothing in what was measured</td>" in marks
+    assert "<td>5s</td><td>Stutter (400 ms frame)</td>" in marks
+    assert "<td>9s</td><td>No lag event; meanwhile another program using the CPU</td>" in marks
+    assert "<td>14s</td><td>Nothing in what was measured</td>" in marks
     text = " ".join(console.render(d, make_capture()).split())
     assert ("You marked 3 moments: 1 matched a stutter, FPS drop or network event; 1 had no lag event but a system "
             "signal moved; 1 showed nothing") in text
-    assert "- 0:05: Stutter (400 ms frame)" in text and "- 0:09: no lag event; meanwhile another program using the CPU" \
-        in text and "- nothing at 0:14" in text
+    assert "- 5s: Stutter (400 ms frame)" in text and "- 9s: no lag event; meanwhile another program using the CPU" \
+        in text and "- nothing at 14s" in text
     d.measured["frames"] = "PresentMon needs admin rights (access denied)"
     unseen = "Frame timing was not measured, so a stutter at those moments could not be seen."
     assert unseen in " ".join(console.render(d, make_capture()).split())

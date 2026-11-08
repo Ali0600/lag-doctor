@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+import shutil
 import signal
 import sys
 import threading
@@ -33,6 +34,7 @@ from lagdoctor.capture.base import Collector
 from lagdoctor.model import Capture, SourceStatus
 
 STATUS_PERIOD_S = 1.0
+STATUS_MIN_WIDTH = 20       # a narrower console still gets the elapsed time and the frame rate
 STOP_TIMEOUT_S = {"frames": 25.0}          # PresentMon's stop can take two 10 s waits (DESIGN: Collector contract)
 DEFAULT_STOP_TIMEOUT_S = 5.0
 STOPPING_MESSAGE = "Stopping and saving the capture (Ctrl+C will not lose it now)..."
@@ -300,7 +302,7 @@ class Session:
                 frames = self._by_name("frames")
                 if frames is not None and frames.ended:
                     live["frames"] = {}             # PresentMon is gone: no frame rate frozen at its last value
-                self._print("\r" + status_line(elapsed, live, self.opts.hotkey) + " ")
+                self._print("\r" + status_line(elapsed, live, console_width()))
                 wait = STATUS_PERIOD_S
                 if self.opts.duration_s is not None:
                     wait = max(0.0, min(wait, self.opts.duration_s - elapsed))
@@ -380,8 +382,9 @@ class Session:
                 c.set_status("failed", f"its results could not be read: {type(exc).__name__}: {exc}")
             sources[c.name] = c.status()
         if not self.opts.frames and "frames" not in sources:
-            sources["frames"] = SourceStatus("off", "frame timing was skipped: it needs admin rights or "
-                                                    "Performance Log Users (see `lagdoctor setup`)")
+            # the report shows it beside "frame timing (PresentMon):", so it never repeats those words
+            sources["frames"] = SourceStatus("off", "it needs admin rights or Performance Log Users (see "
+                                                    "`lagdoctor setup`)")
         if not self.opts.network:            # switched off on purpose: say so, not "not recorded" as if it failed
             for name in ("network", "net_flows"):
                 sources.setdefault(name, SourceStatus("off", "turned off for this recording (--no-network)"))
@@ -444,9 +447,20 @@ def _stop_quietly(c: Collector, timeout: float) -> None:
 
 # ------------------------------------------------------------------ status --
 
-def status_line(elapsed: float, live: dict[str, dict[str, Any]], hotkey: str | None) -> str:
+def console_width() -> int:
+    """The console's width in columns now (a window can be resized while it records); 80 without a console."""
+    try:
+        return max(STATUS_MIN_WIDTH, shutil.get_terminal_size((80, 24)).columns)
+    except (OSError, ValueError):
+        return 80
+
+
+def status_line(elapsed: float, live: dict[str, dict[str, Any]], width: int | None = None) -> str:
     """One short line, refreshed once a second. Unknown values show as '-'; a source this recording does not
-    run at all (frame timing off, --no-network) as 'off', so a dash never stands for something never coming."""
+    run at all (frame timing off, --no-network) as 'off', so a dash never stands for something never coming.
+    With `width`, whole readouts are dropped from the end until it fits width - 1 columns, and it is padded to them:
+    a line as wide as the console wraps, "\\r" then rewrites only its last row, and the screen scrolls a row a second
+    (95 characters once, in a 71-column window). The keys are in the "Recording." line printed once before it."""
     m, s = divmod(int(elapsed), 60)
     parts = [f"{m}:{s:02d}"]
     fps = (live.get("frames") or {}).get("fps")
@@ -463,10 +477,12 @@ def status_line(elapsed: float, live: dict[str, dict[str, Any]], hotkey: str | N
         parts.append("ping off")
     else:
         parts.append(f"ping {ping:.0f} ms" if isinstance(ping, (int, float)) else "ping -")
-    keys = "Ctrl+C stops"
-    if hotkey:
-        keys = f"{hotkey.title()} = it lagged now, " + keys
-    return " | ".join(parts) + f"   ({keys})"
+    if not width:
+        return " | ".join(parts)
+    room = max(1, width - 1)
+    while len(parts) > 1 and len(" | ".join(parts)) > room:
+        parts.pop()
+    return " | ".join(parts)[:room].ljust(room)
 
 
 # --------------------------------------------------------------- defaults --

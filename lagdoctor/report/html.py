@@ -12,6 +12,7 @@ saying so while the rest of the report is written.
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime
 from html import escape
 from pathlib import Path
@@ -21,11 +22,19 @@ from lagdoctor import __version__
 from lagdoctor.analysis.stats import percentile
 from lagdoctor.model import Capture, Diagnosis, F, N, S
 from lagdoctor.report import labels
-from lagdoctor.report.charts import Chart, fmt_clock, number
+from lagdoctor.report.charts import Chart, fmt_elapsed, number
 
 
 def e(value: Any) -> str:
     return escape("" if value is None else str(value), quote=True)
+
+
+_TICKED = re.compile(r"`([^`\n]+)`")
+
+
+def prose(value: Any) -> str:
+    """Text the analysis wrote, escaped, with a `command` in backticks shown as code instead of as backticks."""
+    return _TICKED.sub(r"<code>\1</code>", e(value))
 
 
 def _fmt(v: Any, pattern: str = "{:.0f}", suffix: str = "") -> str:
@@ -116,8 +125,8 @@ def _legend(chart: Chart) -> str:
 def _not_measured_note(cap: Capture, source: str) -> str:
     st = _dict(cap.sources).get(source)
     detail, state = getattr(st, "detail", None), getattr(st, "state", None)
-    why = detail if detail else (state if st else "not recorded")
-    return f'<p class="muted">Not measured: {e(why)}</p>'
+    why = labels.reason_text(detail) if isinstance(detail, str) and detail.strip() else (state if st else "not recorded")
+    return f'<p class="muted">Not measured: {prose(why)}</p>'
 
 
 def _column(table: Any, name: str) -> list:
@@ -281,34 +290,55 @@ def _findings(d: Diagnosis) -> str:
                'the moment it happens.</p>'
     out = []
     for i, f in enumerate(d.findings, 1):
-        ev = "".join(f"<li>{e(x.text)}</li>" for x in f.evidence)
+        ev = "".join(f"<li>{prose(x.text)}</li>" for x in f.evidence)
         fixes = []
         for fx in f.fixes:
             restart = {"game": " Restart the game afterwards.", "reboot": " Restart the PC afterwards."}.get(
                 fx.needs_restart or "", "")
             admin = " Needs admin rights." if fx.needs_admin else ""
             if fx.fix_id:
-                fixes.append(f'<div class="fix"><strong>Fix it:</strong> {e(fx.title)}. '
+                fixes.append(f'<div class="fix"><strong>Fix it:</strong> {prose(fx.title)}. '
                              f'Run <code>lagdoctor fix {e(fx.fix_id)}</code>.{e(restart)}{e(admin)}'
-                             f'{" " + e(fx.detail) if fx.detail else ""} '
+                             f'{" " + prose(fx.detail) if fx.detail else ""} '
                              f'<span class="muted">It asks before changing anything, and '
                              f'<code>lagdoctor undo</code> puts it back.</span></div>')
             else:
-                fixes.append(f'<div class="fix"><strong>Try:</strong> {e(fx.title)}'
-                             f'{": " + e(fx.detail) if fx.detail else ""}{e(restart)}</div>')
+                fixes.append(f'<div class="fix"><strong>Try:</strong> {prose(fx.title)}'
+                             f'{": " + prose(fx.detail) if fx.detail else ""}{e(restart)}</div>')
         conf = labels.CONFIDENCE.get(f.confidence, f.confidence)
-        out.append(f'<div class="card"><h3>{i}. {e(f.title)}<span class="conf {e(f.confidence)}">{e(conf)}'
-                   f'</span></h3><p>{e(f.summary)}</p>{"<ul>" + ev + "</ul>" if ev else ""}{"".join(fixes)}</div>')
+        out.append(f'<div class="card"><h3>{i}. {prose(f.title)}<span class="conf {e(f.confidence)}">{e(conf)}'
+                   f'</span></h3><p>{prose(f.summary)}</p>{"<ul>" + ev + "</ul>" if ev else ""}{"".join(fixes)}</div>')
     return "".join(out)
+
+
+def _ran(d: Diagnosis, *sources: str) -> bool:
+    """Whether any of these sources was measured (Diagnosis.measured: "ok" or "partial: ...")."""
+    return any(str(_dict(d.measured).get(s, "")).startswith(("ok", "partial")) for s in sources)
+
+
+def _no_events(d: Diagnosis) -> str:
+    """What an empty list of worst moments means: "No lag events were found" only where something looked for them."""
+    frames, network = _ran(d, "frames"), _ran(d, "network", "net_flows")
+    if frames:
+        return "No lag events were found."
+    if network:
+        return ("No network lag was found. Frame timing was not measured, so stutters and frame-rate drops could not "
+                "be looked for.")
+    return "No lag events could be looked for: frame timing and the network were not measured."
+
+
+def _frames_text(d: Diagnosis) -> str:
+    """The frames the analysis had, for the header: "0 frames" once stood for frame timing that never ran."""
+    return f"{_fmt(_dict(d.stats).get('frames'))} frames" if _ran(d, "frames") else "frame timing not recorded"
 
 
 def _events(d: Diagnosis) -> str:
     timed = [ev for ev in d.events if ev.kind != "mark" and number(ev.t_start) is not None]
     worst = sorted(timed, key=lambda ev: -(number(ev.severity) or 0.0))[:15]
     if not worst:
-        return '<p class="muted">No lag events were found.</p>'
+        return f'<p class="muted">{e(_no_events(d))}</p>'
     rows = "".join(
-        f"<tr><td>{fmt_clock(ev.t_start)}</td><td>{e(labels.EVENT_KINDS.get(ev.kind, ev.kind))}</td>"
+        f"<tr><td>{fmt_elapsed(ev.t_start)}</td><td>{e(labels.EVENT_KINDS.get(ev.kind, ev.kind))}</td>"
         f"<td>{e(labels.severity_text(ev.kind, ev.severity, ev.detail))}</td>"
         f"<td>{e(', '.join(labels.cause_text(c) for c in ev.causes) or 'no clear cause')}</td></tr>"
         for ev in sorted(worst, key=lambda ev: number(ev.t_start)))
@@ -330,7 +360,7 @@ def _marks(d: Diagnosis) -> str:
             what = "No lag event; meanwhile " + ", ".join(labels.cause_text(c) for c in causes)
         else:
             what = "Nothing in what was measured"
-        body.append(f"<tr><td>{fmt_clock(t)}</td><td>{e(what)}</td></tr>")
+        body.append(f"<tr><td>{fmt_elapsed(t)}</td><td>{e(what)}</td></tr>")
     return (f"<h2>Moments you marked</h2><p>{e(labels.marks_summary(rows, frames_ok))}</p>"
             '<div class="tablewrap"><table><thead><tr><th>When</th><th>What was found</th></tr></thead>'
             f"<tbody>{''.join(body)}</tbody></table></div>")
@@ -390,16 +420,16 @@ def _pc(cap: Capture) -> str:
 def _cleared(d: Diagnosis) -> str:
     if not d.cleared:
         return ""
-    items = "".join(f"<li><strong>{e(labels.topic_text(c))}</strong>: {e(why)}</li>"
-                    for c, why in sorted(d.cleared.items(), key=lambda kv: labels.topic_text(kv[0])))
+    items = "".join(f"<li><strong>{e(labels.topic_text(c))}</strong>: {prose(why)}</li>"
+                    for c, why in sorted(d.cleared.items(), key=lambda kv: labels.topic_text(kv[0]).casefold()))
     return ("<h2>Checked and fine</h2><p class=\"muted\">These were measured and ruled out:</p>"
             f"<ul>{items}</ul>")
 
 
 def _not_measured(d: Diagnosis, cap: Capture) -> str:
-    items = [f"<li><strong>{e(name)}</strong>: {e(why)}</li>"
+    items = [f"<li><strong>{e(name)}</strong>: {prose(why)}</li>"
              for name, why in labels.not_measured(cap.sources, d.measured)]
-    unchecked = "".join(f"<li><strong>{e(', '.join(topics))}</strong>: {e(why)}</li>"
+    unchecked = "".join(f"<li><strong>{e(', '.join(topics))}</strong>: {prose(why)}</li>"
                         for why, topics in labels.group_unchecked(d.unchecked))
     if not items and not unchecked:
         return ""
@@ -426,14 +456,16 @@ def _head(d: Diagnosis, cap: Capture, game: str) -> str:
     except (TypeError, ValueError):
         when = cap.started_at
     lag = labels.LAG_TYPES.get(d.lag_type, d.lag_type) if isinstance(d.lag_type, str) else d.lag_type
-    return (f"<header><h1>Lag report: {e(game)}</h1><p class=\"meta\">{e(when)} &middot; "
-            f"{fmt_clock(cap.duration_s)} recorded &middot; {_fmt(_dict(d.stats).get('frames'))} frames</p></header>"
+    exe = labels.game_name({"name": _dict(cap.target).get("name")})
+    exe = f"{e(exe)} &middot; " if exe not in (game, "your game") else ""   # the file, when the title is the name
+    return (f"<header><h1>Lag report: {e(game)}</h1><p class=\"meta\">{exe}{e(when)} &middot; "
+            f"{fmt_elapsed(cap.duration_s)} recorded &middot; {e(_frames_text(d))}</p></header>"
             f'<section class="verdict {e(d.lag_type)}"><div class="badge">{e(lag)}</div>'
-            f'<p class="headline">{e(d.headline)}</p></section>')
+            f'<p class="headline">{prose(d.headline)}</p></section>')
 
 
 def render(d: Diagnosis, cap: Capture, capture_path: Path | None = None) -> str:
-    game = _dict(cap.target).get("name") or "your game"
+    game = labels.game_name(cap.target)
     footer = f"lag-doctor {e(__version__)}"
     if capture_path:
         footer += (f" &middot; capture saved at <code>{e(capture_path)}</code> &middot; re-run the analysis with "

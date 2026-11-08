@@ -367,3 +367,11 @@ computed from longer events.
 where quiet stretches as long as a mark's window gave 0.64, so routine reads looked linked to the lag.
 **Takeaway**: compute a base rate with the same statistic and the same window length as the events it is compared
 with, or the comparison measures the windows, not the cause.
+
+### A "see the other list" pointer must land for every case it can come from
+Replacing a repeated detail with a pointer ("which was not recorded (see Not measured)") moves the duty of saying
+why to the list it points at, and that list may be built from a different predicate than the one behind the pointer.
+**Why it came up**: the rules call a source missing when it has no rows, but the Not measured list read only each
+source's own state; a sampler that ran ("ok") and recorded nothing was pointed at and listed nowhere.
+**Takeaway**: when a message starts pointing elsewhere, check the target is derived from the same condition (or a
+wider one) and test the case where the two used to differ.

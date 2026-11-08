@@ -103,8 +103,8 @@ def test_without_frame_timing_frame_rules_are_unchecked_and_nothing_claims_no_st
     why = s.cap.sources["frames"].detail
     d = diagnose(s.cap)
     for cause in FRAME_RULES:
-        assert cause in d.unchecked, cause
-        assert why in d.unchecked[cause], (cause, d.unchecked[cause])
+        assert cause in d.unchecked, cause                  # the why is the Not measured list's, said once (wording)
+        assert d.unchecked[cause].startswith(dg.labels.needs_source("frames")), (cause, d.unchecked[cause])
     assert not set(FRAME_RULES) & (set(d.cleared) | causes(d))
     assert not [f for f in d.findings if f.category in ("stutter", "pacing")]
     for key in ("hitches", "severe_hitches", "freezes", "stutters", "stutters_per_min", "hitch_rate_bound",
@@ -113,7 +113,7 @@ def test_without_frame_timing_frame_rules_are_unchecked_and_nothing_claims_no_st
     assert d.stats["frames"] == 0 and d.lag_type == "unknown"
     text = d.headline.lower()
     assert "no hitch" not in text and "no lag" not in text and "no stutter" not in text
-    assert d.headline.startswith("Frame timing was not measured (" + why)
+    assert d.headline.startswith(f"Frame timing was not measured ({dg.labels.short_reason(why)}), so stutter")
     assert d.measured["frames"] == why
 
 
@@ -123,7 +123,8 @@ def test_frame_rows_from_a_source_that_failed_never_back_a_no_hitch_claim():
     d = diagnose(cap)
     assert "no hitch" not in d.headline.lower() and "no lag" not in d.headline.lower()
     assert d.lag_type == "unknown" and d.stats["stutters"] is None
-    assert "PresentMon stopped after 4 s" in d.unchecked["uneven_pacing"]
+    assert d.measured["frames"] == "PresentMon stopped after 4 s"           # the Not measured list's reason
+    assert d.unchecked["uneven_pacing"] == dg.labels.needs_source("frames")
 
 
 def test_the_headline_names_the_finding_that_claims_the_lags_own_events():
@@ -244,6 +245,23 @@ def everything_wrong():
     return cap
 
 
+def test_no_finding_is_titled_with_its_own_evidence_line():
+    # Wording: the Game Bar cause's title was its only evidence line, word for word ("Game Bar capture is on; whether
+    # it records in the background is unknown" twice). Every LagLab mode, everything wrong at once, and Windows'
+    # default Game Bar state (capture on, the background setting absent)
+    caps = [synth.laglab(mode).cap for mode in synth.MODES] + [everything_wrong()]
+    default = synth.laglab("smooth").cap
+    default.inventory["settings"].update(game_dvr=True, background_recording=None)
+    caps.append(default)
+    seen = set()
+    for cap in caps:
+        for f in diagnose(cap).findings:
+            seen.add(f.cause)
+            lines = {e.text.rstrip(".").casefold() for e in f.evidence}
+            assert f.title.rstrip(".").casefold() not in lines, (f.cause, f.title)
+    assert "game_dvr" in seen                       # the fixture's own premise: the Game Bar finding was among them
+
+
 def test_every_fix_offered_matches_designs_fix_table_exactly():
     d = diagnose(everything_wrong())
     offered = {}
@@ -307,7 +325,10 @@ def test_frames_that_ran_but_recorded_nothing_are_not_measured():
     d = diagnose(cap)
     assert d.measured["frames"] == "PresentMon ran but recorded no frames from the game"
     assert d.lag_type == "unknown" and d.stats["stutters"] is None
-    assert "recorded no frames" in d.unchecked["uneven_pacing"]
+    assert d.unchecked["uneven_pacing"] == dg.labels.needs_source("frames")
+    # the frame source's own state is "ok", yet the Not measured list the reason points at names it
+    missing = dg.labels.not_measured(cap.sources, d.measured)
+    assert ("frame timing (PresentMon)", "PresentMon ran but recorded no frames from the game") in missing
 
 
 def test_the_diagnosis_survives_json_and_the_reports_render_it():
@@ -697,7 +718,7 @@ def test_a_router_ignoring_pings_in_a_real_capture_is_no_network_lag():
 
 def test_a_lost_connection_is_said_with_its_time():
     d = diagnose(synth.laglab("smooth", duration_s=120.0, server_gaps=[(100.0, 20000.0, "open")]).cap)
-    assert d.headline.startswith("Network lag (the game server stopped answering at 1:40)")
+    assert d.headline.startswith("Network lag (the game server stopped answering at 1m 40s)")
 
 
 # ------------------------------------------------------------------------------ marks (CC-5) ---
@@ -742,7 +763,7 @@ def test_marks_are_reported_also_without_frame_timing():
     text = console.render(d, s.cap)
     assert "You marked 4 moments: 4 showed nothing in what was measured. Frame timing was not measured" in \
         " ".join(text.split())
-    assert "0:08, 0:15, 0:22, 0:30" in text
+    assert "8s, 15s, 22s, 30s" in text
     page = html.render(d, s.cap)
     assert "<h2>Moments you marked</h2>" in page and page.count("Nothing in what was measured") == 4
     assert page.count('class="vl mark"') == 8          # on the CPU/GPU chart and the ping chart (no frame chart)
@@ -755,7 +776,7 @@ def test_marks_with_frames_say_which_matched_a_stutter():
     text = " ".join(console.render(d, s.cap).split())
     assert ("You marked 2 moments: 1 matched a stutter, FPS drop or network event; 1 showed nothing in what was "
             "measured. No stutter or FPS drop was measured at those moments.") in text
-    assert "- 0:04: Stutter (" in text and "- nothing at 0:02" in text
+    assert "- 4s: Stutter (" in text and "- nothing at 2s" in text
     page = html.render(d, s.cap)
     assert page.count('class="vl mark"') == 6          # frame, CPU/GPU and ping charts
 

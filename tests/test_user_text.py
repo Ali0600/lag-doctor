@@ -80,6 +80,44 @@ def test_no_fix_detail_repeats_the_restart_note_the_reports_add():
     assert hits == [], "\n".join(hits)
 
 
+UNDO_WORDS = re.compile(r"\bundo\b", re.I)
+
+
+def undo_repeats(source: str, name: str = "<source>") -> list[str]:
+    """FixSuggestion calls with a fix_id whose detail repeats the undo note the HTML report adds to every such fix
+    ("It asks before changing anything, and `lagdoctor undo` puts it back")."""
+    hits = []
+    for node in ast.walk(ast.parse(source)):
+        if not (isinstance(node, ast.Call) and getattr(node.func, "id", getattr(node.func, "attr", None))
+                == "FixSuggestion"):
+            continue
+        kw = {k.arg: k.value for k in node.keywords if k.arg}
+        fix_id = kw.get("fix_id", node.args[2] if len(node.args) > 2 else None)
+        if fix_id is None or (isinstance(fix_id, ast.Constant) and fix_id.value is None):
+            continue
+        detail = kw.get("detail", node.args[1] if len(node.args) > 1 else None)
+        text = "".join(c.value for c in ast.walk(detail) if isinstance(c, ast.Constant) and isinstance(c.value, str)) \
+            if detail is not None else ""
+        if UNDO_WORDS.search(text):
+            hits.append(f"{name}:{node.lineno}: {text[:100]!r}")
+    return hits
+
+
+def test_the_undo_scan_flags_a_detail_that_repeats_the_undo_note():
+    source = ('FixSuggestion(title="t", detail="A setting; `lagdoctor undo` puts it back.", fix_id="x")\n'
+              'FixSuggestion(title="t", detail="A setting.", fix_id="y")\n'
+              'FixSuggestion(title="t", detail="Undo is up to you.")\n')        # advice: the report adds no note
+    assert [h.split(":")[1] for h in undo_repeats(source)] == ["1"]
+
+
+def test_no_fix_detail_repeats_the_undo_note_the_html_report_adds():
+    # Wording: a fix box read "... `lagdoctor undo` puts it back. It asks before changing anything, and lagdoctor
+    # undo puts it back." The console shows no detail for a fix it can run, and `fix` prints its own undo line
+    hits = [h for p in user_modules() for h in undo_repeats(p.read_text(encoding="utf-8"),
+                                                            p.relative_to(ROOT).as_posix())]
+    assert hits == [], "\n".join(hits)
+
+
 def test_the_scan_finds_citations_in_strings_and_f_strings_but_not_in_docstrings_or_comments():
     source = ('"""Module doc (WT 8)."""\n'
               'def f(x):\n'

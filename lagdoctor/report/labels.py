@@ -1,9 +1,18 @@
 """Plain-English labels shared by the console and HTML reports."""
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from lagdoctor.report.charts import number
+
+# A reason the capture's own sources carry can open with what the list already says it is about ("frame timing
+# (PresentMon): frame timing was skipped: ..."); earlier builds wrote this prefix for every frame source that was off.
+_SAID_ALREADY = re.compile(r"^\s*frame timing was skipped:\s*", re.IGNORECASE)
+# Where a reason's first clause ends: its details (a path, a command, an error text) follow.
+_CLAUSE_END = re.compile(r" \(|: |; |\. ")
+SHORT_REASON_FALLBACK = "see Not measured"
+GAME_NAME_MAX = 80                    # a window title longer than this is cut, never wrapped into the headline
 
 LAG_TYPES = {
     "none": "No lag found",
@@ -38,7 +47,7 @@ CAUSES = {
     "driver_dpc": "a driver holding up the CPU",
     "cpu_throttle": "the CPU slowing down (heat or power)",
     "gpu_throttle": "the GPU slowing down (heat or power)",
-    "vram_overflow": "video memory full",
+    "vram_overflow": "video memory over 90% full",
     "gpu_spike": "a moment of heavy GPU work",
     "game_stall": "the game waiting on itself",
     "wrong_gpu": "running on the wrong GPU",
@@ -89,8 +98,8 @@ TOPICS = {
     "game_stall": "the game waiting on itself",
     "wrong_gpu": "which GPU the game runs on",
     "hybrid_copy": "copies between GPUs",
-    "gpu_limit": "GPU load",
-    "cpu_limit": "CPU load",
+    "gpu_limit": "the GPU as the frame-rate limit",
+    "cpu_limit": "the CPU as the frame-rate limit",
     "gpu_contention": "other programs on the game's GPU",
     "ram_pressure": "RAM and the page file",
     "power_plan": "power plan",
@@ -256,15 +265,52 @@ def not_measured(sources: Any, measured: Any) -> list[tuple[str, str]]:
     (Diagnosis.measured). An unknown source is still listed, by its id in words."""
     sources = sources if isinstance(sources, dict) else {}
     measured = measured if isinstance(measured, dict) else {}
-    out = [(source_text(str(src)), _why(getattr(st, "detail", None) or getattr(st, "state", None)))
-           for src, st in sorted(sources.items(), key=lambda kv: str(kv[0])) if getattr(st, "state", None) != "ok"]
+    out = []
+    for src, st in sorted(sources.items(), key=lambda kv: str(kv[0])):
+        if getattr(st, "state", None) != "ok":
+            out.append((source_text(str(src)), _why(getattr(st, "detail", None) or getattr(st, "state", None))))
+        elif isinstance(measured.get(src), str) and measured[src] != "ok":    # ran, but the analysis had nothing of it
+            out.append((source_text(str(src)), _why(measured[src])))
     out += [(source_text(str(src)), _why(why)) for src, why in sorted(measured.items(), key=lambda kv: str(kv[0]))
             if why != "ok" and src not in sources]
     return out
 
 
 def _why(value: Any) -> str:
-    return value if isinstance(value, str) and value.strip() else "not measured"
+    return reason_text(value) if isinstance(value, str) and value.strip() else "not measured"
+
+
+def reason_text(why: str) -> str:
+    """A source's reason as the Not measured list shows it, beside the source's name: without an opening that repeats
+    it ("frame timing (PresentMon): frame timing was skipped: PresentMon ... is not installed")."""
+    return _SAID_ALREADY.sub("", why, count=1).strip() or why
+
+
+def short_reason(why: Any) -> str:
+    """A reason's first clause, for a sentence such as the verdict: no path, command or error text, which the Not
+    measured list gives once in full. "PresentMon 2.6.0 is not installed (C:\\...). Run `lagdoctor setup` ..." is
+    "PresentMon 2.6.0 is not installed"; a first clause that still holds a path or a command is no short reason."""
+    if not isinstance(why, str) or not why.strip():
+        return SHORT_REASON_FALLBACK
+    text = _SAID_ALREADY.sub("", why.strip(), count=1)
+    m = _CLAUSE_END.search(text)
+    text = (text[:m.start()] if m else text).strip().rstrip(".;:,")
+    if not text or "`" in text or "\\" in text or re.search(r"[A-Za-z]:/", text) or len(text) > 120:
+        return SHORT_REASON_FALLBACK
+    return text
+
+
+def game_name(target: Any) -> str:
+    """The game as a player knows it: its window's title when the capture has a sane one, else its exe name, else
+    "your game". A title is the name the game shows; "ff7rebirth_.exe" is only a file."""
+    target = target if isinstance(target, dict) else {}
+    for key in ("window_title", "name"):
+        v = target.get(key)
+        if isinstance(v, str):
+            s = " ".join(v.split())           # control characters stay for each report to show safely (SEC-8)
+            if s:
+                return s if len(s) <= GAME_NAME_MAX else s[:GAME_NAME_MAX - 3].rstrip() + "..."
+    return "your game"
 
 
 def group_unchecked(unchecked: dict[str, str]) -> list[tuple[str, list[str]]]:
@@ -277,4 +323,24 @@ def group_unchecked(unchecked: dict[str, str]) -> list[tuple[str, list[str]]]:
     for cause, why in unchecked.items():
         key = (why or "not checked").split(";", 1)[0].strip()
         groups.setdefault(key, []).append(topic_text(cause))
-    return sorted(((r, sorted(t)) for r, t in groups.items()), key=lambda g: (-len(g[1]), g[0]))
+    out = []
+    for r, topics in groups.items():
+        if len(topics) > 1 and r.startswith(NEEDS):   # "these need frame timing ...", for a list of them
+            r = "these need " + r[len(NEEDS):]
+        out.append((r, sorted(topics, key=str.casefold)))
+    return sorted(out, key=lambda g: (-len(g[1]), g[0]))
+
+
+def sorted_topics(causes: Any) -> list[str]:
+    """The topics of these causes in alphabetical order, whatever their case ("CPU heat" with "copies", not before)."""
+    return sorted((topic_text(c) for c in causes), key=str.casefold)
+
+
+NEEDS = "needs "                      # how a reason that a missing source blocked begins (rules._Env.need)
+
+
+def needs_source(source: str) -> str:
+    """Why a cause could not be checked when a source it needs was not measured. The source's own reason, path and
+    command included, is in the Not measured list, once; repeating it here chained colons ("needs X, which was not
+    measured: frame timing was skipped: ...")."""
+    return f"{NEEDS}{source_text(source)}, which was not recorded (see Not measured)"
