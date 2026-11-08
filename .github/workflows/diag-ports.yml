@@ -1,0 +1,54 @@
+# Throwaway (never merged): why the tests' loopback DNS stand-ins find no port free for both UDP and TCP on a runner.
+# Runs on pushes to diag/** branches only; ci.yml and the experiments workflow do not run for them. Each job is a fresh
+# VM: its excluded port ranges, the stand-ins' step swept around the dynamic range, and the real tests started with the
+# TCP port-0 hint inside a run of ports closed to UDP (scripts/diag_ports.py). Results: job summaries, diag-ports-*.
+name: Stand-in ports probe
+
+on:
+  push:
+    branches: ["diag/**"]
+
+permissions:
+  contents: read
+
+env:
+  LAGDOCTOR_ABSENT: internet_icmp,gpu,thermal_zone,nvidia
+
+jobs:
+  ports:
+    name: Ports (Python ${{ matrix.python }}, VM ${{ matrix.vm }})
+    runs-on: windows-2025
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.11"]
+        vm: [1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.10.4"
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: uv sync --locked
+      - name: The runner's port settings
+        run: |
+          netsh int ipv4 show dynamicport tcp
+          netsh int ipv4 show dynamicport udp
+          netsh int ipv4 show excludedportrange protocol=tcp
+          netsh int ipv4 show excludedportrange protocol=udp
+          Get-Service hns, winnat, vmcompute, docker, hvhost, vmms -ErrorAction SilentlyContinue | Format-Table -AutoSize | Out-String -Width 200
+      - name: Measure
+        env:
+          DIAG_OUT: ${{ runner.temp }}\diag-ports
+        run: uv run --no-sync python scripts/diag_ports.py
+      - name: Keep the readings
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: diag-ports-${{ matrix.python }}-${{ matrix.vm }}
+          path: ${{ runner.temp }}\diag-ports\diag-ports.json
+          if-no-files-found: warn
