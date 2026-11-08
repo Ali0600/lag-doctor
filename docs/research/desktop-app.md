@@ -412,6 +412,26 @@ WebView2 reference by this session's research agent and are marked [research: ..
   window and the page too, and no menu mode followed; nothing was pressed after it there. A lone Alt, the case
   `SC_KEYMENU` is sent for, is untested on both.
 
+## 13. Measured by M1's window tests
+
+`tests/test_app_page.py` through `tests/app_harness.py`, on a demo library of 4 synthetic sessions, run from the
+agent's shell on the owner's PC (2026-11-08, WebView2 Runtime 157.0.4341.42, 120 DPI). Each line is [verified: the
+harness's facts file], unless it says otherwise.
+- **The app's own window works as the spike's did**: the export returned S_OK, the runtime read all 6 of the options
+  object's values, every one of the 15 settings read back as set, and WebView2's 5 variables were back as they were.
+  The whole run, 49 scripted steps from the library to a recovered browser process, took 5.5 s.
+- **The shared buffer**: the frame-time chart drew all 3,373 frames of the main chain, handed over as 53,968 bytes of
+  doubles through `CreateSharedBuffer` and `PostSharedBufferToScript`; the page released the buffer and the window
+  closed it.
+- **Recovery**: DevTools' `Page.crash`, called from the host through `CallDevToolsProtocolMethod` (S_OK, DevTools off),
+  raised ProcessFailed kind 1; the window loaded its entry page again and the library came back. Ending the browser
+  process with `taskkill /F` raised kind 0; on BrowserProcessExited the window made environment 2 with a new browser
+  process, the runtime read the new options object's 6 values, and the library came back.
+- **Policy from inside the page**: `window.open` returned null, `location.href = 'https://example.com/'` left the
+  page where it was (NavigationStarting refused it), and 3 malformed messages were dropped unanswered.
+- **`CapturePreview`** (slot 30, PNG) wrote each screen to a file through an `SHCreateStreamOnFileEx` stream: the
+  README's pictures.
+
 ## Verification log (2026-11-08)
 
 | Claim | Result | Source read |
@@ -426,4 +446,5 @@ WebView2 reference by this session's research agent and are marked [research: ..
 | The spike's 134 slots and IIDs equal that header's | confirmed: 0 mismatches | the same parse, against `scripts/webview_spike.py` |
 | `CreateWebViewEnvironmentWithOptionsInternal` takes (bool, runtime type, folder, options, handler), 0 = installed; the runtime's folder is the `EBWebView` value read with `KEY_WOW64_32KEY` | confirmed | webview/webview `loader.hh` and Wails `env_create.go`, `find_dll_installed.go` (master, 2026-11-08) |
 | Step 2's additions: the controller's `add_GotFocus` 15 and `add_LostFocus` 17, `ICoreWebView2FocusChangedEventHandler` 05EA24BD-6452-4926-9014-4B82B498135D, and the key event's `get_KeyEventLParam` 5 | confirmed: 140 entries, 0 mismatches | the same header and script, against the spike's tables |
+| M1's additions: `ICoreWebView2::ExecuteScript` 29, `ICoreWebView2_17::PostSharedBufferToScript` 116, `ICoreWebView2Environment12::CreateSharedBuffer` 24, `ICoreWebView2SharedBuffer` get_Size 3, get_Buffer 4, Close 7, and the IIDs of those interfaces and of `ICoreWebView2ExecuteScriptCompletedHandler` | confirmed: every slot and IID `lagdoctor/winapi/webview2.py` names equals `WebView2.idl`'s, and a reader of that IDL matched `WebView2.h`'s C vtables in all 297 interfaces (5,731 slots) | the SDK's nupkg, SHA-256 pinned, through `tests/test_webview2_idl.py` |
 | Section 12's quotes (the key event, its order, GetKeyState, AltGr, `SC_KEYMENU`, AllowHostInputProcessing) | quoted, not re-read here | learn.microsoft.com references, WebView2Feedback issues 1703 and 5549 and Chromium's source, read by this session's research agent on 2026-11-08 |

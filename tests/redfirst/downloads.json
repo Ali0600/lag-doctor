@@ -78,8 +78,8 @@
  {
   "name": "the tally is never registered",
   "file": "tests/conftest.py",
-  "old": "    config.pluginmanager.register(downloads.Tally(os.environ), \"lagdoctor-download-tally\")",
-  "new": "    pass",
+  "old": "        config.pluginmanager.register(downloads.Tally(os.environ, line), f\"lagdoctor-download-tally-{line}\")",
+  "new": "        pass",
   "tests": [
    "tests/test_downloads.py::test_on_a_pc_without_the_downloads_their_tests_skip_and_are_counted"
   ]
@@ -87,8 +87,8 @@
  {
   "name": "the tally counts only the exe's tests",
   "file": "tests/downloads.py",
-  "old": "                        if FIXTURES.keys() & set(getattr(item, \"fixturenames\", ()))}",
-  "new": "                        if {\"presentmon_exe\"} & set(getattr(item, \"fixturenames\", ()))}",
+  "old": "    \"presentmon\": (\"PresentMon tests\", \"PresentMon's download or its gold captures\", (\"presentmon_exe\", \"gold_etl_dir\")),",
+  "new": "    \"presentmon\": (\"PresentMon tests\", \"PresentMon's download or its gold captures\", (\"presentmon_exe\",)),",
   "tests": [
    "tests/test_downloads.py::test_on_a_pc_without_the_downloads_their_tests_skip_and_are_counted"
   ]
@@ -169,8 +169,8 @@
  {
   "name": "a new download that CI does not fetch",
   "file": "tests/downloads.py",
-  "old": "DOWNLOADS = {\"presentmon\": \"PresentMon's pinned release\", \"presentmon_gold\": \"PresentMon's gold ETW captures\"}",
-  "new": "DOWNLOADS = {\"presentmon\": \"PresentMon's pinned release\", \"presentmon_gold\": \"PresentMon's gold ETW captures\", \"presentmon_src\": \"PresentMon's source\"}",
+  "old": "    \"presentmon_gold\": \"PresentMon's gold ETW captures\",\n",
+  "new": "    \"presentmon_gold\": \"PresentMon's gold ETW captures\",\n    \"presentmon_src\": \"PresentMon's source\",\n",
   "tests": [
    "tests/test_downloads.py::test_ci_fetches_checks_and_requires_every_download_and_uses_only_real_outputs"
   ]

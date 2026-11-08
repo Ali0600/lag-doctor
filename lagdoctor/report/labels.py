@@ -149,6 +149,90 @@ SOURCES = {
     "network": "the ping and Wi-Fi monitor", "net_flows": "the game's own network traffic (ETW)",
 }
 
+# Every column a chart can show (model.F, S, G, N), as (label, unit): the app's charts name a series only through this
+# table. The columns left out are names, ids and addresses, never drawn as a line (NOT_CHARTED). Each model column but
+# "t" is in exactly one of the two (tests/test_app_views.py).
+COLUMNS = {
+    # frames (PresentMon)
+    "frame_ms": ("time between frames", "ms"),
+    "cpu_busy_ms": ("CPU time per frame", "ms"),
+    "cpu_wait_ms": ("CPU waiting per frame", "ms"),
+    "gpu_latency_ms": ("CPU start to GPU start", "ms"),
+    "gpu_busy_ms": ("GPU time per frame", "ms"),
+    "gpu_wait_ms": ("GPU idle per frame", "ms"),
+    "displayed": ("frame shown (1) or dropped (0)", ""),
+    "display_ms": ("time each frame stayed on screen", "ms"),
+    "display_latency_ms": ("CPU start to on screen", "ms"),
+    "input_latency_ms": ("input to on screen", "ms"),
+    "anim_error_ms": ("animation timing error", "ms"),
+    "sync_interval": ("VSync interval (0 = off)", ""),
+    "allows_tearing": ("tearing allowed (1) or not (0)", ""),
+    "hybrid": ("copied between GPUs (1) or not (0)", ""),
+    # system sampler
+    "cpu_total_pct": ("CPU use, all cores", "%"),
+    "cpu_max_core_pct": ("busiest CPU core", "%"),
+    "cpu_perf_pct": ("CPU speed against its base clock", "%"),
+    "cpu_perf_limit_pct": ("CPU speed limit (100 = none)", "%"),
+    "thermal_limit_pct": ("CPU heat limit (100 = none)", "%"),
+    "dpc_pct": ("driver work (DPC), busiest core", "%"),
+    "interrupt_pct": ("interrupts, busiest core", "%"),
+    "game_cpu_pct": ("the game's CPU use (100 = one core)", "%"),
+    "game_top_thread_pct": ("the game's busiest thread (100 = one core)", "%"),
+    "game_threads": ("the game's threads", ""),
+    "game_ws_mb": ("the game's memory in use", "MB"),
+    "game_private_mb": ("the game's private memory", "MB"),
+    "game_page_faults_ps": ("the game's page faults", "/s"),
+    "game_io_read_bps": ("the game's disk and file reads", "B/s"),
+    "game_io_write_bps": ("the game's disk and file writes", "B/s"),
+    "game_io_ops_ps": ("the game's read and write calls", "/s"),
+    "game_focused": ("the game in front (1) or not (0)", ""),
+    "game_gpu_pct": ("the game's GPU use", "%"),
+    "gpu_pct": ("GPU use, all programs", "%"),
+    "gpu_other_pct": ("GPU use by other programs", "%"),
+    "vram_used_mb": ("video memory in use", "MB"),
+    "game_vram_mb": ("the game's video memory", "MB"),
+    "game_shared_mb": ("the game's data spilled into system RAM", "MB"),
+    "ram_avail_mb": ("free RAM", "MB"),
+    "commit_pct": ("memory committed", "%"),
+    "hard_faults_ps": ("reads from disk for memory", "/s"),
+    "disk_busy_pct": ("busiest disk", "%"),
+    "disk_read_bps": ("disk reads, busiest disk", "B/s"),
+    "disk_read_ms": ("disk read time", "ms"),
+    "disk_queue": ("disk queue", ""),
+    # NVIDIA (NVML)
+    "nv_util_pct": ("NVIDIA GPU use", "%"),
+    "nv_mem_used_mb": ("NVIDIA video memory in use", "MB"),
+    "nv_temp_c": ("NVIDIA GPU temperature", "°C"),
+    "nv_power_w": ("NVIDIA GPU power", "W"),
+    "nv_power_limit_w": ("NVIDIA GPU power limit", "W"),
+    "nv_clock_mhz": ("NVIDIA GPU clock", "MHz"),
+    "nv_clock_max_mhz": ("NVIDIA GPU top clock", "MHz"),
+    "nv_pstate": ("NVIDIA performance state (0 = fastest)", ""),
+    "nv_throttle_pct": ("NVIDIA slowed by heat or power", "%"),
+    "nv_power_cap_pct": ("NVIDIA at its power cap", "%"),
+    # network
+    "gw_rtt_ms": ("ping to your router", "ms"),
+    "inet_rtt_ms": ("ping to the internet", "ms"),
+    "server_rtt_ms": ("ping to the game server", "ms"),
+    "wifi_signal_pct": ("Wi-Fi signal", "%"),
+    "wifi_rssi_dbm": ("Wi-Fi signal strength", "dBm"),
+    "wifi_channel": ("Wi-Fi channel", ""),
+    "wifi_rx_mbps": ("Wi-Fi receive rate", "Mbit/s"),
+    "wifi_tx_mbps": ("Wi-Fi send rate", "Mbit/s"),
+    "wifi_retries_ps": ("Wi-Fi retries", "/s"),
+    "nic_rx_bps": ("network download, all programs", "B/s"),
+    "nic_tx_bps": ("network upload, all programs", "B/s"),
+}
+NOT_CHARTED = frozenset({"present_mode", "runtime", "swap_chain", "frame_type", "game_top_thread_id", "nv_reasons",
+                         "wifi_bssid"})
+
+
+def column_text(column: str) -> str:
+    """A chart series' name in words, with its unit: "time between frames (ms)"."""
+    label, unit = COLUMNS.get(column, (column.replace("_", " "), ""))
+    return f"{label} ({unit})" if unit else label
+
+
 # The power-mode slider's positions (inventory power.slider) and the plan types (power.personality) that have no
 # slider: Windows shows it only on Balanced and plans derived from it (winapi/power.py).
 POWER_MODES = ("best_efficiency", "balanced", "best_performance")

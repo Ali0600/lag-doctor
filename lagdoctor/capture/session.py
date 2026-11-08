@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from lagdoctor import __version__, clock
+from lagdoctor import __version__, clock, paths
 from lagdoctor.capture.base import Collector
 from lagdoctor.model import Capture, SourceStatus
 
@@ -618,10 +618,7 @@ def _default_alive(target: dict[str, Any]) -> Callable[[], bool]:
 def session_dir(base: Path, target: dict[str, Any], when: datetime | None = None) -> Path:
     """A fresh folder per capture: <base>/<yyyymmdd-hhmmss>-<game>, never one that already exists."""
     when = when or datetime.now()
-    if not isinstance(target.get("name"), str):
-        target = dict(target, name=None)          # a capture from elsewhere may hold any JSON value here
-    stem = "".join(ch if ch.isalnum() or ch in "-_." else "_" for ch in (target.get("name") or "game"))
-    stem = stem.rsplit(".", 1)[0].strip("._")[:40] or "game"
+    stem = paths.folder_stem(target.get("name"))    # a capture from elsewhere may hold any JSON value there
     Path(base).mkdir(parents=True, exist_ok=True)
     for n in range(1, 100):
         d = Path(base) / (f"{when:%Y%m%d-%H%M%S}-{stem}" + (f"-{n}" if n > 1 else ""))

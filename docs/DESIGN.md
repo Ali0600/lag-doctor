@@ -143,7 +143,8 @@ up from there was "not installed" for the user's terminal and the elevated recor
   form, which RAM disks without a Mount Manager entry still give), never whether the process has a package
   identity; `paths.redirected()` is the pure reading of that path.
 - `cli.main` runs it once, before anything is written (the journal healing writes), per
-  `cli.PRIVATE_COPY_POLICY`: `setup`, `watch`, `fix` and `undo` save files other windows must find and refuse
+  `cli.PRIVATE_COPY_POLICY`: `setup`, `watch`, `fix`, `undo` and `app` (its log and WebView2's data folder; from M4
+  its recordings) save files other windows must find and refuse
   (exit 5, saying where the files would go and to open PowerShell from the Start menu); `check` and `analyze`
   only read the PC and print a one-line note, and the journal is not healed under a private copy. A probe that
   cannot be made refuses the savers too. The elevated child probes the folder it saves the capture in (the
@@ -166,21 +167,26 @@ lagdoctor/
             etw.py                                      ETW sessions         (capture/netflows)
             elevation.py                                rights + UAC relaunch
             pipe.py                                     the locked named pipe (the relay, the capture service)
+            webview2.py                                 WebView2 from ctypes, through the runtime's own export (the app)
             process.py                                  priority of other processes (fixes/priority)
   capture/  base.py (done) target.py sysmon.py gpumon.py netmon.py netflows.py presentmon.py inventory.py
             session.py
   analysis/ stats.py (done) frames.py events.py attribute.py rules.py diagnose.py
+            window.py                                   the samples around a moment (the app's Results)
   fixes/    base.py journal.py registry.py catalog.py (done) + power.py refresh_rate.py gpu_preference.py
             gamebar.py windowed.py priority.py
-  report/   charts.py labels.py console.py html.py (done)
+  report/   charts.py labels.py console.py html.py (done) summary.py (summary.json, for the app's library)
+  app/      main.py window.py bridge.py library.py views.py assets/ lag-doctor.ico     the desktop app (M1)
   setup.py  fetch + verify PresentMon
   cli.py __main__.py
 laglab/     the fake laggy game used by tests (done)
 scripts/    redfirst.py e2e_truth.py (done) e2e.py etw_access.py (E1: who may enable the trace providers)
             stage2/ (the capture-service experiments E3, E3b, E3c: GitHub's runners only, never this PC)
             wheel_check.py; msi_build.py msidb.py wix_tool.py runtime_pin.py (the MSI); msi_check.py (installs it:
-            GitHub's runners only, never this PC); runtime_modules.py + .json (what the pinned runtime imports)
-installer/  lag-doctor.wxs (WiX v7, per-machine), lagdoctor.cmd (the PATH shim), PresentMon-LICENSE.txt
+            GitHub's runners only, never this PC); runtime_modules.py + .json (what the pinned runtime imports);
+            webview_spike.py (M0); make_icon.py (lag-doctor's icon)
+installer/  lag-doctor.wxs (WiX v7, per-machine, with the app's Start-menu shortcut), lagdoctor.cmd (the PATH shim),
+            PresentMon-LICENSE.txt
 ```
 
 `winapi/` modules are thin ctypes wrappers with no policy: plain Python values in and out, `OSError`
@@ -385,6 +391,22 @@ class PipeClient:
 # One read and one write may run at once. Waits run in 100 ms slices, so Ctrl+C and close() land within one. Each
 # direction's OVERLAPPED and buffer belong to the pipe, and a call an exception interrupts is cancelled and waited out
 # before the exception goes on (a message it had received is the next read's): Windows never writes freed memory.
+
+# winapi/webview2.py (the app's window; research note desktop-app.md, sections 3 and 11) -----------------
+SLOTS: dict[str, dict[str, int]]; IIDS: dict[str, str]   # only what lag-doctor calls or implements, every entry
+                                                  # checked against the SDK's WebView2.idl (tests/test_webview2_idl.py)
+def find_runtime() -> dict | None                 # {folder, version, build, dll, exe} of the installed Evergreen
+                                                  # runtime (EdgeUpdate ClientState EBWebView, HKLM then HKCU)
+def environment_creator(dll) -> fn                # CreateWebViewEnvironmentWithOptionsInternal(check, 0, folder,
+                                                  # options, handler): the runtime's own export, no loader DLL
+class Com(ptr, iface, owned=True)                 # an interface pointer: call/do by method name, get_*/put_*, qi(),
+                                                  # get_ptr(), release(); ComError (an OSError) with .hr on a failure
+class Handler(iface, proto, fn, guard)            # one-method COM object; guard(iface, fn) must never raise into C
+class EnvOptions(strings, bools)                  # EnvironmentOptions 1-3 as one object; .asked lists what the
+                                                  # runtime read
+def env_state(name) -> str | None; set_env(name, value | None)   # SetEnvironmentVariableW: "" stays present
+# plus the user32/kernel32/ole32/shell32 calls a host window needs (CreateWindowExW ... MessageBoxW). Whoever makes a
+# Handler or EnvOptions keeps it referenced for as long as WebView2 may call it.
 
 # winapi/process.py (WT 9) ------------------------------------------------------------------------------
 # Every call takes an optional create_time; when given, identity is checked WITHOUT a handle (an
@@ -950,9 +972,10 @@ lagdoctor check                      settings check-up without a game running
 lagdoctor fix [ID ...] [--list]      apply fixes suggested by the last report (asks first)
 lagdoctor undo [ID | --all]          restore from the journal
 lagdoctor setup                      fetch + verify PresentMon, explain how to get ETW rights
+lagdoctor app                        lag-doctor's window: recorded games and their results (see The app)
 ```
 
-- Each `watch` writes `capture.ldcap.json.gz`, `diagnosis.json` and `report.html` into a new folder under
+- Each `watch` writes `capture.ldcap.json.gz`, `diagnosis.json`, `report.html` and `summary.json` into a new folder under
   `paths.sessions_dir()` and remembers it (absolute) in `last-session.txt`; `check` writes its diagnosis into a
   `<stamp>-check-up` folder and remembers it in `last-checkup.txt`. `fix` offers what the last watch and the
   last check-up suggested, newest report per fix id, saying where each offer comes from; a remembered folder
@@ -985,6 +1008,73 @@ lagdoctor setup                      fetch + verify PresentMon, explain how to g
   settles journal entries a crash left `pending`, and marks session-only changes whose process has ended as
   undone (checked without opening the process).
 
+## The app (lagdoctor/app)
+
+`lagdoctor app` opens lag-doctor's own window (`docs/LAUNCHER-PLAN.md`): in M1, the recorded games and their results.
+Recording from it comes with M4. The window code is ported from M0's spike, which passed the owner's run.
+
+- **Start order** (`main.run`): the AppUserModel ID (`app.APP_ID`, also on the MSI's shortcut); per-monitor DPI
+  awareness; one instance per lag-doctor home (the named mutex `Local\lag-doctor-app-<tag>`, the window class
+  `LagDoctorApp-<tag>`, the tag 12 hex digits of the SHA-256 of the home's resolved path, so a second start brings the
+  first window forward and a test's home never meets the owner's app); the refusals, said through `main.tell` (in the
+  console that started it, else in a message box, as pythonw has no console): started elevated, no WebView2 Runtime, a
+  runtime before build 1661 (CreateSharedBuffer) or one without the export. Another app's private copy of AppData is
+  refused earlier, by `cli.main` (exit 5). Then faulthandler into `app.log` under the home (the previous run's kept as
+  `app-previous.log`), STA COM, the window and the environment. If the view cannot be made, `App.on_failed` says why
+  and opens the last watch's `report.html` instead.
+- **The window** (`window.py`): every handler guarded and kept referenced; the settings in `window.SETTINGS`, each read
+  back; the options object (exclusive data folder, crash dumps kept on the PC); WebView2's five variables set only
+  around the environment's creation (`HARDENED_ENV`) and put back; each refusing handler (navigation, frame
+  navigation, new window, permission, download, external scheme, script dialog) refuses first and counts what it
+  refused in `refused`. The page's folder `lagdoctor/app/assets` is mapped to `https://app.lagdoctor.example` with
+  access DENY; WebView2's data folder is `webview` under the home. A render process that exits gets the entry page
+  again; a browser process that exits drops the view, and BrowserProcessExited (the data folder free) brings a new
+  environment with a new options object. Two worker threads (at most 32 requests waiting) post their results through
+  the window's own queue (`WM_APP + 1`), never to the thread.
+- **The bridge** (`bridge.py`): `origin_ok`, `navigation_allowed` and `parse` are pure. A request is
+  `{type: "request", id, kind, ...}` with exactly its fields: `library`; `game` (a game id); `results` and
+  `open_report` (a session id); `moment` (a session id and an event id); `compare` (`a`, `b`); `settings`,
+  `open_folder`, `test_sound`. Notices: `ready`, `frames_done` (`token`). The answer is
+  `{type: "reply", id, ok, data | error}`; a failure the app did not expect is logged with its traceback and answered
+  with one sentence naming the log.
+- **The library** (`library.py`): one Entry per session folder named as `session_dir` names them, from its
+  `summary.json`, else from the folder's name (stamp and game stem). A recording is a `watch` folder holding its
+  capture; check-ups and `analyze` folders are left out. A game's key is `paths.folder_stem` of its exe name, case
+  folded; the page knows it only as `g-` and 16 hex digits of its SHA-256. A session id resolves only against the
+  listing. `last-session.txt` marks the recording `lagdoctor fix` acts on: fix commands show on that one only.
+- **summary.json** (`report/summary.py`, schema `lagdoctor.summary/1`, at most 64 KB), written by
+  `cli.analyze_and_report`: `kind` (`watch` or `analyze`), `tool_version`, `capture_tool_version`, `game`, `exe`,
+  `exe_name`, `started_at`, `duration_s`, `lag_type`, `headline`, `frames`, `avg_fps`, `low1_fps`, `stutters_per_min`,
+  `worst_frame_ms`, `top_cause`, `frames_source`, `frames_measured`, `refresh_hz`, `power_plan`, `power_mode`,
+  `launcher`. Read back field by field: one of the wrong type reads as None. A failed write is said and the analysis
+  goes on.
+- **The views** (`views.py`), plain dicts: `library_view`, `game_view`, `results_view` (the saved diagnosis through
+  `Diagnosis.from_json`, analysed again only when it cannot be read), `moment_view` (`analysis.window` 5 s either side
+  of an event, at most 120 s of it), `compare_view` (the numbers with the better side marked, beside the conditions:
+  power plan and mode, refresh rate, how frames were timed, measured length), `settings_view`, `readiness_view`.
+  Chart series are named through `labels.COLUMNS`.
+- **Frame times** reach the page in a read-only shared buffer (`ICoreWebView2Environment12::CreateSharedBuffer`,
+  `ICoreWebView2_17::PostSharedBufferToScript`): little-endian doubles, the main chain's times then its frame times
+  (NaN for none), at most 4,000,000 frames, with `{kind, session, count, request, token}` as the event's data. The page
+  copies them, releases the buffer and sends `frames_done`, and the window closes it.
+- **The page** (`assets/`): a CSP meta tag (`default-src 'none'`, scripts and styles from the app's own host only, no
+  connections, workers or frames); text goes on the page through `el()`, which makes text nodes; uPlot 1.6.32 (MIT)
+  vendored with its LICENSE and pinned by SHA-256.
+- **The MSI's shortcut**: one Start-menu shortcut, `lag-doctor`, in every account's Start menu (ProgramMenuFolder under
+  ALLUSERS=1), starting `[INSTALLFOLDER]pythonw.exe -m lagdoctor app` in the install folder with lag-doctor's icon
+  (the Icon table, from the payload's `lagdoctor\app\lag-doctor.ico`) and `System.AppUserModel.ID` = `app.APP_ID`
+  through ShortcutProperty. Its component is keyed by `HKCU\Software\lag-doctor\StartMenuShortcut` (DWORD 1).
+  `msi_check`'s `registry` and `shortcut` verdicts read both back after the install (the .lnk through IShellLinkW and
+  its own property store), and `gone` requires the .lnk, its icon file and the value gone, and the key as it was.
+
+```python
+# analysis/window.py
+def window(cap, t0, t1, frames=None) -> dict      # {t0, t1, frames, system, gpu, network, others, marks}: each
+                                                  # table's rows with t0 <= t <= t1, columns kept aligned; frames is
+                                                  # the table to cut (the main chain; default the capture's own);
+                                                  # ValueError unless t0 and t1 are finite and in order
+```
+
 ## Testing
 
 - **Unit**: pure functions on literal sample points; parsers against fixture text taken from real tool output
@@ -995,6 +1085,20 @@ lagdoctor setup                      fetch + verify PresentMon, explain how to g
   `nvidia-smi`, `Get-NetRoute`).
 - **ETW without rights**: a private in-process session (allowed for standard users) proves the consumer
   path (NE 5.6); PresentMon's `--etl_file` replay proves the frames path.
+- **The app**: the bridge, the library, the summary, the views and `analysis.window` in plain pytest; the window
+  itself in `tests/test_app_page.py`, behind the declared `webview2` capability (CI's runner has it): a child process
+  (`tests/app_harness.py`) opens the real window without the focus on a demo library of made-up games
+  (`tests/app_demo.py`) and drives the page through the host's own script hook, `ExecuteScript` (WebDriver for
+  WebView2 is broken since runtime 133): the library, a game named like markup shown as text, Results with every
+  frame of the shared buffer drawn, a lag moment, Compare, Settings, a navigation, a new window and malformed
+  messages refused, then a render process crashed (DevTools' `Page.crash`) and the browser process ended, each
+  recovered.
+- **WebView2's vtables**: `python -m tests.downloads fetch-webview2-idl` takes `WebView2.idl` out of
+  Microsoft.Web.WebView2 1.0.4314.35's nupkg, opened only after its SHA-256 matches the pin and read by its exact name;
+  the IDL has its own pin, checked on every use. `tests/webview2_idl.py` reads it, and `tests/test_webview2_idl.py`
+  pins every vtable slot and IID `lagdoctor/winapi/webview2.py` names. The reader is proven offline on a literal IDL
+  and against the spike's numbers counted from `WebView2.h`. The IDL's tests have their own line in the download
+  tally, so the PresentMon count is unchanged.
 - **Downloaded test data** (`tests/downloads.py`): the PresentMon release and its gold captures are not in the
   repo. `lagdoctor setup` and `python -m tests.downloads fetch-gold` fetch them; the fixtures check the exe
   against the tests' own pin, independent of `setup.py`'s. Without them those tests skip, except where

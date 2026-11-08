@@ -7,11 +7,17 @@ refuses to install anything off a runner.
 """
 from __future__ import annotations
 
+import ctypes
 import hashlib
+import inspect
+import os
 import re
+import shutil
+import subprocess
 import sys
 import xml.etree.ElementTree as ET
-from pathlib import Path, PurePosixPath
+from ctypes import wintypes
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 
@@ -23,7 +29,7 @@ import msi_check as mc  # noqa: E402
 import msidb  # noqa: E402
 import runtime_pin  # noqa: E402
 import wix_tool  # noqa: E402
-from lagdoctor import setup  # noqa: E402
+from lagdoctor import app, setup  # noqa: E402
 
 WXS_NS = {"w": "http://wixtoolset.org/schemas/v4/wxs"}
 UPGRADE_CODE = "{955424CD-63D8-410A-A74B-618FC618CDBA}"      # lag-doctor's, for every version: never changes
@@ -180,6 +186,55 @@ def test_bin_alone_is_added_to_the_end_of_the_system_path_and_removed_on_uninsta
 def test_the_path_row_the_build_expects_is_what_those_attributes_make():
     # Windows Installer's Environment table: "=" set on install, "-" removed on uninstall, "*" system; "[~];" appends.
     assert mb.PATH_ROW == {"Name": "=-*PATH", "Value": "[~];[BINFOLDER]"}
+
+
+def _start_menu_component(root: ET.Element) -> ET.Element:
+    folders = root.findall(".//w:StandardDirectory[@Id='ProgramMenuFolder']", WXS_NS)
+    assert len(folders) == 1
+    comps = folders[0].findall("w:Component", WXS_NS)
+    assert len(comps) == 1 and not folders[0].findall("w:Directory", WXS_NS)      # no subfolder to clean up
+    return comps[0]
+
+
+def test_the_start_menu_shortcut_starts_the_app_windowless_under_its_own_id():
+    """The Start-menu shortcut (docs/LAUNCHER-PLAN.md, Identity): the installed runtime's pythonw.exe, which opens no
+    console, on `-m lagdoctor app` in the install folder, lag-doctor's icon from the payload, and the AppUserModel ID
+    the app's process sets on itself: the two must agree, or the taskbar shows the shortcut and the window apart."""
+    root = wxs()
+    shortcuts = root.findall(".//w:Shortcut", WXS_NS)
+    assert len(shortcuts) == 1
+    s = shortcuts[0]
+    assert any(child is s for child in _start_menu_component(root))
+    assert (s.get("Name"), s.get("Target"), s.get("Arguments"), s.get("WorkingDirectory")) == (
+        "lag-doctor", "[INSTALLFOLDER]pythonw.exe", "-m lagdoctor app", "INSTALLFOLDER")
+    assert s.get("Advertise") in (None, "no") and s.get("Directory") is None       # a path target, in the folder above
+    props = s.findall("w:ShortcutProperty", WXS_NS)
+    assert [(p.get("Key"), p.get("Value")) for p in props] == [("System.AppUserModel.ID", app.APP_ID)]
+    assert app.APP_ID == "LagDoctor.App"
+    icons = s.findall("w:Icon", WXS_NS)
+    assert len(icons) == 1 and icons[0].get("Id").endswith(".ico")
+    source = PureWindowsPath(icons[0].get("SourceFile"))
+    assert source.parts[0] == "!(bindpath.payload)"
+    assert PurePosixPath(*source.parts[1:]) == PurePosixPath(app.ICON.relative_to(ROOT).as_posix())
+    assert app.ICON.is_file() and app.ICON.read_bytes()[:4] == b"\x00\x00\x01\x00"     # an icon file
+    # The install check expects the same shortcut: its file name, its target's name and its arguments.
+    assert (mc.SHORTCUT_NAME, mc.APP_RUNTIME, mc.APP_ARGUMENTS) == ("lag-doctor.lnk", "pythonw.exe", "-m lagdoctor app")
+
+
+def test_the_shortcuts_component_is_keyed_by_a_value_under_hkcu():
+    """A shortcut that is not advertised, in a Start-menu folder, passes Windows Installer's ICEs only in a component
+    keyed by an HKCU registry value, even in a per-machine package. WiX v7.0.1's darice.cub, run over each choice
+    (2026-11-08): HKMU fails ICE57; HKLM fails ICE38, ICE43 and ICE57; a file fails ICE43 and ICE57; the folder fails
+    ICE18, ICE38 and ICE43. The MSI build validates with ICE61 alone suppressed, so another choice fails CI there."""
+    root = wxs()
+    comp = _start_menu_component(root)
+    assert re.fullmatch(r"\{[0-9A-F-]{36}\}", comp.get("Guid")) and comp.get("Directory") is None
+    values = comp.findall("w:RegistryValue", WXS_NS)
+    assert len(values) == 1
+    assert {k: values[0].get(k) for k in ("Root", "Key", "Name", "Type", "Value", "KeyPath")} == {
+        "Root": "HKCU", "Key": r"Software\lag-doctor", "Name": "StartMenuShortcut", "Type": "integer", "Value": "1",
+        "KeyPath": "yes"}
+    assert len(root.findall(".//w:RegistryValue", WXS_NS)) == 1 and not root.findall(".//w:RegistryKey", WXS_NS)
 
 
 # ----------------------------------------------------------------- reading an MSI ---
@@ -400,6 +455,240 @@ def test_the_check_installs_nothing_off_a_github_hosted_runner(monkeypatch, tmp_
     with pytest.raises(SystemExit):
         mc.run_checks(tmp_path / "missing.msi", tmp_path / "missing.zip", tmp_path / "pm.exe", tmp_path / "logs")
     assert called == []
+
+
+def test_every_check_between_install_and_uninstall_runs_in_the_order_reported():
+    """MIDDLE names the checks reported as not run when the install fails; run_checks must run exactly those."""
+    ran = re.findall(r'guarded\("([a-z ]+)"', inspect.getsource(mc.run_checks))
+    assert ran == [*mc.MIDDLE, "gone"]
+    assert mc.MIDDLE == ("files", "registered", "path", "registry", "shortcut", "command", "imports", "untouched")
+
+
+# ----------------------------------------------------------- the Start-menu shortcut and its registry value ---
+
+KEYPATH_ROW = {"Registry": "reg1", "Root": "1", "Key": r"Software\lag-doctor", "Name": "StartMenuShortcut",
+               "Value": "#1", "Component_": "StartMenuShortcut"}
+
+
+def test_a_registry_row_is_read_back_as_the_data_it_writes():
+    assert mc.registry_data("#1") == 1 and mc.registry_data("#4096") == 4096 and mc.registry_data("on") == "on"
+    for unread in ("#x01ff", "#%C:\\x", "##1", "#", "[INSTALLFOLDER]", "a[~]b", None):
+        with pytest.raises(ValueError):
+            mc.registry_data(unread)
+    assert mc.registry_name(KEYPATH_ROW) == r"HKCU\Software\lag-doctor\StartMenuShortcut"
+
+
+def test_the_registry_check_needs_each_value_there_with_its_data():
+    assert mc.judge_registry([KEYPATH_ROW], {"reg1": (True, 1)}).ok
+    bad = {"value missing": {"reg1": (True, None)}, "key missing": {"reg1": (False, None)},
+           "unreadable": {"reg1": (None, None)}, "other data": {"reg1": (True, 2)}, "text, not a number": {
+               "reg1": (True, "1")}, "not read at all": {}}
+    assert {k: mc.judge_registry([KEYPATH_ROW], v).ok for k, v in bad.items()} == dict.fromkeys(bad, False)
+    assert not mc.judge_registry([], {}).ok                             # the shortcut's key path must be there
+    hku = {**KEYPATH_ROW, "Root": "3"}                                  # a root this check does not read
+    assert not mc.judge_registry([hku], {"reg1": mc.read_registry_value(hku)}).ok
+
+
+def test_after_the_uninstall_each_registry_value_and_its_key_are_as_before():
+    before = {"reg1": (False, None)}
+    assert mc.registry_left([KEYPATH_ROW], before, {"reg1": (False, None)}) == []
+    for after in ({"reg1": (True, 1)}, {"reg1": (True, None)}, {"reg1": (None, None)}, {}):   # value, empty key
+        assert mc.registry_left([KEYPATH_ROW], before, after), after
+    kept = {"reg1": (True, None)}                                       # the key was there before: it stays
+    assert mc.registry_left([KEYPATH_ROW], kept, kept) == []
+
+
+def test_a_component_belongs_in_the_install_folder_or_at_the_value_the_msi_writes():
+    paths = mc.registry_keypaths(KEYPATH_ROW)
+    assert paths == {"01:\\software\\lag-doctor\\startmenushortcut", "21:\\software\\lag-doctor\\startmenushortcut"}
+    local, absent = msidb.INSTALLSTATE_LOCAL, msidb.INSTALLSTATE_ABSENT
+    assert mc.component_in_place(local, str(INSTALL / "python.exe"), INSTALL, paths)
+    assert mc.component_in_place(local, str(INSTALL / "bin") + "\\", INSTALL, paths)
+    assert mc.component_in_place(local, "21:\\Software\\lag-doctor\\StartMenuShortcut", INSTALL, paths)
+    for state, path in ((absent, str(INSTALL / "python.exe")), (local, r"C:\Windows\python.exe"), (local, ""),
+                        (local, "21:\\Software\\Other\\StartMenuShortcut"), (local, "22:\\Software\\lag-doctor\\x"),
+                        (absent, "21:\\Software\\lag-doctor\\StartMenuShortcut")):
+        assert not mc.component_in_place(state, path, INSTALL, paths), (state, path)
+
+
+def test_the_registered_check_takes_the_shortcuts_component_at_its_registry_value(monkeypatch):
+    info = {"product_code": PRODUCT, "upgrade_code": UPGRADE, "manufacturer": "lag-doctor",
+            "components": ["{C1}", "{C2}"], "registry": [KEYPATH_ROW]}
+    before = _keys()
+    after = {k: before[k] | v for k, v in mc.added_keys(PRODUCT, UPGRADE).items()}
+    monkeypatch.setattr(mc.msidb, "product_state", lambda code: msidb.INSTALLSTATE_DEFAULT)
+    monkeypatch.setattr(mc.msidb, "related_products", lambda code: [PRODUCT])
+    monkeypatch.setattr(mc, "uninstall_entry", lambda code: {"DisplayName": "lag-doctor", "DisplayVersion": "0.1.0",
+                                                             "Publisher": "lag-doctor"})
+    monkeypatch.setattr(mc, "installer_keys", lambda: after)
+    monkeypatch.setattr(mc, "installer_folders", lambda install: [str(install) + "\\"])
+    where = {"{C1}": (msidb.INSTALLSTATE_LOCAL, str(INSTALL / "python.exe")),
+             "{C2}": (msidb.INSTALLSTATE_LOCAL, "21:\\Software\\lag-doctor\\StartMenuShortcut")}
+    monkeypatch.setattr(mc.msidb, "component_path", lambda code, comp: where[comp])
+    check = mc.check_registered(info, INSTALL, before, "0.1.0")
+    assert check.ok, check.detail
+    where["{C2}"] = (msidb.INSTALLSTATE_LOCAL, "21:\\Software\\elsewhere\\StartMenuShortcut")
+    check = mc.check_registered(info, INSTALL, before, "0.1.0")
+    assert not check.ok and "{C2}" in check.detail
+
+
+ICON_SHA = "ab" * 32
+WANT = {"target": str(INSTALL / "pythonw.exe"), "arguments": "-m lagdoctor app", "working_dir": str(INSTALL),
+        "app_id": "LagDoctor.App", "icon_sha256": ICON_SHA}
+LNK = Path(r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\lag-doctor.lnk")
+
+
+def test_the_shortcut_must_start_pythonw_on_the_app_with_its_id_and_icon():
+    good = {"target": str(INSTALL / "pythonw.exe"), "arguments": "-m lagdoctor app", "working_dir": str(INSTALL),
+            "app_id": "LagDoctor.App", "icon": r"C:\Windows\Installer\{X}\lagdoctor.ico", "icon_sha256": ICON_SHA}
+    assert mc.judge_shortcut(good, WANT, LNK, []).ok
+    assert mc.judge_shortcut({**good, "target": str(INSTALL / "PythonW.exe"), "working_dir": str(INSTALL) + "\\"},
+                             WANT, LNK, []).ok                                       # Windows names ignore case
+    bad = {"another ID": {"app_id": "Python.App"}, "no ID": {"app_id": None},
+           "python.exe": {"target": str(INSTALL / "python.exe")},
+           "a python elsewhere": {"target": r"C:\Python313\pythonw.exe"},
+           "no arguments": {"arguments": ""}, "the CLI's arguments": {"arguments": "-m lagdoctor"},
+           "more arguments": {"arguments": "-m lagdoctor app --debug"},
+           "started elsewhere": {"working_dir": r"C:\Windows\System32"},
+           "Python's icon": {"icon_sha256": "cd" * 32}, "an icon that cannot be read": {"icon_sha256": None}}
+    outcomes = {k: mc.judge_shortcut({**good, **v}, WANT, LNK, []) for k, v in bad.items()}
+    assert {k: c.ok for k, c in outcomes.items()} == dict.fromkeys(bad, False)
+    assert "opens a console" in outcomes["python.exe"].detail
+    assert not mc.judge_shortcut(None, WANT, LNK, []).ok                            # no shortcut at all
+    own = r"C:\Users\x\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\lag-doctor.lnk"
+    check = mc.judge_shortcut(None, WANT, LNK, [own])
+    assert not check.ok and own in check.detail                                     # only this account's
+    assert not mc.judge_shortcut(good, WANT, LNK, [own]).ok                         # and a second one there
+
+
+def test_the_expected_shortcut_comes_from_the_app_and_the_install_folder():
+    want = mc.expected_shortcut(INSTALL)
+    assert want == {"target": r"C:\Program Files\lag-doctor\pythonw.exe", "arguments": "-m lagdoctor app",
+                    "working_dir": r"C:\Program Files\lag-doctor", "app_id": app.APP_ID,
+                    "icon_sha256": hashlib.sha256(app.ICON.read_bytes()).hexdigest()}
+
+
+def test_the_start_menus_programs_folders_are_the_known_ones():
+    common, own = mc.shortcut_paths()
+    assert os.path.normcase(common) == os.path.normcase(
+        Path(os.environ["ProgramData"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "lag-doctor.lnk")
+    assert os.path.normcase(own) == os.path.normcase(
+        Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "lag-doctor.lnk")
+
+
+def _write_lnk(path: Path, target: str, arguments: str, working_dir: str, icon: Path, app_id: str | None) -> None:
+    """A .lnk written through the shell's own ShellLink object, the AppUserModel ID in its property store."""
+    with mc.ComApartment():
+        link = mc.shell_link()
+        store, persist = ctypes.c_void_p(), ctypes.c_void_p()
+        try:
+            for slot, text in ((20, target), (11, arguments), (9, working_dir)):    # SetPath, SetArguments, ...
+                mc.com_method(link, slot, ctypes.HRESULT, wintypes.LPCWSTR)(link, text)
+            mc.com_method(link, 17, ctypes.HRESULT, wintypes.LPCWSTR, ctypes.c_int)(link, str(icon), 0)
+            if app_id is not None:
+                store = mc.com_query(link, mc.IID_IPROPERTY_STORE)
+                text = ctypes.create_unicode_buffer(app_id)
+                value = mc.PROPVARIANT()
+                value.vt, value.ptr = mc.VT_LPWSTR, ctypes.cast(text, ctypes.c_void_p).value
+                key = mc.PROPERTYKEY(mc.com_guid(mc.PKEY_APP_USER_MODEL_ID[0]), mc.PKEY_APP_USER_MODEL_ID[1])
+                mc.com_method(store, 6, ctypes.HRESULT, ctypes.POINTER(mc.PROPERTYKEY),     # SetValue, Commit
+                              ctypes.POINTER(mc.PROPVARIANT))(store, ctypes.byref(key), ctypes.byref(value))
+                mc.com_method(store, 7, ctypes.HRESULT)(store)
+            persist = mc.com_query(link, mc.IID_IPERSIST_FILE)
+            mc.com_method(persist, 6, ctypes.HRESULT, wintypes.LPCWSTR, wintypes.BOOL)(persist, str(path), True)
+        finally:
+            for obj in (store, persist, link):
+                mc.com_release(obj)
+
+
+def test_a_shortcut_written_through_the_shell_reads_back_whole(tmp_path):
+    """read_shortcut against a real .lnk, and against two readers it shares no code with: WScript.Shell's shortcut
+    object and Shell.Application's view of the link's System.AppUserModel.ID."""
+    lnk, icon = tmp_path / "lag-doctor.lnk", tmp_path / "x.ico"
+    icon.write_bytes(app.ICON.read_bytes())
+    _write_lnk(lnk, str(INSTALL / "pythonw.exe"), "-m lagdoctor app", str(INSTALL), icon, "LagDoctor.App")
+    got = mc.read_shortcut(lnk)
+    assert {k: got[k] for k in ("target", "arguments", "working_dir", "icon", "icon_index", "app_id")} == {
+        "target": str(INSTALL / "pythonw.exe"), "arguments": "-m lagdoctor app", "working_dir": str(INSTALL),
+        "icon": str(icon), "icon_index": 0, "app_id": "LagDoctor.App"}
+    script = ("$s = (New-Object -ComObject WScript.Shell).CreateShortcut($args[0]); $s.TargetPath; $s.Arguments; "
+              "$s.WorkingDirectory; $s.IconLocation; (New-Object -ComObject Shell.Application).NameSpace($args[1])."
+              "ParseName($args[2]).ExtendedProperty('System.AppUserModel.ID')")
+    p = subprocess.run([shutil.which("powershell") or "powershell", "-NoProfile", "-NonInteractive", "-Command",
+                        f"& {{ {script} }}", str(lnk), str(lnk.parent), lnk.name],
+                       capture_output=True, text=True, timeout=120)
+    assert p.returncode == 0, p.stderr
+    assert p.stdout.splitlines() == [got["target"], got["arguments"], got["working_dir"], f"{got['icon']},0",
+                                     got["app_id"]]
+    plain = tmp_path / "plain.lnk"                                       # a shortcut without an ID reads as None
+    _write_lnk(plain, str(INSTALL / "pythonw.exe"), "-m lagdoctor app", str(INSTALL), icon, None)
+    assert mc.read_shortcut(plain)["app_id"] is None
+
+
+def test_the_shortcut_check_reads_the_start_menus_link_and_its_icon(tmp_path, monkeypatch):
+    common, own = tmp_path / "common", tmp_path / "own"
+    common.mkdir()
+    own.mkdir()
+    monkeypatch.setattr(mc, "shortcut_paths", lambda: [common / mc.SHORTCUT_NAME, own / mc.SHORTCUT_NAME])
+    icon = tmp_path / "Installer" / "lagdoctor.ico"
+    icon.parent.mkdir()
+    icon.write_bytes(app.ICON.read_bytes())
+    _write_lnk(common / mc.SHORTCUT_NAME, str(INSTALL / "pythonw.exe"), "-m lagdoctor app", str(INSTALL), icon,
+               app.APP_ID)
+    seen: dict = {}
+    check = mc.check_shortcut(INSTALL, seen)
+    assert check.ok, check.detail
+    assert seen["icon"] == icon
+    icon.write_bytes(b"\x00\x00\x01\x00 not lag-doctor's")
+    assert not mc.check_shortcut(INSTALL, {}).ok
+    icon.write_bytes(app.ICON.read_bytes())
+    shutil.copyfile(common / mc.SHORTCUT_NAME, own / mc.SHORTCUT_NAME)  # a copy in this account's Start menu
+    check = mc.check_shortcut(INSTALL, {})
+    assert not check.ok and str(own / mc.SHORTCUT_NAME) in check.detail
+    (own / mc.SHORTCUT_NAME).unlink()
+    (common / mc.SHORTCUT_NAME).unlink()
+    assert not mc.check_shortcut(INSTALL, {}).ok
+
+
+def test_the_uninstall_must_take_the_shortcut_and_its_icon_away(tmp_path):
+    lnk, icon = tmp_path / "lag-doctor.lnk", tmp_path / "lagdoctor.ico"
+    assert mc.shortcut_left([lnk, None, icon]) is None
+    lnk.write_bytes(b"")
+    assert str(lnk) in mc.shortcut_left([lnk, None, icon])
+    lnk.unlink()
+    icon.write_bytes(b"")
+    assert str(icon) in mc.shortcut_left([lnk, None, icon])
+
+
+def test_the_gone_check_finds_a_shortcut_or_registry_value_left_behind(tmp_path, monkeypatch):
+    install = tmp_path / "Program Files" / "lag-doctor"
+    common, own = tmp_path / "common" / mc.SHORTCUT_NAME, tmp_path / "own" / mc.SHORTCUT_NAME
+    icon = tmp_path / "Installer" / "lagdoctor.ico"
+    for p in (common, own, icon):
+        p.parent.mkdir(parents=True, exist_ok=True)
+    info = {"product_code": PRODUCT, "upgrade_code": UPGRADE, "components": ["{C1}"], "registry": [KEYPATH_ROW]}
+    keys, registry_now = _keys(), {"reg1": (False, None)}
+    monkeypatch.setattr(mc.msidb, "product_state", lambda code: msidb.INSTALLSTATE_UNKNOWN)
+    monkeypatch.setattr(mc.msidb, "related_products", lambda code: [])
+    monkeypatch.setattr(mc.msidb, "component_path", lambda code, comp: (msidb.INSTALLSTATE_UNKNOWN, ""))
+    monkeypatch.setattr(mc, "installer_keys", lambda: keys)
+    monkeypatch.setattr(mc, "installer_folders", lambda install: [])
+    monkeypatch.setattr(mc, "read_path", lambda: OLD)
+    monkeypatch.setattr(mc, "read_registry_values", lambda rows: registry_now)
+    monkeypatch.setattr(mc, "shortcut_paths", lambda: [common, own])
+
+    def gone():
+        return mc.check_gone(info, install, {"python.exe": "x"}, keys, OLD, ENTRY, {"reg1": (False, None)},
+                             {"icon": icon})
+    assert gone().ok, gone().detail
+    for leftover in (common, own, icon):
+        leftover.write_bytes(b"")
+        check = gone()
+        assert not check.ok and str(leftover) in check.detail
+        leftover.unlink()
+    registry_now = {"reg1": (True, None)}                                # the emptied key left behind
+    check = gone()
+    assert not check.ok and "StartMenuShortcut" in check.detail
 
 
 # ------------------------------------------------- the build and the file check, run on scripted inputs ---
