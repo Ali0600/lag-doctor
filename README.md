@@ -112,7 +112,7 @@ uv run lagdoctor analyze CAPTURE                        # re-run the analysis on
 ## Testing
 
 ```powershell
-uv sync --extra laglab                                         # adds pyglet, for LagLab
+uv sync --group laglab                                         # adds pyglet, for LagLab
 uv run pytest -q                                               # unit + live read-only tests
 uv run python scripts/redfirst.py tests/redfirst/<area>.json   # prove each guard's test can fail
 uv run python scripts/e2e.py                                   # LagLab scenarios, judged end to end (UAC prompt)

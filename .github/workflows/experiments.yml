@@ -30,7 +30,7 @@ jobs:
           version: "0.10.4"
           python-version: "3.13"
       - name: Install
-        run: uv sync --locked --extra laglab
+        run: uv sync --locked
       - name: The runner as found
         run: uv run --no-sync python scripts/stage2/drive.py facts
       - name: The service layout under Program Files

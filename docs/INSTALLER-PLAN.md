@@ -91,14 +91,16 @@ but a GitHub-hosted runner. Measured (research note section 8):
   `capture/netflows.py` this PC's addresses from `winapi/iphlp.adapter_addresses()` (GetAdaptersAddresses) and
   `capture/inventory.py` the RAM size from `winapi/memory.py` (GlobalMemoryStatusEx), each checked against psutil
   on the live machine. `tests/test_stdlib_only.py` keeps every module under `lagdoctor/` on the standard library,
-  which is all the embeddable runtime holds. The tests keep psutil for their independent readouts, so it can move to
-  a dev-only dependency in `pyproject.toml`.
+  which is all the embeddable runtime holds. The tests keep psutil for their independent readouts: since 2026-11-08
+  it is in the dev group, the wheel declares no dependency at all, and LagLab's pyglet is a dependency group rather
+  than an extra the wheel would advertise without shipping `laglab/`.
 - WiX v7 per-machine MSI built in CI: the embeddable Python, lag-doctor's code, the byte-identical Intel-signed
   PresentMon 2.6.0 with Intel's licence text, `lagdoctor` on PATH, and lag-doctor looking for PresentMon under
   Program Files first. CI installs, runs and uninstalls it on the runner (part of E7).
-- Before the MSI, the leftovers PRs #6 and #8 reported: psutil moves to the dev group (the tests' readouts still use
-  it); `scripts/stage2/drive.py` stops copying psutil into its install folder; and the `laglab` extra may become a
-  dependency group, since the wheel advertises an extra that installs pyglet but ships no `laglab/`.
+- [x] The leftovers PRs #6 and #8 reported, done 2026-11-08 (PR #12): psutil in the dev group (the tests' readouts
+  still use it); `scripts/stage2/drive.py` no longer copies psutil into its install folder; the `laglab` extra is a
+  dependency group (DECISIONS 2026-11-08), since the wheel advertised an extra that installs pyglet but ships no
+  `laglab/`.
 - WiX v7 builds must accept its Open Source Maintenance Fee EULA explicitly (research note section 5: no fee below
   US$10,000 a year of revenue). Accepting it is the owner's call, asked before any accept switch goes into CI.
 - What SignPath requires, prepared in the repo: a "Code signing policy" section with "Free code signing provided by

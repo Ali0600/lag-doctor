@@ -43,7 +43,7 @@ jobs:
           version: "0.10.4"
           python-version: ${{ matrix.python }}
       - name: Install
-        run: uv sync --locked --extra laglab
+        run: uv sync --locked --group laglab
       - name: Where the downloads go
         id: downloads
         run: uv run --no-sync python -m tests.downloads ci-outputs

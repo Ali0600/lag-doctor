@@ -31,6 +31,18 @@
 
 ---
 
+## 2026-11-08: LagLab's pyglet is a dependency group, not an extra
+
+With psutil moved to the dev group, the wheel's metadata still offered a `laglab` extra that installs pyglet, though
+the wheel ships no `laglab/`. The implementing session chose; the owner has not weighed in.
+- **A `laglab` dependency group (chosen)**: groups never reach the wheel's metadata, and `uv sync --group laglab`
+  keeps the step that adds pyglet for the tests separate, as the README had it.
+- **Keep the extra**: rejected. `pip install lag-doctor[laglab]` would install a graphics library for a package that
+  is not there.
+- **pyglet in the dev group**: rejected. Every `uv sync`, a checkout user's included, and the wheel job's checker
+  environment would install it for nothing.
+Revisit hook: `[dependency-groups]` in `pyproject.toml`.
+
 ## 2026-11-07: How the first capture's analysis defects were fixed
 
 The review of the first real capture (`docs/FIRST-CAPTURE-REVIEW.md`) listed 11 analysis defects; PRs #7 and #9 fixed

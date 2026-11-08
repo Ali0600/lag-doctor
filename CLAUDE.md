@@ -8,7 +8,7 @@ counter paths, struct offsets, event layouts, registry values) are in the fact-c
 ## Commands
 
 ```powershell
-uv sync --extra laglab --python 3.13                     # set up .venv (Python 3.13: unpinned, uv takes 3.12)
+uv sync --group laglab --python 3.13                     # set up .venv (Python 3.13: unpinned, uv takes 3.12)
 uv run pytest -q                                         # unit + live read-only tests
 uv run pytest -q tests/test_<area>.py                    # one area (use this while other work is running)
 uv run python scripts/redfirst.py tests/redfirst/<spec>.json   # prove a guard's test can fail
