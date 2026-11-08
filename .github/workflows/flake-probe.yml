@@ -1,0 +1,46 @@
+# Throwaway (never merged): how often the real-private-session tracker test fails on a runner, and why.
+# Runs on pushes to diag/** branches only; ci.yml and the experiments workflow do not run for them.
+name: Tracker test flake probe
+
+on:
+  push:
+    branches: ["diag/**"]
+
+permissions:
+  contents: read
+
+env:
+  LAGDOCTOR_ABSENT: internet_icmp,gpu,thermal_zone,nvidia
+  TEST: tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap
+  PROBE_REORDER: "-"
+
+jobs:
+  probe:
+    name: Flake probe (Python ${{ matrix.python }})
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.13", "3.11"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.10.4"
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: uv sync --locked --group laglab
+      - name: Phase probe, 40 runs of the test's scenario
+        run: uv run --no-sync python scripts/flake_probe.py 40 "$env:PROBE_REORDER"
+      - name: The test alone, 50 times
+        if: ${{ !cancelled() }}
+        run: uv run --no-sync python scripts/flake_loop.py alone 50
+      - name: The test alone with half the CPUs busy, 30 times
+        if: ${{ !cancelled() }}
+        run: uv run --no-sync python scripts/flake_loop.py stress 30
+      - name: The whole suite with the test in it, 4 times
+        if: ${{ !cancelled() }}
+        run: uv run --no-sync python scripts/flake_loop.py suite 4
