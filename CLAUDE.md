@@ -57,10 +57,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   starts, so keep the checkout still until a queued run has begun. Editing a line that an existing mutation's `old`
   quotes makes that mutation BAD-SPEC, and no test notices: after an edit, check every `old` in
   `tests/redfirst/*.json` still occurs exactly once in its file, and re-point the ones that moved (same sabotage, new
-  text). `report.json` and `user_text.json` are laid out by hand: change their values in place, never by rewriting
-  the file through `json.dumps`. The copy holds `lagdoctor/`, `laglab/`, `tests/`, `scripts/`, `docs/`, `.github/`,
-  `installer/`, `pyproject.toml`, `uv.lock` and `LICENSE` (`COPY_DIRS`, `COPY_FILES`): a test that reads any other
-  file fails before its sabotage (BAD-BASE) until that file is added there.
+  text). Most specs (`report.json`, `user_text.json` and `session.json` among them) are laid out by hand: change their
+  values in place, never by rewriting the file through `json.dumps`. A script may rewrite a spec only after checking
+  it is byte for byte `json.dumps(indent=1)` plus a newline (`first_capture.json` and `power_plan.json` are), and with
+  `write_bytes`: Python's `write_text` writes CRLF on Windows. The copy holds `lagdoctor/`, `laglab/`, `tests/`,
+  `scripts/`, `docs/`, `.github/`, `installer/`, `pyproject.toml`, `uv.lock` and `LICENSE` (`COPY_DIRS`,
+  `COPY_FILES`): a test that reads any other file fails before its sabotage (BAD-BASE) until that file is added there.
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
   a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
 - **Text a player reads is plain words.** Research citations (`WT 8`, `LC 4.9`, `NE 7 row 9`) and review ids
@@ -155,15 +157,25 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   set --no-cone /Tests/Gold/` stored `C:/Program Files/Git/Tests/Gold/` (the checkout then wrote nothing), and `git
   show origin/main:.github/workflows/ci.yml` became `origin\main;.github\...`. Prefix such commands with
   `MSYS_NO_PATHCONV=1`, or run them from PowerShell or Python's `subprocess`, which pass arguments as typed.
+  A native program cannot open bash's process substitution either: `gh pr merge --body-file <(git log -1 ...)` failed
+  with "The system cannot find the path specified" (and a `| tail` after it hid the exit code); write the text to a
+  file first.
+- The agent's Edit and Write tools decode a `\u` escape typed into new text into the character itself: `\u00a0`
+  landed as a literal no-break space (2026-11-07), which is what `console._PUNCT` writes as escapes to avoid. Build
+  such text in Python from counted pieces (`chr(92) + "u00a0"`) and read the line back with `ascii()`.
 - To read one CI job's log while the rest of its run goes on (a fast job's verdict, such as the wheel job on a
   sabotage commit), use `gh api repos/Ali0600/lag-doctor/actions/jobs/<job id>/logs --allow-escape-sequences`:
   `gh run view <run> --log --job <job id>` refuses until the whole run has finished, and without the flag `gh api`
   prints only a refusal of the log's colour codes (seen 2026-11-07).
-- `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` is
-  timing-sensitive under full-suite load (failed once on 2026-11-05 with 0 delay gaps, then 4/4 alone; on CI once in
-  two full runs): rerun it alone before blaming a change for it, as CI does. A test that starts a child pytest gives it
-  its own `TEMP` (as `tests/test_redfirst.py` and `tests/test_downloads.py` do): child runs in the shared pytest temp
-  folder made this test about 2 s slower on CI and failed it 3 times in 16 runs (2026-11-07).
+- `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` failed
+  at random until 2026-11-08 (`AssertionError: []`; in CI's step that ran it alone, 4 of 57 runs on Python 3.11 and
+  none of 56 on 3.13). Its private ETW session hands every event over inside `stop()`, so with the tracker's 2 s
+  reorder window the first second of the stream came late, and whether the server was known before the planted gap
+  hung on when the session started against whole seconds. The test now gives the tracker a window longer than the run
+  and asserts that no packet came late, and CI runs it in the suite again; a test that drives the tracker over a
+  private session needs the same window. A test that starts a child pytest gives it its own `TEMP` (as
+  `tests/test_redfirst.py` and `tests/test_downloads.py` do): child runs in the shared pytest temp folder made this
+  test about 2 s slower on CI and failed it 3 times in 16 runs (2026-11-07, before the window).
   `tests/test_nvidia_live.py::test_sampler_
   reads_each_row_just_after_a_driver_refresh` failed on 2026-11-07, alone too, with the NVIDIA GPU idle in P8 (no
   training job) and the screen locked; it had passed with the GPU busy. Two more depend on the PC's state: `tests/test_cli.py::test_a_real_console_event_

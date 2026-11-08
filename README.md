@@ -228,7 +228,7 @@ While it records, lag-doctor measures your connection, which `--no-network` turn
   SHA-pinned actions, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 40 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 1,689 deliberate sabotages in
+  there, failing rather than skipping if they go missing; plus a mutation harness of 1,695 deliberate sabotages in
   33 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.

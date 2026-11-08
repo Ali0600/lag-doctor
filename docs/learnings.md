@@ -138,6 +138,18 @@ because the real Kernel-Network session needs admin rights.
 **Takeaway**: a private session tests the consumer, not the controller; count handles to catch leaks that
 a file deletion would not show.
 
+### A test that never reads its subject's status can pass with the subject degraded
+A component with a degraded mode says so (a status, a count of what it dropped). A test that checks only the outputs
+passes whenever the degraded path still happens to produce them, and fails by chance when it does not.
+**Why it came up**: the tracker's real-ETW test flaked on CI with `AssertionError: []` (no gap at all). Every run,
+passing or not, the tracker had said "partial: 96 game packets arrived more than 2 s late" (up to 126): the private
+session hands its events over inside `stop()`, and the live loop had already finalised all but the last 2 s. Whether
+the server was picked before the planted gap then hung on the phase: on this laptop, delaying the writer by a fixed
+0.05, 0.1, 0.15, 0.85 or 0.95 s failed every time, and 0, 0.2, 0.3, 0.5 or 0.7 s passed every time.
+**Takeaway**: when a test flakes, read the subject's own status in a passing run first. Degraded there means the test
+runs it in the wrong regime: fix the regime, assert the status, and sweep the suspected phase to show the failure is
+gone, not rarer.
+
 ### A process handle outlives the process
 `OpenProcess` keeps succeeding on a process that has exited for as long as anyone holds a handle to it, and
 `SetPriorityClass(REALTIME)` unelevated reports success while setting HIGH. The process list does not wait for the
