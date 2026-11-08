@@ -1,0 +1,73 @@
+# M0's CI probe (docs/LAUNCHER-PLAN.md): does GitHub's Windows runner have the WebView2 Runtime, and can it open
+# lag-doctor's window? It runs scripts/webview_spike.py --ci, the automated checks only (the owner's steps need a
+# person), and a rehearsal of the owner's steps that exercises their code with automatic answers. Started by hand
+# (Actions -> "Window spike" -> Run workflow) and by pull requests that change the spike, the two lagdoctor modules it
+# imports, or this file. The answer is the job summary and the webview-spike-results artifact.
+#
+# Exit 3 means the spike found no WebView2 Runtime. That is an answer (M1's window tests then cannot run here), but
+# only once a second, independent reading agrees: the runtime's own version value in the registry and its exe under
+# Program Files. If either is there, the spike's finder is wrong and the step fails.
+name: Window spike
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/webview-spike.yml"
+      - "scripts/webview_spike.py"
+      - "lagdoctor/setup.py"
+      - "lagdoctor/winapi/ntquery.py"
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    name: The WebView2 window spike on the runner
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.10.4"
+          python-version: "3.13"
+      - name: Install
+        run: uv sync --locked
+      - name: The automated checks
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          uv run --no-sync python scripts/webview_spike.py --ci --work-dir "$env:RUNNER_TEMP\webview-spike"
+          $code = $LASTEXITCODE
+          if ($code -eq 3) {
+            $exe = @(Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft\EdgeWebView\Application\*\msedgewebview2.exe" -ErrorAction SilentlyContinue)
+            $pv = @('HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+                    'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}') |
+              ForEach-Object { (Get-ItemProperty $_ -ErrorAction SilentlyContinue).pv } | Where-Object { $_ }
+            if ($exe.Count -gt 0 -or $pv) {
+              "The spike found no runtime, but one is installed ($($exe.Count) msedgewebview2.exe, version value '$pv'): its finder is wrong."
+              exit 1
+            }
+            "No WebView2 Runtime on this runner, by both readings: that is the answer."
+            exit 0
+          }
+          exit $code
+      - name: A rehearsal of the owner's steps
+        if: ${{ !cancelled() }}
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          uv run --no-sync python scripts/webview_spike.py --rehearse --ci --work-dir "$env:RUNNER_TEMP\webview-spike"
+          $code = $LASTEXITCODE
+          if ($code -eq 3) { exit 0 }
+          exit $code
+      - name: Keep the results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: webview-spike-results
+          path: ${{ runner.temp }}\webview-spike
+          if-no-files-found: warn

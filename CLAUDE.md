@@ -19,6 +19,7 @@ uv build --clear --out-dir dist                          # the sdist, and the wh
 uv run python scripts/wheel_check.py dist                # that wheel in a fresh venv, run outside the checkout
 uv run pytest -q tests/test_msi.py                       # the MSI's build, WiX source and install check, no install
 uv run python scripts/runtime_modules.py --zip <path>.zip [--write]   # what the pinned runtime imports, asked of it
+uv run python scripts/webview_spike.py --auto            # M0: the WebView2 window's automated checks (the owner runs it bare)
 ```
 
 CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 and 3.11 on every push to `main` and
@@ -130,9 +131,17 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `lagdoctor.cmd`, since the folder on PATH must not offer the runtime's `python.exe`. Python must never write into
   the install: the build ships unchecked-hash `.pyc` files the shipped runtime compiles, and the check's `untouched`
   and `gone` verdicts fail on anything an administrator's run wrote there (a build without them did exactly that).
-- **The desktop app is a plan only** (`docs/LAUNCHER-PLAN.md`; the owner, 2026-11-08). Build no part of it, the M0
-  window spike included, until the owner says go. Its relay is also the protocol of Stage 4's capture service
-  (`docs/INSTALLER-PLAN.md`), so Stage 4 work starts from that plan too.
+- **The desktop app is built milestone by milestone** (`docs/LAUNCHER-PLAN.md`; the owner said go on 2026-11-08).
+  M0's spike (`scripts/webview_spike.py`) gates the window: no window code goes into `lagdoctor/` (M1) before the
+  owner's own run of the spike passes and the plan records it. An agent may run `--auto` or `--rehearse`, which do
+  this on the owner's screen for about 45 s: a window opens without taking the focus; it opens a DevTools window on
+  purpose and closes it; it goes blank for about 6 s and reloads, because the run ends its own WebView2 browser
+  process; its move check holds it in Windows' move loop for about 2.5 s, which moves the mouse pointer onto its title
+  bar and captures the mouse (the spike puts the pointer back); then three short windows follow, one of them a child
+  that dies of an access violation on purpose. Run it when the owner is not mid-game. Its interactive run is the
+  owner's, in their terminal. The spike keeps everything under `%TEMP%\lag-doctor-webview-spike`, which the private
+  copy leaves alone. The relay is also the protocol of Stage 4's capture service (`docs/INSTALLER-PLAN.md`), so Stage
+  4 work starts from that plan too.
 - **The repo is public** (https://github.com/Ali0600/lag-doctor). Never commit the owner's personal details: write
   user-folder paths as `%LOCALAPPDATA%`, `%TEMP%` or `<repo>`, and leave out this PC's name and SID, its adapter and
   power-plan GUIDs, its public IP and MAC addresses (tests use documentation ranges, `192.168.0.x` for a home network,

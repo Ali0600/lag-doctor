@@ -513,3 +513,37 @@ attempts API.
 rerun had turned green, so the run list showed it in none of 64 runs; over every attempt it was 2 of 136 test jobs.
 **Takeaway**: count a flake over every attempt (`/actions/runs/<id>/attempts/<n>/jobs`), never over the run list:
 reruns are where flakes go to hide.
+
+### An empty `os.environ` value deletes the variable on Windows
+On Windows, CPython's `os.environ[name] = ""` calls `_wputenv("NAME=")`, which the C runtime treats as "remove": the
+variable leaves the process's environment block while `os.environ` still shows `""`. `SetEnvironmentVariableW(name,
+"")` keeps it present and empty. `GetEnvironmentVariableW` tells the two apart only if the last error is cleared
+first, since it sets one only when it fails: 0 with error 0 means empty, error 203 means absent.
+**Why it came up**: the window spike sets WebView2's own `WEBVIEW2_*` variables empty before the runtime loads (Wails'
+loader notes that WebView2 checks only that they exist). Its control set a scratch variable through `os.environ` and
+read it back as absent.
+**Takeaway**: to leave a variable present but empty for native code, set it with `SetEnvironmentVariableW`, and read it
+back with `SetLastError(0)` then `GetEnvironmentVariableW`, telling error 203 from an empty value.
+
+### ctypes turns a crash beneath a foreign call into a Python OSError
+CPython's release builds for Windows run each ctypes call into native code inside a structured-exception handler. An
+access violation beneath that call, even deep in code it reached, comes back from the innermost such call as
+`OSError: exception: access violation reading 0x...`, and left uncaught it ends the process with exit code 1, not
+0xC0000005. faulthandler still logs "Windows fatal exception" first, even when ctypes then handles the fault and the
+process lives on; a fail-fast crash (0xC0000409) bypasses both.
+**Why it came up**: the window spike's sabotage drops a WebView2 handler's references. The child died inside
+`DispatchMessageW` with faulthandler's line, and its exit code, 1, was the one any ordinary Python error gives; the
+first version of the check accepted any non-zero exit, and a later catch-all in the spike's own `main()` swallowed the
+fault so the child exited 0.
+**Takeaway**: identify a crash by its signature (the `OSError` text, faulthandler's line) together with the exit code,
+and never catch every exception in a process whose crash is the result being measured.
+
+### Modal loops drop messages posted to the thread
+A message posted with `PostThreadMessage` has no window, and the loops Windows runs inside a call (moving or sizing a
+window, a menu, a message box) dispatch it to nothing. In about 2.5 s of the move loop, every message posted to the
+window during it arrived (432 to 463), and of 431 to 465 posted to the thread during it, 8 or 9 did.
+**Why it came up**: the window spike's worker check, which enters the move loop through `SC_MOVE` and leaves it with
+Esc, so no person has to drag the window. Counting every post of the run first made the loss look like 78 %: the
+messages posted before and after the loop all arrived.
+**Takeaway**: worker threads post their results to a window (`PostMessage(hwnd, ...)`), never to the UI thread; and a
+loss rate counts only what was posted while the loss could happen.
