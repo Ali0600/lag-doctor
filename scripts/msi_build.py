@@ -169,7 +169,7 @@ def validate_command(wix: str, msi: Path, accept_eula: str | None) -> list[str]:
 # The Environment row WiX writes for Part="last", Action="set", System="yes", Permanent="no": "=" set on install,
 # "-" removed on uninstall, "*" the system's; "[~];" appends to the PATH already there (Windows Installer's
 # Environment table).
-PATH_ROW = {"Name": "=*PATH", "Value": "[~];[BINFOLDER]"}   # SABOTAGE, reverted next
+PATH_ROW = {"Name": "=-*PATH", "Value": "[~];[BINFOLDER]"}
 
 
 def tree_files(top: Path) -> list[str]:
@@ -333,6 +333,9 @@ def build(args: argparse.Namespace) -> dict:
     try:
         payload = work / "payload"
         staged = stage(payload, Path(args.wheel), zip_path, Path(args.presentmon))
+        for cache in sorted(payload.rglob("__pycache__")):    # SABOTAGE, reverted next: no bytecode shipped
+            shutil.rmtree(cache)
+        (payload / "lagdoctor" / "fixes" / "power.py").unlink()     # SABOTAGE, reverted next: an MSI missing a file
         out.mkdir(parents=True, exist_ok=True)
         msi = out / f"{PRODUCT}-{version}-x64.msi"
         argv = wix_command(str(Path(args.wix).resolve()), version, payload, msi, args.accept_eula)
