@@ -186,7 +186,14 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
 - To read one CI job's log while the rest of its run goes on (a fast job's verdict, such as the wheel job on a
   sabotage commit), use `gh api repos/Ali0600/lag-doctor/actions/jobs/<job id>/logs --allow-escape-sequences`:
   `gh run view <run> --log --job <job id>` refuses until the whole run has finished, and without the flag `gh api`
-  prints only a refusal of the log's colour codes (seen 2026-11-07).
+  prints only a refusal of the log's colour codes (seen 2026-11-07). That job itself must have finished: while it
+  runs, the call fails with HTTP 404 and an XML `BlobNotFound` body (2026-11-08).
+- To measure a flaky test on GitHub's runners, push a throwaway branch `diag/<topic>-before` (or `-after`), cut from
+  main and never merged, whose own workflow runs on `push: branches: ["diag/**"]` (`ci.yml` and the experiments
+  workflow do not run for it). Run the test many times, each as its own pytest process, and read each outcome from
+  `--junitxml`. Where timing is the suspect, add a fixed delay per run at the suspect point and sweep it: a late session
+  start made the tracker test below fail 16 of 120 runs before its fix and 0 of 120 after (PR #14). The four `diag/*`
+  branches of PRs #14 and #15 stay on GitHub while those PRs cite their runs.
 - `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` failed
   at random until 2026-11-08 (`AssertionError: []`; in CI's step that ran it alone, 4 of 57 runs on Python 3.11 and
   none of 56 on 3.13). Its private ETW session hands every event over inside `stop()`, so with the tracker's 2 s
