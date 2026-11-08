@@ -19,6 +19,7 @@ from lagdoctor import clock
 from lagdoctor.capture import netflows as nf
 from lagdoctor.capture.netflows import FlowTracker
 from lagdoctor.winapi import etw
+from tests.loopback_dns import LoopbackDns
 
 GAME, OTHER = 4242, 999
 LOCAL, SERVER = "192.168.0.225", "203.0.113.7"
@@ -545,61 +546,9 @@ def test_a_server_that_goes_quiet_for_good_ends_in_an_open_gap():
 
 # ---------------------------------------------------------------- the self-test glue ---
 
-class _LoopbackDns:
-    """Answers one DNS query over UDP and one over TCP on the same loopback port number."""
-
-    def __init__(self):
-        for _ in range(10):
-            self.tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.tcp.bind(("127.0.0.1", 0))
-            self.port = self.tcp.getsockname()[1]
-            self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                self.udp.bind(("127.0.0.1", self.port))
-                break
-            except OSError:
-                self.tcp.close()
-                self.udp.close()
-        else:
-            raise RuntimeError("no free port for both UDP and TCP")
-        self.tcp.listen(1)
-        self.tcp.settimeout(5)
-        self.udp.settimeout(5)
-        self.threads = [threading.Thread(target=self._udp, daemon=True), threading.Thread(target=self._tcp, daemon=True)]
-        for th in self.threads:
-            th.start()
-
-    @staticmethod
-    def _answer(q):
-        return q[:2] + struct.pack(">HHHHH", 0x8180, 1, 0, 0, 0) + q[12:]
-
-    def _udp(self):
-        try:
-            q, addr = self.udp.recvfrom(512)
-            self.udp.sendto(self._answer(q), addr)
-        except OSError:
-            pass
-
-    def _tcp(self):
-        try:
-            conn, _ = self.tcp.accept()
-            with conn:
-                n = struct.unpack(">H", conn.recv(2))[0]
-                a = self._answer(conn.recv(n))
-                conn.sendall(struct.pack(">H", len(a)) + a)
-        except OSError:
-            pass
-
-    def close(self):
-        for th in self.threads:
-            th.join(5)
-        self.tcp.close()
-        self.udp.close()
-
-
 @pytest.mark.parametrize("mismatch", [False, True])
 def test_the_selftest_marks_the_layout_verified_only_with_every_event_and_no_mismatch(mismatch):
-    dns = _LoopbackDns()
+    dns = LoopbackDns()
     made = []
     me = os.getpid()
     tr = _tracker(made, selftest=True, selftest_server="127.0.0.1", selftest_port=dns.port)
