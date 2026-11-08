@@ -38,15 +38,18 @@ In PowerShell (Python 3.11 or newer, managed by [uv](https://docs.astral.sh/uv/)
 ```powershell
 git clone https://github.com/Ali0600/lag-doctor         # get the code
 cd lag-doctor
-uv sync                                                 # create .venv
-uv run python -m lagdoctor setup                        # download + verify PresentMon 2.6.0 (asks first)
-uv run python -m lagdoctor check                        # settings check-up, no game needed
-uv run python -m lagdoctor watch --game eldenring.exe   # or --pid PID; with neither, the busiest game
-uv run python -m lagdoctor fix --list                   # the automatic fixes the last report suggested
-uv run python -m lagdoctor fix power_plan               # shows before -> after and asks
-uv run python -m lagdoctor undo                         # what lag-doctor changed; undo an ID, or --all
-uv run python -m lagdoctor analyze CAPTURE              # re-run the analysis on a saved capture
+uv sync                                                 # create .venv, with the lagdoctor command in it
+uv run lagdoctor setup                                  # download + verify PresentMon 2.6.0 (asks first)
+uv run lagdoctor check                                  # settings check-up, no game needed
+uv run lagdoctor watch --game eldenring.exe             # or --pid PID; with neither, the busiest game
+uv run lagdoctor fix --list                             # the automatic fixes the last report suggested
+uv run lagdoctor fix power_plan                         # shows before -> after and asks
+uv run lagdoctor undo                                   # what lag-doctor changed; undo an ID, or --all
+uv run lagdoctor analyze CAPTURE                        # re-run the analysis on a saved capture
 ```
+
+- **`lagdoctor` is a command in `.venv`**: after `.venv\Scripts\activate`, plain `lagdoctor watch ...` works in that
+  window. `uv build` makes a wheel of the `lagdoctor` package alone (`dist\`); nothing is published yet.
 
 - **A recording ends** with Ctrl+C, after `--duration S`, or when the game exits. After the first Ctrl+C it
   says it is stopping and saving, and a second press cannot lose the capture.
@@ -114,6 +117,8 @@ uv run pytest -q                                               # unit + live rea
 uv run python scripts/redfirst.py tests/redfirst/<area>.json   # prove each guard's test can fail
 uv run python scripts/e2e.py                                   # LagLab scenarios, judged end to end (UAC prompt)
 uv run python scripts/etw_access.py                            # who may trace on this PC (read-only, UAC prompt)
+uv build --clear --out-dir dist                                # the sdist and the wheel, as CI builds them
+uv run python scripts/wheel_check.py dist                      # install the wheel in a fresh venv and run it there
 ```
 
 - **LagLab** produces one known cause per scenario (GPU-bound, CPU-bound, CPU hitch, disk hitch, wait hitch,
@@ -133,8 +138,13 @@ uv run python scripts/etw_access.py                            # who may trace o
   `LAGDOCTOR_ABSENT`, and the tests marked as needing those skip there with the reason. Its High performance plan
   needs no declaring: the power tests hold on any plan. On a PC without an NVIDIA GPU, set
   `$env:LAGDOCTOR_ABSENT = "nvidia"` before running the tests, or the NVIDIA ones fail.
+- **The wheel, installed**: a second CI job builds the wheel, installs it into a fresh venv and runs `lagdoctor`
+  there, outside the checkout (`scripts/wheel_check.py`). The wheel must hold exactly the files git tracks under
+  `lagdoctor/`, every module must import from that venv, `--version` must name the wheel's version, and `analyze`
+  must write its report for a synthetic capture. `--help` and `analyze` alone would miss most of that: `analyze`
+  never imports most of `capture/`, `fixes/` and `winapi/`.
 - **Downloaded test data**: the tests that replay or verify the real PresentMon need its pinned release and its gold
-  captures. `uv run python -m lagdoctor setup` gets the first, `uv run python -m tests.downloads fetch-gold` the
+  captures. `uv run lagdoctor setup` gets the first, `uv run python -m tests.downloads fetch-gold` the
   second; without them those tests skip with the reason. CI gets both the same way before the tests, checks them
   against the tests' own pins, caches them, and sets `LAGDOCTOR_REQUIRE` so a missing one fails those tests
   instead; each job's summary counts them.
@@ -152,11 +162,11 @@ uv run python scripts/etw_access.py                            # who may trace o
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
 - **Testing that proves itself**: 2,689 tests, run in CI on GitHub's Windows runners for 2 Python versions with
-  SHA-pinned actions; the hardware a runner lacks is declared, so those tests skip there by name and still fail on
-  the laptop if a bug hides the hardware, and the 32 tests on the real PresentMon get its release and gold captures
-  fetched, pinned and cached there, failing rather than skipping if they go missing; plus a mutation harness of
-  1,525 deliberate sabotages in 30 specs that must each turn a test red, run on a throwaway copy of the tree with
-  hash checks.
+  SHA-pinned actions, beside a job that installs the built wheel into a fresh venv and runs it there; the hardware
+  a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides the
+  hardware, and the 32 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
+  there, failing rather than skipping if they go missing; plus a mutation harness of 1,525 deliberate sabotages in
+  30 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
 - **Supply chain and least privilege**: PresentMon pinned by SHA-256, checked through a deny-write handle and

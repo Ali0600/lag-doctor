@@ -220,6 +220,16 @@ def test_a_check_that_reads_the_real_tree_is_unisolated_not_caught(scratch):
     assert "real tree" in info and str(proj.resolve() / "lagdoctor" / "guard.py").lower() in out.lower(), out
 
 
+def test_a_real_root_on_sys_path_listed_again_mid_run_still_gets_its_verdict(scratch):
+    """The venv's editable install puts the real checkout's root on sys.path, and a file saved there mid-run makes
+    Python list that folder again. The probe takes the real tree off the test process's sys.path, so that listing
+    never happens and the run keeps its verdict. Here PYTHONPATH puts the scratch project's real root there."""
+    proj, temp = scratch
+    spec = [{"name": "root listed", **DROP_GUARD, "tests": [CHECKS + "test_lists_the_real_root_again"]}]
+    code, out = _run(proj, temp, spec, PYTHONPATH=str(proj), REDFIRST_FIXTURE_REAL=str(proj))
+    assert _verdicts(out)["root listed"][0] == "CAUGHT" and code == 0, out
+
+
 def test_a_run_that_ends_without_the_probe_report_is_unisolated(scratch):
     proj, temp = scratch
     spec = [{"name": "exits hard", **DROP_GUARD, "tests": [CHECKS + "test_exits_without_a_report"]}]
@@ -278,6 +288,28 @@ def test_the_probe_records_touches_of_the_real_tree_outside_the_venv(tmp_path):
     got = json.loads(report.read_text(encoding="utf-8"))
     assert got["seen"] is True
     assert sorted(got["touched"]) == sorted(str(p) for p in (real / "a.txt", real, real / "copied.txt"))
+
+
+def test_the_probe_takes_the_real_tree_off_sys_path_but_keeps_the_venv(tmp_path):
+    real = tmp_path / "Real"
+    site = real / ".venv" / "Lib" / "site-packages"
+    site.mkdir(parents=True)
+    (real / "scripts").mkdir()
+    (tmp_path / "probe").mkdir()
+    (tmp_path / "probe" / f"{redfirst.PROBE}.py").write_text(redfirst.PROBE_SOURCE, encoding="utf-8")
+    report, seen = tmp_path / "report.json", tmp_path / "path.json"
+    entries = [str(tmp_path / "probe"), str(real) + os.sep, str(real / "scripts"), str(site)]   # the .pth's form
+    code = "\n".join([
+        "import json, sys",
+        f"sys.path[:0] = {entries!r}",
+        f"import {redfirst.PROBE}",
+        f"json.dump(sys.path, open({str(seen)!r}, 'w', encoding='utf-8'))",
+    ])
+    env = dict(os.environ, REDFIRST_PROBE_REAL=str(real), REDFIRST_PROBE_SKIP=str(real / ".venv"),
+               REDFIRST_PROBE_WATCH=str(real / "w.py"), REDFIRST_PROBE_OUT=str(report))
+    subprocess.run([sys.executable, "-I", "-c", code], env=env, check=True, timeout=60)
+    left = json.loads(seen.read_text(encoding="utf-8"))
+    assert left[:2] == [str(tmp_path / "probe"), str(site)], left      # the real root and its scripts/ are gone
 
 
 def test_an_empty_spec_is_an_error_not_a_pass(scratch):
