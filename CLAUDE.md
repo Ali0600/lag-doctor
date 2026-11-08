@@ -18,6 +18,7 @@ uv run lagdoctor ...                                     # the tool (see README)
 uv build --clear --out-dir dist                          # the sdist, and the wheel built from it
 uv run python scripts/wheel_check.py dist                # that wheel in a fresh venv, run outside the checkout
 uv run pytest -q tests/test_msi.py                       # the MSI's build, WiX source and install check, no install
+uv run python scripts/runtime_modules.py --zip <path>.zip [--write]   # what the pinned runtime imports, asked of it
 ```
 
 CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 and 3.11 on every push to `main` and
@@ -26,9 +27,11 @@ PresentMon through `lagdoctor setup --download` and the gold captures through `t
 both against the tests' pins and caches them; each job's summary counts the tests that use them. Its wheel job runs
 `uv build --offline` (with the copy of uv_build inside the pinned uv: `pyproject.toml`'s bound stays on that uv's
 minor version, and `tests/test_wheel_check.py` fails when the two part) and then `scripts/wheel_check.py`. Its msi job
-installs WiX 7.0.1 from its SHA-512-pinned package (`scripts/wix_tool.py`), builds the MSI (`scripts/msi_build.py`),
-keeps it as the `lag-doctor-msi` artifact, then installs, runs and uninstalls it there (`scripts/msi_check.py`, whose
-verdicts are the job summary; msiexec's logs are the `msi-logs` artifact). The PresentMon cache key hashes
+first asks the pinned runtime what it imports (`scripts/runtime_modules.py`) and fails unless
+`scripts/runtime_modules.json` is that answer, then installs WiX 7.0.1 from its SHA-512-pinned package
+(`scripts/wix_tool.py`), builds the MSI (`scripts/msi_build.py`), keeps it as the `lag-doctor-msi` artifact, then
+installs, runs and uninstalls it there (`scripts/msi_check.py`, whose verdicts are the job summary; msiexec's logs are
+the `msi-logs` artifact). The PresentMon cache key hashes
 `setup.py`, `paths.py` and `cli.py`, so a change to one makes every job download PresentMon afresh; GitHub's release
 host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job before blaming the change.
 
@@ -40,9 +43,14 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   both. The one exception is PresentMon's own child process (DESIGN.md, Principles). In tests, where psutil stays as
   an independent readout, `psutil.Process(pid)` (even constructing it), `psutil.process_iter()` and
   `psutil.pid_exists()` open a handle: `psutil.pids()` is the only psutil call allowed on other processes.
-- **`lagdoctor/` imports only the standard library and itself** (`tests/test_stdlib_only.py`): the installer ships
-  python.org's embeddable runtime, and Smart App Control would block psutil's unsigned native module. Read Windows
-  through `lagdoctor/winapi/` (ctypes), and name a dynamically imported module in a string literal.
+- **`lagdoctor/` imports only itself and what the installed runtime imports** (`tests/test_stdlib_only.py`): the
+  installer ships python.org's embeddable runtime, which leaves tkinter, IDLE, turtle, venv and ensurepip out of the
+  standard library (so no tkinter UI), and Smart App Control would block psutil's unsigned native module. The modules
+  allowed are that runtime's own answer, `scripts/runtime_modules.json`, never this interpreter's
+  `sys.stdlib_module_names`, which names the left-out ones too. When `scripts/runtime_pin.py` moves, rewrite the JSON
+  with `scripts/runtime_modules.py --write` in the same change (CI's msi job fails until it is the new runtime's
+  answer), and never edit it by hand. Read Windows through `lagdoctor/winapi/` (ctypes), and name a dynamically
+  imported module in a string literal.
 - **Tests never change real settings.** Registry fixes run against the `reg_sandbox` fixture
   (`HKCU\Software\LagDoctorTest\<uuid>`, deleted afterwards); power, display and GPU-preference backends
   are faked. Process-priority tests act only on a child process the test spawned. `LAGDOCTOR_HOME` is

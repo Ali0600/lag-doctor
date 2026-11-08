@@ -6,8 +6,8 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-# None at run time: lagdoctor/ imports only the standard library (tests/test_stdlib_only.py), which is all the
-# installer's embeddable Python holds.
+# None at run time: lagdoctor/ imports only the standard-library modules the installer's embeddable Python imports
+# (tests/test_stdlib_only.py; scripts/runtime_modules.json), and that Python holds no other package.
 dependencies = []
 
 [project.scripts]

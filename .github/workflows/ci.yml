@@ -137,6 +137,11 @@ jobs:
           python-version: "3.13"
       - name: Install the build's environment
         run: uv sync --locked
+      # What the runtime the MSI ships can import, asked of that runtime (scripts/runtime_modules.py): the list that
+      # tests/test_stdlib_only.py lets lagdoctor/ import from must be its answer byte for byte, so a list edited by
+      # hand, or not rewritten when the runtime's pin moved, fails here. The ZIP it downloads is the one the build uses.
+      - name: The runtime's module list is its own answer
+        run: uv run --no-sync python scripts/runtime_modules.py --zip "$env:RUNNER_TEMP\runtime\embeddable.zip"
       - name: Where the downloads go
         id: downloads
         run: uv run --no-sync python -m tests.downloads ci-outputs

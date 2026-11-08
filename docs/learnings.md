@@ -466,3 +466,12 @@ of its positions), the real tests failed 36 times out of 36. With random dynamic
 there.
 **Takeaway**: one protocol's port-0 choice says nothing about another protocol's ports, and retries taken from a
 sequential allocator are one try, not ten: draw them independently, and name each refusal.
+
+### An interpreter's list of its standard library is not what a distribution of it ships
+`sys.stdlib_module_names` is compiled into CPython from its whole source tree, the same in every build of a version;
+python.org's embeddable ZIP of that very build leaves out tkinter, IDLE, turtle, venv, ensurepip and the tests.
+**Why it came up**: `tests/test_stdlib_only.py` allowed `lagdoctor/` every name on the test interpreter's list, so
+`import tkinter` would have passed CI and failed in the MSI's runtime. Asked itself, that runtime imports 264 of the
+290 names on its own list (`scripts/runtime_modules.py`).
+**Takeaway**: judge what a shipped runtime can import by asking that runtime (look up and import each name there),
+never by the catalogue of the interpreter that happens to run the check.
