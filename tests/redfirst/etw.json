@@ -955,5 +955,50 @@
    "tests/test_etw_tracker.py::test_a_consumer_ended_by_lag_doctors_own_stop_by_name_is_a_stop_it_asked_for",
    "tests/test_cli.py::test_closing_the_window_is_a_stop_the_flow_tracker_asked_for"
   ]
+ },
+ {
+  "name": "real-ETW test: a 300 ms silence under the gap floor",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "GAP_FACTOR, GAP_FLOOR_S = 3.0, 0.050",
+  "new": "GAP_FACTOR, GAP_FLOOR_S = 3.0, 0.500",
+  "tests": [
+   "tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap"
+  ]
+ },
+ {
+  "name": "real-ETW test: a gap found and never kept",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                    self._pending.append(g)",
+  "new": "                    pass",
+  "tests": [
+   "tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap"
+  ]
+ },
+ {
+  "name": "real-ETW test: the burst after a gap not counted",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                if g.flow is flow and g.end <= t <= g.burst_until:",
+  "new": "                if False:",
+  "tests": [
+   "tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap"
+  ]
+ },
+ {
+  "name": "real-ETW test: packets timed by when they arrived",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        t = clock.qpc_to_seconds(ev.timestamp) - self.origin",
+  "new": "        t = self.now()",
+  "tests": [
+   "tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap"
+  ]
+ },
+ {
+  "name": "real-ETW test: the 2 s window kept on a session that delivers at stop",
+  "file": "tests/test_etw_tracker.py",
+  "old": "    tr._table.reorder_s = 60.0",
+  "new": "    tr._table.reorder_s = nf.REORDER_S",
+  "tests": [
+   "tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap"
+  ]
  }
 ]

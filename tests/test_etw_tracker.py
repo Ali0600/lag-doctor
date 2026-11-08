@@ -648,11 +648,19 @@ def test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_dela
         return sessions[0]
 
     tr = FlowTracker({GAME}, selftest=False, session_factory=factory, names=lambda pids: {GAME: "game.exe"})
+    # A private session cannot be real time: it hands every event over inside stop(), up to the whole run after it
+    # was written, while the live loop finalises the timeline up to the reorder window before now. With the 2 s
+    # window the first second of the stream came late and stayed out of the timeline, and whether the server was
+    # known before the gap then hung on where whole seconds fell (a writer starting 0.07-0.17 s past one missed
+    # the gap every time). A window longer than the run takes the stream in whole, as it was written.
+    tr._table.reorder_s = 60.0
     recv = _v4(GAME, 1200, "127.0.0.1", SERVER, 50000, 27015)
     send = _v4(GAME, 100, SERVER, "127.0.0.1", 27015, 50000)
     try:
         tr.start(clock.now())
-        assert _wait(lambda: sessions and sessions[0].health()["running"]), tr.status()
+        # ok once start() has returned, the provider enabled: an event written before that is never logged
+        assert _wait(lambda: tr.status().state != "off"), tr.status()
+        assert tr.status().state == "ok", tr.status()
         start = time.perf_counter()
         for k in range(int(3.0 * 64)):
             target = start + k / 64
@@ -670,6 +678,8 @@ def test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_dela
     h = sessions[0].health()
     assert h["events"] >= 2 * 192 - 20 + 15 and h["lost"] == 0 and h["callback_errors"] == 0, h
     r = tr.result()
+    # No packet came after the window, so every verdict below is on the whole stream, and nothing made it partial.
+    assert r["health"]["late"] == 0 and tr.status().state == "ok", (r["health"]["late"], tr.status())
     assert r["server"] is not None, r
     assert (r["server"]["ip"], r["server"]["port"]) == (SERVER, 27015)
     assert 14.0 < r["server"]["tick_ms"] < 17.5
