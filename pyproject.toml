@@ -10,6 +10,9 @@ dependencies = [
     "psutil>=7.0",
 ]
 
+[project.scripts]
+lagdoctor = "lagdoctor.cli:main"
+
 [project.optional-dependencies]
 # Only the synthetic test game needs a graphics library.
 laglab = ["pyglet>=2.1"]
@@ -17,9 +20,15 @@ laglab = ["pyglet>=2.1"]
 [dependency-groups]
 dev = ["pytest>=8"]
 
-[tool.uv]
-# Run from the checkout (`uv run python -m lagdoctor`); no build backend needed.
-package = false
+[build-system]
+# The same minor version as the uv that CI pins (ci.yml), so uv builds with the copy of uv_build it carries.
+requires = ["uv_build>=0.10.4,<0.11"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+# The wheel holds the lagdoctor package only: laglab/, tests/, scripts/ and docs/ stay in the checkout.
+module-name = "lagdoctor"
+module-root = ""
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

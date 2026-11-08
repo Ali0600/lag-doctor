@@ -14,13 +14,17 @@ uv run pytest -q tests/test_<area>.py                    # one area (use this wh
 uv run python scripts/redfirst.py tests/redfirst/<spec>.json   # prove a guard's test can fail
 uv run python -m tests.downloads fetch-gold              # PresentMon's gold captures, for the replay tests
 uv run python -m laglab --list-modes                     # the fake laggy game used by tests
-uv run python -m lagdoctor ...                           # the tool (see README)
+uv run lagdoctor ...                                     # the tool (see README); the elevated child runs -m lagdoctor
+uv build --clear --out-dir dist                          # the sdist, and the wheel built from it
+uv run python scripts/wheel_check.py dist                # that wheel in a fresh venv, run outside the checkout
 ```
 
 CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 and 3.11 on every push to `main` and
 every pull request; code and workflow changes go through a pull request and merge on green. Before the tests it gets
 PresentMon through `lagdoctor setup --download` and the gold captures through `tests.downloads fetch-gold`, checks
-both against the tests' pins and caches them; each job's summary counts the tests that use them.
+both against the tests' pins and caches them; each job's summary counts the tests that use them. Its wheel job runs
+`uv build --offline` (with the copy of uv_build inside the pinned uv: `pyproject.toml`'s bound stays on that uv's
+minor version, and `tests/test_wheel_check.py` fails when the two part) and then `scripts/wheel_check.py`.
 
 ## Rules an agent must not guess
 
@@ -105,6 +109,16 @@ both against the tests' pins and caches them; each job's summary counts the test
 - A new worktree has no `.venv`, and the first `uv run` builds one on uv's own managed Python 3.12 (pyproject asks
   only for 3.11 or later; seen 2026-11-07). Run the `uv sync ... --python 3.13` line first: it resolves to
   `C:\Python313`, the interpreter of the main checkout's venv.
+- `uv sync` installs lag-doctor itself, editable: `.venv\Lib\site-packages\lag_doctor.pth` holds the checkout's root,
+  so every process in the venv can import `lagdoctor`, `laglab`, `tests` and `scripts`, after its own folder,
+  `PYTHONPATH` and site-packages. Red-first runs still test their copy: pytest's `pythonpath` and `cwd` put it first,
+  and the probe takes the real tree off the test process's sys.path (Python lists a sys.path folder again after a
+  file in it is saved, which read as UNISOLATED). A child that a test starts with neither its `cwd` nor `PYTHONPATH`
+  on the copy still imports the real checkout, and its mutation shows as SURVIVED. A folder named
+  `lagdoctor` without `__init__.py` (a fixture, a scratch project) loses to the real package even when it comes first
+  on sys.path, so give it one (as `tests/fixtures/redfirst/project/lagdoctor/__init__.py` does). The wheel holds
+  `lagdoctor/` and nothing else (uv_build takes the whole folder): a file the product reads from anywhere else would
+  not ship, and the files check, which compares `lagdoctor/` only, would not name it.
 - Git Bash rewrites an argument that looks like a POSIX path before starting a native program: `git sparse-checkout
   set --no-cone /Tests/Gold/` stored `C:/Program Files/Git/Tests/Gold/` (the checkout then wrote nothing), and `git
   show origin/main:.github/workflows/ci.yml` became `origin\main;.github\...`. Prefix such commands with

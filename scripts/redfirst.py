@@ -21,7 +21,9 @@ everything stops (exit 3). A mutation is CAUGHT only when pytest ran tests and r
 code 1). A collection or import error (exit code 2+) means the sabotage broke loading, which proves
 nothing, so it is BROKE-LOAD, not CAUGHT. A probe loaded into each pytest run records what that process
 touches: if it touched the real tree (outside the venv), or ended without its report, the mutation is
-UNISOLATED, since the copy may not be what was tested. Exit status is 0 only if every mutation was caught.
+UNISOLATED, since the copy may not be what was tested. The probe also takes the real tree off that process's
+sys.path, where the venv's editable install puts the repo's root. Exit status is 0 only if every mutation was
+caught.
 """
 from __future__ import annotations
 
@@ -50,7 +52,8 @@ PROBE_FILE = PROBE + ".py"
 PROBE_SOURCE = r'''"""Loaded into each pytest run by scripts/redfirst.py (-p _redfirst_probe).
 
 Records the paths this process touches inside the real repo (outside the venv) and whether it opened the
-mutated file, and writes them as JSON at exit. It never raises into the code it watches.
+mutated file, and writes them as JSON at exit. It never raises into the code it watches. It also takes the
+real repo off sys.path, where the venv's editable install puts its root.
 """
 import atexit
 import json
@@ -78,6 +81,10 @@ def _under(path, top):
     return path == top or path.startswith(top.rstrip(os.sep) + os.sep)
 
 
+def _real(path):
+    return _under(path, _REAL) and not any(_under(path, s) for s in _SKIP)
+
+
 def _hook(event, args):
     where = _EVENTS.get(event)
     if where is None:
@@ -89,7 +96,7 @@ def _hook(event, args):
                 path = os.path.normcase(raw)
                 if path == _WATCH:
                     _seen["watch"] = True
-                elif _under(path, _REAL) and not any(_under(path, s) for s in _SKIP):
+                elif _real(path):
                     _touched.add(raw)
     except Exception:
         pass
@@ -100,6 +107,9 @@ def _report():
         json.dump({"touched": sorted(_touched), "seen": _seen["watch"]}, f)
 
 
+# Off sys.path, the real tree can be neither imported from that way nor listed again: Python lists a sys.path
+# folder anew after a file in it is saved, which would read as a touch of the real tree.
+sys.path[:] = [p for p in sys.path if not _real(_norm(p or "."))]
 sys.addaudithook(_hook)
 atexit.register(_report)
 '''

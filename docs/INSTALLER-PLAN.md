@@ -81,7 +81,10 @@ but a GitHub-hosted runner. Measured (research note section 8):
 
 ## Stage 3: the MSI
 
-- A build backend and a `lagdoctor` console entry point in `pyproject.toml` (today `package = false`).
+- [x] A build backend and a `lagdoctor` console entry point in `pyproject.toml`. Done 2026-11-07: uv_build
+  (DECISIONS 2026-11-07); the wheel holds the `lagdoctor` package alone. CI's wheel job builds it, installs it into a
+  fresh venv and runs it outside the checkout (`scripts/wheel_check.py`: the files git tracks, every module imported,
+  `--help`, `--version`, `analyze`); seven wheels broken on purpose each failed it.
 - [x] Replace psutil, whose native module is unsigned (Smart App Control would block it). Done 2026-11-07:
   `capture/presentmon.py` reads the PID list from `winapi/ntquery.pids()` (the handle-free snapshot),
   `capture/netflows.py` this PC's addresses from `winapi/iphlp.adapter_addresses()` (GetAdaptersAddresses) and
