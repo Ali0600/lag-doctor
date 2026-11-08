@@ -27,11 +27,10 @@ from ctypes import wintypes
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator
 
-import psutil
-
 from lagdoctor import clock, setup
 from lagdoctor.capture.base import Collector
 from lagdoctor.model import F, SeriesBuilder
+from lagdoctor.winapi import ntquery
 
 VERSION = setup.VERSION
 TOOL = f"PresentMon {VERSION}"
@@ -416,8 +415,9 @@ class PresentMonSource(Collector):
     a pid keeps every process and keys its chains "<pid>:0x…", since an address is only unique within
     one process (PM 10 rule 6).
 
-    The game is watched with is_alive() (default: its PID is still listed by psutil.pids()), because
-    --terminate_on_proc_exit never fires if anti-cheat strips PresentMon's handle (PM 8.1).
+    The game is watched with is_alive() (default: its PID is still in a process snapshot, winapi/ntquery.pids(),
+    which opens no process), because --terminate_on_proc_exit never fires if anti-cheat strips PresentMon's
+    handle (PM 8.1).
     A live PresentMon that ends by itself with exit code 0 while the game still runs had its trace session
     stopped from outside (PM 5, 7.1: e.g. another capture's --stop_existing_session), so its frames stop
     there: the capture is "partial" and says when. The game is given EXITED_GRACE_S to vanish first, since
@@ -450,6 +450,8 @@ class PresentMonSource(Collector):
         self.pid = check_pid(pid) if self.etl_file is None or pid is not None else None
         self.exe = Path(os.path.abspath(exe)) if exe is not None else None
         self._is_alive = is_alive
+        self._snapshotter: ntquery.Snapshotter | None = None      # the default check's buffer, made on first use
+        self._snapshotter_lock = threading.Lock()
         self._console = True
         self._lock = threading.Lock()           # what result() and live() read
         self._proc_lock = threading.Lock()
@@ -662,9 +664,17 @@ class PresentMonSource(Collector):
                 self._stderr_head.append(line)
             self._stderr_tail.append(line)
 
+    def _pid_listed(self) -> bool:
+        """The default liveness check: the game's PID is still in a handle-free process snapshot."""
+        with self._snapshotter_lock:
+            if self._snapshotter is None:
+                self._snapshotter = ntquery.Snapshotter()
+            snapshotter = self._snapshotter
+        return self.pid in ntquery.pids(snapshotter)
+
     def _probe_alive(self) -> bool | None:
         """Is the game still running? None when the check itself failed."""
-        is_alive = self._is_alive or (lambda: self.pid in psutil.pids())
+        is_alive = self._is_alive or self._pid_listed
         try:
             return bool(is_alive())
         except Exception:  # noqa: BLE001 - a broken check must not end the capture

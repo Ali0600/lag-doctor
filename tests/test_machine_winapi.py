@@ -1,4 +1,4 @@
-"""Machine-state wrappers (dxgi, display, power, storage).
+"""Machine-state wrappers (dxgi, display, power, storage, memory).
 
 Pure decoding is pinned on literal sample points, most of them the values this laptop returned in the research
 (WT 5-9). The live tests are read-only and compare with an independent readout: nvidia-smi, typeperf, the
@@ -21,7 +21,7 @@ from pathlib import Path
 import psutil
 import pytest
 
-from lagdoctor.winapi import display, dxgi, power, storage
+from lagdoctor.winapi import display, dxgi, memory, power, storage
 
 SYSTEM32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
 POWERSHELL = SYSTEM32 / "WindowsPowerShell" / "v1.0" / "powershell.exe"
@@ -362,7 +362,47 @@ def test_check_path_wants_an_absolute_path(bad):
         storage.check_path(bad)
 
 
+# ======================================================================== memory: pure
+
+def test_memory_layout_matches_the_sdk():
+    s = memory.MEMORYSTATUSEX
+    assert ctypes.sizeof(s) == 64
+    assert (s.dwMemoryLoad.offset, s.ullTotalPhys.offset, s.ullAvailPhys.offset, s.ullAvailExtendedVirtual.offset) == \
+        (4, 8, 16, 56)
+
+
+def test_the_memory_layout_guard_refuses_a_drifted_struct(monkeypatch):
+    class Drifted(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_uint32), ("ullTotalPhys", ctypes.c_uint64)]
+
+    monkeypatch.setattr(memory, "MEMORYSTATUSEX", Drifted)
+    with pytest.raises(RuntimeError, match="expected 64 and 8"):
+        memory._check_layout()
+
+
+def test_a_failed_memory_call_raises_the_windows_error(monkeypatch):
+    def fail(status):
+        ctypes.set_last_error(87)
+        return 0
+
+    monkeypatch.setattr(memory._k32, "GlobalMemoryStatusEx", fail)
+    with pytest.raises(OSError) as err:
+        memory.total_physical_bytes()
+    assert err.value.winerror == 87
+
+
+def test_a_success_that_reports_no_memory_is_refused(monkeypatch):
+    monkeypatch.setattr(memory._k32, "GlobalMemoryStatusEx", lambda status: 1)     # "succeeds", fills nothing
+    with pytest.raises(OSError) as err:
+        memory.total_physical_bytes()
+    assert err.value.winerror == 13
+
+
 # ======================================================================== live, read-only
+
+def test_live_total_physical_memory_matches_psutil():
+    # psutil 7.2.2's virtual_memory() multiplies GetPerformanceInfo's PhysicalTotal by PageSize: another API.
+    assert memory.total_physical_bytes() == psutil.virtual_memory().total
 
 @pytest.fixture(scope="module")
 def adapters():

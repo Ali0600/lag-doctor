@@ -16,10 +16,12 @@ verification log; trust a note's *Corrected* entries over its body.
    - **The one exception is PresentMon itself**: its child process opens the game with
      `PROCESS_QUERY_LIMITED_INFORMATION` (the access Task Manager uses) and holds it until the game exits
      (PM 8.1). lag-doctor's own process never opens the game.
-   - **psutil opens handles.** `psutil.Process(pid)` (the constructor itself), all its methods,
-     `psutil.process_iter()` and `psutil.pid_exists()` open the process (WT 9.4). Only `psutil.pids()`
-     is allowed for processes other than our own. Names, paths, CPU, threads, I/O and parent PIDs come
-     from `winapi/ntquery.py`. `tests/test_no_handles.py` enforces this.
+   - **No psutil, no handles.** PIDs, names, paths, CPU, threads, I/O and parent PIDs come from
+     `winapi/ntquery.py`, which opens no process; `OpenProcess` exists only in `winapi/process.py`.
+     `tests/test_no_handles.py` enforces this. `lagdoctor/` does not use psutil at all (principle 5); the tests
+     still read it as an independent readout, and there its trap stands: `psutil.Process(pid)` (the
+     constructor itself), all its methods, `psutil.process_iter()` and `psutil.pid_exists()` open the process
+     (WT 9.4), and only `psutil.pids()` does not.
 2. **Evidence or silence.** Every finding carries the numbers behind it. A source that did not run is
    reported as *not measured*, never as *fine*; a cause that was checked and ruled out is listed as
    *checked and fine* with what was measured.
@@ -28,6 +30,10 @@ verification log; trust a note's *Corrected* entries over its body.
    path; `undo` restores from the journal, never from an assumed default.
 4. **Least privilege.** Only frame timing and the ETW network flows need ETW rights. Everything else runs
    as a normal user, fixes never need elevation, and the tool says plainly what it cannot see.
+5. **Standard library only.** The installer ships python.org's embeddable runtime, which holds the standard
+   library and nothing else, and Smart App Control, which blocks unknown unsigned code, would block psutil's
+   unsigned native module (`docs/research/install-and-rights.md`). So `lagdoctor/` imports only the standard
+   library and itself, and reads Windows through `winapi/` (ctypes); `tests/test_stdlib_only.py` enforces it.
 
 ## Data flow
 
@@ -150,6 +156,7 @@ lagdoctor/
   winapi/   hotkey.py (done)
             pdh.py ntquery.py windows.py                system side          (capture/sysmon, capture/target)
             dxgi.py display.py power.py storage.py      machine state        (capture/inventory, fixes)
+            memory.py
             nvml.py                                     NVIDIA telemetry     (capture/gpumon)
             icmp.py iphlp.py wlan.py                    network probes       (capture/netmon)
             etw.py                                      ETW sessions         (capture/netflows)
@@ -196,6 +203,8 @@ class ProcInfo:
     thread_count: int; threads: list[ThreadInfo] | None      # parsed only for the pids asked for
 class Snapshotter:                                 # one reusable buffer, grown on 0xC0000004
     def snapshot(self, threads_for: Iterable[int] = ()) -> dict[int, ProcInfo]
+def pids(snapshotter: Snapshotter | None = None) -> frozenset[int]   # every running PID, 0 included, from one
+                                                  # snapshot: the list EnumProcesses (psutil.pids) gives, no handle
 def image_path(pid: int) -> str | None            # SystemProcessIdInformation (88) + QueryDosDeviceW
 def self_check(snapshotter=None) -> None          # compare our own process with GetProcessTimes /
                                                   # GetProcessIoCounters; raise if the layout drifted
@@ -244,6 +253,9 @@ def plan_settings(scheme: str) -> dict            # {max_cpu_ac/dc, max_cpu1_ac/
                                                   #  boost_ac/dc: 0 Disabled .. 6, cooling_ac/dc: 0 Passive,
                                                   #  1 Active}; None = not readable
 
+# winapi/memory.py (SDK um\sysinfoapi.h) ---------------------------------------------------------------
+def total_physical_bytes() -> int                 # GlobalMemoryStatusEx ullTotalPhys; OSError when Windows cannot say
+
 # winapi/storage.py (WT 9.5) ---------------------------------------------------------------------------
 def media_type(path: str) -> str                  # "SSD" | "HDD" | "Unknown"  (seek penalty, access 0)
 def free_gb(path: str) -> float | None
@@ -278,6 +290,10 @@ def if_row(if_index: int) -> dict                 # {in_octets, out_octets, type
                                                   #  tx_link_bps, rx_link_bps}
 def default_gateway() -> str | None               # next hop toward 1.1.1.1; a tunnel route falls back to the
                                                   # physical /0 route
+def adapter_addresses() -> list[dict]             # [{alias, if_index, addresses: [text]}]: every adapter's unicast
+                                                  # IPv4 and IPv6 addresses (GetAdaptersAddresses), adapters that are
+                                                  # down included; an IPv6 link-local address carries "%zone"; a
+                                                  # pointer that leads outside the returned buffer is an OSError
 
 # winapi/wlan.py (NE 3) ---------------------------------------------------------------------------------
 class Wlan:
@@ -412,8 +428,9 @@ because `0` or junk means *every process*):
   `unavailable` "needs admin rights or Performance Log Users"; "already running" / "error code 183" → retry
   once after `--terminate_existing_session`). A crash exit (outside 0–7) gets the same session clean-up as a
   kill.
-- Watch the game ourselves (`target.is_alive`), because `--terminate_on_proc_exit` cannot fire if anti-cheat
-  strips PresentMon's handle (PM 8.1). PresentMon ending by itself with exit 0 while the game still runs
+- Watch the game ourselves (`target.is_alive`; without an `is_alive`, the game's PID still being in
+  `ntquery.pids()`), because `--terminate_on_proc_exit` cannot fire if anti-cheat strips PresentMon's handle
+  (PM 8.1). PresentMon ending by itself with exit 0 while the game still runs
   (its session was stopped from outside) makes the source `partial`, with the time frames stopped.
 - `etl_file=` runs `--etl_file <path>` instead of `--process_id` (no rights needed): used by tests against
   the gold captures in PresentMon's repo.
@@ -498,7 +515,7 @@ session's snapshot (for `oem.tools`; None without them). `registry` lets tests p
 ```
 os        {name, build}                                  e.g. {"name": "Windows 11 Home", "build": 26200}
 cpu       {name, cores, threads, hybrid, p_threads, e_threads}   GetSystemCpuSetInformation EfficiencyClass
-ram_gb    float
+ram_gb    float                                          GiB to 0.1, GlobalMemoryStatusEx (winapi/memory.py)
 laptop    bool                                           a battery is present
 adapters  [ … winapi.dxgi.list_adapters() … ]            software adapters dropped
 displays  [ … winapi.display.list_displays() … ]
@@ -863,7 +880,8 @@ lagdoctor setup                      fetch + verify PresentMon, explain how to g
   (PresentMon CSV from replays of the gold ETL captures in PresentMon's repo); rules on synthetic captures
   built through `SeriesBuilder`.
 - **Live, read-only**: ctypes wrappers run against this machine and are compared with an independent readout
-  (psutil on our own process, typeperf, `powercfg`, `nvidia-smi`, `Get-NetRoute`).
+  (psutil on our own process and its PID list, adapter addresses and RAM size, typeperf, `powercfg`,
+  `nvidia-smi`, `Get-NetRoute`).
 - **ETW without rights**: a private in-process session (allowed for standard users) proves the consumer
   path (NE 5.6); PresentMon's `--etl_file` replay proves the frames path.
 - **Downloaded test data** (`tests/downloads.py`): the PresentMon release and its gold captures are not in the
@@ -876,6 +894,9 @@ lagdoctor setup                      fetch + verify PresentMon, explain how to g
   writes into its own tree stops the run.
 - **No handles**: `tests/test_no_handles.py` fails if `psutil.Process`, `process_iter` or `pid_exists` is
   used outside the allow-list, and if `OpenProcess` appears outside `winapi/process.py`.
+- **Standard library only**: `tests/test_stdlib_only.py` fails if a module under `lagdoctor/` imports anything
+  but the standard library and lagdoctor itself (psutil named, with the reason), in any form: inside a function
+  or a try block, through `__import__` or `importlib.import_module`, or by a module name it cannot read.
 - **End to end**: `scripts/e2e.py` runs each LagLab mode with a real capture and judges the diagnosis against
   LagLab's ground-truth log (`scripts/e2e_truth.py`). It needs ETW rights, so it runs on demand: without them
   it relaunches itself once through a UAC prompt and prints the verdicts back in the original window. The

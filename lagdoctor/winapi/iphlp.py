@@ -1,8 +1,10 @@
-"""Routes and interface counters from iphlpapi, no admin needed.
+"""Routes, interface counters and this PC's own addresses from iphlpapi, no admin needed.
 
 Layouts from docs/research/network-and-etw.md (NE) 1.5 and its verification log (#20-#24), and
 windows-telemetry.md (WT) 11.1 item 4: MIB_IF_ROW2 is 1,352 bytes, InterfaceIndex @8 (set it, leave
-InterfaceLuid @0 zero), InOctets @1208, OutOctets @1280.
+InterfaceLuid @0 zero), InOctets @1208, OutOctets @1280. GetAdaptersAddresses' entries are from the SDK
+(um\\IPTypes.h:113-133 and 286-350, shared\\ws2def.h:258-269): Windows writes Length 448 into every adapter entry
+and 64 into every unicast address entry (seen here, 2026-11-07, 11 adapters).
 
 The route toward a destination comes from GetBestRoute2 every time, never from a cache: a route can
 change between lookups (NE 1.3, log #13), and VPNs add split routes (NE 0 item 3).
@@ -17,6 +19,9 @@ from ctypes import wintypes
 
 AF_UNSPEC, AF_INET, AF_INET6 = 0, 2, 23
 ERROR_FILE_NOT_FOUND = 2               # GetIfEntry2 on an index that does not exist (seen here)
+ERROR_INVALID_DATA = 13
+ERROR_BUFFER_OVERFLOW = 111            # SDK shared\winerror.h:954; GetAdaptersAddresses: the buffer is too small
+ERROR_NO_DATA = 232                    # winerror.h:1845; GetAdaptersAddresses: no adapter has an address
 ERROR_NOT_FOUND = 1168
 ERROR_NETWORK_UNREACHABLE = 1231       # GetBestRoute2 with no route (NE 1.4)
 ERROR_HOST_UNREACHABLE = 1232
@@ -99,14 +104,53 @@ class MIB_IF_ROW2(ctypes.Structure):               # 1,352 bytes (SDK shared\net
                    "OutBroadcastOctets", "OutQLen")]
 
 
+class SOCKET_ADDRESS(ctypes.Structure):            # 16 bytes (SDK shared\ws2def.h:258-269)
+    _fields_ = [("lpSockaddr", ctypes.c_void_p), ("iSockaddrLength", ctypes.c_int)]
+
+
+class IP_ADAPTER_UNICAST_ADDRESS_LH(ctypes.Structure):    # 64 bytes (SDK um\IPTypes.h:113-133)
+    _fields_ = [("Length", ctypes.c_ulong), ("Flags", wintypes.DWORD), ("Next", ctypes.c_void_p),
+                ("Address", SOCKET_ADDRESS), ("PrefixOrigin", ctypes.c_int), ("SuffixOrigin", ctypes.c_int),
+                ("DadState", ctypes.c_int), ("ValidLifetime", ctypes.c_ulong), ("PreferredLifetime", ctypes.c_ulong),
+                ("LeaseLifetime", ctypes.c_ulong), ("OnLinkPrefixLength", ctypes.c_ubyte)]
+
+
+class IP_ADAPTER_ADDRESSES_LH(ctypes.Structure):          # 448 bytes (SDK um\IPTypes.h:286-350)
+    _fields_ = [("Length", ctypes.c_ulong), ("IfIndex", ctypes.c_ulong), ("Next", ctypes.c_void_p),
+                ("AdapterName", ctypes.c_void_p), ("FirstUnicastAddress", ctypes.c_void_p),
+                ("FirstAnycastAddress", ctypes.c_void_p), ("FirstMulticastAddress", ctypes.c_void_p),
+                ("FirstDnsServerAddress", ctypes.c_void_p), ("DnsSuffix", ctypes.c_void_p),
+                ("Description", ctypes.c_void_p), ("FriendlyName", ctypes.c_void_p),
+                ("PhysicalAddress", ctypes.c_ubyte * 8), ("PhysicalAddressLength", ctypes.c_ulong),
+                ("Flags", ctypes.c_ulong), ("Mtu", ctypes.c_ulong), ("IfType", ctypes.c_ulong),
+                ("OperStatus", ctypes.c_int), ("Ipv6IfIndex", ctypes.c_ulong), ("ZoneIndices", ctypes.c_ulong * 16),
+                ("FirstPrefix", ctypes.c_void_p), ("TransmitLinkSpeed", ctypes.c_uint64),
+                ("ReceiveLinkSpeed", ctypes.c_uint64), ("FirstWinsServerAddress", ctypes.c_void_p),
+                ("FirstGatewayAddress", ctypes.c_void_p), ("Ipv4Metric", ctypes.c_ulong),
+                ("Ipv6Metric", ctypes.c_ulong), ("Luid", ctypes.c_uint64), ("Dhcpv4Server", SOCKET_ADDRESS),
+                ("CompartmentId", ctypes.c_uint32), ("NetworkGuid", GUID), ("ConnectionType", ctypes.c_int),
+                ("TunnelType", ctypes.c_int), ("Dhcpv6Server", SOCKET_ADDRESS),
+                ("Dhcpv6ClientDuid", ctypes.c_ubyte * 130), ("Dhcpv6ClientDuidLength", ctypes.c_ulong),
+                ("Dhcpv6Iaid", ctypes.c_ulong), ("FirstDnsSuffix", ctypes.c_void_p)]
+
+
 _check_size(SOCKADDR_INET, 28, "NE 1.5")
 _check_size(IP_ADDRESS_PREFIX, 32, "NE 1.5")
 _check_size(MIB_IPFORWARD_ROW2, 104, "NE 1.5")
 _check_size(MIB_IF_ROW2, 1352, "NE 1.5, WT 11.1")
-for _field, _off in (("InterfaceIndex", 8), ("Alias", 28), ("Type", 1128), ("OperStatus", 1156),
-                     ("TransmitLinkSpeed", 1192), ("InOctets", 1208), ("OutOctets", 1280), ("OutQLen", 1344)):
-    if getattr(MIB_IF_ROW2, _field).offset != _off:      # offsets from NE 1.5 / log #24 and WT 11.1
-        raise RuntimeError(f"MIB_IF_ROW2.{_field} is at {getattr(MIB_IF_ROW2, _field).offset}, expected {_off}")
+_check_size(SOCKET_ADDRESS, 16, "SDK shared\\ws2def.h")
+_check_size(IP_ADAPTER_UNICAST_ADDRESS_LH, 64, "SDK um\\IPTypes.h")
+_check_size(IP_ADAPTER_ADDRESSES_LH, 448, "SDK um\\IPTypes.h")
+for _struct, _field, _off in (
+        (MIB_IF_ROW2, "InterfaceIndex", 8), (MIB_IF_ROW2, "Alias", 28), (MIB_IF_ROW2, "Type", 1128),
+        (MIB_IF_ROW2, "OperStatus", 1156), (MIB_IF_ROW2, "TransmitLinkSpeed", 1192), (MIB_IF_ROW2, "InOctets", 1208),
+        (MIB_IF_ROW2, "OutOctets", 1280), (MIB_IF_ROW2, "OutQLen", 1344),        # NE 1.5 / log #24 and WT 11.1
+        (IP_ADAPTER_UNICAST_ADDRESS_LH, "Next", 8), (IP_ADAPTER_UNICAST_ADDRESS_LH, "Address", 16),
+        (IP_ADAPTER_ADDRESSES_LH, "Next", 8), (IP_ADAPTER_ADDRESSES_LH, "FirstUnicastAddress", 24),
+        (IP_ADAPTER_ADDRESSES_LH, "FriendlyName", 72), (IP_ADAPTER_ADDRESSES_LH, "Ipv6IfIndex", 108),
+        (IP_ADAPTER_ADDRESSES_LH, "Luid", 224), (IP_ADAPTER_ADDRESSES_LH, "FirstDnsSuffix", 440)):  # the SDK's
+    if getattr(_struct, _field).offset != _off:
+        raise RuntimeError(f"{_struct.__name__}.{_field} is at {getattr(_struct, _field).offset}, expected {_off}")
 
 _iphlpapi = ctypes.WinDLL("iphlpapi", use_last_error=True)
 _iphlpapi.GetBestRoute2.argtypes = [ctypes.c_void_p, wintypes.ULONG, ctypes.c_void_p,
@@ -119,9 +163,26 @@ _iphlpapi.GetIpForwardTable2.argtypes = [ctypes.c_ushort, ctypes.POINTER(ctypes.
 _iphlpapi.GetIpForwardTable2.restype = wintypes.DWORD
 _iphlpapi.FreeMibTable.argtypes = [ctypes.c_void_p]
 _iphlpapi.FreeMibTable.restype = None
+_iphlpapi.GetAdaptersAddresses.argtypes = [wintypes.ULONG, wintypes.ULONG, ctypes.c_void_p, ctypes.c_void_p,
+                                           ctypes.POINTER(wintypes.ULONG)]
+_iphlpapi.GetAdaptersAddresses.restype = wintypes.ULONG
 
 _tls = threading.local()         # one reusable MIB_IF_ROW2 per calling thread
 MAX_ROUTES = 65_536              # sanity bound on the route table walk
+
+# Only the unicast lists are read, so the others are left out (SDK um\IPTypes.h:403-405).
+GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_MULTICAST, GAA_FLAG_SKIP_DNS_SERVER = 0x0002, 0x0004, 0x0008
+_GAA_FLAGS = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER
+GAA_START_BYTES = 16 * 1024      # Microsoft's advice is to start at 15 KB; about 17 KB was needed here (11 adapters)
+GAA_MAX_BYTES = 16 << 20
+GAA_HEADROOM = 4096              # adapters can appear between the call that was too small and the retry
+MAX_ADAPTERS = 4096              # sanity bounds on the two list walks
+MAX_ADAPTER_ADDRESSES = 4096
+NAME_CHARS = 257                 # IF_MAX_STRING_SIZE + 1, the size of MIB_IF_ROW2.Alias
+# The fields read from each entry end here, so the Length Windows writes into it must reach at least this far.
+_ADAPTER_READ = IP_ADAPTER_ADDRESSES_LH.Ipv6IfIndex.offset + ctypes.sizeof(ctypes.c_ulong)
+_UNICAST_READ = IP_ADAPTER_UNICAST_ADDRESS_LH.Address.offset + ctypes.sizeof(SOCKET_ADDRESS)
+_SOCKADDR_SIZE = {AF_INET: ctypes.sizeof(SOCKADDR_IN), AF_INET6: ctypes.sizeof(SOCKADDR_IN6)}
 
 
 def _parse_ip(ip: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
@@ -289,3 +350,113 @@ def default_gateway() -> str | None:
     """The default gateway (your router) as text, or None when there is none."""
     route = default_route()
     return route["next_hop"] if route else None
+
+
+# ---------------------------------------------------------------- this PC's addresses ---
+
+def _layout_error(msg: str) -> OSError:
+    err = OSError(0, f"GetAdaptersAddresses returned data that does not fit the expected layout: {msg}")
+    err.winerror = ERROR_INVALID_DATA
+    return err
+
+
+def adapter_addresses(*, start_bytes: int = GAA_START_BYTES) -> list[dict]:
+    """Every adapter's unicast IPv4 and IPv6 addresses (GetAdaptersAddresses; no process handles), in Windows' order:
+    [{alias, if_index, addresses: [text]}]. Adapters that are down are listed too, as psutil.net_if_addrs() lists
+    them. An IPv6 link-local address carries its zone ("fe80::1%8"), as best_route() writes one; if_index is 0
+    when neither IPv4 nor IPv6 is bound to the adapter."""
+    if isinstance(start_bytes, bool) or not isinstance(start_bytes, int) or not 0 < start_bytes <= GAA_MAX_BYTES:
+        raise ValueError(f"start_bytes must be 1..{GAA_MAX_BYTES}, got {start_bytes!r}")
+    size = start_bytes
+    for _ in range(4):
+        buf = (ctypes.c_ulonglong * ((size + 7) // 8))()      # 8-byte aligned: the entries hold pointers
+        have = ctypes.sizeof(buf)
+        asked = wintypes.ULONG(have)
+        rc = _iphlpapi.GetAdaptersAddresses(AF_UNSPEC, _GAA_FLAGS, None, buf, ctypes.byref(asked))
+        if rc == 0:
+            return _parse_adapters(ctypes.addressof(buf), have)
+        if rc == ERROR_NO_DATA:
+            return []
+        if rc != ERROR_BUFFER_OVERFLOW:
+            raise ctypes.WinError(rc)
+        need = asked.value if asked.value > have else have * 2
+        size = need + GAA_HEADROOM
+        if size > GAA_MAX_BYTES:
+            raise OSError(0, f"GetAdaptersAddresses needs {need} bytes, over the {GAA_MAX_BYTES}-byte cap")
+    raise OSError(0, "GetAdaptersAddresses kept asking for a bigger buffer")
+
+
+def _parse_adapters(base: int, size: int) -> list[dict]:
+    """Walk the lists GetAdaptersAddresses wrote into the buffer at `base`. Every entry, string and socket
+    address it points to lies inside that buffer, so a pointer that leads outside it means the layout drifted:
+    that is an OSError, never a read of memory that is not ours."""
+    end = base + size
+
+    def entry(ptr: int, read: int, what: str) -> int:
+        """The Length of the entry at ptr, once the entry is known to lie inside the buffer."""
+        if ptr < base or ptr + read > end:
+            raise _layout_error(f"{what} at offset {ptr - base} is outside the {size}-byte buffer")
+        if (ptr - base) % 8:
+            raise _layout_error(f"{what} at offset {ptr - base} is not 8-byte aligned")
+        length = ctypes.c_ulong.from_address(ptr).value
+        if length < read or ptr + length > end:
+            raise _layout_error(f"{what} at offset {ptr - base} claims {length} bytes")
+        return length
+
+    out: list[dict] = []
+    ptr = base                              # the first adapter starts the buffer
+    for _ in range(MAX_ADAPTERS):
+        entry(ptr, _ADAPTER_READ, "an adapter")
+        a = IP_ADAPTER_ADDRESSES_LH.from_address(ptr)
+        addresses: list[str] = []
+        u_ptr = a.FirstUnicastAddress or 0
+        for _ in range(MAX_ADAPTER_ADDRESSES + 1):     # the last turn only sees the list end
+            if not u_ptr:
+                break
+            entry(u_ptr, _UNICAST_READ, "a unicast address")
+            u = IP_ADAPTER_UNICAST_ADDRESS_LH.from_address(u_ptr)
+            text = _socket_address_text(u.Address, base, end)
+            if text is not None:
+                addresses.append(text)
+            u_ptr = u.Next or 0
+        else:
+            raise _layout_error("an adapter's address list never ended")
+        out.append({"alias": _wide_text(a.FriendlyName or 0, base, end), "if_index": int(a.IfIndex or a.Ipv6IfIndex),
+                    "addresses": addresses})
+        ptr = a.Next or 0
+        if not ptr:
+            return out
+    raise _layout_error("the adapter list never ended")
+
+
+def _socket_address_text(sa: SOCKET_ADDRESS, base: int, end: int) -> str | None:
+    """An IPv4 or IPv6 address as text; None for another family or an unspecified address (psutil skips the
+    first; Windows assigns no interface the second)."""
+    ptr, length = sa.lpSockaddr or 0, sa.iSockaddrLength
+    if length < 2:
+        raise _layout_error(f"a socket address claims {length} bytes")
+    if not ptr or ptr < base or ptr + length > end:
+        raise _layout_error(f"a {length}-byte socket address points outside the buffer")
+    family = ctypes.c_ushort.from_address(ptr).value
+    need = _SOCKADDR_SIZE.get(family)
+    if need is None:
+        return None
+    if length < need:
+        raise _layout_error(f"a family {family} socket address is {length} bytes, under {need}")
+    inet = SOCKADDR_INET()
+    ctypes.memmove(ctypes.byref(inet), ptr, need)
+    return _sockaddr_text(inet)
+
+
+def _wide_text(ptr: int, base: int, end: int) -> str:
+    """A NUL-terminated UTF-16 string inside the buffer, at most NAME_CHARS long with its NUL; "" for NULL."""
+    if not ptr:
+        return ""
+    if ptr < base or ptr >= end or (ptr - base) % 2:
+        raise _layout_error(f"a name at offset {ptr - base} is outside the buffer")
+    raw = ctypes.string_at(ptr, min(end - ptr, 2 * NAME_CHARS))
+    text = raw.decode("utf-16-le", errors="replace")
+    nul = text.find("\0")
+    if nul < 0:
+        raise _layout_error(f"a name at offset {ptr - base} has no end within {NAME_CHARS} characters")
+    return text[:nul]

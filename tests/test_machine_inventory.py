@@ -393,6 +393,10 @@ def _threads_by_efficiency_class() -> dict[int, int]:
     return dict(counts)
 
 
+def test_live_ram_is_the_figure_psutil_gave():
+    assert inventory._ram_gb() == round(psutil.virtual_memory().total / 2**30, 1)
+
+
 def test_live_collect_agrees_with_independent_readouts():
     inv = inventory.collect({"exe": sys._base_executable})
     assert inv["errors"] == {}

@@ -1,6 +1,7 @@
 """winapi/ntquery.py: snapshots of every process without handles, checked against our own process.
 
-psutil is used only on our own process (psutil.Process() with no argument), as the independent readout.
+psutil is the independent readout: psutil.Process() with no argument for our own process, and psutil.pids()
+(EnumProcesses, which opens no process) for the PID list.
 """
 from __future__ import annotations
 
@@ -132,6 +133,23 @@ def test_the_buffer_grows_on_length_mismatch_and_is_reused():
     grown = s.grow_count
     s.snapshot()
     assert s.grow_count == grown                              # the grown buffer is kept
+
+
+def test_pids_are_the_list_enumprocesses_gives():
+    before = set(psutil.pids())             # EnumProcesses, read just before and just after: it brackets ours
+    mine = ntquery.pids()
+    after = set(psutil.pids())
+    assert isinstance(mine, frozenset) and {0, 4, os.getpid()} <= mine
+    assert before & after <= mine, sorted((before & after) - mine)
+    assert mine <= before | after, sorted(mine - (before | after))
+    assert len(mine) > 20
+
+
+def test_pids_uses_the_snapshotter_it_is_given():
+    s = Snapshotter()
+    assert s.last_bytes == 0
+    assert os.getpid() in ntquery.pids(s)
+    assert s.last_bytes > SPI_SIZE                            # the snapshot was taken in that buffer
 
 
 def test_threads_are_parsed_only_for_the_pids_asked_for():
