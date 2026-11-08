@@ -1097,7 +1097,9 @@ never `NA`; blocked dropped frames and lost trailing frames; 2 s deferral; 4 s-p
 [inferred]; consumer thread `THREAD_PRIORITY_TIME_CRITICAL`; query handles opened to every presenting process seen;
 UE guide's 95 % / 90 % Draw-time rule; D3DKMT HAGS and hybrid-role query with tested ctypes and output;
 `GetConsoleCP()` console test; no-console `OSError`; venv launcher caveat for creation-flag tests; release-asset
-digest match.
+digest match. Measured on GitHub's runner (2026-11-08, PR #23, `tests/test_relay_live.py`): live on a process that
+never presents and stopped by `--terminate_existing_session` with no console, PresentMon 2.6.0 wrote no CSV at all,
+not even the header: the header waits for something to report.
 
 ### Unverifiable here (left tagged [unverified] or [inferred])
 Live CTRL_BREAK → exit 0 with a complete CSV; `--terminate_existing_session` against a running capture; real row

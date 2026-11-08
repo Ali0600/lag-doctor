@@ -72,6 +72,33 @@
 
 ---
 
+## 2026-11-08: How the relay is built
+
+M3 (`docs/LAUNCHER-PLAN.md`) replaced the elevated child of `watch --elevate` with the relay. The plan fixed what the
+relay does; how it does it was chosen by the implementing session, and the owner has not weighed in.
+- **Run PresentMon and the ETW session in the relay, and everything built on them in the recorder (chosen)**: the
+  relay only filters and forwards, so the least code runs with administrator rights, and the flow tracker, the frame
+  storage and the analysis run in the user's account.
+  - **Run the flow tracker in the relay and send its results**: rejected. More code with administrator rights, and the
+    tracker's DNS self-test would then test the relay's traffic, not the recorder's.
+  - **Run a whole PresentMonSource in the relay and send its result at the end**: rejected. The relay would hold a
+    second copy of every frame (about 0.7 KB each), and a long recording's frames would come over only at the stop.
+- **Forward parsed rows, only the columns the recorder reads (chosen)**, about 150 bytes a frame, through
+  `PresentMonSource(forward=)`, which keeps none. Forwarding PresentMon's CSV lines: rejected, since the relay must
+  parse them anyway to forward only the game's.
+- **pythonw beside the base interpreter (chosen)**: no console window, and the process `launch_elevated` returns is
+  the relay itself, so its pid is the pipe server's. PresentMon then has no console to share and stops by its session
+  name, a path PresentMonSource already had.
+  - **python.exe with a hidden console**: rejected. Whether a console started elevated stays hidden when Windows
+    Terminal is the default terminal is not known, and a venv's python.exe is a launcher whose pid is not the relay's.
+- **Check the pipe's owner as well as the server's pid (chosen)**: an owner of Administrators proves an elevated
+  process made the pipe (an unelevated token is refused it, error 1307), and the pid proves it was the relay launched.
+  Stage 4's service will check its own SID.
+- **A relay that cannot record ends the watch with the reason (chosen)**, as the elevated child's failures did, so a
+  recording never runs on without the frame timing the player asked for. Recording on without it: deferred, as the
+  backlog's "ask before recording without frame timing".
+Revisit hooks: `client.relay_python`, `client.launch`'s checks, and `Relay._on_event` in `relay/server.py`.
+
 ## 2026-11-08: CI tests the Python the installer ships, and skips pushes that change only docs
 
 The owner asked why CI ran two Python versions and said docs changes should not run everything. A review of every CI

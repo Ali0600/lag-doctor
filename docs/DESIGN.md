@@ -80,34 +80,27 @@ verification log; trust a note's *Corrected* entries over its body.
 - `winapi/elevation.can_trace()` = `CheckTokenMembership(Administrators S-1-5-32-544)` OR
   `CheckTokenMembership(Performance Log Users S-1-5-32-559)`; both count enabled SIDs only, so a UAC-filtered
   admin token answers False (PM 6.3, verify log).
-- `lagdoctor watch` without ETW rights asks: relaunch the capture elevated (one UAC prompt), or continue
-  without frame timing (frames reported *not measured*). `--elevate` / `--no-elevate` answer it up front. A
-  member of Performance Log Users is not asked (frame timing works unelevated), but an explicit `--elevate`
-  still elevates them, for the game-server tracker; a member who declines records frame timing here. An
-  administrator window is never elevated again. Without rights, the tracker's not-measured reason names what
-  helps: `--elevate`, and for a member, that the group cannot start it (`netflows._refused_why`).
-  The elevated child runs **only the capture** in its own console window, writes the capture file and
-  exits; the unelevated parent waits, loads it, analyses, reports and offers fixes. So fixes and the journal
-  stay in the user's own context.
-- The child is `python -E -s -m lagdoctor watch --pid P --capture-only --create-time T --out-file F
-  --presentmon-exe X --inventory-file I --parent-sid S --parent-procs pid:ct,... (--steam-log L | --no-steam-log)`
-  (hidden flags; every path absolute; `launch_elevated` refuses any empty argument or control character).
-  An administrator approving the prompt for a standard user runs the child as *that* account, with its own
-  profile and HKCU, so the parent hands over what it read in the user's own context: the PresentMon it
-  verified (the child verifies it again), the inventory (read before the prompt), the user's Steam log (or that
-  there is none) and its SID (the child notes when its token user differs), plus its own process identity for
-  `target["tool_pids"]`. The child refuses to record a process whose create time differs (the game exited during
-  the prompt), and the parent refuses to analyse a capture of another process.
-- `-E -s` keep the user's PYTHON* variables and user site-packages out of the elevated interpreter. From a
-  checkout it still runs the checkout's own code, which the user can write: UAC shows the signed Python launcher,
-  not the code it runs, and is not a security boundary for same-user code. Installed by the MSI (Stage 3),
-  `sys.executable` is the bundled runtime's `python.exe`, whose `._pth` gives `sys.path` its own ZIP and folder
-  only, so the child runs only code under Program Files, which only an administrator can change. The capture
-  service (Stage 4) takes the prompt away too (DECISIONS 2026-11-06, `docs/INSTALLER-PLAN.md`).
-- One recording at a time: whichever process records holds the named mutex `Local\lag-doctor-capture`
-  (`session.CaptureLock`); a second `watch` refuses before starting PresentMon or any ETW session. The parent
-  releases the lock just before the UAC launch, the child takes it, and the parent takes it back if the
-  prompt is declined.
+- `lagdoctor watch` without ETW rights asks: start the relay (one UAC prompt), or continue without frame
+  timing (frames reported *not measured*). `--elevate` / `--no-elevate` answer it up front. A member of
+  Performance Log Users is not asked (frame timing works unelevated), but an explicit `--elevate` still elevates
+  them, for the game-server tracker; a member who declines records frame timing here. An administrator window is
+  never elevated again. Without rights, the tracker's not-measured reason names what helps: `--elevate`, and for a
+  member, that the group cannot start it (`netflows._refused_why`).
+- The recording stays in the user's own window: the live line, Ctrl+C, the inventory, the samplers, the save,
+  the analysis and the fixes all run there, in the user's account. Only PresentMon and the Kernel-Network session
+  run in the relay (next section), with administrator rights; their data comes back over a locked pipe. So an
+  administrator approving the prompt for a standard user changes only who runs those two: the inventory, the Steam
+  log and the capture file are the user's.
+- The relay runs as `pythonw -B -E -s -m lagdoctor.relay`: no console window, no bytecode written (it writes no
+  file at all), and the user's PYTHON* variables and user site-packages left out. From a checkout it still runs
+  the checkout's own code, which the user can write: UAC shows the signed Python launcher, not the code it runs,
+  and is not a security boundary for same-user code. Installed by the MSI (Stage 3), its interpreter is the
+  bundled runtime's `pythonw.exe`, whose `._pth` gives `sys.path` its own ZIP and folder only, so the relay runs
+  only code under Program Files, which only an administrator can change. The capture service (Stage 4) takes the
+  prompt away too (DECISIONS 2026-11-06, `docs/INSTALLER-PLAN.md`).
+- One recording at a time: the window that records holds the named mutex `Local\lag-doctor-capture`
+  (`session.CaptureLock`) for the whole recording, the relay's part included; a second `watch` refuses before
+  starting PresentMon or any ETW session.
 - `lagdoctor setup` explains the alternative: join Performance Log Users once (an admin command the user
   runs, then sign out and in), after which frame timing needs no prompt. The tool never changes group
   membership.
@@ -124,9 +117,68 @@ verification log; trust a note's *Corrected* entries over its body.
     one UAC prompt, through `--elevate` (`cli.TRACKER_NOT_IN_GROUP`).
 - **Frame timing is never silently dropped.** If PresentMon is missing or fails its check, `watch` stops before
   it looks for the game (exit 6) unless `--no-elevate` asked for a recording without it; a recording without
-  frame timing says so before "Recording.", and the elevated child, opened only for frame timing, records
-  nothing when its PresentMon fails its check (exit 6). A 14-minute recording of a real game was once made
-  with every frame missing and the reason only in the report afterwards.
+  frame timing says so before "Recording.", and when the relay's own check of PresentMon fails, nothing is recorded
+  (exit 6). A 14-minute recording of a real game was once made with every frame missing and the reason only in the
+  report afterwards.
+
+### The relay (lagdoctor/relay/)
+
+The recording's administrator part (LAUNCHER-PLAN M3), and the protocol of Stage 4's capture service. `client.py`
+is the recorder's side, `server.py` the relay process, `protocol.py` the messages.
+
+- **What the prompt approves** is the whole command line (`client.relay_argv`): `--pipe` a fresh random name
+  (`lagdoctor-relay-` and 32 hex digits), `--recorder pid:create_time` (the process running `watch`, never a venv
+  launcher), `--sid` the recorder's account, `--game pid:create_time`, and `--frames --presentmon-exe X` (the
+  PresentMon the recorder verified, a plain local drive path: never a share or a device path, which the relay would
+  open with an administrator's credentials) and/or `--network`. The relay parses it strictly (`server.parse_args`,
+  also run by `relay_argv` before any prompt); from the pipe it takes `start` then `stop`, once each, and nothing
+  after `stop`, so no PresentMon or ETW argument, and its queue of commands never grows.
+- **Its checks, before any pipe exists**, on its own handle-free snapshot: the recorder is running as that exact
+  process in the relay's Windows session, and `target.accept_target` accepts the game: running as that exact
+  process, in that session, the one approved. The recorder calls the same predicate before asking for the prompt,
+  so they cannot drift. Then PresentMon must be on a fixed or removable drive (`storage.drive_type`) and pass
+  `setup.verify` again.
+- **Its pipe** (`winapi/pipe.py`): first instance only, remote clients refused, a DACL for the recorder's SID
+  (`client_dacl`), a medium label, and Administrators as its owner (`O:BA`), which Windows refuses an unelevated
+  token (error 1307, measured). It serves the first client whose pid and session (read from the pipe, no handle)
+  are the recorder's, and lets anyone else go.
+- **The recorder's checks** (`client.launch`): the server's pid is the pid of the process it launched (the
+  process handle it holds since the launch keeps Windows from giving that number away), the pipe's owner is
+  Administrators, and the relay's hello names that pid, the game and what it runs.
+- **What leaves the relay**, after `start` (which carries only the capture clock's origin):
+  - the game's frame rows, only the columns the recorder reads (`protocol.FRAME_COLUMNS`); its PresentMon runs as
+    `PresentMonSource(..., forward=)`, which passes rows on and keeps none, and starts only if `accept_target` still
+    accepts the game on a fresh snapshot (minutes may have passed since the first check);
+  - the Kernel-Network events of the game's processes and of the recorder (the tracker's DNS self-test), whole. The
+    game's processes are its tree while it runs plus those seen before that still run as the same process, each
+    in the recorder's session, from a snapshot once a second on a thread of its own (a slow reader cannot stretch
+    it): a pid Windows gives to another program is dropped at once. A recorder whose pid names another process
+    ends the recording;
+  - for every other program, bytes received and sent as running totals, only for processes in the recorder's
+    Windows session (DECISIONS 2026-11-08), the largest 64; bytes of programs gone before their session could be
+    read, or in another session, are only counted;
+  - statuses: PresentMon's (`frames`, final once its run is over), the ETW session's start result and health
+    (`net`), with the relay's own counts (`health.relay`: events it did not decode, rows or events it could not
+    pass on, bytes it kept back). An event of an unknown layout is only counted: whose it was cannot be read.
+- **Stopping**: on `stop`, or when the recorder hangs up, the relay stops the network trace, then PresentMon, sends
+  what is left and each final status, then `end`; the recorder lets it go as soon as the recording stops, before
+  the save. Messages are one JSON object per pipe message of at most 64 KiB; each side checks every field
+  (`protocol.from_relay`, `protocol.from_recorder`), and a message the protocol does not allow ends the link with
+  the reason.
+- **Exit codes of the relay**, read by the recorder when it ends before the pipe can say why
+  (`protocol.EXIT_*`): 2 a command line lag-doctor does not build, 3 the game or the recorder not running as
+  approved or in another session, 4 its pipe could not be made, 5 the recorder did not connect within 30 s, 6
+  PresentMon failed its check, 7 the recorder broke the protocol, 1 anything else.
+- **In the recorder**, `session.SessionOptions(relay=link)` makes the session's "frames" collector
+  `client.RelayedFrames` (PresentMonSource fed from the pipe: the same storage, live frame rate and result, with
+  `presentmon.relay` `{pid, rows_received, rows_refused}`) and hands the link to `FlowTracker(relay=)`, whose ETW
+  session it stands in for (`client.RelayedEtwSession`). `tool_procs` holds the relay, and its whole process tree
+  (its PresentMon) joins `target["tool_pids"]`. A link that breaks ends both collectors' data there, with the
+  reason, and the rest of the recording goes on. The relay is asked to stop only by a collector that is stopping
+  (a tracker that fails never ends frame timing), and the stop is announced to the tracker first
+  (`netflows.expect_external_stop`), so the relay's consumer ending is never read as dying by itself. Network
+  messages that come before the tracker has made its session (the frames may start the relay first) are kept for
+  it, up to 50,000 events, and the rest counted (`health.early_dropped`).
 
 ### Where files go: another app's private copy
 
@@ -147,8 +199,8 @@ up from there was "not installed" for the user's terminal and the elevated recor
   its recordings) save files other windows must find and refuse
   (exit 5, saying where the files would go and to open PowerShell from the Start menu); `check` and `analyze`
   only read the PC and print a one-line note, and the journal is not healed under a private copy. A probe that
-  cannot be made refuses the savers too. The elevated child probes the folder it saves the capture in (the
-  nearest existing one), never a home of its own. When lag-doctor's own Python is the packaged app (a Microsoft
+  cannot be made refuses the savers too. The relay saves nothing, so it needs no probe. When lag-doctor's own
+  Python is the packaged app (a Microsoft
   Store Python: every window has the same private copy), the advice is another Python, not another window
   (`paths.private_copy_advice`).
 - `scripts/e2e.py` makes the same check, and checks PresentMon, before its UAC prompt (exit 3).
@@ -168,6 +220,7 @@ lagdoctor/
             elevation.py                                rights + UAC relaunch
             pipe.py                                     the locked named pipe (the relay, the capture service)
             webview2.py                                 WebView2 from ctypes, through the runtime's own export (the app)
+  relay/    protocol.py server.py client.py __main__.py   frame timing and the network trace with admin rights
             process.py                                  priority of other processes (fixes/priority)
   capture/  base.py (done) target.py sysmon.py gpumon.py netmon.py netflows.py presentmon.py inventory.py
             session.py
@@ -273,6 +326,7 @@ def total_physical_bytes() -> int                 # GlobalMemoryStatusEx ullTota
 # winapi/storage.py (WT 9.5) ---------------------------------------------------------------------------
 def media_type(path: str) -> str                  # "SSD" | "HDD" | "Unknown"  (seek penalty, access 0)
 def free_gb(path: str) -> float | None
+def drive_type(root: str) -> int                  # GetDriveTypeW of a drive root: 2 removable, 3 fixed, 4 network
 def new_file_path(folder: str) -> str             # "\\?\..." where a new file in folder really lands (probe,
                                                   # deleted on close); NT form on a volume without drive-letter
                                                   # paths; OSError if it cannot be made
@@ -351,7 +405,9 @@ def launch_elevated(argv: list[str], cwd: str) -> ElevatedChild   # ShellExecute
                                                                   # PermissionError when declined (1223);
                                                                   # ValueError for a relative program or folder
 class ElevatedChild:
-    def wait(self, timeout_s: float | None = None) -> int | None  # exit code; a Ctrl+C leaves the child running
+    pid: int                                      # the child's; the open handle keeps Windows from reusing it
+    def wait(self, timeout_s: float | None = None) -> int | None  # exit code; a Ctrl+C leaves the child running;
+                                                                  # wait(0) only polls
     def close(self) -> None
 def relaunch_elevated(argv: list[str], cwd: str) -> int   # launch + wait + close (scripts/e2e.py)
 def hold_named_mutex(name: str)                   # handle, or None when another process holds it
@@ -451,11 +507,11 @@ The session copies these into the `Capture`. Keys not listed here go nowhere, so
 
 | collector (`name`), module, class | `result()` keys → Capture field |
 |---|---|
-| `frames`, capture/presentmon.py, `PresentMonSource(pid, exe=None, etl_file=None, *, is_alive=None)` | `columns` (F, every swap chain of the target) → `frames`; `swap_chains` `{"0x…": {"frames", "displayed", "runtime"}}` (an unfiltered replay keys them `"<pid>:0x…"`), `main_chain` (most displayed frames), `presentmon` `{version, exe, args, exit_code, stop_path, rows, malformed, rejoined, headers, stderr_tail}` → `target["presentmon"]`; `live()` = `{frames, fps, malformed}` |
+| `frames`, capture/presentmon.py, `PresentMonSource(pid, exe=None, etl_file=None, *, is_alive=None, forward=None)` (relayed: relay/client.py `RelayedFrames`) | `columns` (F, every swap chain of the target) → `frames`; `swap_chains` `{"0x…": {"frames", "displayed", "runtime"}}` (an unfiltered replay keys them `"<pid>:0x…"`), `main_chain` (most displayed frames), `presentmon` `{version, exe, args, exit_code, stop_path, rows, malformed, rejoined, headers, stderr_tail}` → `target["presentmon"]`; `live()` = `{frames, fps, malformed}` |
 | `system`, capture/sysmon.py, `SystemSampler(target)` | `columns` (S) → `system`; `others` → `others`; `game_adapter_luid` (adapter whose 3D engine the game used most) → `target["adapter_luid"]`; `game_pids` (game + children seen) → `target["pids"]`; `cost` `{ticks, median_ms, max_ms, mean_ms}` (also in the status detail) |
 | `gpu`, capture/gpumon.py, `NvidiaSampler(adapter)` | `columns` (G) → `gpu`; `device` `{name, clock_max_mhz, mem_total_mb, temp_target_c, power_default_w}` or None → `inventory["nvidia"]`; `live()` adds `source` ("nvml"/"nvidia-smi") |
 | `network`, capture/netmon.py, `NetworkSampler(server_ip=None, *, steam_log=None)` | `columns` (N) → `network`; `targets` `{gateway, internet, server}` (IPs or None), `probes` `{target: {"sent", "lost", "from_t"}}`, `lost` `{target: [t, …]}`, `wifi_scans` `[t, …]`, `route` `{if_index, description, vpn: bool \| None, toward}` → `net_flows[…]` under the same keys; `interface` `{name, kind: "wifi"/"ethernet"/"other", band, channel}` → `inventory["network"]`; `downloads` `[{t, source, mbps}]` from the Steam log, or None when no download log was read, with `download_sources` (the logs read) → `net_flows[…]` |
-| `net_flows`, capture/netflows.py, `FlowTracker(game_pids or a callable)` | `server` `{ip, port, proto, pid, rx_packets, tx_packets, rx_bytes, tx_bytes, tick_ms, first_rx_t, last_rx_t}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8; `gaps` `[[t, ms, kind], …]` (t = the last packet before the silence; kind: "delay" burst after the gap / "loss" no burst / "local" our own tx paused too / "open" the server went silent for good while we kept sending / "unknown" a late delivery hides which); `server_rx` `[[t, pps], …]` (t = end of each 1 s bin); talkers, gaps and server_rx are None when the session never ran; `layout` "verified"/"unverified"; `health` → `net_flows[…]` |
+| `net_flows`, capture/netflows.py, `FlowTracker(game_pids or a callable, *, relay=None)` | `server` `{ip, port, proto, pid, rx_packets, tx_packets, rx_bytes, tx_bytes, tick_ms, first_rx_t, last_rx_t}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8, with `talkers_scope` "all" (its own ETW session) or "session" (through the relay: the programs in this Windows session only); `game_wire_bytes` `[rx, tx]` the game's bytes that crossed the network (one end this PC's), never its loopback traffic; `gaps` `[[t, ms, kind], …]` (t = the last packet before the silence; kind: "delay" burst after the gap / "loss" no burst / "local" our own tx paused too / "open" the server went silent for good while we kept sending / "unknown" a late delivery hides which); `server_rx` `[[t, pps], …]` (t = end of each 1 s bin); talkers, game_wire_bytes, gaps and server_rx are None when the session never ran; `layout` "verified"/"unverified"; `health` → `net_flows[…]` |
 
 `others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct, create_time, gpu_game_pct], …]]`: up to 8
 non-game processes that did something that tick, ranked by CPU, `cpu_pct` with 100 = one logical CPU, `io_bps`
@@ -463,7 +519,7 @@ read + write bytes, `gpu_pct` their busiest engine on any adapter, `create_time`
 prove a PID was not reused), `gpu_game_pct` their busiest engine on the game's adapter (None while that adapter
 is unknown). lag-doctor's own process is included: its load is real, and `target["tool_pids"]` (written by the
 session from handle-free snapshots: this process, its venv launcher, its PresentMon and nvidia-smi children, and
-in the elevated flow the waiting parent) lets the analysis keep it out of the blame and out of the background-CPU
+the relay with its PresentMon) lets the analysis keep it out of the blame and out of the background-CPU
 signals (the listed totals, and the machine-wide reading minus the game): its sampling is the measurement's cost,
 never "another program using the CPU".
 
@@ -548,7 +604,7 @@ target began, so "not probed" never reads as "lost". Wi-Fi quality, retries and 
 `scan_complete` notifications are timestamped into `wifi_scans` (None when the notifications could not be
 registered, so "no scan" is never claimed unmeasured). Steam `logs\content_log.txt` is tailed
 for "Current download rate" lines (each placed at its own time stamp); `steam_log=` overrides where that log
-is (the elevated child gets the user's). Delivery Optimization is not read (it would mean a PowerShell spawn
+is. Delivery Optimization is not read (it would mean a PowerShell spawn
 during play). Location-gated calls are never made: the BSSID column holds per-session labels ("AP 1"), never
 a MAC address, and only when the OS already allows location. `nic_rx_bps`/`nic_tx_bps` are bytes per second.
 
@@ -852,7 +908,9 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   lost" when some were. `server_lag`: argued only when a server flow covers most of the capture; no server flow
   is unchecked (a TCP-only or offline game); an "open" gap is a lost connection; "local" gaps are the game
   pausing its own sending. `bandwidth_hog`: checked only from a source that sees all traffic (ETW talkers, or the
-  NIC counters).
+  NIC counters); talkers that cover only the player's Windows session (`talkers_scope` "session", through the
+  relay) can name a program but rule out only together with the NIC counters, since services run outside it: what
+  the adapter moved less the game's own bytes over the network (`game_wire_bytes`) must stay under 1 MB/s.
 
 ### Scoring (LC 5)
 - Evidence families: frame timing, GPU telemetry, GPU engine/memory, CPU threads, CPU frequency/limits,
@@ -982,11 +1040,12 @@ lagdoctor app                        lag-doctor's window: recorded games and the
   that is gone is reported, never replaced by another session's.
 - `analyze` writes into a fresh session folder (with `analyzed-capture.txt` naming its source), never beside
   the capture, and never changes what `fix` uses. A damaged, foreign or newer-format file gets one plain line.
-- The elevated child (see Privileges and elevation) records into the file the parent chose and exits; it never
-  analyses, fixes or touches the journal. `watch` exit codes: 2 bad arguments or game not found, 3 the PID now
-  belongs to another process, 4 another recording is running, 5 its files would land in another app's private
-  copy (any command that saves; see Where files go), 6 frame timing was wanted but PresentMon is missing or
-  failed its check, 130 stopped waiting.
+- The relay (see The relay) writes no file; the window that started the recording saves, analyses and reports it.
+  `watch` exit codes: 2 bad arguments, the game not found, or a game the relay would refuse (in another Windows
+  session), 3 the game exited during the UAC prompt, 4 another recording is running, 5 its files would land in
+  another app's private copy (any command that saves; see Where files go), 6 frame timing was wanted but
+  PresentMon is missing or failed its check (here or in the relay), 1 the relay could not record for another
+  reason (said in plain words), 130 stopped.
 - The live status line shows `-` for a value not in yet and `off` for a source this recording does not run
   (frame timing off, `--no-network`). It fits the console's width now (`session.console_width`): readouts drop
   from its end and it is padded, so `\r` rewrites one row (a 95-character line in a 71-column window scrolled a

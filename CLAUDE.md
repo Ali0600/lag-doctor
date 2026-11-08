@@ -189,6 +189,14 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   keyboard; the spike's tests make every real input call raise. Its interactive run is the owner's, in their terminal. The spike keeps everything under `%TEMP%\lag-doctor-webview-spike`, which the private
   copy leaves alone. The relay is also the protocol of Stage 4's capture service (`docs/INSTALLER-PLAN.md`), so Stage
   4 work starts from that plan too.
+- **The relay** (`lagdoctor/relay/`, DESIGN.md "The relay") runs PresentMon and the Kernel-Network session with
+  administrator rights for a recording in the user's own window. Everything it does comes from its command line
+  (`client.relay_argv`, parsed by `server.parse_args` on both sides of the prompt); from the pipe it takes only `start`
+  and `stop`, and it passes back only what `protocol.py` lists: the game's frame rows and events, the recorder's own
+  events, and per-program byte totals for the recorder's Windows session (DECISIONS 2026-11-08). A new message or field
+  goes through `protocol.from_relay` or `from_recorder` with its checks. `tests/test_relay_live.py` starts the real
+  relay elevated and runs only on GitHub's runner (`scripts/stage2/guard.py`); the other relay tests run its code on a
+  thread here, unelevated. An agent never starts `python -m lagdoctor.relay` itself: only `watch` does.
 - **The relay and the capture service talk only through `lagdoctor/winapi/pipe.py`.** Name a pipe through
   `pipe.path` (Windows folds `..` in a `\\.\` path, so a name holding one opened an ordinary file), build its
   descriptor with `pipe.client_dacl` (a SID string can carry entries of its own), and check who answered: a server
@@ -210,8 +218,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
   for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
   to land recounts on main: a total its PR did not touch goes stale without a merge conflict (after #4 and #5, and
-  again after #7). The PresentMon figure (40 since #13) is the tests that run on CI with a download, not CI's "tests
-  that use a download" count (41, one of which skips there): read a counter at the commit that set a figure before
+  again after #7). The PresentMon figure (42 since #23) is the tests that run on CI with a download, not CI's "tests
+  that use a download" count (43, one of which skips there): read a counter at the commit that set a figure before
   correcting the figure against it.
 - **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies. (Its High
   performance plan has no power-mode slider; `slider_mode()` reads the plan's personality, so the power tests hold

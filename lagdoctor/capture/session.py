@@ -14,7 +14,11 @@ collectors stop cannot lose the capture.
 
 lag-doctor's own processes go into target["tool_pids"] (handle-free snapshots,
 once the collectors have started their children and again just before they are
-stopped), so the analysis never blames them for the lag.
+stopped), so the analysis never blames them for the lag: this process and what
+it started, and each tool root it was given (the relay) with what that started.
+
+With a relay (relay/client.py), frame timing and the game-server tracker run in
+it, with administrator rights; their collectors here are fed from its pipe.
 """
 from __future__ import annotations
 
@@ -46,7 +50,7 @@ CAPTURE_LOCK_NAME = "Local\\lag-doctor-capture"
 
 # Which result() keys go where (docs/DESIGN.md, "What each collector's result() returns").
 NETWORK_FLOW_KEYS = ("targets", "probes", "lost", "wifi_scans", "route", "downloads", "download_sources")
-FLOW_KEYS = ("server", "talkers", "gaps", "server_rx", "layout", "health")
+FLOW_KEYS = ("server", "talkers", "talkers_scope", "game_wire_bytes", "gaps", "server_rx", "layout", "health")
 # lag-doctor's own processes are first listed at the first status tick this far in, once the collectors have
 # had a status period to start their children (PresentMon, nvidia-smi), and again just before they stop.
 TOOL_SIGHT_S = 0.5
@@ -67,9 +71,11 @@ class SessionOptions:
     presentmon_exe: Path | None = None
     frames: bool = True                    # False when the user chose to run without ETW rights
     steam_log: str | Path | None = None    # None: look it up in this account's HKCU; "": none; a path: that file
-    # lag-doctor's processes outside this one, as (pid, create_time): the waiting window of an elevated
-    # recording and its venv launcher. Each counts while that exact process still runs.
+    # lag-doctor's processes outside this one, as (pid, create_time): the relay. Each counts, with every process it
+    # started (its PresentMon), while that exact process still runs.
     tool_procs: tuple[tuple[int, int], ...] = ()
+    # A relay/client.RelayLink: frame timing and the game-server tracker come through it (whichever it runs).
+    relay: Any = None
 
 
 def request_stop(stop: threading.Event, reason: str) -> None:
@@ -493,7 +499,10 @@ def default_collectors(target: dict[str, Any], inventory: dict[str, Any], opts: 
     from lagdoctor.capture.sysmon import SystemSampler
 
     out: list[Collector] = [SystemSampler(target)]
-    if opts.frames:
+    relay = opts.relay
+    if opts.frames and relay is not None and relay.frames:
+        out.append(relay.frames_collector(target["pid"]))
+    elif opts.frames:
         from lagdoctor.capture.presentmon import PresentMonSource
         # PresentMon's own --terminate_on_proc_exit cannot fire if anti-cheat strips its handle, so it is
         # also told when the game ends, by the same handle-free check the session uses.
@@ -508,7 +517,8 @@ def default_collectors(target: dict[str, Any], inventory: dict[str, Any], opts: 
         pid, created = target["pid"], target.get("create_time")
         out.append(NetworkSampler(server_ip=opts.server_ip, steam_log=opts.steam_log))
         # Polled once a second, so child processes the game starts later join its traffic.
-        out.append(FlowTracker(lambda: target_mod.game_pids(pid, created)))
+        out.append(FlowTracker(lambda: target_mod.game_pids(pid, created),
+                               relay=relay if relay is not None and relay.network else None))
     return out
 
 
@@ -583,21 +593,24 @@ def tool_pids(procs: dict[int, Any], target: dict[str, Any], extra: Iterable[tup
               me: int | None = None, image_path: Callable[[int], str | None] | None = None,
               launcher: str | None = None) -> list[int]:
     """lag-doctor's own processes in one snapshot, ours first: own_processes(), each `extra` (pid, create_time)
-    still running as that process, and the children lag-doctor runs (PresentMon, nvidia-smi), but never the
-    game's own process tree, even when lag-doctor started the game (scripts/e2e.py runs LagLab)."""
+    still running as that process (the relay), and the processes lag-doctor and those run (PresentMon, nvidia-smi),
+    but never the game's own process tree, even when lag-doctor started the game (scripts/e2e.py runs LagLab)."""
     from lagdoctor.capture.target import descendants
     own = own_processes(procs, me=me, image_path=image_path, launcher=launcher)
     if not own:
         return []
     out = dict.fromkeys(pid for pid, _ in own)
+    roots = [own[0]]
     for pid, created in extra:
         p = procs.get(pid)
         if p is not None and p.create_time == created:
             out.setdefault(pid)
+            roots.append((pid, created))
     game, created = target.get("pid"), target.get("create_time")
     theirs = descendants(procs, game, created) if isinstance(game, int) and isinstance(created, int) else set()
-    for pid in sorted(descendants(procs, own[0][0], own[0][1]) - theirs):
-        out.setdefault(pid)
+    for root, root_created in roots:
+        for pid in sorted(descendants(procs, root, root_created) - theirs):
+            out.setdefault(pid)
     return list(out)
 
 

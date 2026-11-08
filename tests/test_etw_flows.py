@@ -606,3 +606,29 @@ def test_selftest_traffic_sends_one_udp_and_one_tcp_query_from_the_ports_it_repo
     assert out["errors"] == []
     assert (out["udp_port"], out["tcp_port"]) == (dns.udp_client, dns.tcp_client)
     assert out["udp_reply"] is (not bad_txid) and out["tcp_reply"] is (not bad_txid)
+
+
+def test_relayed_totals_join_the_bytes_counted_here_per_program_and_the_latest_replace_the_last():
+    # Through the relay (DECISIONS 2026-11-08) a program's bytes come as the relay's running totals, and a program
+    # it counted before it was known as the game's is counted here too from then on: both add up per pid.
+    table = FlowTable({80})
+    table.count(80, "recv", 100)                     # the game, from its forwarded events
+    table.count(77, "send", 10)                      # a program counted here and by the relay
+    table.set_relayed([(77, 5, 5), (90, 1000, 0)])
+    table.set_relayed([(77, 6, 6), (90, 2000, 0)])   # running totals: the latest replaces the last, never adds
+    got = {t["pid"]: (t["rx_bytes"], t["tx_bytes"], t["name"]) for t in table.result({90: "chrome.exe"})["talkers"]}
+    assert got == {90: (2000, 0, "chrome.exe"), 80: (100, 0, None), 77: (6, 16, None)}
+    assert table.talker_pids() == [90, 80, 77]
+    table.set_relayed([])
+    assert {t["pid"] for t in table.result()["talkers"]} == {80, 77}
+
+
+def test_the_games_wire_bytes_count_only_its_traffic_that_crossed_the_network():
+    table = FlowTable({GAME}, LOCALS)
+    table.count_wire(Packet(11, "tcp", "recv", GAME, 1000, LOCAL, "203.0.113.9", 50000, 443))   # from the internet
+    table.count_wire(Packet(10, "tcp", "send", GAME, 300, "203.0.113.9", LOCAL, 443, 50000))   # to it
+    table.count_wire(Packet(43, "udp", "recv", GAME, 64, "127.0.0.1", "127.0.0.1", 5000, 5001))  # loopback
+    table.count_wire(Packet(43, "udp", "recv", GAME, 64, LOCAL, LOCAL, 5000, 5001))             # to itself
+    table.count_wire(Packet(11, "tcp", "recv", OTHER, 5000, LOCAL, "203.0.113.9", 50001, 443))  # another program
+    table.count_wire(Packet(12, "tcp", "connect", GAME, 0, "203.0.113.9", LOCAL, 443, 50000))   # no bytes
+    assert table.game_wire == [1000, 300] and table.result()["game_wire_bytes"] == [1000, 300]

@@ -681,8 +681,8 @@
  {
   "name": "a group member who declines loses frame timing",
   "file": "lagdoctor/cli.py",
-  "old": "                if not may_trace:                     # a group member who declined still records frames here",
-  "new": "                if True:                     # a group member who declined still records frames here",
+  "old": "                    if relay is None and not may_trace:   # declined: a group member still records frames here",
+  "new": "                    if relay is None:   # declined: a group member still records frames here",
   "tests": [
    "tests/test_cli.py::test_a_group_member_who_declines_still_records_frames_here"
   ]

@@ -26,7 +26,8 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
 - [x] Stage 3: the MSI (2026-11-08, PRs #6, #8, #12 and #13). A WiX v7 per-machine MSI built in CI, installed, run
   from a fresh shell and uninstalled on a throwaway runner with nothing left; nothing published or signed yet.
 - [ ] Stage 4: the capture service. Begun 2026-11-08 with its channel, the locked pipe (`lagdoctor/winapi/pipe.py`, PR
-  #19; research note section 11), which the relay of `docs/LAUNCHER-PLAN.md` M3 uses first.
+  #19; research note section 11), and the relay core it will host (`lagdoctor/relay/`, `docs/LAUNCHER-PLAN.md` M3,
+  done 2026-11-08): its protocol, its checks and its client.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.
 
 ## E2: the group fallback
@@ -49,7 +50,8 @@ not help.
    every commit (research note section 7; DECISIONS 2026-11-07).
 2. Done (2026-11-07): public at https://github.com/Ali0600/lag-doctor; `.github/SECURITY.md` asks for reports through
    GitHub's private vulnerability reporting.
-3. Done (2026-11-07): CI on `windows-2025` for Python 3.13 and 3.11, SHA-pinned actions, a read-only token. Tests
+3. Done (2026-11-07): CI on `windows-2025` for Python 3.13 and 3.11, SHA-pinned actions, a read-only token (since
+   2026-11-08 for 3.13 alone, the version the MSI ships, with pushes that change only docs skipped: DECISIONS). Tests
    that need what the runner lacks skip by declaration (`LAGDOCTOR_ABSENT`, `tests/capabilities.py`). Standard
    runners are free for public repositories [verified: GitHub Actions billing page, 2026-11-06].
 4. Done (2026-11-07): of the 32 tests that skipped there for want of PresentMon's download or its gold captures, 31
@@ -150,6 +152,16 @@ but a GitHub-hosted runner. Measured (research note section 8):
   pipe's owner (`owner_sid()`, which a squatter cannot set to the service's), since any process could create that
   name first, for instance in the moments after the service stops itself when idle.
 - E8: each guard ships red-first, as every guard here does.
+- What M3's review (2026-11-08) left for the service, where any local user is a caller:
+  - **One recording machine-wide.** The ETW session names (`lagdoctor`, `lag-doctor-net`) are global, and starting
+    either stops another Windows session's recording; the capture lock is per session. An elevated relay in another
+    session can already do this; the service must refuse a second caller instead.
+  - **The caller's session, from the caller.** The relay filters per-program totals by its own session, which equals
+    the recorder's only because it checks that at start; the service runs in session 0 and must use the client's.
+  - **The caller's account, from its token**, never a command line, for the pipe's DACL and the checks.
+  - **The game's tree can hold another account's process**: a caller naming Explorer as its game would get the
+    whole events of an administrator's elevated programs started from it. Before a descendant's events leave the
+    service, it must run as the caller's account, read without opening the game.
 
 ## Stage 5: release
 

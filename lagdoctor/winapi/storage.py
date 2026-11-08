@@ -84,6 +84,12 @@ def check_path(path: str) -> str:
     return path
 
 
+def drive_type(root: str) -> int:
+    """GetDriveTypeW of a drive root (a letter, a colon and a backslash): 2 removable, 3 fixed, 4 a network drive, 1 no
+    such root."""
+    return int(_kernel32.GetDriveTypeW(root))
+
+
 def judged_drive_type(drive_type: int) -> bool:
     """Only local fixed and removable disks are asked; a network, optical or RAM drive stays Unknown."""
     return drive_type in (DRIVE_REMOVABLE, DRIVE_FIXED)
