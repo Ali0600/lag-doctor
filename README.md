@@ -61,7 +61,8 @@ lagdoctor check                              # in a new terminal window: PATH ch
 
 ## Run it
 
-In PowerShell (Python 3.11 or newer, managed by [uv](https://docs.astral.sh/uv/)):
+In PowerShell (Python 3.13, the version the installer ships, managed by [uv](https://docs.astral.sh/uv/), which
+downloads it if the PC lacks it):
 
 ```powershell
 git clone https://github.com/Ali0600/lag-doctor         # get the code
@@ -179,8 +180,10 @@ uv run python scripts/wheel_check.py dist                      # install the whe
   test started.
 - PresentMon's parser is tested against its own gold ETW captures replayed through the real exe, and the
   ETW consumer against private in-process sessions, so neither needs admin rights in the test suite.
-- **CI** (`.github/workflows/ci.yml`) runs the suite on GitHub's Windows Server 2025 runners for Python 3.13 and
-  3.11. A runner has no GPU, no NVIDIA driver, no thermal sensors and no ping replies: the workflow declares that in
+- **CI** (`.github/workflows/ci.yml`) runs the suite on GitHub's Windows Server 2025 runners for Python 3.13, the
+  version the MSI ships, on every pull request and on every push to `main` except one that changes only `docs/`,
+  `CLAUDE.md` or `.github/SECURITY.md`: no job reads those, and a test scans everything the jobs run to keep that
+  true. A runner has no GPU, no NVIDIA driver, no thermal sensors and no ping replies: the workflow declares that in
   `LAGDOCTOR_ABSENT`, and the tests marked as needing those skip there with the reason. Its High performance plan
   needs no declaring: the power tests hold on any plan. On a PC without an NVIDIA GPU, set
   `$env:LAGDOCTOR_ABSENT = "nvidia"` before running the tests, or the NVIDIA ones fail.
@@ -267,12 +270,14 @@ connection to Microsoft, as the runtime does on its own.
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 3,252 tests, run in CI on GitHub's Windows runners for 2 Python versions with
-  SHA-pinned actions, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway runner; the
+- **Testing that proves itself**: 3,263 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+  ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
+  that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
+  runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
-  the hardware, and the 40 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 2,025 deliberate sabotages in
-  40 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  the hardware, and the 42 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
+  there, failing rather than skipping if they go missing; plus a mutation harness of 2,043 deliberate sabotages in
+  42 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
 - **Supply chain and least privilege**: a per-machine WiX MSI of 179 files built in CI from pinned inputs (Python

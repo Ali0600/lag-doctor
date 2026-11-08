@@ -66,6 +66,9 @@
 - **Profile folders shown by their variable in the terminal too** (the console summary and the CLI's own lines), so
   a pasted terminal is as safe to share as the report. Its report path would then need a form a browser opens.
   Revisit hook: `console.ascii_text` and `cli.say`, calling `html.user_neutral`.
+- **A `changes` job with an `if:` on each CI job, instead of the push trigger's `paths-ignore`**, once a CI check is
+  ever required: a job skipped by `if:` reports success, while a workflow skipped by its path filter leaves a required
+  check Pending. Revisit hook: the `on:` block of `ci.yml`, plus one aggregate job that `needs:` the rest, to require.
 
 ---
 
@@ -95,6 +98,39 @@ relay does; how it does it was chosen by the implementing session, and the owner
   recording never runs on without the frame timing the player asked for. Recording on without it: deferred, as the
   backlog's "ask before recording without frame timing".
 Revisit hooks: `client.relay_python`, `client.launch`'s checks, and `Relay._on_event` in `relay/server.py`.
+
+## 2026-11-08: CI tests the Python the installer ships, and skips pushes that change only docs
+
+The owner asked why CI ran two Python versions and said docs changes should not run everything. A review of every CI
+job so far (88 test jobs on 3.11, over 85 runs), checked by a second reviewer, answered both; the owner chose the
+one-version option ("do A").
+- **One Python, the one the MSI ships (chosen by the owner)**: `requires-python = ">=3.13"`, a matrix of `["3.13"]`
+  and a committed `.python-version` of 3.13; when `scripts/runtime_pin.py` moves to a new minor version (3.13 now
+  gets security releases only, with no more Windows binaries), that version joins the matrix in the same change.
+  `tests/test_python_versions.py` holds the four together. The 3.11 leg never caught a 3.11 incompatibility in the
+  product: its reds alone were flakes and one test bug (a handle count that needed `gc.collect()` on 3.11), and it
+  caused 5 of the 6 reruns where only one leg went red. Nothing is published, so no 3.11 user is known, while a new
+  checkout here built its venv on uv's own 3.12, which CI never ran.
+  - **Keep 3.13 and 3.11**: rejected, it guarded a promise no known user relied on and doubled the flake noise.
+  - **A quick 3.11 check instead of the suite** (the wheel job on 3.11, or compiling and importing every module):
+    rejected, it keeps a promise nobody uses at lower coverage. Revisit hook: the `wheel` job in `ci.yml`, as a
+    matrix, if a user on an older Python appears.
+  - **An upper bound on `requires-python`**: rejected, it would block the planned move to the next runtime.
+- **Pushes to main that change only docs start no run (chosen)**: the push trigger's `paths-ignore` of `docs/**`,
+  `CLAUDE.md` and `.github/SECURITY.md`. No job reads them, and `tests/test_ci_triggers.py` scans everything the jobs
+  run to keep that true. 20 of the 42 pushes to main before this were such pushes, about 248 of ci.yml's 960
+  job-minutes. `README.md` stays a trigger: uv_build reads it into the wheel's metadata, so a deleted or non-UTF-8
+  README fails the build.
+  - **Filter pull requests too**: rejected. GitHub filters a pull request on its whole diff, none of the 18 so far
+    was docs-only, and a path-skipped check would stay Pending if one were ever required.
+  - **A `changes` job with an `if:` on each job**: deferred, worth it once a check is required (Backlog).
+  - **`[skip ci]` in docs commits**: rejected. Every agent would have to remember it, and on a pull request it
+    leaves the head commit with no checks, which reads as a merge conflict (CLAUDE.md).
+  - **An extension glob such as `**/*.md`**: rejected, it would also skip `tests/fixtures/presentmon/README.md`,
+    which a test reads.
+- **No concurrency group (kept)**: cancelling superseded runs would have cancelled the one-at-a-time sabotage pushes
+  whose verdicts red-first work reads, and main's per-commit verdicts; the waste it would have saved was about 27
+  job-minutes in two days.
 
 ## 2026-11-08: M1 reads each session's saved diagnosis, and the Start-menu shortcut is keyed by an HKCU value
 

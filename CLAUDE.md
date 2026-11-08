@@ -8,7 +8,7 @@ counter paths, struct offsets, event layouts, registry values) are in the fact-c
 ## Commands
 
 ```powershell
-uv sync --group laglab --python 3.13                     # set up .venv (Python 3.13: unpinned, uv takes 3.12)
+uv sync --group laglab                                   # set up .venv on Python 3.13 (.python-version)
 uv run pytest -q                                         # unit + live read-only tests
 uv run pytest -q tests/test_<area>.py                    # one area (use this while other work is running)
 uv run python scripts/redfirst.py tests/redfirst/<spec>.json   # prove a guard's test can fail
@@ -27,8 +27,17 @@ uv run python -m tests.app_harness <home> <out.json> [<shots>]   # drive the win
 uv run python scripts/make_icon.py                       # rewrite lag-doctor's icon, lagdoctor/app/lag-doctor.ico
 ```
 
-CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 and 3.11 on every push to `main` and
-every pull request; code and workflow changes go through a pull request and merge on green. Before the tests it gets
+CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 on every pull request and on every
+push to `main` except one that changes only `docs/**`, `CLAUDE.md` or `.github/SECURITY.md` (its `paths-ignore`; no job
+reads them, and `tests/test_ci_triggers.py` keeps both the list and that claim true). Such a push starts no run, and
+`gh run list --commit <sha>` then prints nothing and exits 0, so never wait for one: GitHub filters a push on its whole
+range, so prove it with `git diff --name-only <base> <sha>`, where `<base>` is the head of the last push to main that
+has a ci.yml run (`gh run list --workflow ci.yml --branch main --event push --limit 1 --json headSha`). Main is green
+when that run concluded success and every later commit is such a push. `README.md` is not exempt: the build reads it
+into the wheel's metadata. 3.13 is the Python the installer ships (`scripts/runtime_pin.py`); `requires-python`,
+`.python-version` and the matrix follow it (`tests/test_python_versions.py`), and when the pin moves to a new minor
+version, that version joins the matrix in the same change (`docs/DECISIONS.md`, 2026-11-08). Code and workflow
+changes go through a pull request and merge on green. Before the tests it gets
 PresentMon through `lagdoctor setup --download` and the gold captures through `tests.downloads fetch-gold`, checks
 both against the tests' pins and caches them; each job's summary counts the tests that use them. Its wheel job runs
 `uv build --offline` (with the copy of uv_build inside the pinned uv: `pyproject.toml`'s bound stays on that uv's
@@ -42,7 +51,9 @@ spike's automated checks and a rehearsal on pull requests that change the spike,
 `lagdoctor/winapi/ntquery.py`: GitHub's runner has the WebView2 Runtime (156.0.4314.58 on 2026-11-08), and its "no
 runtime" answer passes only when the runtime's registry version and exe agree. The rehearsal types step 2's keys, a
 wheel turn and a right-click itself there, and its `keys-typed` check fails the job unless each arrived and nothing
-acted. The PresentMon cache key hashes
+acted. It does not run for the app's own code: M1's window tests (`tests/test_app_page.py`) are in ci.yml's test
+jobs; to run the spike against a branch that changes none of its paths, `gh workflow run webview-spike.yml --ref
+<branch>`. The PresentMon cache key hashes
 `setup.py`, `paths.py` and `cli.py`, so a change to one makes every job download PresentMon afresh; GitHub's release
 host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job before blaming the change.
 
@@ -80,8 +91,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   values in place, never by rewriting the file through `json.dumps`. A script may rewrite a spec only after checking
   it is byte for byte `json.dumps(indent=1)` plus a newline (`first_capture.json` and `power_plan.json` are), and with
   `write_bytes`: Python's `write_text` writes CRLF on Windows. The copy holds `lagdoctor/`, `laglab/`, `tests/`,
-  `scripts/`, `docs/`, `.github/`, `installer/`, `pyproject.toml`, `uv.lock` and `LICENSE` (`COPY_DIRS`,
-  `COPY_FILES`): a test that reads any other file fails before its sabotage (BAD-BASE) until that file is added there.
+  `scripts/`, `docs/`, `.github/`, `installer/`, `pyproject.toml`, `uv.lock`, `LICENSE` and `.python-version`
+  (`COPY_DIRS`, `COPY_FILES`): a test that reads any other file fails before its sabotage (BAD-BASE) until that file
+  is added there.
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
   a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
 - **Text a player reads is plain words.** Research citations (`WT 8`, `LC 4.9`, `NE 7 row 9`) and review ids
@@ -199,13 +211,15 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   and made-up MACs and GUIDs), what else runs on it, and when its owner played or downloaded what. Push only `main` and
   branches cut from it: the history from before the 2026-11-07 rewrite stays in `refs/backup/`, `refs/original/` and
   the merged `worktree-*` branches, and `.git/hooks/pre-push` (local, not in the repo) refuses any commit that holds
-  those details.
+  those details. Pull request bodies, review comments and issue text are public too, and no hook reads them: a
+  command for the owner names the folder as `<repo>\.claude\worktrees\<name>` there, never the full user path (a PR
+  body that held it was refused before posting, 2026-11-08).
 - **The README's Experience Gained carries totals** (tests, red-first sabotages and their specs, the tests on the real
   PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
   for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
   to land recounts on main: a total its PR did not touch goes stale without a merge conflict (after #4 and #5, and
-  again after #7). The PresentMon figure (40 since #13) is the tests that run on CI with a download, not CI's "tests
-  that use a download" count (41, one of which skips there): read a counter at the commit that set a figure before
+  again after #7). The PresentMon figure (42 since #23) is the tests that run on CI with a download, not CI's "tests
+  that use a download" count (43, one of which skips there): read a counter at the commit that set a figure before
   correcting the figure against it.
 - **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies. (Its High
   performance plan has no power-mode slider; `slider_mode()` reads the plan's personality, so the power tests hold
@@ -220,9 +234,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   and the app's own `run()`, which refuses an elevated start, is never what a test opens: `tests/app_harness.py`
   builds `App` itself.
 - `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
-- A new worktree has no `.venv`, and the first `uv run` builds one on uv's own managed Python 3.12 (pyproject asks
-  only for 3.11 or later; seen 2026-11-07). Run the `uv sync ... --python 3.13` line first: it resolves to
-  `C:\Python313`, the interpreter of the main checkout's venv.
+- A new worktree has no `.venv`; the first `uv sync` or `uv run` builds one on Python 3.13, named by `.python-version`,
+  which resolves to `C:\Python313` here (measured 2026-11-08, uv 0.10.4). Before that file, uv took its own managed
+  3.12, which CI never ran. A venv still on 3.12 is rebuilt by the next `uv run`: not while a red-first run uses it.
 - The main checkout (`<repo>`) is also a session's working folder: on 2026-11-08 the original session worked there
   while worktree sessions built M0 and its step 2. Work in a worktree. After landing a change, bring the main checkout
   to the new main only with `git merge --ff-only origin/main`, only when it is on `main` with `git status --porcelain`
@@ -310,4 +324,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   each at its best of three (about 0.06x on this laptop); if it fails again, rerun it alone before blaming a change.
   `tests/test_sysmon_sampler.py::test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild` failed once in a
   full local run (2026-11-08: the grandchild's first reading was 0.0, so its mean was 72 % against the 88 % expected,
-  outside the 10-point bound) and passed alone; rerun it alone before blaming a change.
+  outside the 10-point bound) and passed alone; rerun it alone before blaming a change. The Window spike workflow's
+  socket check (`sockets-1` or `sockets-2`) failed 2 of 7 dispatched runs on 2026-11-08 (the M1 branch 2 of 4, main 0
+  of 3, the spike's code the same on both): a WebView2 process held one UDP4 socket "bound" on an ephemeral port, once
+  with an outgoing connection, which reads as the runtime's own network traffic rather than a listener; rerun the job
+  before blaming a change. A fix that tells the two apart was proposed as its own session, not made.

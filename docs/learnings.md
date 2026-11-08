@@ -655,3 +655,28 @@ oversized file was cut mid-string and failed to parse on its own; a file whose f
 needs the check.
 **Takeaway**: test a size cap with input whose first N bytes are valid; input that is broken anywhere tests the
 parser, not the cap.
+
+### A DLL beside a game's exe is loaded in place of Windows' own
+When a program loads a DLL by name, Windows looks in the program's own folder before System32, unless the name is on
+Windows' KnownDLLs list, which always loads Windows' own copy. So a `dinput8.dll`, `dxgi.dll` or `xinput1_3.dll`
+dropped next to a game's exe is loaded instead of Windows' copy and runs inside the game's process. Most fan fixes
+get in this way (Ultimate ASI Loader, DXVK, Special K's local install), and so do DLL-planting attacks.
+**Why it came up**: the owner asked how people make bug and frame-rate fixes for PC games, and whether lag-doctor
+could. Those fixes run inside the game, which lag-doctor's first principle rules out (no injection, hooks, memory
+reads or handles), and anti-cheat treats such files as cheats: BattlEye's FAQ tells players to make sure no
+`d3d9.dll`, `dxgi.dll` or `dsound.dll` sits in the game's folder.
+**Takeaway**: whoever can write to an exe's folder can run code inside that exe; mods use that on purpose, so judge a
+mod from outside the process (record before and after), and run anything elevated only from a folder that only
+administrators can write.
+
+### A path-filtered push leaves its commit with no run, which looks like CI never started
+GitHub matches a `push` path filter against the whole pushed range (before to after) and a `pull_request` filter
+against the pull request's whole diff. A push it skips gets no run and no commit status: `gh run list --commit <sha>`
+prints nothing and exits 0, the same answer a pull request with a merge conflict gets (no workflow starts for it). A
+required check whose workflow a path filter skipped stays Pending, while a job skipped by `if:` reports success.
+**Why it came up**: CI was made to skip pushes to main that change only docs (20 of 42 pushes had re-run every job on
+unchanged code), and the habit of confirming main's run for every pushed commit would then wait forever on a docs
+commit, or pass without having checked anything.
+**Takeaway**: once a workflow filters by path, prove that a commit was meant to be skipped from its diff against the
+last commit that ran, never from the missing run; and keep path filters off any check that is, or may become,
+required.
