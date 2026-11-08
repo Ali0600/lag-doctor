@@ -657,6 +657,18 @@ reads or handles), and anti-cheat treats such files as cheats: BattlEye's FAQ te
 mod from outside the process (record before and after), and run anything elevated only from a folder that only
 administrators can write.
 
+### A path-filtered push leaves its commit with no run, which looks like CI never started
+GitHub matches a `push` path filter against the whole pushed range (before to after) and a `pull_request` filter
+against the pull request's whole diff. A push it skips gets no run and no commit status: `gh run list --commit <sha>`
+prints nothing and exits 0, the same answer a pull request with a merge conflict gets (no workflow starts for it). A
+required check whose workflow a path filter skipped stays Pending, while a job skipped by `if:` reports success.
+**Why it came up**: CI was made to skip pushes to main that change only docs (20 of 42 pushes had re-run every job on
+unchanged code), and the habit of confirming main's run for every pushed commit would then wait forever on a docs
+commit, or pass without having checked anything.
+**Takeaway**: once a workflow filters by path, prove that a commit was meant to be skipped from its diff against the
+last commit that ran, never from the missing run; and keep path filters off any check that is, or may become,
+required.
+
 ### A bound UDP endpoint is not a server, and Windows' tables cannot say which it is
 TCP has a state for a server (LISTEN); UDP does not. Windows lists every UDP socket as a bound endpoint, a client's
 too: a socket that only called `connect()` is listed at the address Windows bound it to (0.0.0.0 or ::), not the one

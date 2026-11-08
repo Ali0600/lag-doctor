@@ -8,7 +8,7 @@ counter paths, struct offsets, event layouts, registry values) are in the fact-c
 ## Commands
 
 ```powershell
-uv sync --group laglab --python 3.13                     # set up .venv (Python 3.13: unpinned, uv takes 3.12)
+uv sync --group laglab                                   # set up .venv on Python 3.13 (.python-version)
 uv run pytest -q                                         # unit + live read-only tests
 uv run pytest -q tests/test_<area>.py                    # one area (use this while other work is running)
 uv run python scripts/redfirst.py tests/redfirst/<spec>.json   # prove a guard's test can fail
@@ -27,8 +27,17 @@ uv run python -m tests.app_harness <home> <out.json> [<shots>]   # drive the win
 uv run python scripts/make_icon.py                       # rewrite lag-doctor's icon, lagdoctor/app/lag-doctor.ico
 ```
 
-CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 and 3.11 on every push to `main` and
-every pull request; code and workflow changes go through a pull request and merge on green. Before the tests it gets
+CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 on every pull request and on every
+push to `main` except one that changes only `docs/**`, `CLAUDE.md` or `.github/SECURITY.md` (its `paths-ignore`; no job
+reads them, and `tests/test_ci_triggers.py` keeps both the list and that claim true). Such a push starts no run, and
+`gh run list --commit <sha>` then prints nothing and exits 0, so never wait for one: GitHub filters a push on its whole
+range, so prove it with `git diff --name-only <base> <sha>`, where `<base>` is the head of the last push to main that
+has a ci.yml run (`gh run list --workflow ci.yml --branch main --event push --limit 1 --json headSha`). Main is green
+when that run concluded success and every later commit is such a push. `README.md` is not exempt: the build reads it
+into the wheel's metadata. 3.13 is the Python the installer ships (`scripts/runtime_pin.py`); `requires-python`,
+`.python-version` and the matrix follow it (`tests/test_python_versions.py`), and when the pin moves to a new minor
+version, that version joins the matrix in the same change (`docs/DECISIONS.md`, 2026-11-08). Code and workflow
+changes go through a pull request and merge on green. Before the tests it gets
 PresentMon through `lagdoctor setup --download` and the gold captures through `tests.downloads fetch-gold`, checks
 both against the tests' pins and caches them; each job's summary counts the tests that use them. Its wheel job runs
 `uv build --offline` (with the copy of uv_build inside the pinned uv: `pyproject.toml`'s bound stays on that uv's
@@ -82,8 +91,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   values in place, never by rewriting the file through `json.dumps`. A script may rewrite a spec only after checking
   it is byte for byte `json.dumps(indent=1)` plus a newline (`first_capture.json` and `power_plan.json` are), and with
   `write_bytes`: Python's `write_text` writes CRLF on Windows. The copy holds `lagdoctor/`, `laglab/`, `tests/`,
-  `scripts/`, `docs/`, `.github/`, `installer/`, `pyproject.toml`, `uv.lock` and `LICENSE` (`COPY_DIRS`,
-  `COPY_FILES`): a test that reads any other file fails before its sabotage (BAD-BASE) until that file is added there.
+  `scripts/`, `docs/`, `.github/`, `installer/`, `pyproject.toml`, `uv.lock`, `LICENSE` and `.python-version`
+  (`COPY_DIRS`, `COPY_FILES`): a test that reads any other file fails before its sabotage (BAD-BASE) until that file
+  is added there.
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
   a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
 - **Text a player reads is plain words.** Research citations (`WT 8`, `LC 4.9`, `NE 7 row 9`) and review ids
@@ -216,9 +226,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   and the app's own `run()`, which refuses an elevated start, is never what a test opens: `tests/app_harness.py`
   builds `App` itself.
 - `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
-- A new worktree has no `.venv`, and the first `uv run` builds one on uv's own managed Python 3.12 (pyproject asks
-  only for 3.11 or later; seen 2026-11-07). Run the `uv sync ... --python 3.13` line first: it resolves to
-  `C:\Python313`, the interpreter of the main checkout's venv.
+- A new worktree has no `.venv`; the first `uv sync` or `uv run` builds one on Python 3.13, named by `.python-version`,
+  which resolves to `C:\Python313` here (measured 2026-11-08, uv 0.10.4). Before that file, uv took its own managed
+  3.12, which CI never ran. A venv still on 3.12 is rebuilt by the next `uv run`: not while a red-first run uses it.
 - The main checkout (`<repo>`) is also a session's working folder: on 2026-11-08 the original session worked there
   while worktree sessions built M0 and its step 2. Work in a worktree. After landing a change, bring the main checkout
   to the new main only with `git merge --ff-only origin/main`, only when it is on `main` with `git status --porcelain`
