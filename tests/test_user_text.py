@@ -135,3 +135,33 @@ def test_no_internal_citations_in_text_a_player_reads():
     hits = [f"{where}: {c}" for p in modules
             for where, c in citations(p.read_text(encoding="utf-8"), p.relative_to(ROOT).as_posix())]
     assert hits == [], "\n".join(hits)
+
+
+def non_ascii(source: str, name: str = "<source>") -> list[tuple[str, str]]:
+    """(where, character) for each character outside ASCII in a string literal of `source` that is not a docstring."""
+    tree = ast.parse(source)
+    docs = _docstrings(tree)
+    return sorted((f"{name}:{node.lineno}", ch) for node in ast.walk(tree)
+                  if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docs
+                  for ch in set(node.value) if not ch.isascii())
+
+
+def test_the_character_scan_reads_f_strings_and_skips_docstrings_and_comments():
+    source = ('"""Café notes."""\n'
+              'x = f"the GPU reached {t} °C"   # a comment: über\n'
+              'y = "a → b"\n'
+              'def f():\n'
+              '    """Über."""\n'
+              '    return "plain"\n')
+    assert non_ascii(source) == [("<source>:2", "°"), ("<source>:3", "→")]
+
+
+def test_every_character_outside_ascii_a_module_writes_has_a_form_in_the_console():
+    # Wording, first capture: "The GPU reached 89 ?C". The console's table of ASCII forms is kept by hand: this holds
+    # it to every character the modules' strings contain, so a message that brings a new one fails here first.
+    from lagdoctor.report import console
+    found = [hit for p in user_modules() for hit in non_ascii(p.read_text(encoding="utf-8"),
+                                                              p.relative_to(ROOT).as_posix())]
+    assert {"°", "≥"} <= {ch for _, ch in found}                    # the ones a report prints today are seen
+    missing = [f"{where}: {ch!r} (U+{ord(ch):04X})" for where, ch in found if console.ascii_text(ch) == "?"]
+    assert missing == [], "\n".join(missing)

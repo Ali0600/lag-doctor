@@ -298,14 +298,15 @@ def _frames_capture(n: int) -> Capture:
 
 
 def test_the_save_takes_a_fraction_of_the_old_saves_time(tmp_path):
-    # Measured against the old save on the same data, so a busy PC slows both alike. On a 30-minute 144 FPS
-    # capture here: 2.6 s against 36 s.
+    # Measured against the old save on the same data, the two in turns and each at its best of three, so a slow
+    # stretch of a busy PC lands on both alike. With the old save timed once, before the new one's three, it failed
+    # once on CI (Python 3.11: 0.35 s against 0.84 s). On a 30-minute 144 FPS capture here: 2.6 s against 36 s.
     cap = _frames_capture(15_000)
-    t0 = time.perf_counter()
-    _old_save(cap, tmp_path / "old.gz")
-    old = time.perf_counter() - t0
-    new = math.inf
+    old = new = math.inf
     for _ in range(3):
+        t0 = time.perf_counter()
+        _old_save(cap, tmp_path / "old.gz")
+        old = min(old, time.perf_counter() - t0)
         t0 = time.perf_counter()
         cap.save(tmp_path / "new.gz")
         new = min(new, time.perf_counter() - t0)

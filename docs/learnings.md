@@ -379,3 +379,12 @@ why to the list it points at, and that list may be built from a different predic
 source's own state; a sampler that ran ("ok") and recorded nothing was pointed at and listed nowhere.
 **Takeaway**: when a message starts pointing elsewhere, check the target is derived from the same condition (or a
 wider one) and test the case where the two used to differ.
+
+### An invisible character in source is one edit away from another
+A literal no-break space looks like a space and a byte-order mark like nothing, so an editor, a formatter or an
+agent's edit tool can swap one for another character, and the diff shows nothing anyone would notice.
+**Why it came up**: the console's table of ASCII forms mapped the no-break space to a space; an edit retyped the key
+as a plain space, the entry became a no-op, and every no-break space printed as "?". Writing the fix, the agent's
+edit tool turned the escape `\u00a0` back into the literal character.
+**Takeaway**: write invisible and look-alike characters as escapes (`"\u00a0"`, `"\ufeff"`), and after an
+edit read the line back with `ascii()` to see which one landed.

@@ -6,10 +6,12 @@ from html.parser import HTMLParser
 
 import pytest
 
+from lagdoctor.analysis.diagnose import diagnose
 from lagdoctor.model import (F, N, S, Capture, Diagnosis, Evidence, Finding, FixSuggestion, LagEvent,
                              SeriesBuilder, SourceStatus)
 from lagdoctor.report import charts, console, html as html_report, labels
 from lagdoctor.winapi import power as winapi_power
+from tests import synth
 
 EVIL = '<script>alert(1)</script>'
 EVIL_ATTR = '"><img src=x onerror=alert(1)>'
@@ -192,6 +194,22 @@ def test_console_is_ascii_and_wrapped_even_with_unicode_input():
     assert all(len(line) <= 80 for line in text.splitlines()), max(text.splitlines(), key=len)
     # The command sits alone on its own line, so a copy never picks up prose or a line break.
     assert "       run: lagdoctor fix power_plan" in text.splitlines()
+
+
+def test_the_console_writes_the_degree_sign_as_plain_text():
+    # Wording, first capture: "The GPU reached 89 ?C", as the console had no ASCII form for the degree sign
+    d = make_diagnosis(evidence_text="The GPU reached 89 °C, at or above its 75 °C target temperature.")
+    text = " ".join(console.render(d, make_capture()).split())
+    assert "The GPU reached 89 C, at or above its 75 C target temperature." in text
+
+
+def test_the_console_writes_a_no_break_space_as_a_space():
+    # Text from Windows (an error message in a source's reason) can hold one; an edit once retyped the console's entry
+    # for it as a plain space, so it printed as "?"
+    cap = make_capture()
+    cap.sources["net_flows"] = SourceStatus("unavailable", "needs ETW rights:" + chr(0xA0) + "access denied")
+    text = " ".join(console.render(make_diagnosis(), cap).split())
+    assert "needs ETW rights: access denied" in text
 
 
 def test_write_is_atomic(tmp_path):
@@ -645,6 +663,26 @@ def test_the_marked_moments_are_listed_with_what_was_found_at_each():
     unseen = "Frame timing was not measured, so a stutter at those moments could not be seen."
     assert unseen in " ".join(console.render(d, make_capture()).split())
     assert unseen in section(html_report.render(d, make_capture()), "Moments you marked")
+
+
+def test_a_mark_where_only_the_cpu_clock_fell_names_no_heat_or_power():
+    # Wording, first capture: at a mark the CPU ran at 56 % of its base clock (70 % the rest of the time) while
+    # Windows reported no limit, and the marks list and the verdict said "the CPU slowing down (heat or power)"
+    perf = (lambda t: 56.0 if 59.0 <= t <= 62.0 else 70.0)
+    cap = synth.capture(system=synth.system_table(120, cpu_perf_pct=perf, cpu_perf_limit_pct=100.0,
+                                                  thermal_limit_pct=100.0, game_top_thread_pct=95.0,
+                                                  cpu_total_pct=20.0, game_cpu_pct=60.0),
+                        duration=120.0, marks=[60.0])
+    cap.sources = synth.sources(("system",))
+    d = diagnose(cap)
+    assert d.stats["marks"] == [{"t": 60.0, "events": [], "causes": ["cpu_throttle"]}]     # only the clock moved
+    lead = d.findings[0]
+    assert (lead.cause, lead.title) == ("cpu_throttle", "The CPU ran below its base clock")   # no limit was seen
+    said = "the CPU running below full speed"
+    assert d.headline.endswith(f"; possible: {said}.") and not re.search(r"heat|power", d.headline), d.headline
+    assert f"  - 1m: no lag event; meanwhile {said}" in console.render(d, cap).splitlines()
+    marks = section(html_report.render(d, cap), "Moments you marked")
+    assert f"<td>1m</td><td>No lag event; meanwhile {said}</td>" in marks
 
 
 def test_marks_are_drawn_on_the_frame_cpu_gpu_and_network_charts():

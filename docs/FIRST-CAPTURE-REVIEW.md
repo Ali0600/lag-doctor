@@ -132,10 +132,20 @@ with it, and what is still open, each with the code to start from.
   timing not recorded"; the fix details lose their undo note (a check keeps it out); `commands` show as code; the
   window title names the game, the exe beside it, in both reports.
 
-## Noticed while fixing these, left for later
+## Noticed while fixing these (all fixed in PR #11)
 
 - The console prints the degree sign as "?" ("The GPU reached 89 ?C"): `console._PUNCT` has no ASCII form for it.
+  *Fixed (PR #11):* "89 C". A check over every module's strings now fails on any character the console has no form
+  for. Its first run found one more, the byte-order mark `gpumon` strips (the console now drops it); and the
+  no-break space, whose entry an edit had retyped as a plain space, prints as a space again.
 - A mark where the CPU ran at 56 % of its base clock reads "the CPU slowing down (heat or power)", a cause the
   capture never showed (Windows reported no limit): `labels.CAUSES["cpu_throttle"]`.
+  *Fixed (PR #11):* "the CPU running below full speed", in the marks lists and the verdict alike.
 - `tests/redfirst/power_plan.json`'s "the plan's settings not recorded" no longer applies: #3 reflowed its line in
   `capture/inventory.py`, so the runner reports it BAD-SPEC.
+  *Fixed (PR #11):* re-pointed at the line as it is now, and CAUGHT again.
+- `tests/test_model.py::test_the_save_takes_a_fraction_of_the_old_saves_time` failed once on main's Python 3.11 job
+  (new save 0.35 s, old 0.84 s; it needs under 0.3x) and passed on rerun. It timed the old save once, before the new
+  save's best of three.
+  *Fixed (PR #11):* the two run in turns, each at its best of three, against the same 0.3x; a save at gzip level 9
+  now fails it on its own.
