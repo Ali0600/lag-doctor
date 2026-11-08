@@ -45,6 +45,21 @@ def test_reads_the_real_tree():
     assert guard.refuses(0)
 
 
+def test_lists_the_real_root_again():
+    # As when a file is saved in the real checkout's root mid-run, with that root on sys.path (the venv's editable
+    # install puts it there): the next import lookup and metadata scan list the folder again.
+    import importlib.metadata
+    real = os.environ["REDFIRST_FIXTURE_REAL"]
+    st = os.stat(real)
+    os.utime(real, ns=(st.st_atime_ns, st.st_mtime_ns + 2_000_000_000))
+    try:
+        import no_such_module_anywhere  # noqa: F401
+    except ImportError:
+        pass
+    list(importlib.metadata.distributions())
+    assert guard.refuses(0)
+
+
 def test_exits_without_a_report():
     os._exit(0)          # no atexit handlers run, so the runner's probe never reports
 

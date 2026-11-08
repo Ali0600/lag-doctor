@@ -254,7 +254,8 @@ def install(wheel: Path, venv: Path, cwd: Path, env: dict[str, str]) -> Check:
             return Check("install", False, f"{' '.join(argv[1:3])} exit code {code}: {(out + err).strip()[-600:]!r}")
     exe = venv / "Scripts" / f"{COMMAND}.exe"
     if not exe.is_file():
-        return Check("install", False, f"installed, but there is no {exe.name}: the wheel declares no {COMMAND} command")
+        return Check("install", False, f"installed, but there is no {exe.name}: the wheel declares no "
+                                       f"{COMMAND} command")
     return Check("install", True, f"Python {python} venv in {venv}")
 
 
@@ -291,14 +292,17 @@ def run_checks(dist: Path) -> tuple[Path, list[str], list[Check]]:
         expected = module_names(names)
         asked, answer = tmp / "modules.json", tmp / "imported.json"
         asked.write_text(json.dumps(expected), encoding="utf-8")
-        code, out, err = run([str(venv / "Scripts" / "python.exe"), "-I", "-c", IMPORT_CHILD, str(asked), str(answer)],
-                             work, env)
+        python = str(venv / "Scripts" / "python.exe")
+        code, out, err = run([python, "-I", "-c", IMPORT_CHILD, str(asked), str(answer)], work, env)
         try:
             result = json.loads(answer.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             result = None
-        checks.append(judge_imports(result, expected, venv) if code == 0 and isinstance(result, dict) else
-                      Check("imports", False, f"the import run ended with exit code {code}: {(out + err).strip()[-600:]!r}"))
+        if code == 0 and isinstance(result, dict):
+            checks.append(judge_imports(result, expected, venv))
+        else:
+            checks.append(Check("imports", False, f"the import run ended with exit code {code}: "
+                                                  f"{(out + err).strip()[-600:]!r}"))
         try:
             capture = make_capture(tmp / "capture.ldcap.json.gz")
         except Exception as exc:                  # the checkout's own model, not the wheel: still a failure
@@ -326,7 +330,8 @@ def _remove(path: Path) -> None:
 
 def summary(wheel: Path, names: list[str], checks: list[Check]) -> str:
     files = [n for n in names if not n.endswith("/")]
-    rows = "\n".join(f"| {c.name} | {'pass' if c.ok else '**FAIL**'} | {c.detail.replace('|', '/')} |" for c in checks)
+    rows = "\n".join(f"| {c.name} | {'pass' if c.ok else '**FAIL**'} | "
+                     f"{' '.join(c.detail.split()).replace('|', '/')} |" for c in checks)
     return (f"### Wheel: {wheel.name}\n\n{len(files)} files, {wheel.stat().st_size:,} bytes, installed and run in a "
             f"fresh venv outside the checkout.\n\n| Check | Result | Detail |\n|---|---|---|\n{rows}\n")
 

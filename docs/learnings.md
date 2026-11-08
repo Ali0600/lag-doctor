@@ -297,3 +297,26 @@ same hour were normal. A diagnostic branch showed it only right after the full s
 gone once the child runs got their own `TEMP` (12 of 12 normal).
 **Takeaway**: give every child run of a tool that keeps shared state (temp roots, caches, locks) a private root, and
 compare a suspicious slowdown with runs from the same hour without your change before calling it noise.
+
+### Running an installed command proves only the modules that command imports
+A smoke test that installs a wheel and runs its commands sees only what those commands import. `lagdoctor analyze`
+imported 22 of the package's 56 modules and never psutil, and the fix catalog finds its fixes by listing its own
+folder, so a wheel missing most of `capture/`, `fixes/` and `winapi/`, or one that forgot to declare psutil, still
+passed `--help` and `analyze`.
+**Why it came up**: the Stage 3 wheel job. Of seven wheels broken on purpose (a module left out, psutil undeclared,
+`laglab/` let in, and so on), five passed both commands.
+**Takeaway**: check an installed package three ways: its file list against what git tracks, an import of every
+module in a fresh venv, and its commands; then break one artifact per check and watch each go red.
+
+### An editable install of a flat layout puts the whole checkout on sys.path
+uv_build's editable install is a `.pth` file naming the folder above the package, which in a flat layout is the
+checkout's root. Every process in the venv can then import every top-level folder there (`laglab`, `tests`,
+`scripts`) from any working folder. Two effects followed. A regular package found there (one with `__init__.py`)
+beats a same-named folder without `__init__.py` found earlier on sys.path: Python looks past a namespace folder for a
+regular package. And Python lists a sys.path folder again whenever a file in it has been saved.
+**Why it came up**: making lag-doctor a package, so that `uv run lagdoctor` works. Five of the red-first harness's 10
+self-tests went red: their scratch project's `lagdoctor/` had no `__init__.py`, so `from lagdoctor import guard`
+found the real package, which has no `guard` (all 10 passed with the `.pth` moved aside). Then saving CLAUDE.md during
+a red-first run turned 3 of 28 verdicts into UNISOLATED: the probe saw the checkout's root being listed.
+**Takeaway**: after making a flat-layout project editable, give every same-named package in fixtures and copies an
+`__init__.py`, and take the real tree off sys.path in any process that must test a copy.

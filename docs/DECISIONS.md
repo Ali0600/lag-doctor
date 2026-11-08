@@ -26,6 +26,23 @@
 
 ---
 
+## 2026-11-07: uv_build makes the wheel, and `uv sync` installs the project
+
+Stage 3 needed a build backend and a `lagdoctor` console entry point (`docs/INSTALLER-PLAN.md`); until then
+`pyproject.toml` had `package = false` and no backend. The implementing session chose; the owner has not weighed in.
+- **uv_build, bounded to the pinned uv's minor version (chosen)**: the uv that CI pins carries a copy, so
+  `uv build --offline` needs no download; the flat layout takes two keys (`module-name = "lagdoctor"`,
+  `module-root = ""`); the wheel holds that package and its metadata, and the sdist adds only `pyproject.toml`, the
+  README and the licence. The cost: the bound must move with CI's `version:` (`tests/test_wheel_check.py`).
+- **hatchling or setuptools**: rejected. Either is one more package for uv to download before it can build, and
+  this pure-Python package needs nothing from them that uv_build lacks.
+- **Keep `package = false` and build the wheel only in CI**: rejected. A checkout would have no `lagdoctor` command, so
+  the README would keep `python -m`. The editable install it brings (a `.pth` naming the checkout's root) was measured
+  not to change what red-first runs test (`collector_base.json` 4 of 4 caught before and after). It did shadow the
+  harness's scratch package, which has an `__init__.py` now, and a file saved in the root mid-run read as UNISOLATED,
+  so the probe takes the real tree off sys.path (learnings).
+Revisit hook: `[build-system]` and `[tool.uv.build-backend]` in `pyproject.toml`.
+
 ## 2026-11-07: The capture service gets an unrestricted service SID
 
 The plan wanted a restricted service SID on the LocalService capture service if E3 passed with it. E3 ran the
