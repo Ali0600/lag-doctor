@@ -268,7 +268,7 @@ class _Env:
         return _text(getattr(s, "detail", None), 300) or str(getattr(s, "state", "not measured"))
 
     def need(self, name: str) -> str:
-        return f"needs {labels.source_text(name)}, which was not measured: {self.why(name)}"
+        return labels.needs_source(name)     # the source's own reason is in the Not measured list, once
 
     @property
     def frames_measured(self) -> bool:
@@ -1383,8 +1383,7 @@ def _power_plan(cap: Capture, ctx: dict) -> Any:
     better = _better_scheme(e) if quiet else None
     if better:
         fixes.append(FixSuggestion(title=f"Switch the power plan from \"{name}\" to \"{better[1]}\"",
-                                   detail="A standard Windows setting; lag-doctor saves the current plan first, and "
-                                          "`lagdoctor undo` puts it back.",
+                                   detail="A standard Windows setting; lag-doctor saves the current plan first.",
                                    fix_id="power_plan", params={"scheme": better[0]}))
     if p.get("on_battery") is True:
         fixes.append(_advice("Plug in the charger while gaming", "Windows and the GPU driver cap power on battery."))
@@ -1431,8 +1430,7 @@ def _refresh_rate(cap: Capture, ctx: dict) -> Any:
     device = d.get("device") if isinstance(d.get("device"), str) and DEVICE_RE.fullmatch(d["device"]) else None
     battery = e.power.get("on_battery") is True
     note = " A lower rate saves battery, so keep it if that is on purpose." if battery else ""
-    fixes = ([FixSuggestion(title=f"Set {screen} to {top:.0f} Hz", detail="Windows tests the mode first; "
-                            "`lagdoctor undo` puts the old rate back." + note, fix_id="refresh_rate",
+    fixes = ([FixSuggestion(title=f"Set {screen} to {top:.0f} Hz", detail="Windows tests the mode first." + note, fix_id="refresh_rate",
                             params={"device": device, "hz": int(round(top))})]
              if device else
              [_advice(f"Set {screen} to {top:.0f} Hz", "Settings > System > Display > Advanced display." + note)])
@@ -1754,11 +1752,12 @@ def _game_dvr(cap: Capture, ctx: dict) -> Any:
         return c.conclude()
     # CC-6: Windows' default state. The capture switch is on and the background setting was not there to read,
     # whose meaning is unverified (WT 8, LC 4.15), so this is advice to check, never an automatic change.
-    c.support("static", W_STATIC, "Game Bar capture is on; whether it records in the background is unknown")
+    c.support("static", W_STATIC, "Game Bar capture is on, and its background-recording setting was not there to "
+                                  "read, so whether Windows records gameplay in the background is unknown")
     fixes = [_advice("Check whether Windows records gameplay in the background",
                      "In the Xbox Game Bar's capture settings, turn background recording off if you do not use it."),
              others]
-    return c.conclude("Game Bar capture is on; whether it records in the background is unknown",
+    return c.conclude("Game Bar may be recording in the background",
                       "If Windows records gameplay in the background, that costs GPU time the game could have. "
                       "The setting could not be read, so check it.", fixes)
 
@@ -1773,9 +1772,10 @@ def _game_mode_off(cap: Capture, ctx: dict) -> Any:
     if mode is True:
         c.against("static", W_DIRECT, "Game Mode is on")
         return c.conclude()
-    c.support("static", W_STATIC, "Game Mode is off")
+    c.support("static", W_STATIC, "Windows' Game Mode setting is off, so Windows does not favour the game over "
+                                  "background work")     # never the title again, word for word (wording)
     fixes = [FixSuggestion(title="Turn Game Mode on", detail="A standard Windows setting (Settings > Gaming > Game "
-                                                             "Mode); `lagdoctor undo` puts it back.",
+                                                             "Mode).",
                            fix_id="game_mode_on")]
     return c.conclude("Game Mode is off", "Game Mode lets Windows favour the game over background work.", fixes)
 
@@ -2026,7 +2026,7 @@ def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
             up = f", up {RISE_TEXT[n.col](rise)} when the game lagged" if rise is not None else ""
             fixes.append(FixSuggestion(title=f"Lower the priority of {_text(n.name, 80)} (process {pid}{up}) for this "
                                              "session",
-                                       detail="Below-normal priority until it exits; `lagdoctor undo` puts it back. "
+                                       detail="Below-normal priority until it exits. "
                                               "lag-doctor refuses services, protected processes and the game.",
                                        fix_id="background_priority",
                                        # the fix refuses these too: the game and its children, any process with the

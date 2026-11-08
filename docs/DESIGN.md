@@ -806,8 +806,10 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   frames measured and no lag, "unknown" without frames.
 - The headline names the top finding in one sentence; whenever the lag type is not stutter and there were
   severe hitches or freezes it adds "; also N severe hitches, worst X ms"; an open gap reads "the game server
-  stopped answering at m:ss"; with zero hitches it says "no hitches ≥ 50 ms in N frames (at most 3/N at 95 %)";
-  without frames it opens "Frame timing was not measured (why), so stutter and frame rate could not be checked".
+  stopped answering at 13m 22s"; with zero hitches it says "no hitches ≥ 50 ms in N frames (at most 3/N at 95 %)";
+  without frames it opens "Frame timing was not measured (why), so stutter and frame rate could not be checked",
+  the why being the reason's first clause (`labels.short_reason`): never a path or a command, which the Not
+  measured list gives once in full.
 
 ## Fixes (fixes/)
 
@@ -854,13 +856,22 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
   evidence lines and fixes, the moments the user marked with the lag key (how many matched a lag event, which
   showed nothing in what was measured), then "checked and fine" (neutral topic names: "Game Mode", never "Game
   Mode off"), "not measured" and "could not check", grouped by the missing source. Fits one terminal screen; a
-  fix command is never wrapped; control characters from capture strings never reach the terminal. `check`
-  prints a settings check-up instead (no verdict line, one line for what needs a recording).
+  fix command and the report's path are never wrapped (the path on a line of its own), no line breaks at a hyphen
+  or inside a word; control characters from capture strings never reach the terminal. `check` prints a settings
+  check-up instead (no verdict line, one line for what needs a recording).
 - **Both reports** list the same "not measured" sources (`labels.not_measured`: the capture's own source list,
-  then the standard sources it never recorded), each named in words (`labels.SOURCES`: "the game's own network
-  traffic (ETW)", never `net_flows`) with its reason. Text a player reads never carries the research notes'
-  citations (`WT 8`, `LC 4.9`, `CC-5`): they stay in comments. A fix's `detail` never repeats the restart note
-  the HTML report adds for `needs_restart` (both checked by `tests/test_user_text.py`).
+  a source whose state is "ok" but that the analysis had nothing of (`Diagnosis.measured`: "it ran but recorded
+  nothing"), then the standard sources it never recorded), each named in words (`labels.SOURCES`: "the game's own
+  network traffic (ETW)", never `net_flows`) with its reason, never opening with words that repeat the name
+  ("frame timing was skipped:"). A cause a missing source blocked says "needs <source>, which was not recorded
+  (see Not measured)" (`labels.needs_source`), grouped as "these need ..." for several. Both name the game by its
+  window title, the exe beside it, and give times into the recording as "13m 22s", never "13:22" beside a
+  start time (`charts.fmt_elapsed`); topics sort whatever their case. Text a player reads never carries the
+  research notes' citations (`WT 8`, `LC 4.9`, `CC-5`): they stay in comments. A fix's `detail` never repeats
+  the restart note the HTML report adds for `needs_restart`, nor its undo note, and no finding's title is one
+  of its own evidence lines (checked by `tests/test_user_text.py` and the diagnosis tests). The HTML shows a
+  `command` in backticks as code, "frame timing not recorded" instead of "0 frames", and "No lag events were
+  found" only where frame timing or the network ran to look for them.
 - **HTML** (`report/html.py`): one self-contained file (inline CSS + SVG, no script, no URL), light/dark via
   `prefers-color-scheme`: verdict, stat tiles, frame-time chart (main swap chain only) with stutters and marks,
   CPU/GPU chart, VRAM chart, ping chart (lost pings from the collector's own record), marks on every time chart,
@@ -892,11 +903,13 @@ lagdoctor setup                      fetch + verify PresentMon, explain how to g
   copy (any command that saves; see Where files go), 6 frame timing was wanted but PresentMon is missing or
   failed its check, 130 stopped waiting.
 - The live status line shows `-` for a value not in yet and `off` for a source this recording does not run
-  (frame timing off, `--no-network`). With frame timing on, one line on its own says "Frame timing is not
-  working" as soon as PresentMon fails or its run ends mid-recording in anything but "ok" (a crash or a trace
-  session stopped from outside settles "partial"; the game's own exit settles "ok"), or once the game window was
-  in front for `session.NO_FRAMES_WARN_S` (10 s) without a first frame; time behind other windows does not count
-  (a minimised game draws nothing). Frames that stop while PresentMon still runs are a frozen game, not a fault.
+  (frame timing off, `--no-network`). It fits the console's width now (`session.console_width`): readouts drop
+  from its end and it is padded, so `\r` rewrites one row (a 95-character line in a 71-column window scrolled a
+  row a second); the keys are only in the "Recording." line before it. With frame timing on, one line on its
+  own says "Frame timing is not working" as soon as PresentMon fails or its run ends mid-recording in anything
+  but "ok" (a crash or a trace session stopped from outside settles "partial"; the game's own exit settles "ok"),
+  or once the game window was in front for `session.NO_FRAMES_WARN_S` (10 s) without a first frame; time behind
+  other windows does not count (a minimised game draws nothing). Frames that stop while PresentMon still runs are a frozen game, not a fault.
   Once PresentMon has ended the frame rate shows `-`, never its last value. `--no-network` records the network and
   net_flows sources as "turned off for this recording (--no-network)".
 - Stopping: the first Ctrl+C stops the recording and saves it ("Stopping and saving the capture..."); later

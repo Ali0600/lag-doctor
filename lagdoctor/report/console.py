@@ -15,7 +15,7 @@ from typing import Any, Callable
 
 from lagdoctor.model import Capture, Diagnosis
 from lagdoctor.report import labels
-from lagdoctor.report.charts import fmt_clock, number
+from lagdoctor.report.charts import fmt_elapsed, number
 
 _PUNCT = {"–": "-", "—": "-", "‘": "'", "’": "'", "“": '"', "”": '"',
           "…": "...", "→": "->", "×": "x", "•": "-", "·": "|", "≤": "<=",
@@ -47,8 +47,10 @@ class _Out:
         self.width, self.lines = width, []
 
     def para(self, text: str, indent: str = "", sub: str | None = None) -> None:
+        # never at a hyphen or inside a word: a path broke at "lag-" once, and a broken path cannot be copied
         self.lines.extend(textwrap.wrap(ascii_text(text), self.width, initial_indent=indent,
-                                        subsequent_indent=sub if sub is not None else indent) or [indent.rstrip()])
+                                        subsequent_indent=sub if sub is not None else indent,
+                                        break_on_hyphens=False, break_long_words=False) or [indent.rstrip()])
 
     def add(self, line: str = "") -> None:
         self.lines.append(ascii_text(line))
@@ -69,7 +71,8 @@ def render(d: Diagnosis, cap: Capture, report_path: Path | None = None, width: i
             out.add(f"(Part of this summary could not be shown from this capture: {type(exc).__name__}.)")
     if report_path:
         out.add()
-        out.para(f"Full report: {report_path}")
+        out.add("Full report:")
+        out.add(f"  {report_path}")             # on a line of its own, never wrapped: it gets copied
     return "\n".join(line.rstrip() for line in out.lines) + "\n"
 
 
@@ -80,9 +83,8 @@ def _header(out: _Out, d: Diagnosis, cap: Capture, checkup: bool) -> None:
         out.para(f"lag-doctor settings check-up (no game recorded, {when})")
         out.add()
         return
-    target = cap.target if isinstance(cap.target, dict) else {}
-    game = target.get("name") or "your game"
-    out.para(f"lag-doctor report: {game} ({fmt_clock(cap.duration_s)} recorded, {when})")
+    out.para(f"lag-doctor report: {labels.game_name(cap.target)} ({fmt_elapsed(cap.duration_s)} recorded, "
+             f"started {when})")
     out.add()
     lag = _word(labels.LAG_TYPES, d.lag_type).upper()
     out.para(f"VERDICT [{lag}] {d.headline}")
@@ -136,15 +138,15 @@ def _marks(out: _Out, d: Diagnosis) -> None:
     out.para(labels.marks_summary(rows, frames_ok), sub="  ")
     matched = [(t, found) for t, found, _ in rows if found]
     for t, found in matched[:MAX_MARKS]:
-        out.para(f"- {fmt_clock(t)}: " + "; ".join(labels.event_text(ev) for ev in found[:3]), indent="  ",
+        out.para(f"- {fmt_elapsed(t)}: " + "; ".join(labels.event_text(ev) for ev in found[:3]), indent="  ",
                  sub="    ")
     if len(matched) > MAX_MARKS:
         out.add(f"  ... and {len(matched) - MAX_MARKS} more in the full report.")
     moved = [(t, causes) for t, found, causes in rows if not found and causes]
     for t, causes in moved[:MAX_MARKS]:
-        out.para(f"- {fmt_clock(t)}: no lag event; meanwhile " + ", ".join(labels.cause_text(c) for c in causes),
+        out.para(f"- {fmt_elapsed(t)}: no lag event; meanwhile " + ", ".join(labels.cause_text(c) for c in causes),
                  indent="  ", sub="    ")
-    quiet = [fmt_clock(t) for t, found, causes in rows if not found and not causes]
+    quiet = [fmt_elapsed(t) for t, found, causes in rows if not found and not causes]
     if quiet:
         out.para("- nothing at " + ", ".join(quiet[:12]) + (f" and {len(quiet) - 12} more" if len(quiet) > 12 else ""),
                  indent="  ", sub="    ")
@@ -153,8 +155,7 @@ def _marks(out: _Out, d: Diagnosis) -> None:
 def _cleared(out: _Out, d: Diagnosis) -> None:
     if d.cleared:
         out.add()
-        out.para("Checked and fine: " + "; ".join(sorted(labels.topic_text(c) for c in d.cleared)), indent="",
-                 sub="  ")
+        out.para("Checked and fine: " + "; ".join(labels.sorted_topics(d.cleared)), indent="", sub="  ")
 
 
 def _missing(out: _Out, d: Diagnosis, cap: Capture, checkup: bool) -> None:

@@ -233,22 +233,32 @@ def test_sentence_keeps_a_process_name_lower_case():
 # ------------------------------------------------------------------------- run_rule plumbing ---
 
 def test_a_rule_whose_source_was_not_measured_is_unchecked_with_its_reason():
+    # Changed on purpose (wording): the reason chained the source's own message after a colon ("needs frame timing
+    # (PresentMon), which was not measured: frame timing was skipped: ..."), path and command included, once per
+    # cause; the Not measured list gives it once (test_a_source_that_ran_but_recorded_nothing_is_not_measured)
     cap = make(ok=("system",), src={"frames": NO_FRAMES})
     res = run("cpu_limit", cap, bound={"verdict": "cpu_main", "r": 0.1, "busiest_thread": 0.99})
     assert isinstance(res, rules.Unchecked)
-    assert "frame timing" in res.text and "PresentMon needs admin rights" in res.text
+    assert res.text == "needs frame timing (PresentMon), which was not recorded (see Not measured)" and "admin rights" not in res.text
 
 
 def test_a_source_missing_from_the_capture_reads_not_recorded():
     cap = make(ok=())
     res = run("ram_pressure", cap)
-    assert isinstance(res, rules.Unchecked) and "not recorded in this capture" in res.text
+    assert isinstance(res, rules.Unchecked) and res.text == ("needs the system sampler, which was not recorded (see "
+                                                             "Not measured)")
 
 
 def test_a_source_that_ran_but_recorded_nothing_is_not_measured():
+    from lagdoctor.analysis.diagnose import measured
+    from lagdoctor.report import labels
     cap = make(ok=("frames", "system"))                     # system "ok" but no rows
     res = run("ram_pressure", cap)
-    assert isinstance(res, rules.Unchecked) and "recorded nothing" in res.text
+    assert isinstance(res, rules.Unchecked) and res.text.endswith("which was not recorded (see Not measured)")
+    # ... and the Not measured list it points at names it, though the source's own state is "ok"
+    m = measured(cap, {"frames": 3000})
+    assert m["system"] == "it ran but recorded nothing"
+    assert ("the system sampler", "it ran but recorded nothing") in labels.not_measured(cap.sources, m)
 
 
 def test_either_source_satisfies_an_or_need():
@@ -378,7 +388,8 @@ def test_wrong_gpu_is_ruled_out_on_the_discrete_gpu_or_with_no_discrete_one(adap
 def test_wrong_gpu_without_the_game_adapter_is_unchecked():
     cap = make(adapter=None, ok=("frames",), src={"system": SourceStatus("failed", "sampler did not run")})
     res = run("wrong_gpu", cap)
-    assert isinstance(res, rules.Unchecked) and "sampler did not run" in res.text
+    assert isinstance(res, rules.Unchecked) and res.text == ("which GPU the game rendered on is unknown: needs the "
+                                                             "system sampler, which was not recorded (see Not measured)")
 
 
 def test_wrong_gpu_offers_advice_not_the_fix_when_the_preference_is_already_set():
@@ -902,7 +913,8 @@ def test_gpu_throttle_counts_the_target_temperature():
 def test_gpu_throttle_is_unchecked_when_the_game_is_not_on_the_nvidia_gpu():
     cap = make(src={"gpu": SourceStatus("off", "the game renders on the Intel GPU; NVML not started")})
     res = run("gpu_throttle", cap, bound={"verdict": "gpu"})
-    assert isinstance(res, rules.Unchecked) and "NVML not started" in res.text
+    assert isinstance(res, rules.Unchecked) and res.text == ("needs NVIDIA telemetry (NVML), which was not recorded "
+                                                             "(see Not measured)")
 
 
 def cpu_sys(limit=100.0, thermal=100.0, perf=105.0, busiest=95.0):
@@ -1383,7 +1395,7 @@ def test_windowed_composition_is_fine_with_flip_and_unchecked_without_frame_timi
     for cap in (make(ok=("system",), src={"frames": NO_FRAMES}, inventory=off),
                 make(ok=("system",), src={"frames": NO_FRAMES})):
         res = run("windowed_composition", cap, stats={"frames": 0})
-        assert isinstance(res, rules.Unchecked) and "PresentMon needs admin rights" in res.text
+        assert isinstance(res, rules.Unchecked) and res.text == "needs frame timing (PresentMon), which was not recorded (see Not measured)"
 
 
 @pytest.mark.parametrize("settings, kind, conf", [
@@ -1409,7 +1421,11 @@ def test_game_dvr_with_background_recording_unknown_is_advice_only_and_says_so()
     # CC-6: Windows' default state (GameDVR_Enabled = 1, the capture values absent, WT 8): unknown, not "on"
     res = run("game_dvr", make(inventory={"settings": dict(SETTINGS, game_dvr=True, background_recording=None)}))
     assert is_finding(res, "low")
-    assert res.title == "Game Bar capture is on; whether it records in the background is unknown"
+    # wording: the title was the finding's only evidence line, word for word; now each says its own part
+    assert res.title == "Game Bar may be recording in the background"
+    assert [e.text for e in res.evidence] == ["Game Bar capture is on, and its background-recording setting was not "
+                                              "there to read, so whether Windows records gameplay in the background "
+                                              "is unknown."]
     assert not any(f.fix_id for f in res.fixes) and "Background recording is on" not in res.title
 
 
@@ -1723,7 +1739,7 @@ def test_stutter_cause_verdicts_from_the_lift_test():
 
 def test_stutter_causes_without_frame_timing_are_unchecked_and_with_no_stutters_silent():
     res = run("game_cpu_spike", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0})
-    assert isinstance(res, rules.Unchecked) and "PresentMon needs admin rights" in res.text
+    assert isinstance(res, rules.Unchecked) and res.text.startswith("needs frame timing (PresentMon), which was not recorded (see Not measured)")
     assert run("game_cpu_spike", make()) is None
 
 

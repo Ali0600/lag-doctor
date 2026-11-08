@@ -11,7 +11,7 @@ from typing import Any, Iterable
 from lagdoctor.analysis import attribute, events, frames, rules
 from lagdoctor.model import F, Capture, Diagnosis, Finding, LagEvent
 from lagdoctor.report import labels
-from lagdoctor.report.charts import fmt_clock
+from lagdoctor.report.charts import fmt_elapsed
 
 STANDARD_SOURCES = ("frames", "system", "gpu", "network", "net_flows")   # DESIGN, result() table
 LOW_FPS_FRAC = 0.80          # LC 2.4 (S18, CHI '23), DECISIONS 2026-11-04: under 80 % of the target is low FPS
@@ -73,6 +73,9 @@ def measured(cap: Capture, stats: dict[str, Any]) -> dict[str, str]:
         out.setdefault(name, "not recorded in this capture")
     if out.get("frames") == "ok" and not stats.get("frames"):
         out["frames"] = "PresentMon ran but recorded no frames from the game"
+    for name, table in (("system", cap.system), ("gpu", cap.gpu), ("network", cap.network)):
+        if out.get(name) == "ok" and not frames._col(table, "t"):   # the rules point here for why (rules._Env.need)
+            out[name] = "it ran but recorded nothing"
     return out
 
 
@@ -278,7 +281,7 @@ def _lag_part(kind: str, stats: dict[str, Any], evs: list[LagEvent], lag: dict[s
                   (sum(1 for e in net if e.kind == "net_gap") - len(lost), "server gap")]
         parts = [_plural(n, w) for n, w in counts if n]
         if lost:                                 # an "open" gap runs to the end: the connection was lost
-            parts.append(f"the game server stopped answering at {fmt_clock(min(e.t_start for e in lost))}")
+            parts.append(f"the game server stopped answering at {fmt_elapsed(min(e.t_start for e in lost))}")
         return "Network lag" + (f" ({', '.join(parts)})" if parts else "")
     return ""
 
@@ -319,8 +322,9 @@ def headline(lag_type: str, findings: list[Finding], stats: dict[str, Any], evs:
         text = "Several problems: " + " and ".join([parts[0]] + [p[0].lower() + p[1:] for p in parts[1:]])
     elif kinds:
         text = _lag_part(kinds[0], stats, evs, lag, env.duration, env.bound)
-    elif lag_type == "unknown":
-        text = f"Frame timing was not measured ({env.why('frames')}), so stutter and frame rate could not be checked"
+    elif lag_type == "unknown":       # a short reason: its path and command are in the Not measured list, once
+        text = (f"Frame timing was not measured ({labels.short_reason(env.why('frames'))}), so stutter and frame rate "
+                "could not be checked")
     else:
         text = "No lag stood out"
         hitches = stats.get("hitches")

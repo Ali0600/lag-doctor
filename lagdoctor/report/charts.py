@@ -26,13 +26,19 @@ def number(v: Any) -> float | None:
     return v if math.isfinite(v) and abs(v) <= MAX_VALUE else None
 
 
-def fmt_clock(seconds: Any) -> str:
-    """m:ss; "-" for a time that is not a sane number."""
+def fmt_elapsed(seconds: Any) -> str:
+    """Time into the recording, or a length of time, never like a time of day: "13:22" beside a 12:17 start read as
+    a clock. "45s", "13m 22s", "14m" on the minute, "1h 02m 03s"; "-" for a time that is not a sane number."""
     seconds = number(seconds)
     if seconds is None:
         return "-"
-    m, s = divmod(int(round(max(0.0, seconds))), 60)
-    return f"{m}:{s:02d}"
+    h, rest = divmod(int(round(max(0.0, seconds))), 3600)
+    m, s = divmod(rest, 60)
+    if h:
+        return f"{h}h {m:02d}m {s:02d}s"
+    if m:
+        return f"{m}m {s:02d}s" if s else f"{m}m"
+    return f"{s}s"
 
 
 def nice_ticks(lo: float, hi: float, n: int = 5) -> list[float]:
@@ -145,7 +151,7 @@ class Chart:
             if x is None or y is None:
                 continue
             self._front.append(f'<circle class="dot {cls}" cx="{self.px(x):.1f}" cy="{self.py(y):.1f}" r="3.5">'
-                               f'<title>{escape(label)} at {fmt_clock(x)}: {y:.0f}{escape(self.y_unit)}</title></circle>')
+                               f'<title>{escape(label)} at {fmt_elapsed(x)}: {y:.0f}{escape(self.y_unit)}</title></circle>')
             drawn = True
         if drawn:
             self.legend.append((cls, label))
@@ -157,7 +163,7 @@ class Chart:
             return self
         X = self.px(x)
         self._front.append(f'<line class="vl {cls}" x1="{X:.1f}" x2="{X:.1f}" y1="{TOP}" y2="{H - BOTTOM}">'
-                           f'<title>{escape(label)} at {fmt_clock(x)}</title></line>')
+                           f'<title>{escape(label)} at {fmt_elapsed(x)}</title></line>')
         if (cls, label) not in self.legend:
             self.legend.append((cls, label))
         return self
@@ -193,7 +199,7 @@ class Chart:
                          f'{t:g}{escape(self.y_unit)}</text>')
         for t in time_ticks(self.x0, self.x1, 8):
             X = self.px(t)
-            parts.append(f'<text class="tick" x="{X:.1f}" y="{H - 8}" text-anchor="middle">{fmt_clock(t)}</text>')
+            parts.append(f'<text class="tick" x="{X:.1f}" y="{H - 8}" text-anchor="middle">{fmt_elapsed(t)}</text>')
         parts += self._back + self._front
         parts.append(f'<rect class="frame" x="{LEFT}" y="{TOP}" width="{W - LEFT - RIGHT}" '
                      f'height="{H - TOP - BOTTOM}"/></svg>')

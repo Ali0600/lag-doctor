@@ -226,6 +226,8 @@ def test_skipped_frame_timing_is_reported_not_silent():
     opts = SessionOptions(duration_s=0.1, hotkey=None, frames=False)
     _, cap = run_session(full_set()[1:], opts=opts)
     assert cap.sources["frames"].state == "off" and "admin rights" in cap.sources["frames"].detail
+    # wording: the reports list it as "frame timing (PresentMon): <reason>", which once began "frame timing was skipped"
+    assert not cap.sources["frames"].detail.lower().startswith("frame timing")
 
 
 def test_network_checks_turned_off_are_reported_as_turned_off():
@@ -244,15 +246,39 @@ def test_the_capture_survives_a_save_and_load(tmp_path):
     assert back.net_flows["gaps"] == [[3.0, 300.0, "loss"]] and back.target["pids"] == [4242, 4243]
 
 
+LIVE = {"frames": {"fps": 143.6}, "system": {"game_top_thread_pct": 61.0, "game_gpu_pct": 97.2},
+        "network": {"inet_rtt_ms": 24.4}}
+
+
 def test_status_line_literal_points():
-    line = status_line(75.4, {"frames": {"fps": 143.6}, "system": {"game_top_thread_pct": 61.0, "game_gpu_pct": 97.2},
-                              "network": {"inet_rtt_ms": 24.4}}, "ctrl+alt+l")
-    assert line.startswith("1:15 | 144 fps | main thread 61% | GPU 97% | ping 24 ms")
-    assert "Ctrl+Alt+L = it lagged now" in line
+    # Changed on purpose (wording): the keys are in the "Recording." line, printed once; this line once carried them
+    # too, 95 characters in a 71-column console
+    assert status_line(75.4, LIVE) == "1:15 | 144 fps | main thread 61% | GPU 97% | ping 24 ms"
     # Running but nothing yet: a dash. Not running at all this time (frame timing off, --no-network): "off".
-    assert status_line(0, {"frames": {}, "system": {}, "network": {}}, None).startswith(
-        "0:00 | fps - | main thread - | GPU - | ping -   (")
-    assert status_line(0, {"system": {}}, None).startswith("0:00 | fps off | main thread - | GPU - | ping off   (")
+    assert status_line(0, {"frames": {}, "system": {}, "network": {}}) == "0:00 | fps - | main thread - | GPU - | ping -"
+    assert status_line(0, {"system": {}}) == "0:00 | fps off | main thread - | GPU - | ping off"
+
+
+@pytest.mark.parametrize("width, shown", [(71, "1:15 | 144 fps | main thread 61% | GPU 97% | ping 24 ms"),
+                                          (54, "1:15 | 144 fps | main thread 61% | GPU 97%"),
+                                          (30, "1:15 | 144 fps"), (3, "1:")])
+def test_the_status_line_fits_the_console_so_a_carriage_return_rewrites_it(width, shown):
+    # Wording: a line as wide as the console wraps, and "\r" then rewrites only its last row while the screen scrolls a
+    # row a second. Whole readouts go from the end, and the rest is padded so a shorter line leaves nothing behind
+    line = status_line(75.4, LIVE, width)
+    assert len(line) == width - 1 and line.rstrip() == shown
+
+
+def test_the_recording_loop_prints_status_lines_no_wider_than_the_console(monkeypatch):
+    import lagdoctor.capture.session as sess
+    monkeypatch.setattr(sess, "console_width", lambda: 40)
+    lines = []
+    s = Session(TARGET, SessionOptions(duration_s=0.3, hotkey="ctrl+alt+l"), collectors=[Fake("system")],
+                inventory=INVENTORY, alive=lambda: True, hotkey_factory=NoHotkey, printer=lines.append)
+    s.run()
+    status = [ln[1:] for ln in lines if ln.startswith("\r")]
+    assert status and all(len(ln) == 39 for ln in status), status
+    assert not any("Ctrl" in ln for ln in status)
 
 
 class FramesState(Collector):

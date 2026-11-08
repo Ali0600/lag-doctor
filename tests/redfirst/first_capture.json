@@ -353,5 +353,268 @@
   "tests": [
    "tests/test_analysis_rules.py::test_mostly_in_front_is_no_evidence_when_the_marks_came_while_it_was_behind"
   ]
+ },
+ {
+  "name": "the verdict carries the whole reason",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "    text = (f\"Frame timing was not measured ({labels.short_reason(env.why('frames'))}), so stutter and frame rate \"",
+  "new": "    text = (f\"Frame timing was not measured ({env.why('frames')}), so stutter and frame rate \"",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_without_frame_timing_frame_rules_are_unchecked_and_nothing_claims_no_stutter"
+  ]
+ },
+ {
+  "name": "the short reason never cut",
+  "file": "lagdoctor/report/labels.py",
+  "old": "    m = _CLAUSE_END.search(text)",
+  "new": "    m = None",
+  "tests": [
+   "tests/test_report.py::test_the_verdict_gets_a_short_reason_and_the_not_measured_list_the_whole_one"
+  ]
+ },
+ {
+  "name": "a path kept as a short reason",
+  "file": "lagdoctor/report/labels.py",
+  "old": "    if not text or \"`\" in text or \"\\\\\" in text or re.search(r\"[A-Za-z]:/\", text) or len(text) > 120:",
+  "new": "    if not text:",
+  "tests": [
+   "tests/test_report.py::test_the_verdict_gets_a_short_reason_and_the_not_measured_list_the_whole_one"
+  ]
+ },
+ {
+  "name": "a reason repeats the source it is listed under",
+  "file": "lagdoctor/report/labels.py",
+  "old": "    return _SAID_ALREADY.sub(\"\", why, count=1).strip() or why",
+  "new": "    return why",
+  "tests": [
+   "tests/test_report.py::test_a_reason_never_repeats_the_source_it_is_listed_under"
+  ]
+ },
+ {
+  "name": "the rules repeat the source's own reason",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        return labels.needs_source(name)     # the source's own reason is in the Not measured list, once",
+  "new": "        return f\"needs {labels.source_text(name)}, which was not measured: {self.why(name)}\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_rule_whose_source_was_not_measured_is_unchecked_with_its_reason"
+  ]
+ },
+ {
+  "name": "a list of topics told it needs",
+  "file": "lagdoctor/report/labels.py",
+  "old": "        if len(topics) > 1 and r.startswith(NEEDS):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_report.py::test_causes_blocked_by_the_same_missing_source_are_listed_together"
+  ]
+ },
+ {
+  "name": "a source that ran but gave nothing missing from Not measured",
+  "file": "lagdoctor/report/labels.py",
+  "old": "        elif isinstance(measured.get(src), str) and measured[src] != \"ok\":",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_frames_that_ran_but_recorded_nothing_are_not_measured",
+   "tests/test_analysis_rules.py::test_a_source_that_ran_but_recorded_nothing_is_not_measured"
+  ]
+ },
+ {
+  "name": "an empty sampler measured as ok",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "        if out.get(name) == \"ok\" and not frames._col(table, \"t\"):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_source_that_ran_but_recorded_nothing_is_not_measured"
+  ]
+ },
+ {
+  "name": "frame timing off says frame timing again",
+  "file": "lagdoctor/capture/session.py",
+  "old": "            sources[\"frames\"] = SourceStatus(\"off\", \"it needs admin rights or Performance Log Users (see \"",
+  "new": "            sources[\"frames\"] = SourceStatus(\"off\", \"frame timing was skipped: it needs admin rights or \"\n                                                    \"Performance Log Users (see \"",
+  "tests": [
+   "tests/test_session.py::test_skipped_frame_timing_is_reported_not_silent"
+  ]
+ },
+ {
+  "name": "the Game Bar title is its evidence line",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return c.conclude(\"Game Bar may be recording in the background\",",
+  "new": "    return c.conclude(\"Game Bar capture is on, and its background-recording setting was not there to read, so \"\n                      \"whether Windows records gameplay in the background is unknown\",",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_no_finding_is_titled_with_its_own_evidence_line",
+   "tests/test_analysis_rules.py::test_game_dvr_with_background_recording_unknown_is_advice_only_and_says_so"
+  ]
+ },
+ {
+  "name": "the Game Mode evidence is its title",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    c.support(\"static\", W_STATIC, \"Windows' Game Mode setting is off, so Windows does not favour the game over \"\n                                  \"background work\")",
+  "new": "    c.support(\"static\", W_STATIC, \"Game Mode is off\")",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_no_finding_is_titled_with_its_own_evidence_line"
+  ]
+ },
+ {
+  "name": "the report path wrapped with its label",
+  "file": "lagdoctor/report/console.py",
+  "old": "        out.add(\"Full report:\")\n        out.add(f\"  {report_path}\")",
+  "new": "        out.para(f\"Full report: {report_path}\")",
+  "tests": [
+   "tests/test_report.py::test_the_report_path_is_on_a_line_of_its_own_and_no_line_breaks_at_a_hyphen"
+  ]
+ },
+ {
+  "name": "lines break at hyphens",
+  "file": "lagdoctor/report/console.py",
+  "old": "break_on_hyphens=False, break_long_words=False)",
+  "new": "break_on_hyphens=True, break_long_words=False)",
+  "tests": [
+   "tests/test_report.py::test_the_report_path_is_on_a_line_of_its_own_and_no_line_breaks_at_a_hyphen"
+  ]
+ },
+ {
+  "name": "long words broken",
+  "file": "lagdoctor/report/console.py",
+  "old": "break_on_hyphens=False, break_long_words=False)",
+  "new": "break_on_hyphens=False, break_long_words=True)",
+  "tests": [
+   "tests/test_report.py::test_the_report_path_is_on_a_line_of_its_own_and_no_line_breaks_at_a_hyphen"
+  ]
+ },
+ {
+  "name": "the status line never cut",
+  "file": "lagdoctor/capture/session.py",
+  "old": "    while len(parts) > 1 and len(\" | \".join(parts)) > room:",
+  "new": "    while False:",
+  "tests": [
+   "tests/test_session.py::test_the_status_line_fits_the_console_so_a_carriage_return_rewrites_it"
+  ]
+ },
+ {
+  "name": "the status line never padded",
+  "file": "lagdoctor/capture/session.py",
+  "old": "    return \" | \".join(parts)[:room].ljust(room)",
+  "new": "    return \" | \".join(parts)[:room]",
+  "tests": [
+   "tests/test_session.py::test_the_status_line_fits_the_console_so_a_carriage_return_rewrites_it"
+  ]
+ },
+ {
+  "name": "the recording loop ignores the console's width",
+  "file": "lagdoctor/capture/session.py",
+  "old": "                self._print(\"\\r\" + status_line(elapsed, live, console_width()))",
+  "new": "                self._print(\"\\r\" + status_line(elapsed, live))",
+  "tests": [
+   "tests/test_session.py::test_the_recording_loop_prints_status_lines_no_wider_than_the_console"
+  ]
+ },
+ {
+  "name": "times print like a clock",
+  "file": "lagdoctor/report/charts.py",
+  "old": "        return f\"{m}m {s:02d}s\" if s else f\"{m}m\"",
+  "new": "        return f\"{m}:{s:02d}\"",
+  "tests": [
+   "tests/test_report.py::test_nice_ticks_and_clock_format_literal_points"
+  ]
+ },
+ {
+  "name": "Could not check sorts upper case first",
+  "file": "lagdoctor/report/labels.py",
+  "old": "        out.append((r, sorted(topics, key=str.casefold)))",
+  "new": "        out.append((r, sorted(topics)))",
+  "tests": [
+   "tests/test_report.py::test_causes_blocked_by_the_same_missing_source_are_listed_together"
+  ]
+ },
+ {
+  "name": "Checked and fine sorts upper case first (console)",
+  "file": "lagdoctor/report/labels.py",
+  "old": "    return sorted((topic_text(c) for c in causes), key=str.casefold)",
+  "new": "    return sorted(topic_text(c) for c in causes)",
+  "tests": [
+   "tests/test_report.py::test_lists_sort_whatever_the_case_and_name_what_was_not_measured"
+  ]
+ },
+ {
+  "name": "Checked and fine sorts upper case first (HTML)",
+  "file": "lagdoctor/report/html.py",
+  "old": "key=lambda kv: labels.topic_text(kv[0]).casefold()))",
+  "new": "key=lambda kv: labels.topic_text(kv[0])))",
+  "tests": [
+   "tests/test_report.py::test_lists_sort_whatever_the_case_and_name_what_was_not_measured"
+  ]
+ },
+ {
+  "name": "the GPU limit's topic is its load",
+  "file": "lagdoctor/report/labels.py",
+  "old": "    \"gpu_limit\": \"the GPU as the frame-rate limit\",",
+  "new": "    \"gpu_limit\": \"GPU load\",",
+  "tests": [
+   "tests/test_report.py::test_lists_sort_whatever_the_case_and_name_what_was_not_measured"
+  ]
+ },
+ {
+  "name": "no lag events found where nothing looked",
+  "file": "lagdoctor/report/html.py",
+  "old": "        return f'<p class=\"muted\">{e(_no_events(d))}</p>'",
+  "new": "        return '<p class=\"muted\">No lag events were found.</p>'",
+  "tests": [
+   "tests/test_report.py::test_no_lag_events_is_said_only_where_something_looked_for_them"
+  ]
+ },
+ {
+  "name": "0 frames for frame timing not recorded",
+  "file": "lagdoctor/report/html.py",
+  "old": "    return f\"{_fmt(_dict(d.stats).get('frames'))} frames\" if _ran(d, \"frames\") else \"frame timing not recorded\"",
+  "new": "    return f\"{_fmt(_dict(d.stats).get('frames'))} frames\"",
+  "tests": [
+   "tests/test_report.py::test_the_header_names_the_game_by_its_window_and_says_when_frame_timing_was_not_recorded"
+  ]
+ },
+ {
+  "name": "backticks shown as characters",
+  "file": "lagdoctor/report/html.py",
+  "old": "    return _TICKED.sub(r\"<code>\\1</code>\", e(value))",
+  "new": "    return e(value)",
+  "tests": [
+   "tests/test_report.py::test_a_command_in_backticks_shows_as_code_in_the_html_report"
+  ]
+ },
+ {
+  "name": "the HTML report names the exe",
+  "file": "lagdoctor/report/html.py",
+  "old": "    game = labels.game_name(cap.target)\n",
+  "new": "    game = _dict(cap.target).get(\"name\") or \"your game\"\n",
+  "tests": [
+   "tests/test_report.py::test_the_header_names_the_game_by_its_window_and_says_when_frame_timing_was_not_recorded"
+  ]
+ },
+ {
+  "name": "the console names the exe",
+  "file": "lagdoctor/report/console.py",
+  "old": "    out.para(f\"lag-doctor report: {labels.game_name(cap.target)} ({fmt_elapsed(cap.duration_s)} recorded, \"",
+  "new": "    out.para(f\"lag-doctor report: {cap.target.get('name')} ({fmt_elapsed(cap.duration_s)} recorded, \"",
+  "tests": [
+   "tests/test_report.py::test_the_header_names_the_game_by_its_window_and_says_when_frame_timing_was_not_recorded"
+  ]
+ },
+ {
+  "name": "the exe before the window title",
+  "file": "lagdoctor/report/labels.py",
+  "old": "    for key in (\"window_title\", \"name\"):",
+  "new": "    for key in (\"name\", \"window_title\"):",
+  "tests": [
+   "tests/test_report.py::test_the_header_names_the_game_by_its_window_and_says_when_frame_timing_was_not_recorded"
+  ]
+ },
+ {
+  "name": "a fix detail repeats the undo note",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "detail=\"A standard Windows setting; lag-doctor saves the current plan first.\",",
+  "new": "detail=\"A standard Windows setting; `lagdoctor undo` puts it back.\",",
+  "tests": [
+   "tests/test_user_text.py::test_no_fix_detail_repeats_the_undo_note_the_html_report_adds"
+  ]
  }
 ]
