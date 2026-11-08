@@ -144,12 +144,8 @@ def main():
     out = os.environ.get("GITHUB_STEP_SUMMARY")
     if out:
         with open(out, "a", encoding="utf-8") as fh:
-            fh.write(f"**{line}**
-
-" + "
-".join(rows) + "
-
-")
+            nl = chr(10)
+            fh.write(f"**{line}**" + nl * 2 + nl.join(rows) + nl * 2)
 
 
 if __name__ == "__main__":
