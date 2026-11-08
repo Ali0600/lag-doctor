@@ -95,6 +95,24 @@ Choices the implementing session made while building M1 (the app with your resul
   broken since runtime 133, and a child keeps the window's COM apartment and any crash out of pytest's process.
   Revisit hook: `tests/app_harness.py`.
 
+## 2026-11-08: The relay passes back per-program byte totals from the user's own Windows session
+
+The relay (`docs/LAUNCHER-PLAN.md`, M3) runs the Kernel-Network session with administrator rights, and Stage 4's
+capture service will serve any local caller, so it must not hand a caller other people's traffic. Today's elevated
+child sees every program's traffic and names the one that filled the connection (`bandwidth_hog`). Put to the owner
+with per-program totals recommended; the owner chose them ("do A) per-program byte totals, from your own Windows
+session only").
+- **Per-program byte totals, from the caller's own Windows session (chosen)**: the relay forwards the game's
+  network events in full (plus the recorder's own, for the DNS self-test) and, for every other program, only bytes
+  received and sent, and only for processes in the recorder's session, judged from its own handle-free snapshot.
+  `bandwidth_hog` can still name a program of the player's; services run in session 0, so ruling a download out also
+  needs the adapter's own counters, which count every program together.
+- **The game's traffic only**: rejected by the owner. `talkers` would be None, and `bandwidth_hog` could only say
+  that something filled the connection, never what.
+- **Every program's traffic, as the elevated child sees it today**: rejected. The service would show one user the
+  traffic of another user's programs and of every service.
+Revisit hooks: the relay's per-program counter (`lagdoctor/relay/`) and `rules._all_traffic_quiet`.
+
 ## 2026-11-08: M0's step 2 is rebuilt before a third run, and CI's rehearsal types its keys
 
 The owner's first run of the window spike passed everything but step 2 (keys and right-click), which saw no

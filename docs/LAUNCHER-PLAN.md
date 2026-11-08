@@ -194,10 +194,12 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
   counts every process but the game, the app's WebView2 GPU process included. So while a game records, the app hides
   its view and suspends it (`put_IsVisible` off, then `TrySuspend`, from M4 on), and the running state's clock moves
   only while the window is shown.
-- **Network traffic per program becomes unknown.** The relay forwards only the game's network events, plus the
-  recorder's own for the tracker's DNS self-test (it matches its packets by the recorder's pid), so `talkers` is None.
-  The bandwidth rule then falls back to the adapter's own counters instead of clearing every program. Whether the relay
-  should forward per-program byte totals instead is an open question for the owner.
+- **Network traffic per program comes only from the player's own session** (the owner's choice, DECISIONS
+  2026-11-08). The relay forwards the game's network events in full, plus the recorder's own for the tracker's DNS
+  self-test (it matches its packets by the recorder's pid). For every other program it passes back only bytes received
+  and sent, and only for processes in the recorder's Windows session. So `bandwidth_hog` can still name a program of the
+  player's, but services (session 0) are not among them, and ruling a download out also needs the adapter's own
+  counters.
 
 ### Launching and finding the game
 
@@ -457,11 +459,6 @@ the sounds and Stop.
 - **Feel numbers**, to judge on screen: the 10-minute default window, the start key (Ctrl+Alt+S), the 20-minute cap
   before a press, and the 1-hour cap for "until I quit".
 - **Fixes from a trimmed span.** Should a trimmed span feed `lagdoctor fix`? Today `analyze` never does.
-- **Per-program network traffic, before M3.** The relay forwards only the game's network events, so `watch --elevate`
-  stops naming a program that filled the connection, which it does today: `talkers` becomes None, and `bandwidth_hog`
-  falls back to the adapter's total, which cannot say who. Should the relay forward per-program byte totals of the
-  user's own session instead: less than full events, more than nothing? Put to the owner on 2026-11-08 (after PR #19),
-  with per-program totals recommended; no answer yet. Ask again only if the question changes.
 - **Two forks the planning session settled** (DECISIONS 2026-11-08), open to the owner:
   - measuring from a start key, rather than the whole recording or a fixed startup skipped per game;
   - refusing Play while the store client is closed, rather than starting it through Explorer.

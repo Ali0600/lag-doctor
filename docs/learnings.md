@@ -615,6 +615,15 @@ completed the step, and its record even showed the owner switching windows mid-s
 **Takeaway**: give a person-run check a live checklist, one action per line, ticked off as each registers, and keep
 the raw events from every place that can see them; a bare count cannot be turned back into which ones happened.
 
+### GitHub's Windows runner takes real input
+A job on GitHub's x64 `windows-2025` runner can bring its own window to the front with `SetForegroundWindow` and type
+and click into it with `SendInput`, as a person would. No GitHub document says so; it was measured.
+**Why it came up**: the window spike's step 2 had to run on real input before the owner's third run. Its CI rehearsal
+typed the step's 11 actions on the runner (41 of 41 input events taken, PR #20): the window took the foreground, every
+key reached the WebView2 page, and the step's own check passed.
+**Takeaway**: UI tests can drive real keys and clicks on GitHub's x64 Windows runners; let only those runners inject
+input (`scripts/stage2/guard.py`), since on a person's PC the keys go to whatever window has the keyboard.
+
 ### Testing a web view's recovery: crash its renderer on purpose through the DevTools protocol
 `ICoreWebView2::CallDevToolsProtocolMethod("Page.crash", "{}")` ends the page's render process from the host, even
 with DevTools turned off; ProcessFailed then reports kind 1 (render process exited), and the app can load its page
