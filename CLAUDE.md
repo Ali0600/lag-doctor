@@ -188,6 +188,13 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `gh run view <run> --log --job <job id>` refuses until the whole run has finished, and without the flag `gh api`
   prints only a refusal of the log's colour codes (seen 2026-11-07). That job itself must have finished: while it
   runs, the call fails with HTTP 404 and an XML `BlobNotFound` body (2026-11-08).
+- **A pull request with a merge conflict gets no CI**: GitHub starts no `pull_request` workflow while the PR cannot
+  merge. On 2026-11-08 other PRs landed during a review, and two pushes to it started nothing (`gh pr checks`: no
+  checks reported). When a push shows no runs, read `gh pr view <n> --json mergeable`, merge `origin/main` into the
+  branch and push again.
+- On some runners `Get-PhysicalDisk` reports every disk's media type as `Unspecified`, and one
+  `tests/test_machine_winapi.py` test skips saying so: 27 skips instead of 26 in a job's summary (2026-11-08). Read the
+  skip list before taking a changed count for a changed suite.
 - To measure a flaky test on GitHub's runners, push a throwaway branch `diag/<topic>-before` (or `-after`), cut from
   main and never merged, whose own workflow runs on `push: branches: ["diag/**"]` (`ci.yml` and the experiments
   workflow do not run for it). Run the test many times, each as its own pytest process, and read each outcome from
