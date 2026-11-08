@@ -213,7 +213,7 @@ lagdoctor/
   winapi/   hotkey.py (done)
             pdh.py ntquery.py windows.py                system side          (capture/sysmon, capture/target)
             dxgi.py display.py power.py storage.py      machine state        (capture/inventory, fixes)
-            memory.py
+            memory.py folders.py
             nvml.py                                     NVIDIA telemetry     (capture/gpumon)
             icmp.py iphlp.py wlan.py                    network probes       (capture/netmon)
             etw.py                                      ETW sessions         (capture/netflows)
@@ -223,7 +223,7 @@ lagdoctor/
   relay/    protocol.py server.py client.py __main__.py   frame timing and the network trace with admin rights
             process.py                                  priority of other processes (fixes/priority)
   capture/  base.py (done) target.py sysmon.py gpumon.py netmon.py netflows.py presentmon.py inventory.py
-            session.py
+            gamefiles.py (what lay beside the game, for the inventory) session.py
   analysis/ stats.py (done) frames.py events.py attribute.py rules.py diagnose.py
             window.py                                   the samples around a moment (the app's Results)
   fixes/    base.py journal.py registry.py catalog.py (done) + power.py refresh_rate.py gpu_preference.py
@@ -322,6 +322,12 @@ def plan_settings(scheme: str) -> dict            # {max_cpu_ac/dc, max_cpu1_ac/
 
 # winapi/memory.py (SDK um\sysinfoapi.h) ---------------------------------------------------------------
 def total_physical_bytes() -> int                 # GlobalMemoryStatusEx ullTotalPhys; OSError when Windows cannot say
+
+# winapi/folders.py (SDK um\KnownFolders.h) ------------------------------------------------------------
+def known_folder(folder_id: str) -> str           # SHGetKnownFolderPath for this process's user (freed with
+                                                  # CoTaskMemFree); OSError (.winerror = the HRESULT) on failure
+def documents() -> str                            # FOLDERID_Documents, wherever OneDrive moved it
+def local_app_data() -> str                       # FOLDERID_LocalAppData
 
 # winapi/storage.py (WT 9.5) ---------------------------------------------------------------------------
 def media_type(path: str) -> str                  # "SSD" | "HDD" | "Unknown"  (seek penalty, access 0)
@@ -656,9 +662,30 @@ power     {scheme_guid, scheme_name, schemes: [[guid, name], …], slider, perso
           a capture has none (an ASUS plan named "Silent" set the CPU exactly as Balanced does here)
 settings  {game_mode, game_dvr, background_recording, hags, windowed_optimizations, vrr, memory_integrity}
           bools or None; hags = for the game's adapter (else any discrete adapter)
-game      {exe, drive, media, free_gb, gpu_preference, monitor_device, launcher}
+game      {exe, drive, media, free_gb, gpu_preference, monitor_device, launcher, exe_bytes, exe_modified, drop_ins,
+           unreal}
           gpu_preference: 0 let Windows decide, 1 power saving, 2 high performance, None not set;
-          launcher: "steam"/"epic"/"other"/None from the exe path
+          launcher: "steam"/"epic"/"other"/None from the exe path;
+          exe_bytes, exe_modified: the exe's size and modified time (ISO 8601 with this PC's offset), so a game
+          update between two recordings shows;
+          drop_ins = capture/gamefiles.drop_ins(): {folder (the exe's), files, more}: the DLLs beside the exe named
+          as one Windows keeps in System32 (gamefiles.PROXY_DLLS, none on KnownDLLs), the .asi plugins there and in
+          the loader's scripts, plugins and update folders (one subfolder deep), and their settings
+          (gamefiles.LOADER_CONFIGS, <dll>.ini, <plugin>.ini, UE4SS's Mods\mods.txt beside its dwmapi.dll);
+          unreal = gamefiles.unreal(): {found, project, looked_in, config, config_more, mods, mods_more}: found
+          False when the exe is not in <project>\Binaries\Win64|WinGDK beside the project's Content\Paks or the
+          install's Engine\Binaries; config: every .ini in Saved\Config\<WindowsNoEditor|Windows|WinGDK> of each
+          looked_in folder (LOCALAPPDATA's and Documents\My Games' folder of the project's and the install folder's
+          name, and the project folder); mods: the .pak, .utoc and .ucas files in Content\Paks\~mods (two
+          subfolders deep);
+          a file: {path, name (relative to its folder; the bare name for config), bytes, modified, sha256, why}:
+          sha256 None with why "larger than 32 MB", "past the 256 MB read for one recording", "out of time" (5 s
+          for the whole check, from its start), "kept online only, so it was not read" (a OneDrive placeholder,
+          judged from the folder listing, never opened), "it changed while it was read" or "could not be read
+          (...)"; *_more and more: files past the 100 listed. A folder that exists but cannot be listed, or the
+          user's folders that cannot be found, leave drop_ins or unreal None with the reason in errors
+          ("game.drop_ins", "game.unreal", "game.exe_file"); a folder that does not exist holds nothing. None of
+          it opens the game's process.
 oem       {tools: [names of running OEM utilities, e.g. "ArmouryCrate.Service.exe"]}
 network   {name, kind, band, channel}                    filled by the session from the network collector
 nvidia    {name, clock_max_mhz, mem_total_mb, temp_target_c, power_default_w}   from the gpu collector
@@ -1105,12 +1132,20 @@ Recording from it comes with M4. The window code is ported from M0's spike, whic
   `cli.analyze_and_report`: `kind` (`watch` or `analyze`), `tool_version`, `capture_tool_version`, `game`, `exe`,
   `exe_name`, `started_at`, `duration_s`, `lag_type`, `headline`, `frames`, `avg_fps`, `low1_fps`, `stutters_per_min`,
   `worst_frame_ms`, `top_cause`, `frames_source`, `frames_measured`, `refresh_hz`, `power_plan`, `power_mode`,
-  `launcher`. Read back field by field: one of the wrong type reads as None. A failed write is said and the analysis
-  goes on.
+  `launcher`, and what lay beside the game (`summary.game_files`, from the inventory's `game`): `game_exe`
+  `{state, why, bytes, modified}`, `drop_ins` and `unreal_config` `{state, why, files: [[name, sha (16 hex digits or
+  null), bytes, modified], ...] (at most 30), more}`, with `state` `checked`, `not_checked` (the reason in `why`) or,
+  for `unreal_config`, `not_unreal`; an Unreal game's `~mods` paks are among `drop_ins`. These three keys came after
+  the schema's first build and are optional in it: a summary without them, or a capture from before the folder check,
+  reads back with each None. Read back field by field: one of the wrong type reads as None. A failed write is said
+  and the analysis goes on.
 - **The views** (`views.py`), plain dicts: `library_view`, `game_view`, `results_view` (the saved diagnosis through
   `Diagnosis.from_json`, analysed again only when it cannot be read), `moment_view` (`analysis.window` 5 s either side
   of an event, at most 120 s of it), `compare_view` (the numbers with the better side marked, beside the conditions:
-  power plan and mode, refresh rate, how frames were timed, measured length), `settings_view`, `readiness_view`.
+  power plan and mode, refresh rate, how frames were timed, measured length, and what changed in the game itself:
+  the exe by size and date, the drop-in files and the Unreal settings files by name, a name both sides hold in
+  another copy (another SHA-256, else another size or date) marked "(different copy)"; a row differs only when both
+  sides were read, and a summary from before the folder check shows "-"), `settings_view`, `readiness_view`.
   Chart series are named through `labels.COLUMNS`.
 - **Frame times** reach the page in a read-only shared buffer (`ICoreWebView2Environment12::CreateSharedBuffer`,
   `ICoreWebView2_17::PostSharedBufferToScript`): little-endian doubles, the main chain's times then its frame times

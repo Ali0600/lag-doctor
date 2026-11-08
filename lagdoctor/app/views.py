@@ -20,6 +20,7 @@ from lagdoctor.app.library import Entry, read_diagnosis
 from lagdoctor.model import Capture, Diagnosis, G, N, S
 from lagdoctor.report import labels
 from lagdoctor.report.charts import fmt_elapsed, number
+from lagdoctor.report.summary import CHECKED, NOT_UNREAL
 
 MAX_EVENTS = 1000                     # lag moments listed on Results (worst first are never cut: see results_view)
 MAX_FRAMES = 4_000_000                # frames handed to the page's chart (64 MB of doubles)
@@ -331,6 +332,77 @@ def moment_view(cap: Capture, d: Diagnosis, main: dict[str, list], event_id: int
 
 # ------------------------------------------------------------------------------------------------ compare --
 
+DIFFERENT_COPY = " (different copy)"
+FILES_ROWS = (("Drop-in files", "drop_ins", "none found"), ("Unreal settings files", "unreal_config", "none found"))
+NOT_UNREAL_TEXT = "not an Unreal Engine game"
+OLDER_FILES_NOTE = "A recording made before lag-doctor looked at the game's folder shows its files as -."
+
+
+def _not_read(v: dict) -> str:
+    return "not read: " + labels.reason_text(v["why"]) if v.get("why") else "not read"
+
+
+def _same_file(f: list, g: list) -> bool:
+    """Two summary file rows ([name, sha, bytes, modified]) are one file: the same name, and the same SHA-256 when
+    both were hashed, else the same size and date."""
+    if f[0].casefold() != g[0].casefold():
+        return False
+    return f[1] == g[1] if f[1] and g[1] else (f[2], f[3]) == (g[2], g[3])
+
+
+def _unmatched(xs: list, ys: list) -> list:
+    rest = list(ys)
+    out = []
+    for x in xs:
+        hit = next((i for i, y in enumerate(rest) if _same_file(x, y)), None)
+        if hit is None:
+            out.append(x)
+        else:
+            rest.pop(hit)
+    return out
+
+
+def files_row(name: str, va: Any, vb: Any, none_text: str) -> dict[str, Any]:
+    """A Compare row of files: each side's names, a name both have in another copy marked so; "-" for a summary
+    older than the folder check. differs when both sides were read and do not hold the same files."""
+    def text(v, other, odd):
+        if v is None:
+            return None
+        if v["state"] == NOT_UNREAL:
+            return NOT_UNREAL_TEXT
+        if v["state"] != CHECKED:
+            return _not_read(v)
+        if not v["files"]:
+            return none_text
+        theirs = {f[0].casefold() for f in other["files"]} if other and other["state"] == CHECKED else set()
+        names = [f[0] + (DIFFERENT_COPY if any(f is o for o in odd) and f[0].casefold() in theirs else "")
+                 for f in v["files"]]
+        return ", ".join(names) + (f", and {v['more']} more" if v["more"] else "")
+
+    ok = va is not None and vb is not None and va["state"] in (CHECKED, NOT_UNREAL) \
+        and vb["state"] in (CHECKED, NOT_UNREAL)
+    odd_a = _unmatched(va["files"], vb["files"]) if ok else []
+    odd_b = _unmatched(vb["files"], va["files"]) if ok else []
+    differs = ok and (va["state"] != vb["state"] or bool(odd_a or odd_b) or va["more"] != vb["more"])
+    return {"name": name, "a": text(va, vb, odd_a) or "-", "b": text(vb, va, odd_b) or "-", "better": None,
+            "differs": differs}
+
+
+def exe_row(va: Any, vb: Any) -> dict[str, Any]:
+    """The game's exe by size and date: a game update between two recordings shows here."""
+    def text(v):
+        if v is None:
+            return None
+        if v["state"] != CHECKED:
+            return _not_read(v)
+        date = labels.date_text(v["modified"])
+        return ", ".join(x for x in (labels.size_text(v["bytes"]), f"dated {date}" if date else None) if x) or None
+
+    ok = va is not None and vb is not None and va["state"] == vb["state"] == CHECKED
+    return {"name": "Game's exe file", "a": text(va) or "-", "b": text(vb) or "-", "better": None,
+            "differs": ok and (va["bytes"], va["modified"]) != (vb["bytes"], vb["modified"])}
+
+
 def compare_view(a: Entry, b: Entry) -> dict[str, Any]:
     """Screen 5: two recordings side by side, with the conditions each ran under next to the numbers."""
     na, nb = numbers(a), numbers(b)
@@ -362,6 +434,10 @@ def compare_view(a: Entry, b: Entry) -> dict[str, Any]:
         return "not recorded" if n.get("frames_measured") is False else None
 
     older = [x.id for x in (a, b) if x.summary is None]
+    before_files = [x.id for x in (a, b) if x.summary is not None and x.summary.get("drop_ins") is None]
+    sa, sb = a.summary or {}, b.summary or {}
+    files = [exe_row(sa.get("game_exe"), sb.get("game_exe"))] + [
+        files_row(name, sa.get(key), sb.get(key), none_text) for name, key, none_text in FILES_ROWS]
     return {
         "a": {"id": a.id, "when": when_text(a.started), "lag_type": lag_text(na["lag_type"])},
         "b": {"id": b.id, "when": when_text(b.started), "lag_type": lag_text(nb["lag_type"])},
@@ -375,8 +451,10 @@ def compare_view(a: Entry, b: Entry) -> dict[str, Any]:
                        text_row("Frames timed", source(na), source(nb)),
                        text_row("Measured length", fmt_elapsed(na.get("duration_s")) if na.get("duration_s")
                                 is not None else None,
-                                fmt_elapsed(nb.get("duration_s")) if nb.get("duration_s") is not None else None)],
-        "note": ("An older recording has no summary, so its conditions show as -." if older else ""),
+                                fmt_elapsed(nb.get("duration_s")) if nb.get("duration_s") is not None else None)]
+        + files,
+        "note": " ".join(x for x in ("An older recording has no summary, so its conditions show as -." if older else "",
+                                     OLDER_FILES_NOTE if before_files else "") if x),
     }
 
 

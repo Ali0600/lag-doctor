@@ -53,7 +53,8 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
    the last recording made, of any game: `fix` takes its offers from that one and the last check-up, so on an older
    recording it would act on another's. `report.html` stays the shareable page.
 5. **Compare**: two recordings of a game side by side, with their conditions next to the numbers: power plan or mode,
-   refresh rate, frames source and measured length.
+   refresh rate, frames source and measured length, and what changed in the game itself (its exe, drop-in files and
+   Unreal settings files, read from its folders when the recording started: DECISIONS 2026-11-08).
 6. **Add a game**: pick an exe; the name and icon come from the file. lag-doctor never starts an exe itself (see
    "Launching and finding the game"), so a game added by hand, or recorded before from another store, has no Play.
    Its page offers the folder wait instead ("start the game yourself; lag-doctor finds it"), as `watch --wait-folder`.

@@ -1,5 +1,6 @@
 """The static snapshot taken at the start of a session: Windows, CPU, RAM, adapters, displays, power, gaming
-settings, the game's file and the OEM tools running. Keys are DESIGN.md's "Inventory keys"; None means unknown.
+settings, the game's file and what lies beside it (capture/gamefiles.py), and the OEM tools running. Keys are
+DESIGN.md's "Inventory keys"; None means unknown.
 
 Nothing here touches the game process: the game's facts come from the exe path in the target dict, the
 registry and the file system. Every section degrades on its own: a section that fails is None and its reason
@@ -24,6 +25,7 @@ import winreg
 from ctypes import wintypes
 from typing import Any, Callable, Iterable
 
+from lagdoctor.capture import gamefiles
 from lagdoctor.fixes.base import is_absent
 from lagdoctor.fixes.registry import RegistryBackend
 from lagdoctor.winapi import display, dxgi, memory, power, storage
@@ -329,11 +331,20 @@ def _gpu_preference(reg: RegistryBackend, exe: str) -> int | None:
     return gpu_preference_from(text) if text else None
 
 
+def _exe_file(exe: str) -> tuple[int, str | None]:
+    try:
+        st = os.stat(exe)
+    except OSError as exc:
+        raise OSError(f"{exe} could not be read: {exc.strerror or exc}") from exc
+    return int(st.st_size), gamefiles.modified_text(st.st_mtime)
+
+
 def _game(errors: dict[str, str], reg: RegistryBackend, target: dict | None) -> dict:
     target = target if isinstance(target, dict) else {}
     monitor = target.get("monitor_device")
     game = {"exe": None, "drive": None, "media": None, "free_gb": None, "gpu_preference": None,
-            "monitor_device": monitor if isinstance(monitor, str) else None, "launcher": None}
+            "monitor_device": monitor if isinstance(monitor, str) else None, "launcher": None,
+            "exe_bytes": None, "exe_modified": None, "drop_ins": None, "unreal": None}
     exe = target.get("exe")
     if exe is None:
         return game
@@ -348,6 +359,13 @@ def _game(errors: dict[str, str], reg: RegistryBackend, target: dict | None) -> 
     game["free_gb"] = round(free, 2) if free is not None else None
     game["gpu_preference"] = _section(errors, "game.gpu_preference", lambda: _gpu_preference(reg, exe))
     game["launcher"] = _section(errors, "game.launcher", lambda: launcher_from_path(exe))
+    # What a fan fix changes: the files beside the exe and an Unreal game's user config, read from the folders only.
+    file = _section(errors, "game.exe_file", lambda: _exe_file(exe))
+    if file is not None:
+        game["exe_bytes"], game["exe_modified"] = file
+    prints = gamefiles.Fingerprints()
+    game["drop_ins"] = _section(errors, "game.drop_ins", lambda: gamefiles.drop_ins(exe, prints))
+    game["unreal"] = _section(errors, "game.unreal", lambda: gamefiles.unreal(exe, prints))
     return game
 
 

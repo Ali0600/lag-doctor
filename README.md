@@ -81,8 +81,15 @@ uv run lagdoctor app                                    # your recorded games an
 - **`lagdoctor app` opens lag-doctor's own window** (or **lag-doctor** in the Start menu, once installed): every game
   you have recorded, each game's recordings, and Results to explore (the verdict and causes, zoomable frame-time,
   CPU/GPU, NVIDIA and ping charts, the lag moments with what the PC did around each, checked and fine, not
-  measured), plus Compare for two recordings of a game, with the conditions each ran under. Recording from the window
-  comes next; for now record with `lagdoctor watch`. It needs Microsoft's WebView2 Runtime, which Windows 11 has. It
+  measured), plus Compare for two recordings of a game, with the conditions each ran under and what changed in the
+  game itself between them. Recording from the window comes next; for now record with `lagdoctor watch`.
+
+- **Judging a fan fix**: record, install the fix, record again, and compare the two. When a recording starts,
+  lag-doctor reads the game's folder (never the game itself) for the files a fan fix adds: the DLLs Windows would
+  otherwise load from System32 (`dxgi.dll`, `dinput8.dll` ...), ASI plugins and their settings, an Unreal game's
+  `~mods` paks; and for an Unreal game, its user settings files (`Engine.ini`, `GameUserSettings.ini`). Compare lists
+  them side by side, marks a file that changed between the two, and shows the exe's size and date, so a game update
+  shows too. A setting kept anywhere else is not seen. It needs Microsoft's WebView2 Runtime, which Windows 11 has. It
   is a window, not a web page: nothing is served and it opens no network connection.
 
 ![lag-doctor's window: the library of recorded games](docs/images/app-library.png)
