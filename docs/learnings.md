@@ -326,3 +326,21 @@ counter kept growing (99-100 % a reading) through idle readings that named only 
 the rules had trusted the counters alone.
 **Takeaway**: before turning a counter into a share, check it against the instantaneous flags of the same reading,
 and count it only where they agree (or leave out the state, here idle, where it is known to drift).
+
+### A robust z-score is infinite wherever most of the baseline is one value
+The median absolute deviation is 0 as soon as more than half the baseline holds one value (a game that reads nothing
+most seconds), and a z-score divided by it calls every change, however ordinary, infinitely unusual: only the
+absolute floor is left to decide.
+**Why it came up**: the first real capture's disk reads were 0 in 54 % of its quiet seconds, so any read of 1 MiB/s
+or more "moved", in 39 % of all seconds, and every mark listed "loading from disk".
+**Takeaway**: give a MAD-based score a fallback spread (the mean absolute deviation × √(π/2), which equals the
+standard deviation on normal data) and keep "no spread at all" for a baseline that truly never moves.
+
+### Compare an event with chance at the event's own window length
+A signal judged "active in the event" when its busiest second in the event's window clears a threshold is more likely
+to be active in a long window than in a 1 s one. Measuring its baseline rate on 1 s windows inflates every lift
+computed from longer events.
+**Why it came up**: a mark covers 4.25 s; against plain 1 s quiet windows the capture's disk reads had a 0.36 chance,
+where quiet stretches as long as a mark's window gave 0.64, so routine reads looked linked to the lag.
+**Takeaway**: compute a base rate with the same statistic and the same window length as the events it is compared
+with, or the comparison measures the windows, not the cause.

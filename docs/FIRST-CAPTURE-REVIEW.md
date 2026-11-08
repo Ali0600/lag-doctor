@@ -56,14 +56,27 @@ with it, and what is still open, each with the code to start from.
    game's busiest thread stayed at 58 % of a CPU.
 3. **Focus "checked and fine"** on the whole-session share (94 %) while 2 of the 3 marks fell in the one stretch
    with another window in front; with fewer than 5 marks the lift guard never applies. `rules._not_focused`.
+   *Fixed (PR #PR2):* the session share counts against only when the lag moments did not come while the game was
+   behind more often than that share; with too few for the lift test the cause is unchecked, with the counts. The
+   capture: "the game was the active window 94% of the time, but 2 of the 3 marked moments came while another
+   window was in front: too few to tell".
 4. **"A system signal moved" for standing conditions.** `asset_streaming` fires on any read of 1 MiB/s or more
    when the quiet baseline is 0 (z = inf): in 64 % of all windows here, with the SSD at most 19 % busy.
    `vram_overflow` compares a level with the whole-capture median and says "rose" for a flat plateau.
    `attribute.py` (`_judge`, the asset_streaming and vram_overflow parts).
+   *Fixed (PR #PR2):* a baseline whose MAD is 0 takes its spread from the mean absolute deviation (a read must
+   reach 53 MB/s here, past 7.9 % of the quiet seconds), and the shared-memory spill is judged by how far it rose
+   within 5 s. The capture's first mark now shows nothing moved, the plateau no spill at any mark.
 5. **The lift test is inflated**: a busiest-1-s peak over an event's longer window against a plain 1-s quiet
    share (asset_streaming: base 0.36, real chance for a mark-sized window 0.64). `attribute.py` lift.
+   *Fixed (PR #PR2):* `b` is the chance that a quiet stretch as long as each event's window holds an active
+   second (`attribute._expected`). The capture's reads now have b 0.20 at the marks, lift 1.7: no link.
 6. **Marks keep two causes, picked by `CAUSE_ORDER` when z ties at `Z_CAP`**, dropping background CPU at 602 % of
    a CPU and the CPU at 56 % of base. `diagnose.py` (the `[:2]`), `attribute.py` ranking.
+   *Fixed (PR #PR2):* a mark keeps every signal that moved, best first, in the stats and both reports. The
+   ranking stays (ties at the cap still go to the more specific cause); with item 4 fixed, ties are rarer. The
+   capture: 13:27 lists the other window, other programs at 602 % of a CPU and a 73 MB/s read; 13:35 the CPU at
+   56 % of base.
 7. **Commit-limit exhaustion and "RAM stayed free" cancel** in one evidence family, so a commit charge at
    99.9 % is never reported. `rules._ram_pressure`.
    *Fixed (PR #7):* over 90 % committed with RAM free, free RAM is no evidence against (nor hard faults for, being
@@ -78,8 +91,13 @@ with it, and what is still open, each with the code to start from.
    and the evidence says so when the counter moved without it. The capture: 78 % at a 55 W cap, from 670 of 839
    readings.
 10. **Background CPU counts lag-doctor's own processes** (`target["tool_pids"]`). `attribute._others`.
+    *Fixed (PR #PR2):* its processes leave the listed totals and the machine-wide reading as well as the blame;
+    `rules._others_steady` agrees. On the capture the background baseline fell from 91 to 85 % of a CPU.
 11. **A capture with only marks** never reaches the "too few events" branch, so the causes the marks named vanish
     from both lists. `rules.py` stutter-cause rules (`_first_cause_ids`).
+    *Fixed (PR #PR2):* with marks standing in for the frames, the marks are the events the rules judge
+    (`_Env.judged`): too few of them is unchecked ("only 3 marked moments"), and a supported cause is titled
+    "Lag you marked ...". The capture's marks name no stutter cause first once item 4 is fixed.
 
 ## Still open: wording (40 found; the ones a player meets first)
 

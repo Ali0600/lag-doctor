@@ -16,6 +16,7 @@ from __future__ import annotations
 import bisect
 import math
 import ntpath
+from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
@@ -36,6 +37,8 @@ MAX_QUIET_WINDOWS = 345_600  # [inferred] a day of ticks: a longer span (junk ti
 MIN_BASE_WINDOWS = 8         # [inferred] fewer quiet windows than this give no usable median / MAD
 Z_MIN = 3.5                  # [inferred] robust z a signal must reach (the usual modified-z outlier cut)
 Z_CAP = 10.0                 # [inferred] beyond this, a stronger z adds no more evidence
+MEAN_AD_TO_SD = math.sqrt(math.pi / 2.0)   # the mean absolute deviation of normal data is sqrt(2 / pi) = 0.798 of a
+                             # standard deviation: the spread a MAD of 0 cannot give (_Baseline)
 # ---- lift test (LC 2.6, 5.2) ---------------------------------------------------------------------
 LIFT_MIN_EVENTS = 5          # LC 2.6, 5.2: a stutter cause needs n >= 5 events ...
 LIFT_MIN_A = 3               # LC 5.2: ... a >= 3 of them with the signal active ...
@@ -69,6 +72,9 @@ IDLE_REASON = "gpu_idle"     # LC 4.2's confounder: idle clocks are low by desig
 POWER_CAP_REASON = "sw_power_cap"    # capture/gpumon's POWER_CAP_REASONS: the counter behind nv_power_cap_pct
 VRAM_FULL_FRAC = 0.90        # LC 4.3, 10: dedicated VRAM >= 90 % full ...
 SHARED_RISE_MB_PER_S = 256.0 / 60.0   # LC 4.3, 10: ... and the game's shared usage +256 MiB/min
+SPILL_LOOKBACK_S = 5.0       # [inferred] item 4: the spill must rise within this long (at that rate: 21 MB), not stand
+                             # above the capture's median; the first real capture sat flat at 245 MB through all three
+                             # marks against a 210 MB median, and each read "rose"
 DISK_BUSY_PCT = 90.0         # LC 4.8 (PAL, S30): disk idle < 10 %
 DISK_READ_MS = 15.0          # LC 4.8 (PAL, S30): Avg. Disk sec/Read > 15 ms
 UNFOCUSED_SHARE = 0.5        # [inferred] the game was not in front for at least half of that second
@@ -221,6 +227,24 @@ def _system(cap: Capture, column: str, f: Callable[[float], float] | None = None
     return _Series(ts, vs)
 
 
+def _rise(series: _Series, lookback: float) -> _Series:
+    """How far each reading stands above the lowest reading of the `lookback` seconds up to it: 0 on a plateau
+    however high, the climb while a level rises (item 4). Missing readings stay missing."""
+    out: list[float | None] = []
+    low: deque[int] = deque()            # indices of the readings in the window, their values increasing
+    for i, (ti, vi) in enumerate(zip(series.t, series.v)):
+        while low and series.t[low[0]] < ti - lookback:
+            low.popleft()
+        if vi is None:
+            out.append(None)
+            continue
+        while low and series.v[low[-1]] >= vi:
+            low.pop()
+        low.append(i)
+        out.append(vi - series.v[low[0]])
+    return _Series(list(series.t), out)
+
+
 def _gpu(cap: Capture, column: str) -> _Series:
     t, v = fa._col(cap.gpu, G.T), fa._col(cap.gpu, column)
     ts, vs = [], []
@@ -318,14 +342,15 @@ class _Others:
     """The `others` table: top non-game processes per tick ([pid, name, cpu_pct, io_bps, gpu_pct, create_time,
     gpu_game_pct]; older captures stop after field 5 or 6)."""
 
-    total: _Series        # sum of the listed processes' CPU
-    top: _Series          # the busiest one's CPU
-    io_top: _Series       # the biggest I/O user's bytes/s
+    total: _Series        # sum of the listed processes' CPU, lag-doctor's own left out
+    top: _Series          # the busiest one's CPU, lag-doctor's own left out
+    io_top: _Series       # the biggest I/O user's bytes/s, lag-doctor's own left out
     per: dict[tuple[int, str], dict[str, _Sparse]]     # (pid, name) -> {"cpu", "io", "gpu"}; 0 when not listed
     by_name: dict[str, dict[str, _Sparse]]             # summed over every background process of one exe name
     helpers: dict[str, dict[str, _Sparse]]             # the same over the game's own child processes (A10)
     roles: dict[tuple[int, str], str]                  # (pid, name) -> "background" | "game_helper" | "tool"
     gpu_any_adapter: bool = False                      # some "gpu" reading is field 5 (any adapter): game_gpu_pct
+    tool: _Series | None = None                        # lag-doctor's own listed CPU per tick (0 when none listed)
 
 
 def _others(cap: Capture) -> _Others:
@@ -336,11 +361,21 @@ def _others(cap: Capture) -> _Others:
             rows.append((float(row[0]), row[1]))
     rows.sort(key=lambda r: r[0])
     t = [r[0] for r in rows]
-    total, top, io_top = [], [], []
+    # Who each process is: lag-doctor's own (never named, and kept out of the background signals: item 10), the
+    # game's own child (named as such), or another program. The cause series keep the game's children: they still
+    # compete with the game (DESIGN).
+    game = game_pids(cap)
+    tool_pids, tool_names = tool_processes(cap)
+
+    def is_tool(pid: int, name: str) -> bool:
+        return pid in tool_pids or name.lower() in tool_names
+
+    total, top, io_top, tool = [], [], [], []
     seen: dict[tuple[int, str], dict[str, dict[int, float]]] = {}       # tick index -> value, listed ticks only
     any_adapter = False
     for k, (_ti, entries) in enumerate(rows):
-        cpus, ios = [], []
+        cpus, ios, own = [], [], []
+        cpu_read = io_read = False                              # a reading at all this tick, lag-doctor's included
         for e in entries:
             if not (isinstance(e, (list, tuple)) and len(e) >= 5):
                 continue
@@ -353,21 +388,22 @@ def _others(cap: Capture) -> _Others:
             cols = seen.setdefault((pid, name), {"cpu": {}, "io": {}, "gpu": {}})
             for key, x in (("cpu", cpu), ("io", io), ("gpu", gpu)):
                 cols[key][k] = float(x) if x is not None and x >= 0 else 0.0
-            if cpu is not None and cpu >= 0:
+            ok_cpu, ok_io = cpu is not None and cpu >= 0, io is not None and io >= 0
+            cpu_read, io_read = cpu_read or ok_cpu, io_read or ok_io
+            if is_tool(pid, name):                              # its sampling is the measurement's cost
+                own.append(float(cpu) if ok_cpu else 0.0)
+                continue
+            if ok_cpu:
                 cpus.append(float(cpu))
-            if io is not None and io >= 0:
+            if ok_io:
                 ios.append(float(io))
-        total.append(math.fsum(cpus) if cpus else None)
-        top.append(max(cpus) if cpus else None)
-        io_top.append(max(ios) if ios else None)
+        total.append(math.fsum(cpus) if cpu_read else None)
+        top.append(max(cpus) if cpus else (0.0 if cpu_read else None))
+        io_top.append(max(ios) if ios else (0.0 if io_read else None))
+        tool.append(math.fsum(own))
     total_s = _Series(t, total)
 
-    # Who each process is: lag-doctor's own (never named), the game's own child (named as such), or another
-    # program. The cause series above keep the game's children: they still compete with the game (DESIGN).
-    game = game_pids(cap)
-    tool_pids, tool_names = tool_processes(cap)
-    roles = {key: ("tool" if key[0] in tool_pids or key[1].lower() in tool_names
-                   else "game_helper" if key[0] in game else "background") for key in seen}
+    roles = {key: ("tool" if is_tool(*key) else "game_helper" if key[0] in game else "background") for key in seen}
     sums: dict[str, dict[str, dict[str, dict[int, float]]]] = {"background": {}, "game_helper": {}}
     for key, cols in seen.items():
         if roles[key] == "tool":
@@ -385,7 +421,7 @@ def _others(cap: Capture) -> _Others:
     grouped = {role: {name: {c: sparse(vals) for c, vals in cols.items()} for name, cols in names.items()}
                for role, names in sums.items()}
     return _Others(total_s, _Series(t, top), _Series(t, io_top), per, grouped["background"], grouped["game_helper"],
-                   roles, any_adapter)
+                   roles, any_adapter, _Series(t, tool))
 
 
 # --------------------------------------------------------------------------- checks ---
@@ -412,15 +448,22 @@ class _Hit:
 
 
 class _Baseline:
-    def __init__(self, med: float, mad: float) -> None:
-        self.med, self.scale = med, fa.MAD_TO_SD * mad
+    """A signal's quiet level and spread. The spread is the MAD's; where more than half the quiet windows hold one
+    value the MAD is 0, and the mean absolute deviation stands in (item 4: the game's disk reads were 0 in 54 % of
+    the first real capture's quiet seconds, so any read of 1 MiB/s or more was "active", in 39 % of all of them).
+    Only a baseline that never moves at all leaves the floor alone to decide."""
+
+    def __init__(self, med: float, mad: float, mean_ad: float = 0.0) -> None:
+        self.med = med
+        self.scale = fa.MAD_TO_SD * mad if mad > 0 else MEAN_AD_TO_SD * mean_ad
 
 
 def _baseline(series: _Series, windows: list[tuple[float, float]]) -> _Baseline | None:
     xs = [x for x in (series.mean(a, b) for a, b in windows) if x is not None]
     if len(xs) < MIN_BASE_WINDOWS:
         return None
-    return _Baseline(st.median(xs), st.mad(xs))
+    med = st.median(xs)
+    return _Baseline(med, st.mad(xs), math.fsum(abs(x - med) for x in xs) / len(xs))
 
 
 def _judge(part: _Part, base: _Baseline, x: float) -> tuple[bool, float]:
@@ -460,8 +503,9 @@ def _causes(cap: Capture, others: _Others) -> list[_Cause]:
     nlp = fa._logical_cpus(cap)
     total = _system(cap, S.CPU_TOTAL_PCT)
     game = _system(cap, S.GAME_CPU_PCT)
-    machine_others = _Series(total.t, [None if x is None or g is None or not nlp else max(0.0, x * nlp - g)
-                                       for x, g in zip(total.v, _align(game, total.t))])
+    own = _align(others.tool, total.t) if others.tool is not None else [None] * len(total.t)   # item 10
+    machine_others = _Series(total.t, [None if x is None or g is None or not nlp else max(0.0, x * nlp - g - (o or 0.0))
+                                       for x, g, o in zip(total.v, _align(game, total.t), own)])
     gpu_other = _system(cap, S.GPU_OTHER_PCT)
     dpc, irq = _system(cap, S.DPC_PCT), _system(cap, S.INTERRUPT_PCT)
     perf = _system(cap, S.CPU_PERF_PCT)
@@ -535,9 +579,10 @@ def _causes(cap: Capture, others: _Others) -> list[_Cause]:
                                       f"the NVIDIA GPU was held down by {held_by(cap)} {{v}} of the time "
                                       "(normally {n})", _pct)],
                why_missing="no NVIDIA throttle readings"),
-        _Cause("vram_overflow", [_Part(shared, +1, lambda m: SHARED_RISE_MB_PER_S * BASE_WINDOW_S,
-                                       "the game's spill into shared memory rose to {v} (normally {n}) with VRAM full",
-                                       lambda v: f"{v:.0f} MB")],
+        _Cause("vram_overflow", [_Part(_rise(shared, SPILL_LOOKBACK_S), +1,
+                                       lambda m: SHARED_RISE_MB_PER_S * SPILL_LOOKBACK_S,
+                                       "the game's spill into shared memory rose {v} within seconds (normally {n}) with "
+                                       "VRAM full", lambda v: f"{v:.0f} MB")],
                condition=vram_full, why_missing="no GPU memory counters or VRAM size"),
         _Cause("not_focused", [_Part(unfocused, +1, lambda m: UNFOCUSED_SHARE,
                                      "the game was not the foreground window for {v} of the moment (normally {n})",
@@ -616,9 +661,15 @@ def _allowed(side: str | None) -> set[str]:
 
 # --------------------------------------------------------------------------- driver ---
 
-def _quiet_windows(start: float, end: float, spans: list[tuple[float, float]], guard: float) -> list[tuple[float, float]]:
-    """1 s windows from start to end, one per tick (at most MAX_QUIET_WINDOWS), that keep `guard` seconds
-    away from every span."""
+def _grid_stride(start: float, end: float) -> float:
+    """The step between the quiet windows' starts: one tick, coarser only past MAX_QUIET_WINDOWS of them."""
+    return max(BASE_STRIDE_S, (end - start) / MAX_QUIET_WINDOWS)
+
+
+def _quiet_grid(start: float, end: float, spans: list[tuple[float, float]],
+                guard: float) -> list[tuple[int, tuple[float, float]]]:
+    """(step number, window) of the 1 s windows from start to end, one per step of _grid_stride, that keep `guard`
+    seconds away from every span. Consecutive step numbers are windows one step apart."""
     merged: list[tuple[float, float]] = []
     for a, b in sorted(spans):
         if merged and a <= merged[-1][1]:
@@ -626,7 +677,7 @@ def _quiet_windows(start: float, end: float, spans: list[tuple[float, float]], g
         else:
             merged.append((a, b))
     starts = [a for a, _ in merged]
-    stride = max(BASE_STRIDE_S, (end - start) / MAX_QUIET_WINDOWS)
+    stride = _grid_stride(start, end)
     out = []
     k = 0
     while True:
@@ -636,9 +687,73 @@ def _quiet_windows(start: float, end: float, spans: list[tuple[float, float]], g
         a, b = w - guard, w + BASE_WINDOW_S + guard
         j = bisect.bisect_right(starts, b) - 1
         if j < 0 or merged[j][1] < a:
-            out.append((w, w + BASE_WINDOW_S))
+            out.append((k, (w, w + BASE_WINDOW_S)))
         k += 1
     return out
+
+
+def _quiet_windows(start: float, end: float, spans: list[tuple[float, float]], guard: float) -> list[tuple[float, float]]:
+    """1 s windows from start to end, one per tick (at most MAX_QUIET_WINDOWS), that keep `guard` seconds
+    away from every span."""
+    return [w for _, w in _quiet_grid(start, end, spans, guard)]
+
+
+def _slides(a: float, b: float, stride: float) -> int:
+    """How many 1 s windows, one step apart, an event window [a, b] holds: _Series.peak judges its busiest one."""
+    if b - a <= BASE_WINDOW_S:
+        return 1
+    return int(math.floor((b - a - BASE_WINDOW_S) / stride + 1e-9)) + 1
+
+
+def _chance(active: list[bool], index: list[int], slides: int) -> float | None:
+    """Item 5: the share of quiet stretches `slides` windows long (runs of that many consecutive quiet 1 s windows)
+    in which some 1 s window is active: the chance that an event window of that length, judged on its busiest
+    second, catches the signal by coincidence. A plain 1 s share understates it for a longer window. None with fewer
+    than MIN_BASE_WINDOWS such stretches."""
+    if slides <= 1:
+        return sum(active) / len(active) if active else None
+    seen = hits = run = 0
+    prefix = [0]
+    for x in active:
+        prefix.append(prefix[-1] + (1 if x else 0))
+    for i in range(len(index)):
+        run = run + 1 if i and index[i] == index[i - 1] + 1 else 1
+        if run >= slides:
+            seen += 1
+            hits += 1 if prefix[i + 1] - prefix[i + 1 - slides] > 0 else 0
+    return hits / seen if seen >= MIN_BASE_WINDOWS else None
+
+
+def _expected(active: list[bool], index: list[int], slides: list[int]) -> float | None:
+    """The lift test's baseline share: the mean over the events of _chance at each one's own window length, a
+    length that too few quiet stretches reach taken at the longest that enough do (item 5)."""
+    if not active:
+        return None
+    runs, run = [], 0
+    for i in range(len(index)):
+        if i and index[i] == index[i - 1] + 1:
+            run += 1
+        else:
+            if run:
+                runs.append(run)
+            run = 1
+    runs.append(run)
+    longest, hi = 1, max(runs)
+    while longest < hi:                   # the longest length with MIN_BASE_WINDOWS stretches; 1 always counts
+        mid = (longest + hi + 1) // 2
+        if sum(max(0, r - mid + 1) for r in runs) >= MIN_BASE_WINDOWS:
+            longest = mid
+        else:
+            hi = mid - 1
+    memo: dict[int, float | None] = {}
+    vals = []
+    for s in slides:
+        s = max(1, min(s, longest))
+        if s not in memo:
+            memo[s] = _chance(active, index, s)
+        if memo[s] is not None:
+            vals.append(memo[s])
+    return math.fsum(vals) / len(vals) if vals else None
 
 
 def _evaluate(cause: _Cause, bases: dict[int, _Baseline | None], a: float, b: float) -> tuple[_Hit | None, bool]:
@@ -686,12 +801,15 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
     spans = sorted((e.t_start, e.t_end) for e in events if e.kind in ATTRIBUTED_KINDS + ("mark",))
     times = [x for c in causes for p in c.parts for x in p.series.t]
     start, end = (min(times), max(times)) if times else (0.0, 0.0)
-    guard, windows = QUIET_GUARD_S, []
+    guard, quiet = QUIET_GUARD_S, []
     while True:
-        windows = _quiet_windows(start, end, spans, guard)
-        if len(windows) >= MIN_BASE_WINDOWS or guard <= QUIET_GUARD_MIN_S:
+        quiet = _quiet_grid(start, end, spans, guard)
+        if len(quiet) >= MIN_BASE_WINDOWS or guard <= QUIET_GUARD_MIN_S:
             break
         guard = max(QUIET_GUARD_MIN_S, guard / 2.0)
+    windows, index = [w for _, w in quiet], [k for k, _ in quiet]
+    # how many 1 s windows each event window holds: its chance of catching a signal by coincidence grows with it
+    slides = [_slides(e.t_start - WINDOW_BEFORE_S, e.t_end + WINDOW_AFTER_S, _grid_stride(start, end)) for e in targets]
 
     bases = {c.name: {k: _baseline(p.series, windows) for k, p in enumerate(c.parts)} for c in causes}
     thread_base = _baseline(thread, windows)
@@ -719,7 +837,8 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
     for c in causes:
         a_cnt = sum(1 for _, _, hits, _ in acts if c.name in hits)
         active_b = [bool(_evaluate(c, bases[c.name], wa, wb)[0]) for wa, wb in windows]
-        b = sum(active_b) / len(active_b) if active_b and any(v is not None for v in bases[c.name].values()) else None
+        b = (_expected(active_b, index, slides) if active_b and any(v is not None for v in bases[c.name].values())
+             else None)
         lift = (a_cnt / n) / max(b, LIFT_B_FLOOR) if b is not None else None
         ever = any(c.name in m for *_, m in acts)
         label = _label(a_cnt, n, lift, measured=ever)

@@ -1271,7 +1271,7 @@
  {
   "name": "machine-wide other CPU",
   "file": "lagdoctor/analysis/attribute.py",
-  "old": "max(0.0, x * nlp - g)",
+  "old": "max(0.0, x * nlp - g - (o or 0.0))",
   "new": "0.0",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_background_cpu_from_many_small_processes"
@@ -1460,7 +1460,7 @@
  {
   "name": "guard never relaxes",
   "file": "lagdoctor/analysis/attribute.py",
-  "old": "        if len(windows) >= MIN_BASE_WINDOWS or guard <= QUIET_GUARD_MIN_S:",
+  "old": "        if len(quiet) >= MIN_BASE_WINDOWS or guard <= QUIET_GUARD_MIN_S:",
   "new": "        if True:",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_dense_events_relax_the_quiet_guard"
@@ -1643,8 +1643,8 @@
  {
   "name": "the game's children grouped with background programs",
   "file": "lagdoctor/analysis/attribute.py",
-  "old": "                   else \"game_helper\" if key[0] in game else \"background\") for key in seen}",
-  "new": "                   else \"background\") for key in seen}",
+  "old": "\"game_helper\" if key[0] in game else \"background\") for key in seen}",
+  "new": "\"background\") for key in seen}",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_the_games_own_child_process_is_named_as_the_games_helper"
   ]
@@ -1652,8 +1652,8 @@
  {
   "name": "lag-doctor's own processes named",
   "file": "lagdoctor/analysis/attribute.py",
-  "old": "    roles = {key: (\"tool\" if key[0] in tool_pids or key[1].lower() in tool_names",
-  "new": "    roles = {key: (\"tool\" if False",
+  "old": "    roles = {key: (\"tool\" if is_tool(*key) else",
+  "new": "    roles = {key: (\"tool\" if False else",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_lag_doctors_own_processes_are_never_named"
   ]

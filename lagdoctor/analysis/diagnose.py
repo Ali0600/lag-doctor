@@ -81,7 +81,8 @@ def measured(cap: Capture, stats: dict[str, Any]) -> dict[str, str]:
 def mark_list(evs: list[LagEvent]) -> list[dict[str, Any]]:
     """CC-5: the user's lag-key presses for the report, each {t, events, causes}: the stutters and FPS drops in
     its window (never pacing, which can span the whole capture) and the network events in it, except a router
-    that ignored pings (NE 7 row 9). `causes` are the signals attribution found when frames were not measured."""
+    that ignored pings (NE 7 row 9). `causes` are all the signals attribution found when frames were not measured,
+    its best first: the first two once dropped other programs at 602 % of a CPU behind two ties (item 6)."""
     ignored = _ignored_losses(evs)
     out = []
     for mk in evs:
@@ -91,7 +92,7 @@ def mark_list(evs: list[LagEvent]) -> list[dict[str, Any]]:
         t = rules._fin(det.get("mark_t"))
         ids = _ids(det.get("frame_events")) + [i for i in _ids(det.get("net_events")) if i not in ignored]
         out.append({"t": t if t is not None else float(mk.t_end) - events.MARK_AFTER_S, "events": sorted(set(ids)),
-                    "causes": [c for c in mk.causes if isinstance(c, str)][:2]})
+                    "causes": list(dict.fromkeys(c for c in mk.causes if isinstance(c, str)))})
     return out
 
 

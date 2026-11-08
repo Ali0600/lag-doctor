@@ -118,7 +118,7 @@ def test_a_signal_must_clear_a_robust_z_of_35():
     ("cpu_throttle", 0, 105.0, 83.99, 84.1),            # speed 20 % (21 points) below normal
     ("cpu_throttle", 1, 0.0, 0.25, 0.24),               # limited in a quarter of the samples
     ("gpu_throttle", 0, 0.0, 30.0, 29.9),               # throttled 30 % of the time
-    ("vram_overflow", 0, 100.0, 100.0 + 256 / 60 + 0.001, 100.0 + 256 / 60 - 0.01),   # +256 MiB/min
+    ("vram_overflow", 0, 0.0, 5 * 256 / 60 + 0.001, 5 * 256 / 60 - 0.01),   # a rise at 256 MiB/min within 5 s
     ("not_focused", 0, 0.0, 0.5, 0.49),                 # out of focus half of that second
 ])
 def test_each_signal_floor(cause, k, normal, ok, short):
@@ -126,6 +126,73 @@ def test_each_signal_floor(cause, k, normal, ok, short):
     base = at._Baseline(normal, 0.0)                  # MAD 0: z is infinite, so only the floor decides
     assert at._judge(part, base, ok)[0], (cause, k)
     assert not at._judge(part, base, short)[0], (cause, k)
+
+
+def test_a_baseline_mostly_at_one_value_takes_its_spread_from_the_mean_deviation():
+    # Item 4: the game's reads were 0 in 54 % of the first real capture's quiet seconds, so the MAD was 0, z infinite,
+    # and every read of 1 MiB/s or more "a signal moved". 60 quiet seconds at 0 and 40 at 30 MB/s: median 0, MAD 0,
+    # mean deviation 12 MB/s, so a spread of 1.2533 x 12 = 15.04 MB/s
+    xs = [0.0] * 60 + [30e6] * 40
+    series = at._Series([k + 0.5 for k in range(100)], xs)
+    base = at._baseline(series, [(k, k + 1.0) for k in range(100)])
+    assert base.med == 0.0 and base.scale == pytest.approx(1.2533141 * 12e6)
+    part = parts_of()["asset_streaming"].parts[0]
+    assert not at._judge(part, base, 23.5e6)[0]                         # z = 1.6: an ordinary read here
+    assert at._judge(part, base, 3.5 * base.scale + 1.0)[0] and not at._judge(part, base, 3.5 * base.scale - 1.0)[0]
+    still = at._baseline(at._Series([k + 0.5 for k in range(100)], [0.0] * 100), [(k, k + 1.0) for k in range(100)])
+    assert still.scale == 0.0 and at._judge(part, still, 1048576.0)[0]   # a baseline that never moves: the floor
+
+
+def reads_cap(io_at, marks, duration=120.0):
+    """A capture without frame timing whose game reads io_at(t) bytes/s, and lag-key presses at `marks`."""
+    cap = lag_cap(times=(), with_frames=False, duration=duration)
+    cap.system[S.GAME_IO_READ_BPS] = [io_at(t) for t in cap.system[S.T]]
+    cap.marks = list(marks)
+    return cap
+
+
+def mark_summary(cap):
+    fr = fa.main_chain(cap)
+    evs = ev.find_events(cap, fr, fa.frame_stats(fr, cap.duration_s))
+    return [e for e in evs if e.kind == "mark"], at.attribute(cap, fr, evs, fa.bound(cap, fr, evs))
+
+
+def test_a_mark_window_is_judged_against_quiet_stretches_as_long_as_it():
+    # Item 5: an event is judged on the busiest second of its window (4.25 s for a mark), but its chance by
+    # coincidence was the share of plain 1 s quiet windows: 0.36 for the first real capture's disk reads, where
+    # stretches of a mark's length gave 0.64. Here a 0.5 s read burst every 7 s: plain 1 s quiet windows held one
+    # 17 % of the time (lift 6.0, "supports"), quiet stretches as long as a mark's window 70 % (lift 1.4: measured)
+    burst = lambda t: 200e6 if int(round(t * 4)) % 28 in (4, 5) else 0.0          # at 7k + 1.0 and 7k + 1.25 s
+    marks, summary = mark_summary(reads_cap(burst, [7 * k + 3.0 for k in (1, 4, 7, 10, 13, 16)]))
+    s = summary["asset_streaming"]
+    assert s["a"] == s["n"] == 6 and firsts(marks) == ["asset_streaming"] * 6     # every mark held a burst
+    assert 0.5 < s["b"] < 0.9 and s["lift"] < at.LIFT_MIN and s["label"] == "neutral"
+    assert at._chance([True, False, False, False] * 25, list(range(100)), 1) == 0.25
+    assert at._chance([True, False, False, False] * 25, list(range(100)), 2) == pytest.approx(0.5, abs=0.01)
+    assert at._chance([True, False, False, False] * 25, list(range(100)), 4) == 1.0
+    gapped = list(range(50)) + list(range(60, 110))                                 # a gap breaks the stretches
+    assert at._chance([False] * 100, gapped, 48) is None                             # 3 + 3 stretches of 48: < 8 ...
+    assert at._expected([False] * 100, gapped, [48]) == 0.0                          # ... so the longest with 8 (47)
+
+
+def spill_cap(shared_at):
+    """Three marks at 40, 44 and 48 s in 60 s, video memory 92 % full, the game's shared memory shared_at(t) MB."""
+    cap = lag_cap(times=(), with_frames=False, duration=60.0, vram_mb=8192,
+                  base=dict(BASE, **{S.VRAM_USED_MB: 7550.0}))
+    cap.system[S.GAME_SHARED_MB] = [shared_at(t) for t in cap.system[S.T]]
+    cap.marks = [40.0, 44.0, 48.0]
+    return cap
+
+
+def test_shared_memory_standing_at_a_level_is_no_spill_rising():
+    # Item 4: the first real capture's game held 245 MB of shared memory flat through all three marks against a
+    # 210 MB median, and each mark read "the spill rose to 245 MB (normally 210 MB)". A rise is measured within 5 s
+    marks, summary = mark_summary(spill_cap(lambda t: 245.0 if 30.0 <= t < 52.0 else 210.0))
+    assert not [m for m in marks if "vram_overflow" in m.causes] and summary["vram_overflow"]["a"] == 0
+    marks, summary = mark_summary(spill_cap(lambda t: 800.0 if t >= 39.5 else 245.0 if t >= 30.0 else 210.0))
+    assert "vram_overflow" in marks[0].causes                           # control: a real spill at the first mark
+    assert any(w.startswith("the game's spill into shared memory rose 555 MB within seconds") for w in marks[0].detail["why"])
+    assert at._rise(at._Series([0.0, 1.0, 2.0, 7.0, 8.0], [5.0, 9.0, 7.0, 7.0, None]), 5.0).v == [0.0, 4.0, 2.0, 0.0, None]
 
 
 def test_memory_paging_also_needs_ram_nearly_full():
@@ -296,14 +363,23 @@ PRESENTMON = r"C:\Users\x\AppData\Local\lag-doctor\presentmon\2.6.0\PresentMon-2
     ([5555, "python.exe", 300.0, 0.0, 0.0], {"tool_pids": [5555]}),           # lag-doctor's own capture process
     ([6000, "PresentMon-2.6.0-x64.exe", 300.0, 0.0, 0.0], {"presentmon": {"exe": PRESENTMON}})])   # its child
 def test_lag_doctors_own_processes_are_never_named(entry, mark):
-    # A10: what the session records as lag-doctor's own (target "tool_pids") and the PresentMon exe it ran
+    # A10: what the session records as lag-doctor's own (target "tool_pids") and the PresentMon exe it ran. Changed on
+    # purpose (item 10): its own 300 % once still made "another program using the CPU" fire ("the machine still was
+    # busy") while no program could be named; its load is the measurement's cost, so it counts nowhere now
     cap = lag_cap(during={S.CPU_TOTAL_PCT: 40.0}, others_during=OTHERS + [entry])
     cap.target.update(mark)
     events, _ = analyse(cap)
-    assert firsts(events) == ["background_cpu"] * 6                    # the machine still was busy
+    assert len(events) == 6 and not [e for e in events if "background_cpu" in e.causes]
     assert all("process" not in e.detail for e in events)
     control = analyse(lag_cap(during={S.CPU_TOTAL_PCT: 40.0}, others_during=OTHERS + [entry]))[0]
-    assert {e.detail.get("process") for e in control} == {entry[1]}     # unmarked, the same process is named
+    assert firsts(control) == ["background_cpu"] * 6                     # unmarked, the same load is another program's
+    assert {e.detail.get("process") for e in control} == {entry[1]}     # and it is named
+    # a real program makes the cause fire while lag-doctor's own process rises more: the program is the one named
+    hog = [9000, "hog.exe", 250.0, 0.0, 0.0]
+    both = lag_cap(during={S.CPU_TOTAL_PCT: 60.0}, others_during=OTHERS + [entry, hog])
+    both.target.update(mark)
+    events, _ = analyse(both)
+    assert firsts(events) == ["background_cpu"] * 6 and {e.detail.get("process") for e in events} == {"hog.exe"}
 
 
 def test_absurd_values_from_a_corrupt_capture_are_missing_never_evidence():

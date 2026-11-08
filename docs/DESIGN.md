@@ -398,7 +398,9 @@ read + write bytes, `gpu_pct` their busiest engine on any adapter, `create_time`
 prove a PID was not reused), `gpu_game_pct` their busiest engine on the game's adapter (None while that adapter
 is unknown). lag-doctor's own process is included: its load is real, and `target["tool_pids"]` (written by the
 session from handle-free snapshots: this process, its venv launcher, its PresentMon and nvidia-smi children, and
-in the elevated flow the waiting parent) lets the analysis keep it out of the blame.
+in the elevated flow the waiting parent) lets the analysis keep it out of the blame and out of the background-CPU
+signals (the listed totals, and the machine-wide reading minus the game): its sampling is the measurement's cost,
+never "another program using the CPU".
 
 ### Collector specifics
 
@@ -618,7 +620,8 @@ swap_chains, main_chain                    int, str        chains seen; the addr
                                                            HTML frame chart draws only that chain)
 ping_gw_ms, ping_inet_ms, ping_server_ms   float           medians
 jitter_ms, loss_pct                        float           internet anchor: mean consecutive difference; lost / sent
-marks                                      list            [{t, events: [ids], causes: [<= 2]}], one per lag-key press
+marks                                      list            [{t, events: [ids], causes: [every signal that moved, best
+                                                           first]}], one per lag-key press
 ```
 
 ### The bound verdict (LC 3.4)
@@ -673,7 +676,13 @@ for a slow frame that simply has no GPU timing (`detail["side_source"]` = "verdi
 as frame-timing evidence). Each 4 Hz signal is then "active" when its busiest 1 s mean in
 `[t_start − 0.5 s, t_end + 0.25 s]` clears both a robust z-score (≥ 3.5 against the median/MAD of quiet 1 s
 windows with no event within 2 s; the guard relaxes to 1 s, then 0.5 s, when fewer than 8 quiet windows exist)
-and an absolute floor. Lift test: a cause *supports* when `a ≥ 3`, `a/n ≥ 0.30` and `lift ≥ 2` (n ≥ 5 events).
+and an absolute floor. Where more than half the quiet windows share one value the MAD is 0, and the mean absolute
+deviation × √(π/2) is the spread instead; only a baseline that never moves leaves the floor alone to decide (the
+first real capture's disk reads were 0 in 54 % of its quiet seconds, and every read of 1 MiB/s counted). Lift
+test: a cause *supports* when `a ≥ 3`, `a/n ≥ 0.30` and `lift ≥ 2` (n ≥ 5 events), with `b` the chance that a quiet
+stretch as long as each event's window (judged, like the event, on its busiest 1 s) holds an active second,
+averaged over the events (`attribute._expected`; a length too few quiet stretches reach is taken at the longest
+that 8 do): a mark's 4.25 s window once met a plain 1 s share, 0.36 where its own length gave 0.64.
 Each event is then attributed to its single best cause (explaining away), first in `ev.causes`; when nothing
 moved, the residual is `gpu_spike` (GPU side), `game_cpu_spike` (a saturated thread) or `game_stall`, and no
 cause at all when the sampler did not measure that moment.
@@ -688,7 +697,7 @@ cause at all when the sampler did not measure that moment.
 | any | DPC/interrupt time up on the busiest CPU | `driver_dpc` (capped at "possible": PDH cannot name the driver) |
 | CPU | `cpu_perf_pct` or `cpu_perf_limit_pct` down | `cpu_throttle` |
 | GPU | GPU busy long and `nv_throttle_pct` up | `gpu_throttle` |
-| GPU | VRAM near full and `game_shared_mb` rising | `vram_overflow` |
+| GPU | VRAM near full and `game_shared_mb` rising (within 5 s, not a plateau over the median) | `vram_overflow` |
 | GPU | GPU busy long, nothing else moved | `gpu_spike` |
 | none | game not focused (`game_focused` = 0) | `not_focused` |
 | none | nothing moved, thread idle | `game_stall` (the game waited on itself) |
@@ -758,6 +767,13 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   (present_swing_pct > 10 %) covering ≥ 10 % of the capture, weighed as a steady metric.
 - `game_dvr`: background recording known off concludes against; unknown is advice only (no auto-fix);
   `game_dvr_off` is offered only when background recording is known on.
+- `not_focused`: the share of the capture behind another window (>= 10 %, on the CPU side), or the lift test.
+  "The active window most of the time" counts against only when the lag moments did not come while the game was
+  behind more often than that share says; with too few of them for the lift test it is unchecked, with the counts
+  (2 of the first real capture's 3 marks fell in its one stretch behind other windows).
+- With marks standing in for the frames, the marks are the events the rules judge (`_Env.judged`): a stutter
+  cause they named first is unchecked with fewer than 5 ("only 3 marked moments"), and one they support is titled
+  "Lag you marked ...", never "Stutters".
 - `background_hogs`: processes named with their rise; `background_priority` is offered only for a (pid, name)
   pair whose create time is unambiguous, never for a process with the game's image name, with the game's PIDs in
   `exclude`.
