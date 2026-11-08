@@ -24,29 +24,24 @@ wheels = [
 name = "lag-doctor"
 version = "0.1.0"
 source = { editable = "." }
-dependencies = [
-    { name = "psutil" },
-]
 
-[package.optional-dependencies]
+[package.dev-dependencies]
+dev = [
+    { name = "psutil" },
+    { name = "pytest" },
+]
 laglab = [
     { name = "pyglet" },
 ]
 
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-]
-
 [package.metadata]
-requires-dist = [
-    { name = "psutil", specifier = ">=7.0" },
-    { name = "pyglet", marker = "extra == 'laglab'", specifier = ">=2.1" },
-]
-provides-extras = ["laglab"]
 
 [package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = ">=8" }]
+dev = [
+    { name = "psutil", specifier = ">=7.0" },
+    { name = "pytest", specifier = ">=8" },
+]
+laglab = [{ name = "pyglet", specifier = ">=2.1" }]
 
 [[package]]
 name = "packaging"

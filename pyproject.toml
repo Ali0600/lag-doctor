@@ -6,19 +6,19 @@ readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = [
-    "psutil>=7.0",
-]
+# None at run time: lagdoctor/ imports only the standard library (tests/test_stdlib_only.py), which is all the
+# installer's embeddable Python holds.
+dependencies = []
 
 [project.scripts]
 lagdoctor = "lagdoctor.cli:main"
 
-[project.optional-dependencies]
-# Only the synthetic test game needs a graphics library.
-laglab = ["pyglet>=2.1"]
-
+# Groups stay out of the wheel's metadata. `uv sync` installs dev; `--group laglab` adds LagLab's.
 [dependency-groups]
-dev = ["pytest>=8"]
+# psutil is the tests' independent readout of what lagdoctor/winapi/ reads.
+dev = ["pytest>=8", "psutil>=7.0"]
+# Only the synthetic test game, laglab/ (not in the wheel), needs a graphics library.
+laglab = ["pyglet>=2.1"]
 
 [build-system]
 # The same minor version as the uv that CI pins (ci.yml), so uv builds with the copy of uv_build it carries.

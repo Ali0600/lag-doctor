@@ -398,3 +398,12 @@ added 13 tests and 18 sabotages without touching that line, and main went green 
 already said 33 at the commit that set the 32, so the two count different things.
 **Takeaway**: after the last of a batch of parallel merges, recount each doc total on main from its source, and
 before correcting a figure against a counter, read the counter at the commit that set the figure.
+
+### An extra is published with the package; a dependency group is not
+`[project.optional-dependencies]` lands in the wheel's metadata (`Provides-Extra`, `Requires-Dist: ...; extra ==`),
+so anyone can install it from the published package; `[dependency-groups]` (PEP 735) stays in `pyproject.toml` and
+the lockfile, for the checkout alone.
+**Why it came up**: LagLab's pyglet was an extra, so the wheel offered `lag-doctor[laglab]`, which would have
+installed a graphics library for a `laglab/` the wheel does not ship.
+**Takeaway**: an extra is for a feature of what you ship; tools for the tests or the repo's own scripts go in a
+group.

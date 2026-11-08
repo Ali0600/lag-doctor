@@ -240,8 +240,9 @@ def _catalog_check(folder: Path, names: list[str]) -> dict:
 
 
 def cmd_layout() -> int:
-    """The folder the MSI would install (Stage 3): python.org's embeddable runtime, lag-doctor's code, psutil and
-    the pinned PresentMon, under Program Files; plus E3c's signature census of the runtime's own files."""
+    """The folder the MSI would install (Stage 3): python.org's embeddable runtime, lag-doctor's code and the pinned
+    PresentMon, under Program Files; plus E3c's signature census of the runtime's own files. lag-doctor's code needs
+    nothing beyond the standard library (tests/test_stdlib_only.py), so no other package goes in."""
     from lagdoctor import setup
     if INSTALL.exists():
         print(f"{INSTALL} already exists: this command builds it once, on a fresh runner.")
@@ -274,19 +275,13 @@ def cmd_layout() -> int:
     shutil.copytree(SCRIPTS / "stage2", INSTALL / "stage2", ignore=skip)
     (INSTALL / "scripts").mkdir()
     shutil.copy2(SCRIPTS / "etw_access.py", INSTALL / "scripts" / "etw_access.py")
-    import psutil
-    src = Path(psutil.__file__).parent
-    shutil.copytree(src, INSTALL / "psutil", ignore=skip)
-    for info in src.parent.glob("psutil-*.dist-info"):
-        shutil.copytree(info, INSTALL / info.name)
     os.environ["LAGDOCTOR_HOME"] = str(work / "home")         # setup's download folder, away from the profile
     exe = setup.ensure_presentmon(allow_download=True)
     shutil.copy2(exe, INSTALL / setup.EXE_NAME)
     presentmon = setup.verify(INSTALL / setup.EXE_NAME)
     record = {"install": str(INSTALL), "embed": {"url": EMBED_URL, "sha256": digest, "size": len(data)},
               "files": sorted(names), "pth": (INSTALL / f"python{EMBED_VERSION.replace('.', '')[:3]}._pth").read_text(),
-              "signatures": signatures, "signature_readout": readout, "catalog": catalog, "psutil": psutil.__version__,
-              "presentmon": presentmon}
+              "signatures": signatures, "signature_readout": readout, "catalog": catalog, "presentmon": presentmon}
     RESULTS.mkdir(exist_ok=True)
     _write_json(RESULTS / "layout.json", record)
     print(f"Built {INSTALL}: {len(names)} runtime files, {len(binaries) - len(unsigned)} of {len(binaries)} binaries "
