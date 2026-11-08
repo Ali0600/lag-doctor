@@ -140,9 +140,13 @@ a file deletion would not show.
 
 ### A process handle outlives the process
 `OpenProcess` keeps succeeding on a process that has exited for as long as anyone holds a handle to it, and
-`SetPriorityClass(REALTIME)` unelevated reports success while setting HIGH.
+`SetPriorityClass(REALTIME)` unelevated reports success while setting HIGH. The process list does not wait for the
+handles: an exited process leaves the NtQuerySystemInformation snapshot and EnumProcesses at once, while an open
+handle only keeps its PID from being handed out again (measured 2026-11-07, a killed child with its Popen handle open).
 **Why it came up**: the priority fix spawns, lowers and restores a test child, and must never act on a PID
-Windows has handed to another process.
+Windows has handed to another process. Later, the PID-list liveness check that replaced psutil: it sees the game exit
+even though PresentMon holds a handle to the game, and its test kills a child it still holds, so the PID cannot be
+reused before the check looks.
 **Takeaway**: check identity (create time) and liveness (exit code) on the handle you then act through,
 better still without any handle first, and verify a write by reading the effective value back.
 
