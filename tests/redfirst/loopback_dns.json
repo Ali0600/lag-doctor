@@ -1,0 +1,38 @@
+[
+ {
+  "name": "the stand-in takes TCP's next port-0 number again",
+  "file": "tests/loopback_dns.py",
+  "old": "        yield _RNG.choice(DYNAMIC)",
+  "new": "        yield (lambda s: (s.bind((HOST, 0)), s.getsockname()[1], s.close())[1])(socket.socket())",
+  "tests": [
+   "tests/test_loopback_dns.py::test_a_port_is_found_when_the_next_tcp_ports_are_all_closed_to_udp"
+  ]
+ },
+ {
+  "name": "the error no longer names the refused ports",
+  "file": "tests/loopback_dns.py",
+  "old": "    raise RuntimeError(f\"no port free for both UDP and TCP in {len(refused)} tries: {', '.join(refused)}\")",
+  "new": "    raise RuntimeError(\"no free port for both UDP and TCP\")",
+  "tests": [
+   "tests/test_loopback_dns.py::test_each_refused_try_is_named_with_its_protocol_and_error_and_leaves_nothing_bound"
+  ]
+ },
+ {
+  "name": "a refused try leaves its UDP socket bound",
+  "file": "tests/loopback_dns.py",
+  "old": "            udp.close()",
+  "new": "            pass",
+  "tests": [
+   "tests/test_loopback_dns.py::test_each_refused_try_is_named_with_its_protocol_and_error_and_leaves_nothing_bound"
+  ]
+ },
+ {
+  "name": "the tries are not capped",
+  "file": "tests/loopback_dns.py",
+  "old": "    for port in itertools.islice(random_ports() if candidates is None else candidates, tries):",
+  "new": "    for port in (random_ports() if candidates is None else candidates):",
+  "tests": [
+   "tests/test_loopback_dns.py::test_each_refused_try_is_named_with_its_protocol_and_error_and_leaves_nothing_bound"
+  ]
+ }
+]

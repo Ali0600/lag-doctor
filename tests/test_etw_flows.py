@@ -9,13 +9,13 @@ from __future__ import annotations
 import random
 import socket
 import struct
-import threading
 
 import psutil
 import pytest
 
 from lagdoctor.capture import netflows as nf
 from lagdoctor.capture.netflows import FlowTable, Packet
+from tests.loopback_dns import LoopbackDns
 
 GAME, OTHER = 4242, 999
 LOCAL, SERVER, VOICE = "192.168.0.225", "203.0.113.7", "198.51.100.20"
@@ -596,65 +596,9 @@ def test_selftest_ignores_other_processes_and_other_ports():
     assert nf.judge_selftest(noise, pid=100, udp_port=5001, tcp_port=6001, remote_ip=REMOTE)["verified"] is False
 
 
-class _FakeDns:
-    """A loopback DNS answerer on one port number for both UDP and TCP (bad_txid: answer the wrong id)."""
-
-    def __init__(self, bad_txid=False):
-        self.bad, self.udp_client, self.tcp_client = bad_txid, None, None
-        for _ in range(10):
-            self.tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.tcp.bind(("127.0.0.1", 0))
-            self.port = self.tcp.getsockname()[1]
-            self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            try:
-                self.udp.bind(("127.0.0.1", self.port))
-                break
-            except OSError:
-                self.tcp.close()
-                self.udp.close()
-        else:
-            raise RuntimeError("no free port for both UDP and TCP")
-        self.tcp.listen(1)
-        self.tcp.settimeout(5)
-        self.udp.settimeout(5)
-        self.threads = [threading.Thread(target=self._serve_udp, daemon=True),
-                        threading.Thread(target=self._serve_tcp, daemon=True)]
-        for th in self.threads:
-            th.start()
-
-    def _answer(self, query):
-        txid = struct.unpack(">H", query[:2])[0] ^ (1 if self.bad else 0)
-        return struct.pack(">HHHHHH", txid, 0x8180, 1, 0, 0, 0) + query[12:]
-
-    def _serve_udp(self):
-        try:
-            data, addr = self.udp.recvfrom(512)
-            self.udp_client = addr[1]
-            self.udp.sendto(self._answer(data), addr)
-        except OSError:
-            pass
-
-    def _serve_tcp(self):
-        try:
-            conn, addr = self.tcp.accept()
-            with conn:
-                self.tcp_client = addr[1]
-                n = struct.unpack(">H", conn.recv(2))[0]
-                reply = self._answer(conn.recv(n))
-                conn.sendall(struct.pack(">H", len(reply)) + reply)
-        except OSError:
-            pass
-
-    def close(self):
-        for th in self.threads:
-            th.join(5)
-        self.tcp.close()
-        self.udp.close()
-
-
 @pytest.mark.parametrize("bad_txid", [False, True])
 def test_selftest_traffic_sends_one_udp_and_one_tcp_query_from_the_ports_it_reports(bad_txid):
-    dns = _FakeDns(bad_txid)
+    dns = LoopbackDns(bad_txid)
     try:
         out = nf.selftest_traffic("127.0.0.1", dns.port, dns.port, timeout=3.0)
     finally:
