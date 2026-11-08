@@ -146,11 +146,15 @@ minor version, and `tests/test_wheel_check.py` fails when the two part) and then
   sabotage commit), use `gh api repos/Ali0600/lag-doctor/actions/jobs/<job id>/logs --allow-escape-sequences`:
   `gh run view <run> --log --job <job id>` refuses until the whole run has finished, and without the flag `gh api`
   prints only a refusal of the log's colour codes (seen 2026-11-07).
-- `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` is
-  timing-sensitive under full-suite load (failed once on 2026-11-05 with 0 delay gaps, then 4/4 alone; on CI once in
-  two full runs): rerun it alone before blaming a change for it, as CI does. A test that starts a child pytest gives it
-  its own `TEMP` (as `tests/test_redfirst.py` and `tests/test_downloads.py` do): child runs in the shared pytest temp
-  folder made this test about 2 s slower on CI and failed it 3 times in 16 runs (2026-11-07).
+- `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` failed
+  at random until 2026-11-08 (`AssertionError: []`; in CI's step that ran it alone, 4 of 57 runs on Python 3.11 and
+  none of 56 on 3.13). Its private ETW session hands every event over inside `stop()`, so with the tracker's 2 s
+  reorder window the first second of the stream came late, and whether the server was known before the planted gap
+  hung on when the session started against whole seconds. The test now gives the tracker a window longer than the run
+  and asserts that no packet came late, and CI runs it in the suite again; a test that drives the tracker over a
+  private session needs the same window. A test that starts a child pytest gives it its own `TEMP` (as
+  `tests/test_redfirst.py` and `tests/test_downloads.py` do): child runs in the shared pytest temp folder made this
+  test about 2 s slower on CI and failed it 3 times in 16 runs (2026-11-07, before the window).
   `tests/test_nvidia_live.py::test_sampler_
   reads_each_row_just_after_a_driver_refresh` failed on 2026-11-07, alone too, with the NVIDIA GPU idle in P8 (no
   training job) and the screen locked; it had passed with the GPU busy. Two more depend on the PC's state: `tests/test_cli.py::test_a_real_console_event_

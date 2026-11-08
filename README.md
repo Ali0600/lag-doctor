@@ -165,7 +165,7 @@ uv run python scripts/wheel_check.py dist                      # install the whe
   SHA-pinned actions, beside a job that installs the built wheel into a fresh venv and runs it there; the hardware
   a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides the
   hardware, and the 32 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 1,628 deliberate sabotages in
+  there, failing rather than skipping if they go missing; plus a mutation harness of 1,633 deliberate sabotages in
   32 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
