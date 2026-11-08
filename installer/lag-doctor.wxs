@@ -41,7 +41,7 @@
          the whole PATH). A folder key path needs a fixed Id and Guid; WiX adds the CreateFolder row itself. -->
     <Component Id="PathEntry" Directory="BINFOLDER" Guid="{EEC3F812-94EF-4DD5-8F80-2A76D6176B6A}">
       <Environment Id="PathEntry" Name="PATH" Value="[BINFOLDER]" Part="last" Action="set" System="yes"
-                   Permanent="no" />
+                   Permanent="yes" />
     </Component>
   </Package>
 </Wix>
