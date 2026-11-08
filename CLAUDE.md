@@ -324,7 +324,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   each at its best of three (about 0.06x on this laptop); if it fails again, rerun it alone before blaming a change.
   `tests/test_sysmon_sampler.py::test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild` failed once in a
   full local run (2026-11-08: the grandchild's first reading was 0.0, so its mean was 72 % against the 88 % expected,
-  outside the 10-point bound) and passed alone; rerun it alone before blaming a change. The Window spike workflow's
+  outside the 10-point bound) and passed alone; rerun it alone before blaming a change.
+  Never run two pytest processes here at once (a review agent's tests beside the suite): they share
+  `%TEMP%\pytest-of-<user>` and its keep-three cleanup, and on 2026-11-08
+  `tests/test_downloads.py::test_fetch_gold_takes_the_pinned_commits_gold_folder_byte_for_byte` failed twice that way
+  (WinError 5 renaming a folder under its `tmp_path`), then passed 3 of 3 alone. The Window spike workflow's
   socket check (`sockets-1` or `sockets-2`) failed 3 of 20 attempts on 2026-11-08 (main 1 of 13, the M1 branch 2 of
   5), each on one UDP4 socket "bound" on an ephemeral port in a WebView2 process: the runtime's own lookups (in 20
   runs watched every 20 ms, all 70 of its UDP sockets were a utility process's, on 0.0.0.0, on a port Windows chose).
