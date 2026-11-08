@@ -1,4 +1,4 @@
-"""Every process's CPU, threads, memory, I/O, parent and image path, without opening any process.
+"""Every process's PID, CPU, threads, memory, I/O, parent and image path, without opening any process.
 
 NtQuerySystemInformation(SystemProcessInformation = 5) fills one buffer with an entry per process, each
 followed by its threads; SystemProcessIdInformation (88) returns one process's image path. Neither needs a
@@ -361,6 +361,12 @@ def _image_name(raw: memoryview, base: int, used: int, length: int, ptr: int) ->
     if rel < 0 or length % 2 or rel + length > used:
         raise _layout_error(f"an image name points outside the returned data ({rel}, {length})")
     return raw[rel:rel + length].tobytes().decode("utf-16-le", errors="replace")
+
+
+def pids(snapshotter: Snapshotter | None = None) -> frozenset[int]:
+    """The PID of every running process, 0 (the idle process) included, from one snapshot: the list EnumProcesses
+    gives (psutil.pids() calls it), without opening any process. Pass a Snapshotter to reuse its buffer."""
+    return frozenset((snapshotter or Snapshotter()).snapshot())
 
 
 # ---------------------------------------------------------------- image path (class 88) ---

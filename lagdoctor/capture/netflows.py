@@ -35,11 +35,9 @@ import threading
 from collections import OrderedDict, deque
 from typing import Any, Callable, Iterable, NamedTuple
 
-import psutil
-
 from lagdoctor import clock
 from lagdoctor.capture.base import Collector
-from lagdoctor.winapi import etw
+from lagdoctor.winapi import etw, iphlp
 
 # NE 4.1: provider identity on this machine.
 KERNEL_NETWORK = "7dd42a49-5329-4832-8dfd-43d979153a88"
@@ -202,14 +200,14 @@ def decode(event_id: int, version: int, data: bytes) -> Packet | None:
 
 
 def local_addresses() -> frozenset[str]:
-    """This PC's interface addresses (psutil.net_if_addrs: no process handles) plus loopback."""
+    """This PC's interface addresses (winapi/iphlp.adapter_addresses: GetAdaptersAddresses, no process handles)
+    plus loopback."""
     out = {"127.0.0.1", "::1"}
-    for addrs in psutil.net_if_addrs().values():
-        for a in addrs:
-            if a.family in (socket.AF_INET, socket.AF_INET6):
-                ip = normalize_ip(a.address)
-                if ip:
-                    out.add(ip)
+    for adapter in iphlp.adapter_addresses():
+        for text in adapter["addresses"]:
+            ip = normalize_ip(text)
+            if ip:
+                out.add(ip)
     return frozenset(out)
 
 

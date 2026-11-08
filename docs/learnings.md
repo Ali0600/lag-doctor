@@ -297,3 +297,23 @@ same hour were normal. A diagnostic branch showed it only right after the full s
 gone once the child runs got their own `TEMP` (12 of 12 normal).
 **Takeaway**: give every child run of a tool that keeps shared state (temp roots, caches, locks) a private root, and
 compare a suspicious slowdown with runs from the same hour without your change before calling it noise.
+
+### The library you replace can check its replacement, as far as its own API differs
+Once code moves off a library, the library is the obvious independent readout for the new code, but it is only as
+independent as the call underneath it. psutil 7.2.2's `virtual_memory()` reads GetPerformanceInfo, so it checks a
+GlobalMemoryStatusEx reader from another API (they agreed to the byte); its `net_if_addrs()` calls the same
+GetAdaptersAddresses, so it checks only how the buffer is parsed.
+**Why it came up**: replacing psutil under `lagdoctor/` for the installer's embeddable runtime. Its C source at the
+pinned tag said which Windows call each of the three readouts makes, before any of them was trusted as a test oracle.
+**Takeaway**: before using a replaced library as the oracle, read which system call it makes: a different API checks
+the value, the same API checks only your parsing, and the value then needs a second witness.
+
+### A C API that fills your buffer with linked lists lets you bounds-check every pointer
+GetAdaptersAddresses writes its adapters, names and addresses into the one buffer the caller passes, linked by
+pointers. So every pointer must land inside that buffer, and one that does not means the ctypes offsets are wrong:
+refuse it with an error instead of reading through it, and bound each list walk so a cycle cannot loop forever.
+**Why it came up**: the adapter reader in `winapi/iphlp.py`. Its tests build such a buffer from literals and break one
+pointer at a time, aiming it at a valid buffer elsewhere, so a sabotaged check returns a wrong answer instead of
+crashing the test process.
+**Takeaway**: when an API's output is self-contained in your buffer, check each pointer against the buffer before
+following it; and test such a guard with readable memory on the wrong side, never with a wild pointer.
