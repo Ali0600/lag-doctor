@@ -17,6 +17,7 @@ uv run python -m laglab --list-modes                     # the fake laggy game u
 uv run lagdoctor ...                                     # the tool (see README); the elevated child runs -m lagdoctor
 uv build --clear --out-dir dist                          # the sdist, and the wheel built from it
 uv run python scripts/wheel_check.py dist                # that wheel in a fresh venv, run outside the checkout
+uv run pytest -q tests/test_msi.py                       # the MSI's build, WiX source and install check, no install
 ```
 
 CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 and 3.11 on every push to `main` and
@@ -24,7 +25,12 @@ every pull request; code and workflow changes go through a pull request and merg
 PresentMon through `lagdoctor setup --download` and the gold captures through `tests.downloads fetch-gold`, checks
 both against the tests' pins and caches them; each job's summary counts the tests that use them. Its wheel job runs
 `uv build --offline` (with the copy of uv_build inside the pinned uv: `pyproject.toml`'s bound stays on that uv's
-minor version, and `tests/test_wheel_check.py` fails when the two part) and then `scripts/wheel_check.py`.
+minor version, and `tests/test_wheel_check.py` fails when the two part) and then `scripts/wheel_check.py`. Its msi job
+installs WiX 7.0.1 from its SHA-512-pinned package (`scripts/wix_tool.py`), builds the MSI (`scripts/msi_build.py`),
+keeps it as the `lag-doctor-msi` artifact, then installs, runs and uninstalls it there (`scripts/msi_check.py`, whose
+verdicts are the job summary; msiexec's logs are the `msi-logs` artifact). The PresentMon cache key hashes
+`setup.py`, `paths.py` and `cli.py`, so a change to one makes every job download PresentMon afresh; GitHub's release
+host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job before blaming the change.
 
 ## Rules an agent must not guess
 
@@ -54,7 +60,9 @@ minor version, and `tests/test_wheel_check.py` fails when the two part) and then
   text). Most specs (`report.json`, `user_text.json` and `session.json` among them) are laid out by hand: change their
   values in place, never by rewriting the file through `json.dumps`. A script may rewrite a spec only after checking
   it is byte for byte `json.dumps(indent=1)` plus a newline (`first_capture.json` and `power_plan.json` are), and with
-  `write_bytes`: Python's `write_text` writes CRLF on Windows.
+  `write_bytes`: Python's `write_text` writes CRLF on Windows. The copy holds `lagdoctor/`, `laglab/`, `tests/`,
+  `scripts/`, `docs/`, `.github/`, `installer/`, `pyproject.toml`, `uv.lock` and `LICENSE` (`COPY_DIRS`,
+  `COPY_FILES`): a test that reads any other file fails before its sabotage (BAD-BASE) until that file is added there.
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
   a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
 - **Text a player reads is plain words.** Research citations (`WT 8`, `LC 4.9`, `NE 7 row 9`) and review ids
@@ -96,6 +104,18 @@ minor version, and `tests/test_wheel_check.py` fails when the two part) and then
   run); `scripts/stage2/guard.py` refuses anywhere else (exit 2). Never run it on this PC. Its instruments are
   checked by `tests/test_stage2.py` without any service; its results are read from the run's `stage2-results`
   artifact and the job summary (`docs/research/install-and-rights.md`, section 8, has the measured ones).
+- **The MSI installs only on CI's runner.** `scripts/msi_check.py` installs and uninstalls a per-machine product
+  (Program Files, the system PATH, Windows Installer's registry) and refuses anywhere but a GitHub-hosted runner
+  (exit 2), before it reads the MSI or changes anything; never install the MSI on this PC. Building it needs the .NET SDK, which this
+  laptop lacks, so it is built in CI; `tests/test_msi.py` checks the build, the WiX source and every install verdict
+  on hand-written inputs. The owner accepted WiX v7's Open Source Maintenance Fee EULA for CI's builds
+  (`docs/DECISIONS.md`, 2026-11-08): `--accept-eula wix7` appears once in `ci.yml` (the test holds it there), every
+  `wix` command but help, version and eula needs it, and no other place accepts it without asking the owner. The
+  `UpgradeCode` in `installer/lag-doctor.wxs` never changes (a new one installs beside the old version). The
+  install's `PresentMon\` folder is where `setup.BUNDLED` looks (a test pins the two together), and `bin\` holds only
+  `lagdoctor.cmd`, since the folder on PATH must not offer the runtime's `python.exe`. Python must never write into
+  the install: the build ships unchecked-hash `.pyc` files the shipped runtime compiles, and the check's `untouched`
+  and `gone` verdicts fail on anything an administrator's run wrote there (a build without them did exactly that).
 - **The repo is public** (https://github.com/Ali0600/lag-doctor). Never commit the owner's personal details: write
   user-folder paths as `%LOCALAPPDATA%`, `%TEMP%` or `<repo>`, and leave out this PC's name and SID, its adapter and
   power-plan GUIDs, its public IP and MAC addresses (tests use documentation ranges, `192.168.0.x` for a home network,
@@ -107,8 +127,9 @@ minor version, and `tests/test_wheel_check.py` fails when the two part) and then
   PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
   for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
   to land recounts on main: a total its PR did not touch goes stale without a merge conflict (after #4 and #5, and
-  again after #7). The PresentMon figure (32) is not CI's "tests that use a download" count (33, of which 32 run
-  there): read a counter at the commit that set a figure before correcting the figure against it.
+  again after #7). The PresentMon figure (40 since #13) is the tests that run on CI with a download, not CI's "tests
+  that use a download" count (41, one of which skips there): read a counter at the commit that set a figure before
+  correcting the figure against it.
 - **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies. (Its High
   performance plan has no power-mode slider; `slider_mode()` reads the plan's personality, so the power tests hold
   there undeclared.) The workflow declares that in `LAGDOCTOR_ABSENT`, and a test that needs one of those carries

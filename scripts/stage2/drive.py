@@ -33,16 +33,11 @@ for _p in (str(SCRIPTS), str(ROOT)):
     if _p not in sys.path:
         sys.path.insert(0, _p)
 
+from runtime_pin import EMBED_PTH, EMBED_SHA256, EMBED_SIZE, EMBED_URL, EMBED_VERSION  # noqa: E402
 from stage2 import guard, pipes, scm, tokeninfo  # noqa: E402
 
 INSTALL = Path(r"C:\Program Files\lagdoctor-stage2")      # where the MSI would put lag-doctor (Stage 3)
 RESULTS = Path(r"C:\lagdoctor-stage2-results")             # uploaded by the workflow
-# python.org's last 3.13 release with Windows binaries (3.13.18 is source-only). Digest and size as the release
-# page lists them, and as re-hashed from the download on 2026-11-07.
-EMBED_VERSION = "3.13.17"
-EMBED_URL = f"https://www.python.org/ftp/python/{EMBED_VERSION}/python-{EMBED_VERSION}-embed-amd64.zip"
-EMBED_SHA256 = "9e35319bffedab8b36ad44d8f377cb4f1733bcec257a0b6d04d94f01486ddb38"
-EMBED_SIZE = 11_441_267
 LOCAL_SERVICE_SID = "S-1-5-19"
 SE_CHANGE_NOTIFY = "SeChangeNotifyPrivilege"
 GAME_SECONDS = 45            # how long the stand-in draws
@@ -276,11 +271,21 @@ def cmd_layout() -> int:
     (INSTALL / "scripts").mkdir()
     shutil.copy2(SCRIPTS / "etw_access.py", INSTALL / "scripts" / "etw_access.py")
     os.environ["LAGDOCTOR_HOME"] = str(work / "home")         # setup's download folder, away from the profile
-    exe = setup.ensure_presentmon(allow_download=True)
+    exe = None
+    for wait in (0, 20, 60):          # GitHub's release host answered 504 to single tries (twice on 2026-11-08)
+        time.sleep(wait)
+        try:
+            exe = setup.ensure_presentmon(allow_download=True)
+            break
+        except (OSError, setup.SetupError) as exc:
+            print(f"::warning::the PresentMon download failed: {exc}", flush=True)
+    if exe is None:
+        print("PresentMon could not be downloaded.")
+        return INSTRUMENT_FAILED
     shutil.copy2(exe, INSTALL / setup.EXE_NAME)
     presentmon = setup.verify(INSTALL / setup.EXE_NAME)
     record = {"install": str(INSTALL), "embed": {"url": EMBED_URL, "sha256": digest, "size": len(data)},
-              "files": sorted(names), "pth": (INSTALL / f"python{EMBED_VERSION.replace('.', '')[:3]}._pth").read_text(),
+              "files": sorted(names), "pth": (INSTALL / EMBED_PTH).read_text(),
               "signatures": signatures, "signature_readout": readout, "catalog": catalog, "presentmon": presentmon}
     RESULTS.mkdir(exist_ok=True)
     _write_json(RESULTS / "layout.json", record)

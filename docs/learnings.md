@@ -419,3 +419,38 @@ the lockfile, for the checkout alone.
 installed a graphics library for a `laglab/` the wheel does not ship.
 **Takeaway**: an extra is for a feature of what you ship; tools for the tests or the repo's own scripts go in a
 group.
+
+### Python writes bytecode beside an installed package whenever it can
+Importing a module whose `__pycache__` has no valid `.pyc` makes Python write one next to the source, if the folder
+is writable, and an administrator can write into Program Files.
+**Why it came up**: a sabotaged MSI without its bytecode ran fine, but CI, as an administrator, wrote
+`lagdoctor\__pycache__\*.pyc` into `C:\Program Files\lag-doctor`, and the uninstall then left the folder behind,
+since Windows Installer removes only the files it installed.
+**Takeaway**: ship unchecked-hash `.pyc` files compiled by the very runtime that loads them
+(`compileall --invalidation-mode unchecked-hash`), and check after a run that the install folder is byte for byte
+as installed.
+
+### A PATH change reaches only processes started after it
+An installer that edits the system PATH changes the registry; every process already running keeps the environment
+it started with, and so does each child it starts.
+**Why it came up**: the MSI check had to run `lagdoctor` "from a fresh shell", but every shell the CI job starts
+inherits the job's old PATH. `CreateEnvironmentBlock` with the job's own token builds the environment a new sign-in
+would get, from the registry, and the check runs cmd and PowerShell in that.
+**Takeaway**: to test what a new window sees after an install, build its environment from the registry; a child of
+the installing process proves nothing about PATH.
+
+### `PurePosixPath` folds away the very path parts a safety check looks for
+`PurePosixPath("a//b").parts` and `PurePosixPath("a/./b").parts` are both `('a', 'b')`: the empty and `.` parts
+never reach a check written over `.parts`.
+**Why it came up**: the MSI build refuses unsafe names in the wheel; its first version checked `.parts` and let
+`lagdoctor//x.py` and `lagdoctor/./x.py` through, which a test caught.
+**Takeaway**: validate a name from an archive on its raw text (`name.split("/")`), before any path class
+normalises it.
+
+### A signed exe ends in zero padding, so a changed last byte may be no change
+An Authenticode signature sits at the end of a PE file, padded to 8 bytes with zeros, so overwriting the last byte
+with `\0` usually leaves the file as it was.
+**Why it came up**: two tests "tampered" with PresentMon that way and expected its check to fail; the check passed,
+because the bytes had not changed.
+**Takeaway**: tamper by flipping a byte inside the code (`data[500_000] ^= 0xFF`), and assert the hash changed
+before trusting the test.

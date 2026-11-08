@@ -31,8 +31,53 @@
 - **A CPU label picked per mark from the part that fired**: "held below full speed by Windows" where the limit flag
   rose at the mark, "running below full speed" where only the clock fell. Revisit hook: `diagnose.mark_list` would
   keep each cause's part, for `labels.cause_text` to read.
+- **A launcher .exe for `lagdoctor` instead of the `.cmd` shim**, built in CI from our own C source: no "Terminate
+  batch job (Y/N)?" after Ctrl+C and exact arguments, once Stage 4 records in the user's own window; SignPath could
+  sign it. Revisit hook: `SHIM` in `scripts/msi_build.py` and the `bin\` harvest in `installer/lag-doctor.wxs`.
 
 ---
+
+## 2026-11-08: The MSI: WiX v7 under its EULA, a .cmd shim on PATH, the wheel's code with its bytecode
+
+Stage 3's per-machine MSI (`docs/INSTALLER-PLAN.md`; built by `scripts/msi_build.py`, checked on CI's runner by
+`scripts/msi_check.py`). The first two forks are the owner's, asked on 2026-11-08; the rest the implementing session
+chose, and the owner has not weighed in.
+- **WiX v7, its Open Source Maintenance Fee EULA accepted for CI's builds (chosen by the owner)**: `-acceptEula wix7`
+  on each build, written once in `ci.yml` (`tests/test_msi.py` holds it there). The EULA (v1.1, read in full) asks a
+  fee only of users who use WiX in revenue-generating work and have US$10,000 or more a year in gross revenue; it is
+  not a licence fee, binds nothing on the MSIs built or the people who install them, and yields to WiX's MS-RL
+  licence. **WiX v5** (MS-RL only, nothing to accept): rejected, FireGiant's security fixes for it ended on
+  2026-02-05. **WiX v6** (EULA v1.0, no switch): rejected, the same kind of EULA binds by use, unsaid. **WiX v7 built
+  from source** (self-compiled binaries need no EULA): rejected, a .NET build of WiX on every run for nothing gained.
+- **`lagdoctor` on PATH through `bin\lagdoctor.cmd` (chosen by the owner)**: it runs the PSF-signed `python.exe`;
+  App Control does not check batch files, so nothing new needs signing or can be blocked. Its costs: after Ctrl+C
+  stops a recording in that window, cmd asks "Terminate batch job (Y/N)?" (rare before Stage 4: recordings run in
+  their own administrator window), and cmd reads `&`, `^` and `%` in unquoted arguments. **A launcher .exe built in
+  CI from our own C source**, as pip and uv do it: deferred, worth trying at Stage 4, when every recording runs in
+  the user's own window (no prompt, exact arguments, signable by SignPath). **A prebuilt launcher** (distlib's
+  `t64.exe`, uv's trampoline): rejected, SignPath signs only binaries built from the project's own source, so Smart
+  App Control would block it for good. **The Python Install Manager's renamable, PSF-signed launcher**: deferred, it
+  needs the runtime's absolute path written at install time, and its signature and `sys.executable` are unchecked. **A
+  `.ps1` shim**: rejected, Windows clients refuse scripts by default (execution policy). **The install folder itself
+  on PATH**: rejected, its `python.exe` would stand in for the user's own `python`.
+- **The code: the wheel's `lagdoctor\`, with unchecked-hash `.pyc` files the shipped runtime compiles (chosen)**:
+  Python then never writes a `__pycache__` beside them. An administrator's run (the elevated recording, an admin
+  terminal, CI) would otherwise write one into Program Files that the uninstall leaves behind. **`.py` only, with `-B`
+  on every launch**: rejected, each launcher (the shim, the elevated child, the Stage 4 service) would have to
+  remember it. **A ZIP of the package on the `._pth`**: rejected, `cli.PROJECT_ROOT`, the elevated child's working
+  folder, would be the ZIP, and the `._pth` E3c measured would change. **Timestamp-checked `.pyc` files**: rejected,
+  Python rewrites one whenever the installed `.py`'s time differs from the one recorded. **Copying `lagdoctor\` from
+  the checkout**, as `drive.py` does: rejected, the MSI would not ship what the wheel job checked.
+- **PresentMon: the installer's copy beside the code first, and a damaged one reported (chosen)**: `setup.bundled()`,
+  under Program Files in an install; a checkout or a wheel has none. **Falling back to the per-user download when the
+  installer's copy fails its check**: rejected, that routes around a damaged install, which reinstalling fixes.
+  **Looking in `%ProgramFiles%\lag-doctor` wherever the code runs**: rejected, a checkout would then depend on an
+  install being there.
+- **Two builds of one version replace each other (`AllowSameVersionUpgrades`, ICE61 suppressed) (chosen)**: CI makes
+  many builds of 0.1.0. **Windows Installer's default**: rejected, two such builds install side by side, sharing files.
+Revisit hooks: `--accept-eula` in `ci.yml` and `WIX_VERSION` in `scripts/wix_tool.py`; `SHIM` in
+`scripts/msi_build.py` and the `bin\` harvest in `installer/lag-doctor.wxs`; `compile_bytecode` in `msi_build.py`;
+`setup.bundled` and `ensure_presentmon`.
 
 ## 2026-11-08: The real-ETW tracker test takes its stream in whole
 

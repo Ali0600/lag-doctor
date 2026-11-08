@@ -136,7 +136,7 @@
    "tests": ["tests/test_wheel_check.py::test_the_uv_that_ci_builds_with_carries_a_uv_build_the_project_accepts"]},
   {"name": "CI's build may fetch a build backend",
    "file": ".github/workflows/ci.yml",
-   "old": "uv build --offline --clear",
-   "new": "uv build --clear",
+   "old": "uv build --offline --clear --out-dir \"$env:RUNNER_TEMP\\dist\"",
+   "new": "uv build --clear --out-dir \"$env:RUNNER_TEMP\\dist\"",
    "tests": ["tests/test_wheel_check.py::test_the_uv_that_ci_builds_with_carries_a_uv_build_the_project_accepts"]}
 ]

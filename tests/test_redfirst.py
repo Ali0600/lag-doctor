@@ -324,7 +324,7 @@ def test_the_copy_takes_only_what_the_tests_need(tmp_path):
     taken = {"lagdoctor/a.py": "x = 1\n", "lagdoctor/sub/b.py": "y = 2\n", "laglab/app.py": "z = 3\n",
              "tests/test_x.py": "def test_x(): pass\n", "tests/fixtures/f.csv": "a,b\n", "scripts/s.py": "",
              "docs/d.md": "# d\n", ".github/workflows/ci.yml": "name: CI\n", "pyproject.toml": "[project]\n",
-             "uv.lock": "version = 1\n"}
+             "uv.lock": "version = 1\n", "installer/lag-doctor.wxs": "<Wix />\n", "LICENSE": "MIT License\n"}
     left = {"lagdoctor/__pycache__/a.cpython-313.pyc": "pyc", "lagdoctor/a.pyc": "pyc",
             "tests/.pytest_cache/v/x": "1", "tests/fixtures/.git/HEAD": "ref", "docs/.claude/s.json": "{}",
             ".venv/pyvenv.cfg": "home = C:\\Python313\n", ".git": "gitdir: elsewhere\n",

@@ -122,9 +122,17 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
 
 ## 5. Shipping
 
-- **Installer**: WiX v7 (v7.0.1 released 2026-10-26) [research: github.com/wixtoolset/wix/releases]. Under the Open
-  Source Maintenance Fee EULA v1.1 no fee is due below US$10,000 a year of revenue, and builds must accept the EULA
-  explicitly (`-acceptEula`) [research: docs.firegiant.com/wix/whatsnew; the re-read got only a summary of that section].
+- **Installer**: WiX v7.0.1, released 2026-10-26; its .NET tool is the NuGet package `wix` 7.0.1 (.NET 8 or later,
+  4,586,487 bytes, SHA-512 `9c72a17d…17b37d70`) [verified: nuget.org's catalog entry, re-read 2026-11-08]. Its EULA,
+  `OSMFEULA.txt` in the repository at v7.0.1, is the Open Source Maintenance Fee template v1.1, read in full on
+  2026-11-08: a fee is owed only by a user whose use is part of revenue-generating activities and whose gross revenue
+  reaches US$10,000 a year; the fee "is not a license fee"; not paying may suspend access to WiX's binaries; WiX's
+  MS-RL licence governs where the two conflict; nothing in it binds the MSIs built or the people who install them,
+  and it has no governing-law, audit or telemetry clause [verified]. Every `wix` command but help, version and eula
+  refuses (WIX7015) until the run passes `-acceptEula wix7` or a remembered `wix eula accept wix7` (a file in the
+  user's profile) [verified: WiX source at v7.0.1, `Program.cs`, `CommandLine.cs`]. The owner accepted it for CI's
+  builds (DECISIONS 2026-11-08). WiX v5 (MS-RL only) has had no security fixes since 2026-02-05 [research:
+  FireGiant's lifecycle page].
 - **winget**: the InstallerUrl must be the publisher's own release location (GitHub Releases qualifies), with its
   SHA-256 and a silent install; the policies require no signature [research: Windows Package Manager policies].
   `ElevationRequirement: elevationRequired` makes winget raise the UAC prompt itself [research: manifest schema
@@ -138,8 +146,11 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
   onboarding is paused comes from an "AI answer" [verified as such; the claim itself unverified, not used]. SignPath
   Foundation signs open-source projects free of charge, under its own name [verified: signpath.org]; its conditions
   (an OSI licence, an existing release, a verifiable build and more) are listed under "Decided" below [verified:
-  signpath.org/terms]. An OV certificate costs about US$150 to 300 a year and needs a hardware token or HSM
-  [research: Microsoft code-signing options].
+  signpath.org/terms]. It signs only binaries built from the project's own source, lets upstream open-source binaries
+  ride inside a signed MSI (verified, not re-signed), holds every signed file to the project's product name and one
+  version, and signs PE files inside an MSI and the MSI itself in one request [verified: signpath.org/terms;
+  docs.signpath.io artifact configuration, 2026-11-08]. An OV certificate costs about US$150 to 300 a year and
+  needs a hardware token or HSM [research: Microsoft code-signing options].
 - **Smart App Control** blocks "unknown, unsigned code" by default, and "there is currently no way to bypass" it for
   individual apps [verified: Smart App Control overview and support FAQ]. Recent updates let it be re-enabled without
   a clean install, except when optional diagnostic data is off [verified: support FAQ]. It is off on this PC
@@ -148,6 +159,9 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
   here]. python.org's embeddable ZIP (3.13.17): every one of its 30 `.exe`, `.dll` and `.pyd` files is signed, 28
   by the PSF and the two `vcruntime140` DLLs by Microsoft [verified: E3c, section 8]. Python scripts run by a
   trusted `python.exe` are not checked; native `.pyd` and `.dll` files are [research: App Control script enforcement].
+  Batch files are not controlled either, only what they run [verified: Microsoft Learn, App Control script
+  enforcement, 2026-10-28], so the MSI's `lagdoctor.cmd` gives Smart App Control nothing to check but the signed
+  `python.exe`.
 - **Administrator protection** is off by default and available with KB5120998; where an organisation uses the Windows
   security baselines it is on by default from the October 2026 update. Elevated processes then run under "a hidden,
   system-generated, profile-separated user account", and every admin operation needs Windows Hello [verified:
@@ -165,7 +179,7 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
 | E3c | python.org's embeddable runtime as an SCM service from Program Files: `sys.path` holds only Program Files entries, every `.exe`/`.pyd`/`.dll` signed. **Done 2026-11-07 (section 8): it runs as a service through ctypes, `sys.path` holds its own folder and ZIP only, all 30 binaries signed** | Python vs a small native helper |
 | E5 | Administrator protection on: `--elevate`'s waitable child, the shared capture mutex, the capture landing in the user's folder | the public `--elevate` fallback |
 | E6 | Smart App Control enforcing VM: the MSI layout runs, inventory's PowerShell child returns JSON in Constrained Language Mode, Defender scan clean | the public release |
-| E7 | winget install, upgrade, uninstall from elevated, unelevated and standard-account shells, and on Windows 10; uninstall removes the service | the public release |
+| E7 | winget install, upgrade, uninstall from elevated, unelevated and standard-account shells, and on Windows 10; uninstall removes the service. **MSI part done 2026-11-08 (section 9): the MSI installs, runs from a fresh shell and uninstalls with nothing left, from an elevated shell that never prompts, on Windows Server 2025; winget, unelevated and standard-account shells, an upgrade, and Windows 10 not yet** | the public release |
 | E8 | Red-first tests of each service guard: another session refused, a squatted pipe fails loudly, a PID in another session refused, no other process's network events relayed, nothing loaded from a user-writable path | shipping the service |
 
 ## 7. Going public
@@ -255,6 +269,45 @@ What a runner cannot show: PresentMon rows with display tracking, so frame timin
 to the presents being seen by PID; the first install on a PC with a GPU (Stage 4) shows the rest. E2 did not run
 there either: the job is the built-in Administrator, elevated, so a filtered token would need an account of its own.
 
+## 9. The MSI on GitHub's runners (Stage 3; 2026-11-08)
+
+Run by `ci.yml`'s msi job on `windows-2025` (`scripts/wix_tool.py`, `scripts/msi_build.py`, `scripts/msi_check.py`):
+runs 42471213097 and 42472399937 for the clean build, 42472425233, 42472467137 and 42472537599 for the sabotages.
+The numbers are the job summaries' and logs' [verified].
+
+- **The build.** WiX `7.0.1+642f1a0`, from the pinned package; `wix build -arch x64 -wx` with the payload bound, then
+  `wix msi validate`, whose one warning on the first build was ICE61 (same-version upgrades, allowed on purpose; now
+  suppressed alone, every other warning an error). The MSI holds 152 files: the runtime ZIP's 34, the 57 files git
+  tracks under `lagdoctor/` and their 57 `.pyc` files, PresentMon, Intel's licence, `bin\lagdoctor.cmd` and
+  lag-doctor's licence, in 153 components (one per file, plus the PATH entry's). Read back from it: product name,
+  manufacturer, summary subject and author all `lag-doctor`, version 0.1.0, the PATH row `=-*PATH` = `[~];[BINFOLDER]`,
+  and a File table that places exactly the payload's files.
+- **The install** (`msiexec /i /qn`, exit 0), as Windows Installer reports it: the product installed, the one product
+  under lag-doctor's upgrade code, each of the 153 components in `C:\Program Files\lag-doctor`, the Apps entry naming
+  lag-doctor, 0.1.0 and its publisher, exactly 5 keys added (its Uninstall entry and its Installer `Products`,
+  `Features`, `UpgradeCodes` and `UserData\S-1-5-18\Products` keys), 15 of its folders in Installer's `Folders` key,
+  and the system PATH's 69 entries followed by `C:\Program Files\lag-doctor\bin\`, once. Every installed file is its
+  source byte for byte, and PresentMon passes lag-doctor's own check there.
+- **From a fresh shell**, in the environment a new sign-in gets (`CreateEnvironmentBlock`, built from the registry,
+  not the job's): `where lagdoctor` finds `bin\lagdoctor.cmd` alone, `where python` nothing installed;
+  `lagdoctor --version` says `lag-doctor 0.1.0` from cmd and from Windows PowerShell 5.1; `--help` starts; `setup`
+  verifies `C:\Program Files\lag-doctor\PresentMon\PresentMon-2.6.0-x64.exe` although a verified per-user copy is
+  there too; `analyze` writes its 42,441-byte report. All 56 modules import in the installed runtime from the install
+  folder, `sys.path` holding its ZIP and folder only (isolated), each `.pyc` compiled from the `.py` beside it. After
+  all that, run as an administrator, the 152 files are unchanged.
+- **The uninstall** (`msiexec /x /qn`, exit 0): every file and the folder gone, the system PATH exactly as before,
+  the product, its components and its upgrade code unknown to Windows Installer, the 5 keys gone and none of its
+  folders left in the `Folders` key.
+- **Sabotages**, each a commit reverted at once: (1) the payload without `lagdoctor/fixes/power.py`, after the build's
+  own checks: `files` failed naming it and `imports` with its ModuleNotFoundError, while `--help`, `setup` and
+  `analyze` passed, which is why those two checks exist; (2) the PATH entry `Permanent="yes"` (the build's own row
+  check loosened to let it through): every check passed until `gone`, which found the PATH still naming `bin\`;
+  (3) no bytecode shipped: an administrator's run wrote `lagdoctor\__pycache__\*.pyc` into Program Files
+  (`untouched`), and the uninstall left the folder holding them, its folders still in the `Folders` key (`gone`).
+
+What a runner cannot show: the UAC prompt (the job is elevated, and UAC never prompts there), SmartScreen on a
+downloaded MSI, Smart App Control (E6), Windows 10, and a standard account's install (E7's other parts).
+
 ## Decided (2026-11-06) and still open
 
 Decided by the owner (DECISIONS 2026-11-06; the work is tracked in `docs/INSTALLER-PLAN.md`):
@@ -302,3 +355,10 @@ Each claim below was re-read from its source by a reader separate from the sweep
 | E3c: the embeddable 3.13.17 runs as a LocalService service from Program Files; `sys.path` is its ZIP and folder only; all 30 binaries signed | measured, three runs; the PowerShell cross-check agreed in the last run (Windows PowerShell 5.1 could not load its security module under the job's PowerShell 7 module path in the first two) | `e3c.json`, `e3c-service.json`, `layout.json` of run 42400758567 |
 | E3: a restricted service SID gets ERROR_ACCESS_DENIED from StartTraceW for every session and PresentMon exit 4; unrestricted, 13 of 13 providers enable, the tracker records (151 events, self-test verified), PresentMon writes 401 rows by PID without display tracking and none with it, the capture ends 0.55 s after the game exits | measured, three runs, with an administrator control that got the same PresentMon result | `e3.json`, `e3-*-service.json`, `standin-*.json` of run 42400758567; `IsTargetProcess` and the lazy CSV header re-read in `OutputThread.cpp` and `CsvOutput.cpp` at v2.6.0 |
 | E3b: the named-pipe trigger starts the service in 0.08 to 0.12 s (the client's first open gets ERROR_PIPE_BUSY), ServiceMain gets `TriggerStarted 6`, idle self-stop after 10 s, the next connect starts it again | measured, three cycles in each of three runs | `e3b.json`, `e3b/e3b-<pid>.json` of run 42400758567; `sc qtriggerinfo` read back |
+| WiX v7.0.1's EULA (OSMF v1.1): a fee only for revenue-generating use at US$10,000 a year or more; not a licence fee; nothing binds the MSIs built or their users | confirmed, read in full on 2026-11-08 | `OSMFEULA.txt` at tag v7.0.1 (the same bytes at v7.0.0 and main) |
+| The `wix` 7.0.1 NuGet package: 4,586,487 bytes, SHA-512 `9c72a17d…17b37d70`, .NET 8 or later | confirmed; CI's download matched it | nuget.org catalog entry `2026.10.26.22.50.24/wix.7.0.1.json`; `scripts/wix_tool.py` on run 42471213097 |
+| Every `wix` command but help, version and eula needs `-acceptEula wix7` (or a remembered acceptance), else WIX7015 | confirmed in the source; CI's builds pass with the switch | WiX v7.0.1 `Program.cs`, `CommandLine.cs`; runs 42471213097, 42472399937 |
+| App Control does not control batch files, only what they run | confirmed | Microsoft Learn, App Control script enforcement (updated 2026-10-28) |
+| SignPath signs only binaries built from the project's own source; upstream open-source binaries may ride unsigned in a signed MSI; one product name and version on every signed file | confirmed | signpath.org/terms; docs.signpath.io artifact configuration (2026-11-08) |
+| The MSI installs, runs from a fresh shell and uninstalls with nothing left: 152 files, 153 components, 5 Installer keys, the PATH entry | measured | `scripts/msi_check.py`, runs 42471213097 and 42472399937 |
+| Sabotaged MSIs fail the check where expected: a missing module (files, imports), a kept PATH entry (gone), no bytecode (files, imports, untouched, gone) | measured | runs 42472425233, 42472467137, 42472537599 |

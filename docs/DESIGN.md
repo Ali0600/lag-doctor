@@ -96,10 +96,12 @@ verification log; trust a note's *Corrected* entries over its body.
   there is none) and its SID (the child notes when its token user differs), plus its own process identity for
   `target["tool_pids"]`. The child refuses to record a process whose create time differs (the game exited during
   the prompt), and the parent refuses to analyse a capture of another process.
-- `-E -s` keep the user's PYTHON* variables and user site-packages out of the elevated interpreter. It still
-  runs the checkout's own code, which the user can write: UAC shows the signed Python launcher, not the code
-  it runs, and is not a security boundary for same-user code. Elevating only admin-writable code was taken up
-  as the installer and capture service (DECISIONS 2026-11-06, `docs/INSTALLER-PLAN.md`).
+- `-E -s` keep the user's PYTHON* variables and user site-packages out of the elevated interpreter. From a
+  checkout it still runs the checkout's own code, which the user can write: UAC shows the signed Python launcher,
+  not the code it runs, and is not a security boundary for same-user code. Installed by the MSI (Stage 3),
+  `sys.executable` is the bundled runtime's `python.exe`, whose `._pth` gives `sys.path` its own ZIP and folder
+  only, so the child runs only code under Program Files, which only an administrator can change. The capture
+  service (Stage 4) takes the prompt away too (DECISIONS 2026-11-06, `docs/INSTALLER-PLAN.md`).
 - One recording at a time: whichever process records holds the named mutex `Local\lag-doctor-capture`
   (`session.CaptureLock`); a second `watch` refuses before starting PresentMon or any ETW session. The parent
   releases the lock just before the UAC launch, the child takes it, and the parent takes it back if the
@@ -173,6 +175,9 @@ lagdoctor/
 laglab/     the fake laggy game used by tests (done)
 scripts/    redfirst.py e2e_truth.py (done) e2e.py etw_access.py (E1: who may enable the trace providers)
             stage2/ (the capture-service experiments E3, E3b, E3c: GitHub's runners only, never this PC)
+            wheel_check.py; msi_build.py msidb.py wix_tool.py runtime_pin.py (the MSI); msi_check.py (installs it:
+            GitHub's runners only, never this PC)
+installer/  lag-doctor.wxs (WiX v7, per-machine), lagdoctor.cmd (the PATH shim), PresentMon-LICENSE.txt
 ```
 
 `winapi/` modules are thin ctypes wrappers with no policy: plain Python values in and out, `OSError`
@@ -422,6 +427,12 @@ because `0` or junk means *every process*):
   checked through a handle that refuses writers, held until the process has started, and the launch uses that
   handle's final path (GetFinalPathNameByHandleW), so a folder junction re-pointed after the check cannot
   redirect it.
+- Which copy: the one lag-doctor's installer put beside the code first (`setup.bundled()`: `PresentMon\` next to
+  the `lagdoctor` package, `C:\Program Files\lag-doctor\PresentMon` in an install), else the per-user download
+  (`%LOCALAPPDATA%\lag-doctor\presentmon\2.6.0`, made by `lagdoctor setup`). `ensure_presentmon`, `watch` and a
+  `PresentMonSource` given no exe all follow that order. An installer's copy that fails its check raises
+  `BrokenInstall`: setup says to install lag-doctor again and offers no download, which would route around a damaged
+  install.
 - Stop (PM 7.4): `CTRL_BREAK_EVENT` to the `CREATE_NEW_PROCESS_GROUP` child when we share a console; else, or
   if it has not exited in 10 s, a second PresentMon `--terminate_existing_session --session_name lagdoctor`
   (exit 0 stopped, 7 none); only then `kill()` plus the same cleanup. Never `terminate()` first: it leaks the
