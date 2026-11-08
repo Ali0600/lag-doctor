@@ -346,6 +346,64 @@ Python 3.11 also modules that 3.13 removed): `tests/test_stdlib_only.py` used it
 what the JSON lists as importable. When the pin moves, `scripts/runtime_modules.py --write` asks the new runtime, and
 CI's msi job asks again on every push and fails unless the JSON is its answer.
 
+## 11. The locked pipe (2026-11-08)
+
+Measured on this PC (build 26200, unelevated, medium integrity) with throwaway probes that made only their own pipes,
+before and while `lagdoctor/winapi/pipe.py` was written; an adversarial review of the module (three reviewers, each
+finding checked by a skeptic: 23 of 25 confirmed) added the last six points. `tests/test_pipe.py` checks each on every
+run, here and on CI, whose suite runs elevated at High integrity (section 8):
+- **Squatting is real.** With another process's pipe already on the name (maximum instances 2 or 255, DACL
+  `D:(A;;GA;;;WD)`), a server created without `FILE_FLAG_FIRST_PIPE_INSTANCE` becomes that pipe's second instance,
+  although it asked for one instance, and the pipe keeps the first creator's descriptor (read back:
+  `D:(A;;FA;;;WD)`). With the flag the create fails with ERROR_ACCESS_DENIED; with the other pipe at one instance,
+  with ERROR_PIPE_BUSY whether or not the flag is set [verified: probe; the test repeats both].
+- **Remote clients**: `FilePipeLocalInformation`'s `NamedPipeType` reads 3 (message type plus
+  `FILE_PIPE_REJECT_REMOTE_CLIENTS`) with `PIPE_REJECT_REMOTE_CLIENTS` and 1 without. An open through
+  `\\localhost\pipe\<name>`, which comes in as a remote client over the loopback, is refused (ERROR_ACCESS_DENIED)
+  with the flag and connects without it [verified: probe].
+- **The client's access**: a client asking for `GENERIC_READ | FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES` opens a pipe
+  whose DACL grants it `0x12018b` and nothing more; `SetNamedPipeHandleState` (message read mode) needs the
+  write-attributes right and fails with ERROR_ACCESS_DENIED without it. A client asking for `GENERIC_WRITE`, which
+  maps to `FILE_GENERIC_WRITE` and so includes `FILE_CREATE_PIPE_INSTANCE` and `FILE_WRITE_EA`, is refused by that
+  DACL [verified: probe].
+- **The integrity label must deny every right, not just writing.** With `S:(ML;;NW;;;ME)` a client impersonating a
+  low-integrity copy of the same token is refused a read-write open but admitted to a read-only one (`GENERIC_READ`),
+  and so can take the pipe's one instance and read what the server writes first. With `NWNR`, `CreateFileW` asking
+  only for `SYNCHRONIZE` is refused, because `CreateFileW` always adds `FILE_READ_ATTRIBUTES`, but `NtOpenFile` asking
+  for `SYNCHRONIZE` alone is admitted. `S:(ML;;NWNRNX;;;ME)` refuses all three opens and admits a medium client. A
+  pipe without a label counts as medium with `NW` only [verified: probes; the review; the test's controls].
+- **Identification level**: a client opened with `SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION` shows level 1
+  (SecurityIdentification) to a server that impersonates it and reads its thread token; without the flags, level 2
+  (SecurityImpersonation) [verified: probe].
+- **Names**: `CreateFileW` on `\\.\pipe\..\C:\<path>` opened that ordinary file: Windows folds `..` in a `\\.\` path
+  before the open. `pipe.path` therefore takes 1 to 100 of `[A-Za-z0-9._-]`, starting with a letter or a digit
+  [verified: probe and the test's control].
+- **`OVERLAPPED.Internal`**: 0x103 (STATUS_PENDING) while a call runs, its final status once it ends (0xC0000120
+  when cancelled), and 0x103 also after a call that failed at once (a bad handle; ERROR_BROKEN_PIPE when the other end
+  had gone), with nothing left to complete it. `CancelIoEx` answers ERROR_NOT_FOUND (1168) for a call that has ended
+  or never ran. A value set before the call (bits above 31) survives only if the call never reached Windows. So
+  "running" is read from both, never from Internal alone [verified: probe].
+- **A thread's I/O ends with the thread**: an overlapped `ConnectNamedPipe` that a thread started and left pending was
+  cancelled (ERROR_OPERATION_ABORTED) when that thread exited. Windows cancels the pending I/O a thread issued when it
+  exits, for handles not bound to a completion port, so no wait in `pipe.py` outlives the call that started it
+  [verified: an early version's own test].
+- **Ctrl+C mid-wait**: Python raises KeyboardInterrupt in the main thread when a blocking call returns, here right
+  after `WaitForSingleObject`, before any cancel. An early version kept each call's OVERLAPPED and buffer in the
+  function's locals, so the call went on with them freed: the next read was woken by the old call's completion and
+  failed with ERROR_IO_INCOMPLETE, messages landed in freed memory, and a process later crashed (the review's probes:
+  a segfault in 2 of 3 runs). Waits also ended only at their timeout. Now each direction's memory belongs to the
+  pipe, waits run in 100 ms slices, and an interrupted call is cancelled and waited out first [verified: the review;
+  the Ctrl+C tests, through `_thread.interrupt_main()`].
+- **Aliases in a read-back descriptor**: `ConvertSecurityDescriptorToStringSecurityDescriptorW` writes the local
+  built-in Administrator (RID 500, CI's job account) as `LA`, where `ConvertSidToStringSidW` writes the full SID; a
+  test compares a read-back DACL with the same DACL as Windows spells it [verified: the review; the test runs the alias
+  case on this PC with its own RID-500 SID].
+- **On CI** (PR #19's run 42514271800 and main's run 42514804440 at `c931ca8`): the integrity test ran as
+  "server at High" and passed on Python 3.11 and 3.13, its unlabelled control included. A medium client reaches
+  a pipe made at High integrity without a label, so the recorder of `docs/LAUNCHER-PLAN.md` M3 never needed the
+  label to get in; the label keeps lower processes out. The `\\localhost` control opened its pipe on the runner,
+  and the exact-DACL test passed with the runner's account written `LA` [verified: both runs' logs].
+
 ## Decided (2026-11-06) and still open
 
 Decided by the owner (DECISIONS 2026-11-06; the work is tracked in `docs/INSTALLER-PLAN.md`):

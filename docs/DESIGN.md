@@ -165,6 +165,7 @@ lagdoctor/
             icmp.py iphlp.py wlan.py                    network probes       (capture/netmon)
             etw.py                                      ETW sessions         (capture/netflows)
             elevation.py                                rights + UAC relaunch
+            pipe.py                                     the locked named pipe (the relay, the capture service)
             process.py                                  priority of other processes (fixes/priority)
   capture/  base.py (done) target.py sysmon.py gpumon.py netmon.py netflows.py presentmon.py inventory.py
             session.py
@@ -349,6 +350,41 @@ class ElevatedChild:
 def relaunch_elevated(argv: list[str], cwd: str) -> int   # launch + wait + close (scripts/e2e.py)
 def hold_named_mutex(name: str)                   # handle, or None when another process holds it
 def release_named_mutex(handle) -> None
+
+# winapi/pipe.py (the relay's and the capture service's channel; install-and-rights.md section 11) --------
+def path(name: str) -> str                        # \\.\pipe\<name>; ValueError unless 1-100 of [A-Za-z0-9._-], not
+                                                  # starting with . _ or -: "..\C:\x" would open an ordinary file
+def client_dacl(sids: list[str]) -> str           # "D:P(A;;0x12018b;;;<sid>)...S:(ML;;NWNRNX;;;ME)": exactly what
+                                                  # connect() asks for, and a medium label denying everything below
+                                                  # medium every right (NW alone still lets it open to read or wait)
+class PipeServer:                                 # the first and only instance; the name taken already raises
+    def __init__(self, name, sddl, max_message=65536)  # ERROR_ACCESS_DENIED (or ERROR_PIPE_BUSY when that pipe
+                                                  # allows one instance); message mode; remote clients refused
+    def wait_client(self, timeout_s) -> bool      # False on timeout; any thread may call it; a client that came and
+                                                  # went is let go and the wait goes on
+    def client_pid(self) -> int                   # GetNamedPipeClientProcessId: no handle on the client
+    def client_session(self) -> int
+    def disconnect(self) -> None                  # unread data is lost: the protocol ends a conversation first
+def connect(name, timeout_s, max_message=65536) -> PipeClient   # identification level, message read mode; retries
+                                                  # FILE_NOT_FOUND and PIPE_BUSY to the deadline (TimeoutError with
+                                                  # .attempts, .errors), raises any other refusal at once
+class PipeClient:
+    def server_pid(self) -> int                   # the pipe's first creator (one instance: the server; maybe exited)
+    def server_session(self) -> int
+# both ends:
+    def read(self, timeout_s) -> bytes            # one whole message; TimeoutError keeps the pipe usable; PEER_GONE
+                                                  # winerrors once the other end has gone; a message over max_message
+                                                  # raises ERROR_MORE_DATA, and so does every read until disconnect()
+    def write(self, data, timeout_s) -> None      # 1..max_message bytes (ValueError first); after a timed-out or
+                                                  # interrupted write every write raises ERROR_BROKEN_PIPE
+    def owner_sid(self) -> str                    # the pipe's owner, from its creator's token: check it beside the PID
+    def descriptor(self) -> str                   # the DACL and label Windows holds, in SDDL
+    def remote_clients_rejected(self) -> bool     # FilePipeLocalInformation, read back
+    def close(self) -> None                       # never waits: a running call sees it within a slice and raises
+                                                  # ERROR_OPERATION_ABORTED; the last call to leave closes the handle
+# One read and one write may run at once. Waits run in 100 ms slices, so Ctrl+C and close() land within one. Each
+# direction's OVERLAPPED and buffer belong to the pipe, and a call an exception interrupts is cancelled and waited out
+# before the exception goes on (a message it had received is the next read's): Windows never writes freed memory.
 
 # winapi/process.py (WT 9) ------------------------------------------------------------------------------
 # Every call takes an optional create_time; when given, identity is checked WITHOUT a handle (an

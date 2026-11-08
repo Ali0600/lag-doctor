@@ -223,7 +223,7 @@ While it records, lag-doctor measures your connection, which `--no-network` turn
 
 ## Experience Gained
 
-- **Windows systems programming from Python**: 16 ctypes modules over 17 Windows DLLs plus NVIDIA's NVML
+- **Windows systems programming from Python**: 17 ctypes modules over 17 Windows DLLs plus NVIDIA's NVML
   (real-time and private ETW sessions, PDH, NtQuerySystemInformation, DXGI/DXCore, ICMP, WLAN) and no third-party
   package at run time, with zero handles opened to the game and imports limited to the 264 standard-library modules
   the shipped Python runtime itself reports it can import, both enforced by syntax-tree scans of the code.
@@ -233,20 +233,22 @@ While it records, lag-doctor measures your connection, which `--no-network` turn
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 2,912 tests, run in CI on GitHub's Windows runners for 2 Python versions with
+- **Testing that proves itself**: 2,956 tests, run in CI on GitHub's Windows runners for 2 Python versions with
   SHA-pinned actions, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 40 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 1,805 deliberate sabotages in
-  35 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 1,849 deliberate sabotages in
+  36 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
-- **Supply chain and least privilege**: a per-machine WiX MSI of 152 files built in CI from pinned inputs (Python
+- **Supply chain and least privilege**: a per-machine WiX MSI of 154 files built in CI from pinned inputs (Python
   runtime and PresentMon by SHA-256, WiX by SHA-512), installed, run from a fresh shell and uninstalled on a
   throwaway runner with nothing left behind, its check proven by 3 sabotaged builds; PresentMon checked through a
   deny-write handle and launched by that handle's resolved path; only the capture runs elevated, behind 1 UAC
-  prompt; the planned capture service measured on GitHub's runners before a line of it ships: a 1-privilege
-  LocalService service enabling all 13 ETW providers and a named-pipe trigger starting it in 0.08 s.
+  prompt; the planned capture service measured on GitHub's runners before it ships (a 1-privilege LocalService
+  service enabling all 13 ETW providers, a named-pipe trigger starting it in 0.08 s), and its pipe locked 6 ways
+  (first instance, local clients only, an exact DACL, no access below medium integrity, identification-level
+  clients, checked names), each lock tested against the attack it stops.
 - **Review to fix**: closed all 49 findings (12 high) of an adversarial code review in 3 verified fix waves,
   cut the capture save from 36 s to 2.6 s to fit the 5 s Windows gives a closing console, and traced a 14-minute
   game recording with no frame timing to Windows keeping a packaged app's AppData files in a private copy.

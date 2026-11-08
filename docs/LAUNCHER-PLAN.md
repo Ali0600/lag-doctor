@@ -21,7 +21,8 @@ service's protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   2026-11-08), and it is: each action ticks off as it arrives, and its record shows what Alt+Left does. The gate waits
   on a run that completes step 2.
 - [ ] M1: the app with your results.
-- [ ] M2: the recording seams.
+- [ ] M2: the recording seams. The locked pipe is done (`lagdoctor/winapi/pipe.py`, PR #19, 2026-11-08); the other
+  seams are not.
 - [ ] M3: the relay.
 - [ ] M4: recording from the app.
 - [ ] M5: measuring the right part.
@@ -369,7 +370,11 @@ Tests:
 - `launch_elevated(..., hwnd=)`, so the UAC prompt belongs to the app's window.
 - `lagdoctor/winapi/pipe.py`: thin wrappers for the locked pipe (created with its DACL and label; connect; read and
   write with a size cap) and for the client's and server's pid and session queries. The checks that use them live in
-  `lagdoctor/relay/` (DESIGN.md keeps policy out of `winapi/`).
+  `lagdoctor/relay/` (DESIGN.md keeps policy out of `winapi/`). Done 2026-11-08: its interface is in DESIGN.md
+  (winapi interfaces) and what each lock was measured to do in `docs/research/install-and-rights.md`, section 11.
+  The relay builds its descriptor with `client_dacl([recorder SID])`, makes the pipe under a random name, compares
+  `client_pid()` and `client_session()` with what the prompt approved, and the recorder compares `server_pid()` with
+  the relay it launched and checks `owner_sid()`.
 
 ### M3: the relay
 
@@ -383,8 +388,11 @@ running game.
   comes due before Stage 4. The backlog's launcher exe removes it.
 - About 31 red-first anchors on the child protocol in `cli.py` move or retire.
 
-The owner runs two checks first: whether an unelevated recorder needs the pipe's medium integrity label, and where
-the UAC prompt appears when the app's window asks for it.
+Of the two checks once left to the owner, the first is answered on CI, where the suite runs elevated (High
+integrity): a medium client reaches a pipe made there with or without a label, since an unlabelled object counts as
+medium, so the recorder never needed the label to get in. The pipe's label is there to keep anything below medium out
+entirely (`tests/test_pipe.py`, whose integrity test is named "server at High" in CI's log; install-and-rights.md,
+section 11). The owner still checks where the UAC prompt appears when the app's window asks for it.
 
 ### M4: recording from the app
 

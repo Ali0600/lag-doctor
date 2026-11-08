@@ -558,6 +558,51 @@ CI probe measured it on PR #18.
 **Takeaway**: before planning around a dependency's absence on a CI runner, probe the runner itself, and check an
 "absent" answer a second way, since a broken finder says "absent" too.
 
+### Named-pipe squatting: the first instance owns the descriptor
+Every instance of a named pipe shares the descriptor of the first one. A server that creates its pipe after another
+process already took the name does not fail by default: it quietly becomes another instance of that process's pipe,
+under that process's DACL, so its clients may reach the squatter. `FILE_FLAG_FIRST_PIPE_INSTANCE` turns that into
+ERROR_ACCESS_DENIED. Measured here: with the squatter at 2 or 255 instances, a server asking for one instance and no
+flag joined it, and read back the squatter's `D:(A;;FA;;;WD)`.
+**Why it came up**: the locked pipe (`lagdoctor/winapi/pipe.py`), which the capture service will hold under a fixed
+name that any local process could try to create first.
+**Takeaway**: a server of a pipe with a known name always creates it with `FILE_FLAG_FIRST_PIPE_INSTANCE`, and its
+clients still check who answered (the server's PID), since the squatter may simply be the first and only instance.
+
+### A thread's pending I/O ends with the thread
+Windows cancels the overlapped I/O a thread started when that thread exits (for handles not bound to a completion
+port), so a wait left pending for a later call fails with ERROR_OPERATION_ABORTED once the thread that began it is
+gone.
+**Why it came up**: the first version of `PipeServer.wait_client` left its `ConnectNamedPipe` armed between calls, so
+that a client arriving between two calls was not missed. A test called it once from a short-lived thread; the next
+call, from another thread, found the wait cancelled. Nothing was missed by ending each wait inside its call: a client
+that arrives between calls opens the listening pipe anyway, and the next `ConnectNamedPipe` answers
+ERROR_PIPE_CONNECTED at once.
+**Takeaway**: never leave an overlapped call pending past the function that started it: wait for it or cancel it and
+wait out the cancel before returning.
+
+### Ctrl+C between an overlapped call and its end leaves Windows writing freed memory
+An overlapped `ReadFile` keeps writing into its buffer and `OVERLAPPED` until it ends. Python raises KeyboardInterrupt
+in the main thread as soon as a blocking call returns, here right after `WaitForSingleObject` and before any cancel, so
+a call whose buffer is a local variable goes on after the frame that owned it is gone.
+**Why it came up**: the review of `lagdoctor/winapi/pipe.py`. After a Ctrl+C mid-read, the next read was woken by the
+old call's completion and failed with ERROR_IO_INCOMPLETE, replies landed in memory Python had reused, and the
+reviewer's probes crashed in 2 of 3 runs. The module's own tests had a pointer into a freed temporary buffer too:
+`ctypes.c_void_p.from_buffer(make_buffer()).value` read a garbage integrity level once and crashed once.
+**Takeaway**: give an overlapped call's buffer and `OVERLAPPED` to an object that outlives the call, cancel and wait it
+out on every exception path, wait in short slices so Ctrl+C lands promptly, and keep a ctypes buffer referenced for as
+long as any pointer into it is used.
+
+### A write-only integrity label still lets a lower process in
+A mandatory label of `NW` (no write up) refuses a lower-integrity process only the write rights. It may still open the
+object to read, or (through `NtOpenFile`) just to wait on it, and an open of a single-instance pipe takes that
+instance. `NWNRNX` refuses every right. Objects without a label count as medium with `NW` only.
+**Why it came up**: the locked pipe was first labelled `S:(ML;;NW;;;ME)`, and its test passed because the test's low
+client went through `pipe.connect`, which asks for write rights. The review opened the same pipe read-only from low
+integrity and held it.
+**Takeaway**: label an object you mean to keep from lower integrity `NWNRNX`, and test the refusal with the opens an
+attacker would choose (read-only, `SYNCHRONIZE` alone), not only with your own client.
+
 ### A check a person performs must show what it has registered, and keep each event
 Step 2 of the window spike asked for eight keys, a wheel turn and a right-click in one paragraph, showed nothing of
 what had registered, and kept only a count of the window's key events (36, then 9). The owner's first run did seven
