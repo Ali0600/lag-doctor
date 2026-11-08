@@ -99,7 +99,8 @@ def test_wix_builds_for_x64_with_warnings_as_errors_and_accepts_the_eula_only_wh
     told = mb.wix_command("wix.exe", "0.1.0", Path(r"C:\p"), Path(r"C:\o\x.msi"), "wix7")
     assert told[-2:] == ["-acceptEula", "wix7"]
     check = mb.validate_command("wix.exe", Path(r"C:\o\x.msi"), "wix7")
-    assert check[:3] == ["wix.exe", "msi", "validate"] and "-wx1105" in check and check[-2:] == ["-acceptEula", "wix7"]
+    assert check[:4] == ["wix.exe", "msi", "validate", "-wx"] and check[-2:] == ["-acceptEula", "wix7"]
+    assert [check[i + 1] for i, a in enumerate(check) if a == "-sice"] == ["ICE61"]      # that one ICE alone
     assert "-acceptEula" not in mb.validate_command("wix.exe", Path(r"C:\o\x.msi"), None)
 
 
@@ -205,6 +206,9 @@ def test_each_file_is_placed_under_the_install_folder_through_its_directories():
         "f1": "python.exe", "f2": "lagdoctor/__pycache__/cli.cpython-313.pyc", "f3": "bin/lagdoctor.cmd"}
     with pytest.raises(ValueError, match="not installed under INSTALLFOLDER"):
         msidb.relative_paths(dirs, comps, [{"File": "f4", "Component_": "c4", "FileName": "x.dll"}], "INSTALLFOLDER")
+    orphan = [*comps, {"Component": "c5", "Directory_": "NOSUCHDIR"}]          # a Directory the table lacks
+    with pytest.raises(ValueError, match="not installed under INSTALLFOLDER"):
+        msidb.relative_paths(dirs, orphan, [{"File": "f5", "Component_": "c5", "FileName": "y.dll"}], "INSTALLFOLDER")
 
 
 # --------------------------------------------------------------- getting WiX itself ---

@@ -271,7 +271,17 @@ def cmd_layout() -> int:
     (INSTALL / "scripts").mkdir()
     shutil.copy2(SCRIPTS / "etw_access.py", INSTALL / "scripts" / "etw_access.py")
     os.environ["LAGDOCTOR_HOME"] = str(work / "home")         # setup's download folder, away from the profile
-    exe = setup.ensure_presentmon(allow_download=True)
+    exe = None
+    for wait in (0, 20, 60):          # GitHub's release host answered 504 to single tries (twice on 2026-11-08)
+        time.sleep(wait)
+        try:
+            exe = setup.ensure_presentmon(allow_download=True)
+            break
+        except (OSError, setup.SetupError) as exc:
+            print(f"::warning::the PresentMon download failed: {exc}", flush=True)
+    if exe is None:
+        print("PresentMon could not be downloaded.")
+        return INSTRUMENT_FAILED
     shutil.copy2(exe, INSTALL / setup.EXE_NAME)
     presentmon = setup.verify(INSTALL / setup.EXE_NAME)
     record = {"install": str(INSTALL), "embed": {"url": EMBED_URL, "sha256": digest, "size": len(data)},

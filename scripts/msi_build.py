@@ -152,10 +152,18 @@ def wix_command(wix: str, version: str, payload: Path, out_msi: Path, accept_eul
     return argv + (["-acceptEula", accept_eula] if accept_eula else [])
 
 
+# ICE61 warns that a build may replace another of the same version, which the MajorUpgrade allows on purpose: CI
+# makes many builds of one version, and two of them must not install side by side.
+SUPPRESSED_ICES = ("ICE61",)
+
+
 def validate_command(wix: str, msi: Path, accept_eula: str | None) -> list[str]:
-    """`wix msi validate`: Windows Installer's ICE checks, which `wix build` does not run. WIX1105 (validation could
-    not run here) would otherwise pass as a warning, so it fails the build."""
-    return [wix, "msi", "validate", "-wx1105", str(msi)] + (["-acceptEula", accept_eula] if accept_eula else [])
+    """`wix msi validate`: Windows Installer's ICE checks, which `wix build` does not run, every warning an error
+    (WIX1105, validation could not run here, included) but the ICEs suppressed above."""
+    argv = [wix, "msi", "validate", "-wx"]
+    for ice in SUPPRESSED_ICES:
+        argv += ["-sice", ice]
+    return argv + [str(msi)] + (["-acceptEula", accept_eula] if accept_eula else [])
 
 
 # The Environment row WiX writes for Part="last", Action="set", System="yes", Permanent="no": "=" set on install,
@@ -339,8 +347,8 @@ def build(args: argparse.Namespace) -> dict:
             raise BuildError(f"wix msi validate failed with exit code {p.returncode}")
         identity = readback(msi, payload, version)
         manifest = {"msi": msi.name, "version": version, **identity, **staged,
-                    "files": {f: {"size": (payload / f).stat().st_size, "sha256": sha256_file(payload / f)}
-                              for f in tree_files(payload)}}
+                    "payload": {f: {"size": (payload / f).stat().st_size, "sha256": sha256_file(payload / f)}
+                                for f in tree_files(payload)}}
         (out / "payload.json").write_text(json.dumps(manifest, indent=1), encoding="utf-8")
         return manifest
     finally:

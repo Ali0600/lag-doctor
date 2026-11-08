@@ -407,7 +407,8 @@ def test_a_damaged_installers_copy_is_reported_never_routed_around(presentmon_ex
 
 
 def test_without_an_installers_copy_the_download_is_expected(bundled_at):
-    bundled_at.parent.mkdir(parents=True)                # the folder alone is not a copy
+    assert setup.bundled() is None and setup.expected_exe() == setup.installed_exe()
+    bundled_at.mkdir(parents=True)                       # a folder under the exe's name is not a copy either
     assert setup.bundled() is None and setup.expected_exe() == setup.installed_exe()
 
 
