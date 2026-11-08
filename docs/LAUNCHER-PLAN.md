@@ -21,7 +21,7 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   in their own terminal before the merge ("It works, merge it").
 - [ ] M2: the recording seams. The locked pipe is done (`lagdoctor/winapi/pipe.py`, PR #19, 2026-11-08), and so are
   tool roots whose whole tree joins `tool_pids` (M3 needed them for the relay); the other seams are not.
-- [x] M3: the relay (`lagdoctor/relay/`, 2026-11-08). `watch --elevate` records in the player's own window; only
+- [x] M3: the relay (`lagdoctor/relay/`, PR #23, merged 2026-11-08). `watch --elevate` records in the player's own window; only
   PresentMon and the network trace run elevated, in a windowless relay (DESIGN.md, "The relay").
 - [ ] M4: recording from the app.
 - [ ] M5: measuring the right part.

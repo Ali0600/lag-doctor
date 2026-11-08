@@ -27,7 +27,7 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   from a fresh shell and uninstalled on a throwaway runner with nothing left; nothing published or signed yet.
 - [ ] Stage 4: the capture service. Begun 2026-11-08 with its channel, the locked pipe (`lagdoctor/winapi/pipe.py`, PR
   #19; research note section 11), and the relay core it will host (`lagdoctor/relay/`, `docs/LAUNCHER-PLAN.md` M3,
-  done 2026-11-08): its protocol, its checks and its client.
+  PR #23, merged 2026-11-08): its protocol, its checks and its client.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.
 
 ## E2: the group fallback
