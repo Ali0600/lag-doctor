@@ -128,8 +128,8 @@
  {
   "name": "the journal healed before the gate",
   "file": "lagdoctor/cli.py",
-  "old": "    out_file = getattr(args, \"out_file\", None)",
-  "new": "    _settle_journal()\n    out_file = getattr(args, \"out_file\", None)",
+  "old": "    code, private = _private_copy_gate(PRIVATE_COPY_POLICY[args.cmd])",
+  "new": "    _settle_journal()\n    code, private = _private_copy_gate(PRIVATE_COPY_POLICY[args.cmd])",
   "tests": [
    "tests/test_private_copy.py::test_commands_that_save_for_other_windows_refuse_and_say_where_and_why"
   ]
@@ -137,8 +137,8 @@
  {
   "name": "the journal healed in a private copy",
   "file": "lagdoctor/cli.py",
-  "old": "    if args.cmd in (\"watch\", \"fix\", \"undo\", \"check\") and not getattr(args, \"capture_only\", False) and not private:",
-  "new": "    if args.cmd in (\"watch\", \"fix\", \"undo\", \"check\") and not getattr(args, \"capture_only\", False):",
+  "old": "    if args.cmd in (\"watch\", \"fix\", \"undo\", \"check\") and not private:",
+  "new": "    if args.cmd in (\"watch\", \"fix\", \"undo\", \"check\"):",
   "tests": [
    "tests/test_private_copy.py::test_commands_that_only_read_say_where_their_files_go_and_carry_on"
   ]
@@ -168,24 +168,6 @@
   "new": "    pass",
   "tests": [
    "tests/test_private_copy.py::test_commands_that_only_read_say_where_their_files_go_and_carry_on"
-  ]
- },
- {
-  "name": "the elevated child asks about a home of its own",
-  "file": "lagdoctor/cli.py",
-  "old": "                                       _existing_folder(Path(out_file).resolve().parent) if out_file else None)",
-  "new": "                                       None)",
-  "tests": [
-   "tests/test_private_copy.py::test_the_elevated_child_asks_about_the_users_folder_it_saves_in"
-  ]
- },
- {
-  "name": "the nearest existing folder not looked for",
-  "file": "lagdoctor/cli.py",
-  "old": "    while not folder.is_dir() and folder.parent != folder:",
-  "new": "    while False:",
-  "tests": [
-   "tests/test_private_copy.py::test_the_elevated_child_asks_about_the_users_folder_it_saves_in"
   ]
  },
  {

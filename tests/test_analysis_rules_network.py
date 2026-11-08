@@ -302,6 +302,31 @@ def test_bandwidth_hog_a_program_moving_1_mb_a_second(moved, kind):
         assert "each program's traffic, from ETW" in res.text
 
 
+@pytest.mark.parametrize("nic_rx, kind", [(0.4e6, rules.Cleared), (5e6, rules.Unchecked)])
+def test_per_program_traffic_of_one_session_needs_the_adapter_to_rule_a_hog_out(nic_rx, kind):
+    # Through the relay the talkers are the player's Windows session only (DECISIONS 2026-11-08): a service outside
+    # it (Delivery Optimization, say) can fill the connection unnamed, so only the adapter's counters clear it.
+    flows = {"downloads": [], "talkers_scope": "session",
+             "talkers": [{"pid": 9999, "name": "chrome.exe", "rx_bytes": 1e6, "tx_bytes": 0}]}
+    res = run("bandwidth_hog", net(inet_rtt_ms=7.0, nic_rx_bps=nic_rx, nic_tx_bps=1e4, flows=flows, ok=ETW))
+    assert isinstance(res, kind)
+    if kind is rules.Cleared:
+        assert res.text.startswith("No program in your Windows session moved 1 MB/s or more on average")
+        assert "the network adapter moved only 0.41 MB/s on average, every program together" in res.text
+    else:
+        assert "programs outside your Windows session, Windows' own services among them" in res.text
+        assert "moved 5.0 MB/s on average, so something used the connection" in res.text
+    named = dict(flows, talkers=[{"pid": 9999, "name": "chrome.exe", "rx_bytes": 300e6, "tx_bytes": 0}])
+    res = run("bandwidth_hog", net(inet_rtt_ms=7.0, nic_rx_bps=nic_rx, nic_tx_bps=1e4, flows=named, ok=ETW))
+    assert is_finding(res) and "chrome.exe" in res.evidence[0].text          # one of the player's is still named
+
+
+def test_a_session_scoped_measurement_without_adapter_counters_rules_nothing_out():
+    flows = {"downloads": [], "talkers_scope": "session", "talkers": []}
+    res = run("bandwidth_hog", net(inet_rtt_ms=7.0, flows=flows, ok=ETW))
+    assert isinstance(res, rules.Unchecked) and "outside your Windows session" in res.text
+
+
 def test_bandwidth_hog_without_any_traffic_source_is_unchecked():
     # unmeasured-downloads-cleared: this test used to expect "checked and fine" from an empty download list,
     # which is what the collector also wrote when it never read a download log

@@ -2728,14 +2728,18 @@ def _bandwidth_hog(cap: Capture, ctx: dict) -> Any:
 
 def _all_traffic_quiet(e: _Env, talkers: Any) -> str | Unchecked:
     """unmeasured-downloads-cleared: what rules a bandwidth hog out, saying which source saw it: the ETW per-program
-    traffic, when its session ran for the whole capture, else the network adapter's own byte counters (every
-    program together) under TALKER_MIN_BPS. Unchecked when neither measured it."""
+    traffic, when its session ran for the whole capture and saw every program, else the network adapter's own byte
+    counters (every program together) under TALKER_MIN_BPS. Unchecked when neither measured it. Through the relay the
+    per-program traffic covers only the player's Windows session (`talkers_scope` "session", DECISIONS 2026-11-08),
+    and services run outside it, so only the adapter can rule them out."""
     flows = e.flows()
     src = flows.get("download_sources")       # the download logs the network collector read
     logs = [s.capitalize() for s in (_text(x, 20) for x in src) if s] if isinstance(src, list) else []
     seen = f"; {' and '.join(logs)}'s download log showed no download" if logs else ""
     stopped = fa._bounded(_dict(flows.get("health")).get("consumer_stopped_t"))
-    if isinstance(talkers, list) and e.measured("net_flows") and stopped is None:
+    measured = isinstance(talkers, list) and e.measured("net_flows") and stopped is None
+    session_only = flows.get("talkers_scope") == "session"      # older captures have no scope: they saw every program
+    if measured and not session_only:
         return (f"no other program moved {TALKER_MIN_BPS / 1e6:.0f} MB/s or more on average (each program's traffic, "
                 f"from ETW){seen}")
     t = fa._col(e.cap.network, N.T)
@@ -2744,11 +2748,16 @@ def _all_traffic_quiet(e: _Env, talkers: Any) -> str | Unchecked:
                               for i, ti in enumerate(t) if fa._bounded(ti) is not None)
            if a is not None and b is not None and a >= 0 and b >= 0]
     if len(nic) >= NIC_MIN_ROWS and st.mean(nic) < TALKER_MIN_BPS:
-        return (f"the network adapter moved only {st.mean(nic) / 1e6:.2f} MB/s on average, every program together "
-                f"(under {TALKER_MIN_BPS / 1e6:.0f} MB/s){seen}")
-    why = ("each program's traffic was not measured (" + (f"the ETW consumer stopped at {stopped:.0f} s"
-                                                           if stopped is not None and isinstance(talkers, list)
-                                                           else e.why("net_flows")) + ")")
+        mine = (f"no program in your Windows session moved {TALKER_MIN_BPS / 1e6:.0f} MB/s or more on average (each "
+                "one's traffic, from ETW), and " if measured else "")
+        return (f"{mine}the network adapter moved only {st.mean(nic) / 1e6:.2f} MB/s on average, every program "
+                f"together (under {TALKER_MIN_BPS / 1e6:.0f} MB/s){seen}")
+    if measured:
+        why = "programs outside your Windows session, Windows' own services among them, were not measured one by one"
+    else:
+        why = ("each program's traffic was not measured (" + (f"the ETW consumer stopped at {stopped:.0f} s"
+                                                               if stopped is not None and isinstance(talkers, list)
+                                                               else e.why("net_flows")) + ")")
     if len(nic) >= NIC_MIN_ROWS:
         why += (f", and the network adapter moved {st.mean(nic) / 1e6:.1f} MB/s on average, so something used the "
                 "connection")

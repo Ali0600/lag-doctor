@@ -26,7 +26,8 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
 - [x] Stage 3: the MSI (2026-11-08, PRs #6, #8, #12 and #13). A WiX v7 per-machine MSI built in CI, installed, run
   from a fresh shell and uninstalled on a throwaway runner with nothing left; nothing published or signed yet.
 - [ ] Stage 4: the capture service. Begun 2026-11-08 with its channel, the locked pipe (`lagdoctor/winapi/pipe.py`, PR
-  #19; research note section 11), which the relay of `docs/LAUNCHER-PLAN.md` M3 uses first.
+  #19; research note section 11), and the relay core it will host (`lagdoctor/relay/`, `docs/LAUNCHER-PLAN.md` M3,
+  done 2026-11-08): its protocol, its checks and its client.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.
 
 ## E2: the group fallback

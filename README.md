@@ -49,7 +49,7 @@ lagdoctor check                              # in a new terminal window: PATH ch
   pins, with Intel's licence. Only its `bin\` folder, which holds `lagdoctor.cmd`, goes on the system PATH, so the
   bundled Python never stands in for your own `python`. `lagdoctor setup` finds that PresentMon: nothing to download.
 - Each recording still asks for one UAC prompt (`watch --elevate`) until the capture service lands (Stage 4); the
-  elevated recording then runs only code from Program Files, which only an administrator can change.
+  part that runs elevated then runs only code from Program Files, which only an administrator can change.
 - Uninstall it from Settings > Apps > Installed apps, or with `msiexec /x lag-doctor-0.1.0-x64.msi`; CI checks that
   no file, PATH entry or Windows Installer key is left.
 - After Ctrl+C ends a recording in the same window, cmd may ask "Terminate batch job (Y/N)?": the recording is
@@ -78,17 +78,18 @@ uv run lagdoctor analyze CAPTURE                        # re-run the analysis on
 - **A recording ends** with Ctrl+C, after `--duration S`, or when the game exits. After the first Ctrl+C it
   says it is stopping and saving, and a second press cannot lose the capture.
 - **Frame timing uses Windows event tracing (ETW), which needs admin rights.** `watch` offers one UAC prompt
-  per recording (`--elevate` skips the question, `--no-elevate` records without frame timing). Only the
-  recording runs elevated, in a window of its own: stop it there with Ctrl+C, and the first window analyses
-  it. `setup` explains the alternative of joining *Performance Log Users* once, which covers frame timing
+  per recording (`--elevate` skips the question, `--no-elevate` records without frame timing). Only PresentMon and
+  the network trace then run elevated, in lag-doctor's relay: a background process with no window, which passes
+  their data back over a locked pipe. The recording itself stays in your window, where Ctrl+C stops it. `setup`
+  explains the alternative of joining *Performance Log Users* once, which covers frame timing
   but not the game-server tracker (Windows does not let that group start it; `--elevate` still does).
   Without either, everything else is still measured and the report says frame timing was not.
 - **No silent recordings without frame timing.** If PresentMon is missing or fails its check, `watch` stops
   before it records and says what to run (`--no-elevate` records everything else anyway). If frame timing stops
   working mid-recording, or the game is in front for 10 s without a frame, it says so on the spot.
 - **Run it from your own PowerShell window.** A shell that a packaged app started (the Claude desktop app is one)
-  can have what it saves under AppData moved into that app's private folder, which your other windows and the
-  admin recording window never see. lag-doctor checks where its files really land, and refuses to set up, record
+  can have what it saves under AppData moved into that app's private folder, which your other windows never
+  see. lag-doctor checks where its files really land, and refuses to set up, record
   or fix from such a shell.
 - **Closing the recording window** also stops and saves, but Windows allows a closing console about 5
   seconds. A 30-minute recording at 144 FPS saves in 2.6 s; much longer ones may not make it. Signing out or
@@ -132,8 +133,9 @@ uv run lagdoctor analyze CAPTURE                        # re-run the analysis on
   method); links each stutter to what changed at that moment (a lift test against the calm stretches); then
   36 rules score causes by evidence family, so no single signal is counted twice.
 - **Layout**: `lagdoctor/winapi` (thin ctypes wrappers), `capture` (one collector per source plus the
-  session), `analysis`, `fixes` (journal, readback, undo), `report` (console and HTML). `laglab/` is a fake
-  game that lags on purpose, used to test the whole chain. `docs/DESIGN.md` is the contract between them.
+  session), `relay` (PresentMon and the network trace with admin rights, for a recording in your own window),
+  `analysis`, `fixes` (journal, readback, undo), `report` (console and HTML). `laglab/` is a fake game that lags
+  on purpose, used to test the whole chain. `docs/DESIGN.md` is the contract between them.
 
 ## Testing
 
@@ -219,6 +221,10 @@ While it records, lag-doctor measures your connection, which `--no-network` turn
 - the game-server tracker checks itself once per recording by looking up `example.com` through `1.1.1.1`, over UDP
   and TCP ([Cloudflare's privacy policy for it](https://developers.cloudflare.com/1.1.1.1/privacy/public-dns-resolver/)).
 
+The network trace sees every program's traffic, so the relay that runs it with admin rights passes back only the
+game's own packets, its own self-check's, and, for other programs, how many bytes each received and sent, only for
+programs in your Windows session: never another user's programs or Windows' own services.
+
 `lagdoctor setup` downloads PresentMon from GitHub only when you agree, and the installer already carries it.
 
 ## Experience Gained
@@ -246,8 +252,9 @@ While it records, lag-doctor measures your connection, which `--no-network` turn
 - **Supply chain and least privilege**: a per-machine WiX MSI of 154 files built in CI from pinned inputs (Python
   runtime and PresentMon by SHA-256, WiX by SHA-512), installed, run from a fresh shell and uninstalled on a
   throwaway runner with nothing left behind, its check proven by 3 sabotaged builds; PresentMon checked through a
-  deny-write handle and launched by that handle's resolved path; only the capture runs elevated, behind 1 UAC
-  prompt; the planned capture service measured on GitHub's runners before it ships (a 1-privilege LocalService
+  deny-write handle and launched by that handle's resolved path; only PresentMon and the ETW trace run elevated, in a
+  windowless relay behind 1 UAC prompt that passes back only the game's data and the player's own programs' byte
+  totals; the planned capture service measured on GitHub's runners before it ships (a 1-privilege LocalService
   service enabling all 13 ETW providers, a named-pipe trigger starting it in 0.08 s), and its pipe locked 6 ways
   (first instance, local clients only, an exact DACL, no access below medium integrity, identification-level
   clients, checked names), each lock tested against the attack it stops.

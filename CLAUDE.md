@@ -150,6 +150,14 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   keyboard; the spike's tests make every real input call raise. Its interactive run is the owner's, in their terminal. The spike keeps everything under `%TEMP%\lag-doctor-webview-spike`, which the private
   copy leaves alone. The relay is also the protocol of Stage 4's capture service (`docs/INSTALLER-PLAN.md`), so Stage
   4 work starts from that plan too.
+- **The relay** (`lagdoctor/relay/`, DESIGN.md "The relay") runs PresentMon and the Kernel-Network session with
+  administrator rights for a recording in the user's own window. Everything it does comes from its command line
+  (`client.relay_argv`, parsed by `server.parse_args` on both sides of the prompt); from the pipe it takes only `start`
+  and `stop`, and it passes back only what `protocol.py` lists: the game's frame rows and events, the recorder's own
+  events, and per-program byte totals for the recorder's Windows session (DECISIONS 2026-11-08). A new message or field
+  goes through `protocol.from_relay` or `from_recorder` with its checks. `tests/test_relay_live.py` starts the real
+  relay elevated and runs only on GitHub's runner (`scripts/stage2/guard.py`); the other relay tests run its code on a
+  thread here, unelevated. An agent never starts `python -m lagdoctor.relay` itself: only `watch` does.
 - **The relay and the capture service talk only through `lagdoctor/winapi/pipe.py`.** Name a pipe through
   `pipe.path` (Windows folds `..` in a `\\.\` path, so a name holding one opened an ordinary file), build its
   descriptor with `pipe.client_dacl` (a SID string can carry entries of its own), and check who answered: a server

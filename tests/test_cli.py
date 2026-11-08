@@ -1,10 +1,9 @@
 """The command line: argument checks, the elevation choice, and fix / undo through the journal.
 
-Watch tests run cmd_watch in this process with a fake target and fake collectors, and the elevated child is
-faked too: nothing here raises a UAC prompt. Some elevated tests keep the real launch_elevated and replace only
-ShellExecuteExW, with a recorder that runs the elevated command's lag-doctor part in this process. The
-console-event tests run the real cli.main in a hidden console of their own, so the events they send never reach
-this process's console.
+Watch tests run cmd_watch in this process with a fake target and fake collectors, and the relay is faked too:
+nothing here raises a UAC prompt. One elevated test keeps the real launch_elevated and replaces only ShellExecuteExW,
+with a stand-in that runs the relay's own code on a thread of this process. The console-event tests run the real
+cli.main in a hidden console of their own, so the events they send never reach this process's console.
 """
 from __future__ import annotations
 
@@ -118,39 +117,6 @@ def test_elevation_choice_literal_points():
     assert cli.elevation_choice(False, False, False, never) == "skip"       # no console to ask on: never elevate
     assert cli.elevation_choice(False, False, True, lambda *a, **k: True) == "elevate"
     assert cli.elevation_choice(False, False, True, lambda *a, **k: False) == "skip"
-
-
-def test_the_elevated_child_records_only_this_game_into_this_file(tmp_path):
-    # Changed on purpose (LC-3, SEC-7, SEC-9): the argv now starts the interpreter with -E -s and carries the
-    # create time, the verified PresentMon, the user's inventory and SID.
-    args = cli.build_parser().parse_args(["watch", "--game", "x.exe", "--duration", "20", "--no-network",
-                                          "--hotkey", "none", "--elevate"])
-    exe, inv, cap = tmp_path / "PresentMon-2.6.0-x64.exe", tmp_path / "inv.json", tmp_path / "c.ldcap.json.gz"
-    argv = cli.elevated_argv(args, {"pid": 4242, "create_time": 133000000000000001, "name": "x.exe"}, cap,
-                             presentmon_exe=exe, inventory_file=inv, parent_sid="S-1-5-21-11-22-33-1001")
-    assert argv[1:6] == ["-E", "-s", "-m", "lagdoctor", "watch"]
-    assert ["--pid", "4242"] == argv[6:8] and "--capture-only" in argv
-    assert argv[argv.index("--create-time") + 1] == "133000000000000001"
-    assert argv[argv.index("--out-file") + 1] == str(cap)
-    assert argv[argv.index("--presentmon-exe") + 1] == str(exe) and argv[argv.index("--inventory-file") + 1] == str(inv)
-    assert argv[argv.index("--parent-sid") + 1] == "S-1-5-21-11-22-33-1001"
-    assert "--elevate" not in argv and "--game" not in argv and "--no-network" in argv
-    assert argv[argv.index("--duration") + 1] == "20.0" and argv[argv.index("--hotkey") + 1] == "none"
-    assert all(isinstance(a, str) for a in argv)
-    child = cli.build_parser().parse_args(argv[5:])                # and the child's own parser reads it back
-    assert (child.capture_only, child.pid, child.create_time, child.out_file, child.presentmon_exe,
-            child.inventory_file, child.parent_sid) == (True, 4242, 133000000000000001, cap, exe, inv,
-                                                        "S-1-5-21-11-22-33-1001")
-
-
-@pytest.mark.parametrize("which", ["cap_path", "presentmon_exe", "inventory_file"])
-def test_the_elevated_child_is_never_handed_a_relative_path(tmp_path, which):
-    args = cli.build_parser().parse_args(["watch", "--pid", "5"])
-    paths_in = {"cap_path": tmp_path / "c.gz", "presentmon_exe": tmp_path / "pm.exe", "inventory_file": None}
-    paths_in[which] = Path("relative") / "thing"
-    cap_path = paths_in.pop("cap_path")
-    with pytest.raises(ValueError, match="absolute"):
-        cli.elevated_argv(args, {"pid": 5, "create_time": 1}, cap_path, **paths_in)
 
 
 def test_a_mistyped_lag_key_is_refused_before_anything_starts():
@@ -434,11 +400,10 @@ def test_a_second_watch_is_refused_before_anything_starts(fake_world, tmp_path, 
     assert other.acquire()
     try:
         plain = cli.main([*WATCH, "--no-elevate", "--out", str(tmp_path / "out")])
-        as_child = cli.main([*WATCH, "--capture-only", "--create-time", str(GAME["create_time"]),
-                             "--out-file", str(tmp_path / "s" / cli.CAPTURE_NAME)])
+        elevating = cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")])
     finally:
         other.release()
-    assert plain == as_child == cli.EXIT_BUSY
+    assert plain == elevating == cli.EXIT_BUSY
     assert "already running" in capsys.readouterr().out
     assert fake_world["find"] == [] and fake_world["sessions"] == []          # nothing sampled, nothing started
     assert cli.main([*WATCH, "--no-elevate", "--out", str(tmp_path / "out")]) == 0    # free again
@@ -553,206 +518,114 @@ def test_closing_the_window_is_a_stop_the_flow_tracker_asked_for(monkeypatch):
     assert tr.result()["health"]["consumer_stopped_t"] is None
 
 
-# ------------------------------------------------------------- the elevated child, faked ---
+# ------------------------------------------------------------------ frame timing through the relay ---
 
-class FakeChild:
-    """What launch_elevated returns. Its 'recording' already ran: `effect(argv, cwd)` wrote what it wrote."""
+class P:
+    """A process as the handle-free snapshot lists it (the fields the relay's checks read)."""
 
-    def __init__(self, code=0, interrupts=0):
-        self.code, self.interrupts, self.closed = code, interrupts, False
+    def __init__(self, pid, ppid, create_time, session_id, name="python.exe"):
+        self.pid, self.ppid, self.create_time, self.session_id, self.name = pid, ppid, create_time, session_id, name
 
-    def wait(self, timeout_s=None):
-        if self.interrupts:
-            self.interrupts -= 1
-            raise KeyboardInterrupt                     # Ctrl+C in this (the first) window while it waits
-        return self.code
+
+def _session_now() -> int:
+    from lagdoctor.winapi import ntquery
+    return ntquery.Snapshotter().snapshot()[os.getpid()].session_id
+
+
+class FakeLink:
+    """What relay/client.launch returns: a relay that runs frame timing (and the tracker) for this recording."""
+
+    def __init__(self, network, events):
+        self.pid, self.create_time, self.frames, self.network = 7777, 1234, True, network
+        self.events, self.closed = events, 0
+
+    def tool_procs(self):
+        return ((self.pid, self.create_time),)
 
     def close(self):
-        self.closed = True
-
-
-def child_capture(argv, cwd, target=None):
-    """Write the capture the way the child would: --out-file resolved against the child's own folder."""
-    out_file = Path(os.path.join(cwd, argv[argv.index("--out-file") + 1]))
-    out_file.parent.mkdir(parents=True, exist_ok=True)
-    Capture(started_at="2026-11-04T21:00:00+01:00", clock_origin=1.0, duration_s=1.0,
-            target=dict(target or GAME, stop_reason="Ctrl+C"), sources={}, inventory={"adapters": []},
-            system={"t": [0.0], "cpu_total_pct": [5.0]}).save(out_file)
-    return out_file
+        self.closed += 1
+        self.events.append("relay let go")
 
 
 @pytest.fixture
-def fake_elevation(monkeypatch, fake_world, tmp_path):
-    """The parent may trace only by elevating; launching runs `state['effect']` and returns `state['child']`."""
-    state = {"launches": [], "child": FakeChild(), "effect": child_capture}
+def fake_relay(monkeypatch, fake_world, tmp_path):
+    """This window may trace only by elevating; relay/client.launch is replaced: it records its arguments and returns
+    a FakeLink, or raises state['raise']. The snapshot shows this process and GAME in this Windows session."""
+    from lagdoctor.relay import client
+    session = _session_now()
+    state = {"launches": [], "link": None, "raise": None, "events": [], "session": session,
+             "procs": {os.getpid(): P(os.getpid(), 4, 555, session), GAME["pid"]: P(GAME["pid"], 4, GAME["create_time"],
+                                                                                     session, GAME["name"])}}
     monkeypatch.setattr(cli, "_presentmon_exe", lambda: (tmp_path / "PresentMon-2.6.0-x64.exe", ""))
     monkeypatch.setattr(elevation, "can_trace", lambda: False)
+    monkeypatch.setattr(sess, "_snapshot", lambda threads_for=(): dict(state["procs"]))
 
-    def launch(argv, cwd):
-        state["launches"].append((list(argv), cwd))
-        state["effect"](argv, cwd)
-        return state["child"]
+    def launch(target, **kw):
+        state["launches"].append(dict(kw, target=dict(target)))
+        if state["raise"] is not None:
+            raise state["raise"]
+        state["link"] = FakeLink(kw["network"], state["events"])
+        return state["link"]
+    monkeypatch.setattr(client, "launch", launch)
+    real_save = Capture.save
 
-    def relaunch(argv, cwd):                     # the same child, for code that waits in one call
-        return launch(argv, cwd).wait()
-    monkeypatch.setattr(elevation, "launch_elevated", launch, raising=False)
-    monkeypatch.setattr(elevation, "relaunch_elevated", relaunch)
+    def save(self, path):
+        state["events"].append("saved")
+        return real_save(self, path)
+    monkeypatch.setattr(Capture, "save", save)
     return state
 
 
-def _split_command_line(program: str, params: str) -> list[str]:
-    """How the child's command line is split (CommandLineToArgvW), program first."""
-    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
-    shell32.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
-    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
-    k32 = ctypes.WinDLL("kernel32")
-    k32.LocalFree.argtypes = [ctypes.c_void_p]
-    n = ctypes.c_int()
-    argv = shell32.CommandLineToArgvW(f'"{program}" {params}', ctypes.byref(n))
-    assert argv, f"CommandLineToArgvW failed: {ctypes.get_last_error()}"
-    try:
-        return [argv[i] for i in range(n.value)]
-    finally:
-        k32.LocalFree(ctypes.cast(argv, ctypes.c_void_p))
+def test_an_elevated_watch_records_here_with_frame_timing_through_the_relay(fake_relay, fake_world, tmp_path):
+    held = []
+    real_run = sess.Session.run
 
-
-class ShellExecuteRecorder:
-    """Stands in for ShellExecuteExW behind the real launch_elevated: records what would have run elevated, runs
-    that command's lag-doctor part here (cli.main, in the faked world), and hands back the handle of a plain
-    child process that exits with the same code."""
-
-    def __init__(self) -> None:
-        self.calls: list[dict] = []
-        self.children: list[subprocess.Popen] = []
-
-    def __call__(self, ref) -> bool:
-        info = ref._obj
-        argv = _split_command_line(info.lpFile, info.lpParameters)
-        self.calls.append({"verb": info.lpVerb, "file": info.lpFile, "params": info.lpParameters,
-                           "dir": info.lpDirectory, "argv": argv})
-        assert argv[1:5] == ["-E", "-s", "-m", "lagdoctor"], argv
-        code = cli.main(argv[5:])                       # the elevated child's own parser and checks
-        child = subprocess.Popen([BASE_PY, "-I", "-c", f"import sys; sys.exit({int(code)})"])
-        self.children.append(child)
-        me = _winapi.GetCurrentProcess()
-        info.hProcess = _winapi.DuplicateHandle(me, child._handle, me, 0, False, _winapi.DUPLICATE_SAME_ACCESS)
-        return True
-
-
-@pytest.fixture
-def real_launch(monkeypatch, fake_world, tmp_path):
-    """The parent may trace only by elevating, through the real launch_elevated; only ShellExecuteExW is faked.
-    This PC's own HKCU is not read for a Steam log (a test may give one)."""
-    from lagdoctor import setup as pm_setup
-    from lagdoctor.capture import netmon
-    rec = ShellExecuteRecorder()
-    monkeypatch.setattr(netmon, "find_steam_log", lambda: None)
-    monkeypatch.setattr(elevation, "_ShellExecuteExW", rec)
-    monkeypatch.setattr(elevation, "can_trace", lambda: False)
-    monkeypatch.setattr(cli, "_presentmon_exe", lambda: (tmp_path / "PresentMon-2.6.0-x64.exe", ""))
-    monkeypatch.setattr(pm_setup, "verify", lambda p, **kw: {"signer": "Intel Corporation"})
-    yield rec
-    for c in rec.children:
-        c.wait(10)
-
-
-@pytest.mark.parametrize("steam", ["none", "found"])
-def test_an_elevated_watch_hands_over_the_steam_log_or_none_through_the_real_launch(real_launch, fake_world,
-                                                                                   monkeypatch, tmp_path, steam):
-    # Every PC without Steam crashed here: the parent handed the child ['--steam-log', ''] and launch_elevated
-    # refuses an empty argument (ValueError, uncaught).
-    from lagdoctor.capture import netmon
-    log = tmp_path / "Steam" / "logs" / "content_log.txt"
-    monkeypatch.setattr(netmon, "find_steam_log", lambda: log if steam == "found" else None)
-    assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.2", "--no-network", "--hotkey", "none",
-                     "--out", str(tmp_path / "out")]) == 0
-    (call,) = real_launch.calls
-    assert call["verb"] == "runas" and call["file"] == sys.executable and call["dir"] == str(cli.PROJECT_ROOT)
-    child = call["argv"][5:]
-    assert all(child) and '""' not in call["params"]
-    (session,) = fake_world["sessions"]                  # only the child recorded
-    if steam == "none":
-        assert "--no-steam-log" in child and "--steam-log" not in child
-        assert session["opts"].steam_log == ""          # never the child's own (perhaps another account's) HKCU
-    else:
-        assert child[child.index("--steam-log") + 1] == str(log.resolve()) and "--no-steam-log" not in child
-        assert session["opts"].steam_log == str(log.resolve())
-    # The waiting window hands over its own processes, so the analysis never blames them.
-    me = child[child.index("--parent-procs") + 1].split(",")[0]
-    assert me.split(":")[0] == str(os.getpid()) and session["opts"].tool_procs[0][0] == os.getpid()
-    out_file = Path(child[child.index("--out-file") + 1])
-    assert (out_file.parent / cli.DIAGNOSIS_NAME).is_file()       # recorded by the child, analysed here
-
-
-def test_a_launch_that_refuses_its_command_is_said_plainly_and_records_here(real_launch, fake_world, monkeypatch,
-                                                                            tmp_path, capsys):
-    monkeypatch.setattr(sys, "executable", "")            # Python could not tell its own path
-    assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.2", "--no-network", "--hotkey", "none",
-                     "--out", str(tmp_path / "out")]) == 0
-    out = capsys.readouterr().out
-    assert real_launch.calls == [] and "was not started" in out and "Traceback" not in out
-    assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1      # recorded here instead
-    (session,) = fake_world["sessions"]
-    assert session["opts"].frames is False
-
-
-def test_the_parent_never_hands_the_child_an_odd_sid_or_process_list(tmp_path):
-    args = cli.build_parser().parse_args(["watch", "--pid", "4242"])
-    game, cap = {"pid": 4242, "create_time": 1}, tmp_path / "c.gz"
-    for kw in ({"parent_sid": "S-1-5-21 1001"}, {"parent_sid": "not a sid"}, {"parent_procs": [(0, 5)]},
-               {"parent_procs": [(1, 1)] * (cli.MAX_PARENT_PROCS + 1)}):
-        with pytest.raises(ValueError):
-            cli.elevated_argv(args, game, cap, **kw)
-    argv = cli.elevated_argv(args, game, cap, parent_sid="S-1-5-21-1-2-3-1001", parent_procs=[(77, 5), (78, 6)])
-    child = cli.build_parser().parse_args(argv[5:])
-    assert child.parent_sid == "S-1-5-21-1-2-3-1001" and child.parent_procs == ((77, 5), (78, 6))
-
-
-def test_a_relative_out_folder_reaches_the_elevated_child_as_an_absolute_path(fake_elevation, monkeypatch,
-                                                                             tmp_path):
-    here, project = tmp_path / "here", tmp_path / "project"
-    here.mkdir()
-    project.mkdir()
-    monkeypatch.chdir(here)
-    monkeypatch.setattr(cli, "PROJECT_ROOT", project)              # where the child runs
-    assert cli.main(["watch", "--pid", "4242", "--out", "rel", "--elevate", "--no-network", "--hotkey", "none"]) == 0
-    argv, cwd = fake_elevation["launches"][0]
-    out_file = Path(argv[argv.index("--out-file") + 1])
-    assert out_file.is_absolute() and out_file.parent.parent == (here / "rel").resolve()
-    assert (out_file.parent / cli.DIAGNOSIS_NAME).is_file()        # found and analysed here
-    assert not (out_file.parent / cli.INVENTORY_HANDOVER).exists()  # the handover is tidied once it ended
-    assert not (project / "rel").exists()
-
-
-def test_the_parent_hands_the_child_its_presentmon_inventory_and_sid(fake_elevation, monkeypatch, tmp_path):
-    from lagdoctor.capture import netmon
-    users_log = tmp_path / "Steam" / "logs" / "content_log.txt"
-    monkeypatch.setattr(netmon, "find_steam_log", lambda: users_log)      # read in the user's own HKCU
-    seen = {}
-
-    def effect(argv, cwd):
-        seen["inventory"] = json.loads(Path(argv[argv.index("--inventory-file") + 1]).read_text(encoding="utf-8"))
-        probe = sess.CaptureLock()                     # the child takes the lock for its recording
-        seen["lock_free"] = probe.acquire()
+    def run(self, *a, **k):
+        probe = sess.CaptureLock()
+        held.append(not probe.acquire())               # this window holds the lock while it records
         probe.release()
-        child_capture(argv, cwd)
-    fake_elevation["effect"] = effect
-    assert cli.main(["watch", "--pid", "4242", "--elevate", "--no-network", "--hotkey", "none",
+        return real_run(self, *a, **k)
+    sess.Session.run = run
+    try:
+        assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.2", "--hotkey", "none",
+                         "--out", str(tmp_path / "out")]) == 0
+    finally:
+        sess.Session.run = real_run
+    (launch,) = fake_relay["launches"]
+    assert launch["target"]["pid"] == GAME["pid"] and launch["target"]["create_time"] == GAME["create_time"]
+    assert launch["presentmon_exe"] == (tmp_path / "PresentMon-2.6.0-x64.exe").resolve()
+    assert launch["frames"] is True and launch["network"] is True
+    assert launch["recorder"] == (os.getpid(), 555) and launch["sid"] == elevation.token_user_sid()
+    (session,) = fake_world["sessions"]
+    link = fake_relay["link"]
+    assert session["opts"].relay is link and session["opts"].frames is True
+    assert session["opts"].tool_procs == ((7777, 1234),) and session["inventory"] is None   # read here, by the session
+    (cap,) = (tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}")
+    assert (cap.parent / cli.DIAGNOSIS_NAME).is_file() and held == [True]
+    events = fake_relay["events"]
+    assert events[:2] == ["relay let go", "saved"] and set(events) == {"relay let go", "saved"}   # let go, then saved
+
+
+def test_without_the_network_the_relay_runs_frame_timing_only(fake_relay, tmp_path):
+    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == 0
+    assert fake_relay["launches"][0]["network"] is False
+
+
+def test_with_a_relay_closing_the_window_leaves_the_network_trace_to_the_relay(fake_relay, monkeypatch, tmp_path):
+    seen = []
+    real = cli._ConsoleControl.__init__
+
+    def init(self, stop, saved, network):
+        seen.append(network)
+        real(self, stop, saved, network)
+    monkeypatch.setattr(cli._ConsoleControl, "__init__", init)
+    assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.2", "--hotkey", "none",
                      "--out", str(tmp_path / "out")]) == 0
-    argv, _ = fake_elevation["launches"][0]
-    assert argv[argv.index("--presentmon-exe") + 1] == str(tmp_path / "PresentMon-2.6.0-x64.exe")
-    assert seen["inventory"] == {"adapters": [], "who": "the user"}         # read here, in the user's account
-    assert argv[argv.index("--parent-sid") + 1] == elevation.token_user_sid()
-    assert argv[argv.index("--create-time") + 1] == str(GAME["create_time"])
-    assert argv[argv.index("--steam-log") + 1] == str(users_log.resolve())
-    assert seen["lock_free"] is True                       # the parent let go of it before the prompt
+    assert seen == [False]                  # this window never stops the relay's ETW session by name
 
 
-def test_a_declined_prompt_records_here_still_holding_the_lock(fake_elevation, monkeypatch, tmp_path, capsys):
-    def declined(argv, cwd):
-        raise PermissionError(13, "the administrator prompt was declined", None, 1223)
-    monkeypatch.setattr(elevation, "launch_elevated", declined, raising=False)
-    monkeypatch.setattr(elevation, "relaunch_elevated", declined)
+def test_a_declined_prompt_records_here_still_holding_the_lock(fake_relay, monkeypatch, tmp_path, capsys):
+    fake_relay["raise"] = PermissionError(13, "the administrator prompt was declined", None, 1223)
     held_while_recording = []
     real_run = sess.Session.run
 
@@ -771,14 +644,68 @@ def test_a_declined_prompt_records_here_still_holding_the_lock(fake_elevation, m
     assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
 
 
+@pytest.mark.parametrize("code,exit_code,said", [
+    (6, cli.EXIT_NOT_READY, "PresentMon failed its check"),
+    (3, cli.EXIT_TARGET_CHANGED, "exited while the UAC prompt was up"),
+    (4, 1, "Frame timing could not be started: the relay ended before it answered"),
+    (None, 1, "Frame timing could not be started: another program answered")])
+def test_a_relay_that_could_not_record_is_explained_and_nothing_is_recorded(fake_relay, fake_world, tmp_path, capsys,
+                                                                            code, exit_code, said):
+    from lagdoctor.relay import client
+    why = "another program answered on the relay's pipe" if code is None else f"the relay ended before it answered"
+    fake_relay["raise"] = client.RelayFailed(why, code)
+    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == exit_code
+    assert said in capsys.readouterr().out
+    assert fake_world["sessions"] == [] and not (tmp_path / "out").exists()
+
+
+def test_a_relay_command_that_was_refused_is_said_plainly_and_records_here(fake_relay, fake_world, tmp_path, capsys):
+    fake_relay["raise"] = ValueError("frame timing through the relay needs PresentMon's absolute path")
+    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == 0
+    out = capsys.readouterr().out
+    assert "was not started, because its command was refused" in out and "Traceback" not in out
+    (session,) = fake_world["sessions"]
+    assert session["opts"].frames is False and session["opts"].relay is None
+
+
+def test_a_game_the_relay_would_refuse_is_refused_before_the_prompt(fake_relay, fake_world, tmp_path, capsys):
+    fake_relay["procs"][GAME["pid"]] = P(GAME["pid"], 4, GAME["create_time"], fake_relay["session"] + 1, "Game.exe")
+    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == cli.EXIT_BAD_ARGS
+    assert "another Windows session" in capsys.readouterr().out
+    assert fake_relay["launches"] == [] and fake_world["sessions"] == []
+
+
+@pytest.mark.parametrize("where", ["recording", "before it records"])
+def test_the_relay_is_let_go_when_the_recording_fails(fake_relay, monkeypatch, tmp_path, where):
+    def broken(*a, **k):
+        raise RuntimeError("a bug")
+    if where == "recording":
+        monkeypatch.setattr(sess.Session, "run", broken)
+    else:                                                  # the session folder cannot be made: no session at all
+        monkeypatch.setattr(sess, "session_dir", broken)
+    with pytest.raises(RuntimeError):
+        cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")])
+    assert fake_relay["link"].closed >= 1
+
+
+def test_a_relative_lagdoctor_home_still_hands_the_relay_an_absolute_presentmon(fake_relay, monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("LAGDOCTOR_HOME", "relative-home")
+    monkeypatch.setattr(cli, "_presentmon_exe", lambda: (Path("relative-home") / "PresentMon-2.6.0-x64.exe", ""))
+    assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.1", "--no-network", "--hotkey",
+                     "none"]) == 0
+    exe = fake_relay["launches"][0]["presentmon_exe"]
+    assert exe.is_absolute() and exe == (tmp_path / "relative-home" / "PresentMon-2.6.0-x64.exe").resolve()
+
+
 # A member of Performance Log Users may trace frames unelevated, but Windows does not let the group enable the
 # game-server tracker's provider (measured, docs/research/install-and-rights.md E1): only --elevate brings it.
 
 @pytest.fixture
-def group_member(fake_elevation, monkeypatch):
+def group_member(fake_relay, monkeypatch):
     monkeypatch.setattr(elevation, "can_trace", lambda: True)
     monkeypatch.setattr(elevation, "is_elevated", lambda: False)
-    return fake_elevation
+    return fake_relay
 
 
 def test_a_group_member_records_frames_here_without_a_prompt(group_member, tmp_path, capsys):
@@ -799,137 +726,107 @@ def test_an_administrator_window_is_never_elevated_again(group_member, monkeypat
     assert group_member["launches"] == []
 
 
-def test_a_group_member_who_declines_still_records_frames_here(group_member, monkeypatch, tmp_path, capsys):
-    def declined(argv, cwd):
-        raise PermissionError(13, "the administrator prompt was declined", None, 1223)
-    monkeypatch.setattr(elevation, "launch_elevated", declined, raising=False)
-    monkeypatch.setattr(elevation, "relaunch_elevated", declined)
+def test_a_group_member_who_declines_still_records_frames_here(group_member, tmp_path, capsys):
+    group_member["raise"] = PermissionError(13, "the administrator prompt was declined", None, 1223)
     assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == 0
     out = capsys.readouterr().out
     assert "declined" in out and "Frame timing is off" not in out    # the group still gives frame timing
     assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
 
 
-def test_a_relative_lagdoctor_home_still_hands_the_child_absolute_paths(fake_elevation, monkeypatch, tmp_path):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("LAGDOCTOR_HOME", "relative-home")
-    monkeypatch.setattr(cli, "_presentmon_exe", lambda: (Path("relative-home") / "PresentMon-2.6.0-x64.exe", ""))
-    assert cli.main(["watch", "--pid", "4242", "--elevate", "--no-network", "--hotkey", "none"]) == 0
-    argv, _ = fake_elevation["launches"][0]
-    for flag in ("--out-file", "--presentmon-exe", "--inventory-file"):
-        assert Path(argv[argv.index(flag) + 1]).is_absolute(), flag
+def _split_command_line(program: str, params: str) -> list[str]:
+    """How the relay's command line is split (CommandLineToArgvW), program first."""
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    k32 = ctypes.WinDLL("kernel32")
+    k32.LocalFree.argtypes = [ctypes.c_void_p]
+    n = ctypes.c_int()
+    argv = shell32.CommandLineToArgvW(f'"{program}" {params}', ctypes.byref(n))
+    assert argv, f"CommandLineToArgvW failed: {ctypes.get_last_error()}"
+    try:
+        return [argv[i] for i in range(n.value)]
+    finally:
+        k32.LocalFree(ctypes.cast(argv, ctypes.c_void_p))
 
 
-def test_the_parent_refuses_a_capture_of_another_process(fake_elevation, tmp_path, capsys):
-    fake_elevation["effect"] = lambda argv, cwd: child_capture(argv, cwd, dict(GAME, create_time=7, name="Other.exe"))
-    assert cli.main(["watch", "--pid", "4242", "--elevate", "--no-network", "--hotkey", "none",
-                     "--out", str(tmp_path / "out")]) == 1
-    (folder,) = (tmp_path / "out").iterdir()
-    assert (folder / cli.CAPTURE_NAME).is_file() and not (folder / cli.DIAGNOSIS_NAME).exists()
-    assert "different process" in capsys.readouterr().out
-    assert not (paths.home() / cli.LAST_SESSION).exists()
+class ShellExecuteRelay:
+    """Stands in for ShellExecuteExW behind the real launch_elevated: records what would run elevated, runs the relay's
+    own main() on a thread of this process (unelevated, its PresentMon and ETW faked), and hands back a handle to this
+    process, whose pid is the relay's here."""
+
+    def __init__(self, parts) -> None:
+        self.parts = parts
+        self.calls: list[dict] = []
+        self.codes: list[int] = []
+        self.threads: list[threading.Thread] = []
+
+    def __call__(self, ref) -> bool:
+        from lagdoctor.relay import server
+        info = ref._obj
+        argv = _split_command_line(info.lpFile, info.lpParameters)
+        self.calls.append({"verb": info.lpVerb, "file": info.lpFile, "params": info.lpParameters,
+                           "dir": info.lpDirectory, "argv": argv, "show": info.nShow})
+        t = threading.Thread(target=lambda: self.codes.append(server.main(argv[6:], owner="", parts=self.parts)),
+                             daemon=True)
+        t.start()
+        self.threads.append(t)
+        me = _winapi.GetCurrentProcess()
+        info.hProcess = _winapi.DuplicateHandle(me, me, me, 0, False, _winapi.DUPLICATE_SAME_ACCESS)
+        return True
 
 
-@pytest.mark.parametrize("code,said", [(cli.EXIT_BUSY, "already running"),
-                                       (cli.EXIT_TARGET_CHANGED, "exited while the UAC prompt was up"),
-                                       (cli.EXIT_NOT_READY, "could not use PresentMon"),
-                                       (cli.EXIT_PRIVATE_COPY, "private folder"),
-                                       (9, "exit code 9")])
-def test_a_child_that_saved_nothing_is_explained(fake_elevation, tmp_path, capsys, code, said):
-    fake_elevation["effect"] = lambda argv, cwd: None
-    fake_elevation["child"] = FakeChild(code=code)
-    assert cli.main(["watch", "--pid", "4242", "--elevate", "--no-network", "--hotkey", "none",
-                     "--out", str(tmp_path / "out")]) == 1
-    assert said in capsys.readouterr().out
-    assert list((tmp_path / "out").iterdir()) == []            # its empty folder is not left behind
+def test_an_elevated_watch_starts_the_real_relay_through_the_real_launch(fake_world, monkeypatch, tmp_path):
+    """Everything but the prompt is real: cli -> relay/client.launch -> launch_elevated -> the relay's own checks and
+    pipe -> the recorder's checks of it. Only ShellExecuteExW and the relay's PresentMon and ETW are stand-ins, and the
+    owner the recorder requires is this token's (unelevated, no pipe here can be owned by Administrators)."""
+    from lagdoctor.relay import client, server
+    from lagdoctor.winapi import ntquery, pipe
+    monkeypatch.setattr(elevation, "can_trace", lambda: False)
+    monkeypatch.setattr(cli, "_presentmon_exe", lambda: (Path(sys.executable).resolve(), ""))
+    with pipe.PipeServer(f"lagdoctor-owner-{uuid.uuid4().hex[:16]}",
+                         pipe.client_dacl([elevation.token_user_sid()])) as probe:
+        monkeypatch.setattr(client, "ADMINISTRATORS", probe.owner_sid())
+    game = subprocess.Popen([BASE_PY, "-I", "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+    try:
+        snap = ntquery.Snapshotter()
+        deadline = time.monotonic() + 10
+        while game.pid not in snap.snapshot() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        real_game = dict(GAME, pid=game.pid, create_time=snap.snapshot()[game.pid].create_time)
+        monkeypatch.setattr(tgt, "find_target", lambda **kw: dict(real_game))
 
+        class Etw:
+            def __init__(self, on_event):
+                pass
 
-@pytest.mark.parametrize("presses", [1, 2])
-def test_ctrl_c_in_the_first_window_says_where_the_recording_goes(fake_elevation, tmp_path, capsys, presses):
-    fake_elevation["child"] = FakeChild(interrupts=presses)
-    if presses == 2:
-        fake_elevation["effect"] = lambda argv, cwd: None     # still recording: nothing saved yet
-    code = cli.main(["watch", "--pid", "4242", "--elevate", "--no-network", "--hotkey", "none",
-                     "--out", str(tmp_path / "out")])
-    out = capsys.readouterr().out
-    argv, _ = fake_elevation["launches"][0]
-    cap_path = argv[argv.index("--out-file") + 1]
-    assert "keeps running in the other" in out and cap_path in out
-    if presses == 1:                                         # it kept waiting, then analysed as usual
-        assert code == 0 and (Path(cap_path).parent / cli.DIAGNOSIS_NAME).is_file()
-    else:
-        assert code == 130 and f'lagdoctor analyze "{cap_path}"' in out
-        # Never tidied away under a child that may still be recording into it.
-        assert (Path(cap_path).parent / cli.INVENTORY_HANDOVER).is_file()
-    assert fake_elevation["child"].closed
+            def start(self):
+                pass
 
+            def stop(self):
+                pass
 
-# --------------------------------------------------------------- the elevated child itself ---
-
-def child_argv(tmp_path, *extra):
-    # The parent elevates only with a verified PresentMon, and always hands it over (fake_world accepts its
-    # check); a test's own --presentmon-exe comes later and wins.
-    return [*WATCH, "--capture-only", "--create-time", str(GAME["create_time"]),
-            "--out-file", str(tmp_path / "s" / cli.CAPTURE_NAME),
-            "--presentmon-exe", str(tmp_path / "handed" / "PresentMon-2.6.0-x64.exe"), *extra]
-
-
-def test_the_elevated_child_refuses_to_record_another_process(fake_world, tmp_path, capsys):
-    argv = child_argv(tmp_path)
-    argv[argv.index("--create-time") + 1] = "999"            # the game exited; its PID was reused
-    assert cli.main(argv) == cli.EXIT_TARGET_CHANGED
-    assert fake_world["sessions"] == [] and not (tmp_path / "s" / cli.CAPTURE_NAME).exists()
-    assert "exited while the UAC prompt was up" in capsys.readouterr().out
-
-
-def test_the_parent_hands_the_child_its_own_steam_log(tmp_path):
-    # Changed on purpose: "none" was an empty --steam-log argument, which launch_elevated refuses; it is the
-    # --no-steam-log flag now, and no argument is ever empty.
-    args = cli.build_parser().parse_args(["watch", "--pid", "4242", "--hotkey", "none"])
-    game = {"pid": 4242, "create_time": 1, "name": "x.exe"}
-    log = tmp_path / "Steam" / "logs" / "content_log.txt"
-    argv = cli.elevated_argv(args, game, tmp_path / "c.gz", steam_log=log)
-    assert argv[argv.index("--steam-log") + 1] == str(log) and "--no-steam-log" not in argv
-    # "" = this account has none: the child must not go looking in its own (perhaps another account's) HKCU.
-    argv = cli.elevated_argv(args, game, tmp_path / "c.gz", steam_log="")
-    assert "--no-steam-log" in argv and "--steam-log" not in argv and all(argv)
-    parsed = cli.build_parser().parse_args(argv[5:])
-    assert parsed.no_steam_log is True and parsed.steam_log is None
-    argv = cli.elevated_argv(args, game, tmp_path / "c.gz")                 # not looked up: neither flag
-    assert "--no-steam-log" not in argv and "--steam-log" not in argv
-    with pytest.raises(ValueError):
-        cli.elevated_argv(args, game, tmp_path / "c.gz", steam_log=Path("rel") / "content_log.txt")
-
-
-def test_the_parent_hands_over_only_a_steam_log_the_child_accepts(monkeypatch, tmp_path):
-    from lagdoctor.capture import netmon
-    plain = tmp_path / "logs" / "content_log.txt"
-    deep = tmp_path / ("x" * 240) / "logs" / "content_log.txt"            # past what the child takes (260)
-    for found, want in ((None, ""), (plain, str(plain.resolve())), (deep, "")):
-        monkeypatch.setattr(netmon, "find_steam_log", lambda found=found: found)
-        assert cli._own_steam_log() == want
-
-
-def test_the_elevated_child_uses_the_steam_log_it_was_handed(fake_world, tmp_path):
-    # Changed on purpose: "none" is --no-steam-log now (it was --steam-log "").
-    log = tmp_path / "Steam" / "logs" / "content_log.txt"
-    assert cli.main(child_argv(tmp_path, "--steam-log", str(log))) == 0
-    assert fake_world["sessions"][0]["opts"].steam_log == str(log)
-    fake_world["sessions"].clear()
-    assert cli.main(child_argv(tmp_path, "--no-steam-log")) == 0
-    assert fake_world["sessions"][0]["opts"].steam_log == ""
-    fake_world["sessions"].clear()
-    assert cli.main(child_argv(tmp_path)) == 0                              # neither: look it up there
-    assert fake_world["sessions"][0]["opts"].steam_log is None
-
-
-def test_the_elevated_child_refuses_a_steam_log_that_is_not_a_local_file(fake_world, tmp_path):
-    # An empty --steam-log is refused now (--no-steam-log says there is none), and so are both flags at once.
-    log = str(tmp_path / "Steam" / "logs" / "content_log.txt")
-    for bad in (["--steam-log", "rel\\content_log.txt"], ["--steam-log", r"\\server\share\content_log.txt"],
-                ["--steam-log", ""], ["--steam-log", log, "--no-steam-log"]):
-        assert cli.main(child_argv(tmp_path, *bad)) == cli.EXIT_BAD_ARGS
-    assert fake_world["sessions"] == []
+            def health(self):
+                return {"pump_alive": True}
+        rec = ShellExecuteRelay(server.Parts(verify=lambda exe: None, etw=Etw))
+        monkeypatch.setattr(elevation, "_ShellExecuteExW", rec)
+        assert cli.main(["watch", "--pid", str(game.pid), "--elevate", "--duration", "0.2", "--hotkey", "none",
+                         "--out", str(tmp_path / "out")]) == 0
+    finally:
+        game.stdin.close()
+        game.wait(10)
+    (call,) = rec.calls
+    assert call["verb"] == "runas" and call["file"] == str(client.relay_python())
+    assert call["dir"] == str(client.PROJECT_ROOT) and Path(call["dir"], "lagdoctor", "relay").is_dir()
+    assert call["argv"][1:6] == ["-B", "-E", "-s", "-m", "lagdoctor.relay"] and all(call["argv"])
+    cfg = server.parse_args(call["argv"][6:])
+    assert cfg.game == (real_game["pid"], real_game["create_time"]) and cfg.frames and cfg.network
+    assert cfg.recorder[0] == os.getpid() and cfg.sid == elevation.token_user_sid()
+    rec.threads[0].join(15)
+    assert rec.codes == [0]                                # the relay ended cleanly once it was let go
+    (session,) = fake_world["sessions"]
+    assert session["opts"].relay is not None and session["opts"].relay.pid == os.getpid()
+    assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
 
 
 def test_a_change_in_place_but_not_confirmed_is_not_called_unchanged(fake_fix, monkeypatch, capsys):
@@ -943,71 +840,6 @@ def test_a_change_in_place_but_not_confirmed_is_not_called_unchanged(fake_fix, m
     out = capsys.readouterr().out
     assert "Applied, not yet confirmed: Windows stored 144 Hz" in out and "Not changed" not in out
     assert "Undo it any time with: lagdoctor undo e1" in out
-
-
-def test_the_elevated_child_needs_its_identity_and_absolute_paths(fake_world, tmp_path):
-    for argv in ([*WATCH, "--capture-only", "--out-file", str(tmp_path / "c.gz")],                  # no create time
-                 [*WATCH, "--capture-only", "--create-time", "1", "--out-file", "rel/c.gz"],
-                 child_argv(tmp_path, "--inventory-file", "inv.json")):
-        assert cli.main(argv) == cli.EXIT_BAD_ARGS
-    assert fake_world["find"] == [] and fake_world["sessions"] == []
-
-
-def test_the_elevated_child_uses_the_presentmon_the_parent_verified(fake_world, monkeypatch, tmp_path):
-    from lagdoctor import setup as pm_setup
-    exe = tmp_path / "users-profile" / "PresentMon-2.6.0-x64.exe"
-    checked = []
-    monkeypatch.setattr(pm_setup, "verify", lambda p, **kw: checked.append(Path(p)) or {"signer": "Intel Corporation"})
-    # This (administrator) account has no PresentMon of its own.
-    monkeypatch.setattr(cli, "_presentmon_exe", lambda: (None, "frame timing was skipped: PresentMon 2.6.0 is not "
-                                                               "installed (C:/Users/Admin/...)"))
-    assert cli.main(child_argv(tmp_path, "--presentmon-exe", str(exe))) == 0
-    opts = fake_world["sessions"][0]["opts"]
-    assert opts.frames is True and opts.presentmon_exe == exe and checked == [exe]
-
-
-def test_a_handed_over_presentmon_that_fails_its_check_is_not_run(fake_world, monkeypatch, tmp_path, capsys):
-    from lagdoctor import setup as pm_setup
-
-    def bad(p, **kw):
-        raise pm_setup.VerifyError("its SHA-256 does not match")
-    monkeypatch.setattr(pm_setup, "verify", bad)
-    # That window was opened only for frame timing: it records nothing at all, and its exit code says why.
-    assert cli.main(child_argv(tmp_path, "--presentmon-exe", str(tmp_path / "pm.exe"))) == cli.EXIT_NOT_READY
-    assert fake_world["sessions"] == [] and not (tmp_path / "s" / cli.CAPTURE_NAME).exists()
-    assert "failed its check: its SHA-256 does not match" in capsys.readouterr().out
-
-
-def test_the_elevated_child_uses_the_inventory_read_in_the_users_account(fake_world, tmp_path):
-    inv = {"adapters": [], "settings": {"game_mode": True}, "who": "the user"}
-    f = tmp_path / "inv.json"
-    f.write_text(json.dumps(inv), encoding="utf-8")
-    assert cli.main(child_argv(tmp_path, "--inventory-file", str(f))) == 0
-    assert fake_world["sessions"][0]["inventory"] == inv
-    assert Capture.load(tmp_path / "s" / cli.CAPTURE_NAME).inventory["who"] == "the user"
-
-
-@pytest.mark.parametrize("text,limit", [("[1, 2", None), ("[1, 2]", None),
-                                        # valid JSON in the bytes read, more after: only the size check sees it
-                                        ('{"adapters": []}' + " " * 200 + "junk", 100)])
-def test_an_inventory_that_cannot_be_read_is_noted_not_trusted(fake_world, monkeypatch, tmp_path, text, limit):
-    if limit:
-        monkeypatch.setattr(cli, "MAX_INVENTORY_BYTES", limit)
-    f = tmp_path / "inv.json"
-    f.write_text(text, encoding="utf-8")
-    assert cli.main(child_argv(tmp_path, "--inventory-file", str(f))) == 0
-    assert fake_world["sessions"][0]["inventory"] is None                  # the session reads its own
-    notes = Capture.load(tmp_path / "s" / cli.CAPTURE_NAME).notes
-    assert any("could not be used" in n and "administrator window" in n for n in notes)
-
-
-@pytest.mark.parametrize("parent,noted", [("S-1-5-21-1-2-3-1001", True), (None, False)])
-def test_an_elevation_by_another_account_is_noted(fake_world, monkeypatch, tmp_path, parent, noted):
-    mine = "S-1-5-21-9-9-9-500"
-    monkeypatch.setattr(elevation, "token_user_sid", lambda: mine)
-    assert cli.main(child_argv(tmp_path, "--parent-sid", parent or mine)) == 0
-    notes = Capture.load(tmp_path / "s" / cli.CAPTURE_NAME).notes
-    assert any("another Windows account" in n for n in notes) is noted
 
 
 # ------------------------------------------------------------------------- analyze ---

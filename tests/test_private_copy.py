@@ -193,15 +193,6 @@ def test_without_a_private_copy_every_command_runs_as_before(monkeypatch, capsys
                        "_settle_journal", "cmd_check", "cmd_analyze"]
 
 
-def test_the_elevated_child_asks_about_the_users_folder_it_saves_in(private, monkeypatch, tmp_path):
-    # Not a home of its own: an administrator's approval may run it as another account.
-    out_file = tmp_path / "sessions" / "x" / cli.CAPTURE_NAME            # not made yet: the child makes it
-    assert cli.main(["watch", "--pid", "4242", "--capture-only", "--create-time", "1",
-                     "--out-file", str(out_file)]) == cli.EXIT_PRIVATE_COPY
-    assert private == [tmp_path]                                         # the nearest folder that exists
-    assert not (tmp_path / "lagdoctor-home").exists()                    # its home was never even made
-
-
 def test_every_command_has_a_policy_and_only_those_that_save_refuse():
     sub = next(a for a in cli.build_parser()._actions if isinstance(a, argparse._SubParsersAction))
     assert set(sub.choices) == set(cli.PRIVATE_COPY_POLICY)
