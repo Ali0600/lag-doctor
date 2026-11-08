@@ -269,9 +269,9 @@ connection to Microsoft, as the runtime does on its own.
   39 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
-- **Supply chain and least privilege**: a per-machine WiX MSI of 154 files built in CI from pinned inputs (Python
+- **Supply chain and least privilege**: a per-machine WiX MSI of 179 files built in CI from pinned inputs (Python
   runtime and PresentMon by SHA-256, WiX by SHA-512), installed, run from a fresh shell and uninstalled on a
-  throwaway runner with nothing left behind, its check proven by 3 sabotaged builds; PresentMon checked through a
+  throwaway runner with nothing left behind, its Start-menu shortcut and app ID read back from the installed link, its check proven by 3 sabotaged builds; PresentMon checked through a
   deny-write handle and launched by that handle's resolved path; only the capture runs elevated, behind 1 UAC
   prompt; the planned capture service measured on GitHub's runners before it ships (a 1-privilege LocalService
   service enabling all 13 ETW providers, a named-pipe trigger starting it in 0.08 s), and its pipe locked 6 ways
