@@ -238,7 +238,9 @@ def test_the_uv_that_ci_builds_with_carries_a_uv_build_the_project_accepts():
     for pin in pins:
         assert low <= tuple(map(int, pin.split("."))) < high, (
             f"ci.yml pins uv {pin}, outside pyproject.toml's {build['requires'][0]}: change both together")
-    assert re.search(r"^\s+run: uv build --offline ", ci, re.M), "CI's build must not fetch a build backend"
+    builds = re.findall(r"^\s+run: uv build\b.*$", ci, re.M)          # the wheel job's and the msi job's
+    assert len(builds) >= 2 and all(" --offline " in b for b in builds), (
+        f"no build in CI may fetch a build backend: {builds}")
 
 
 def test_the_bound_reader_refuses_what_it_cannot_read():

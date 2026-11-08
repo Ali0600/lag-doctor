@@ -172,14 +172,14 @@ jobs:
         run: uv run --no-sync python scripts/wix_tool.py "$env:RUNNER_TEMP\wix"
       # --offline: uv builds with the copy of uv_build it carries (pyproject.toml's bound), never one from the index.
       - name: Build the wheel the MSI ships
-        run: uv build --offline --clear --out-dir "$env:RUNNER_TEMP\dist"
+        run: uv build --offline --clear --out-dir "$env:RUNNER_TEMP\wheel"
       # --accept-eula wix7: the owner accepted WiX v7's Open Source Maintenance Fee EULA for CI's builds
       # (docs/DECISIONS.md, 2026-11-08); without it WiX refuses to build (WIX7015).
       - name: Build the MSI
         env:
           PRESENTMON_DIR: ${{ steps.downloads.outputs.presentmon_dir }}
         run: |
-          $wheel = @(Get-ChildItem "$env:RUNNER_TEMP\dist\*.whl")
+          $wheel = @(Get-ChildItem "$env:RUNNER_TEMP\wheel\*.whl")
           if ($wheel.Count -ne 1) { Write-Output "::error::expected one wheel, found $($wheel.Count)"; exit 2 }
           uv run --no-sync python scripts/msi_build.py --wheel $wheel[0].FullName `
             --runtime-zip "$env:RUNNER_TEMP\runtime\embeddable.zip" `

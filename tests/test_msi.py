@@ -462,6 +462,7 @@ def test_a_payload_part_that_fails_its_check_stops_the_build(presentmon_exe, tmp
     data = bytearray(presentmon_exe.read_bytes())
     data[500_000] ^= 0xFF                                  # inside the code: a signed PE ends in zero padding
     decoy.write_bytes(bytes(data))
+    assert decoy.read_bytes() != presentmon_exe.read_bytes()
     with pytest.raises(setup.VerifyError):
         mb.stage(tmp_path / "p3", _zip(tmp_path / "w.whl", WHEEL), runtime, decoy)
     monkeypatch.setattr(mb, "INTEL_LICENSE_SHA256", "0" * 64)               # its pin moved, or git rewrote it
@@ -525,6 +526,7 @@ def test_the_file_check_passes_only_an_install_that_is_exactly_its_sources(prese
         data = bytearray(pm.read_bytes())
         data[500_000] ^= 0xFF                                                # PresentMon no longer the pinned one
         pm.write_bytes(bytes(data))
+        assert pm.read_bytes() != presentmon_exe.read_bytes()
         check = mc.check_files(install, expected, runtime, package, z)
         assert not check.ok and "PresentMon:" in check.detail
         assert not mc.check_files(tmp_path / "nowhere", expected, runtime, package, z).ok

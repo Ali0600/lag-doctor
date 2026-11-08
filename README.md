@@ -9,8 +9,9 @@ runs for frame timing: PresentMon holds a query-only handle to the game, the kin
 can promise what a given anti-cheat accepts.
 
 Status: a working command-line tool for Windows 10/11, built on one hybrid-GPU laptop; CI runs its tests on
-GitHub's Windows runners for every change. The parts that need admin rights (live frame timing and the game-server tracker) are tested against recorded traces
-and private trace sessions; their live check is `scripts/e2e.py` (see Testing).
+GitHub's Windows runners for every change, and builds, installs and uninstalls its MSI there. The parts that need
+admin rights (live frame timing and the game-server tracker) are tested against recorded traces and private trace
+sessions; their live check is `scripts/e2e.py` (see Testing).
 
 ![lag-doctor's HTML report: verdict, ranked causes and frame-time chart](docs/images/report.png)
 
@@ -30,6 +31,29 @@ generated, the analysis and the page are the real ones.*
   background programs. Each change is journaled first, verified by reading it back, and undone with
   `lagdoctor undo`. It never turns off a security feature, never kills or suspends a process, and never
   touches the game.
+
+## Install
+
+A per-machine installer, `lag-doctor-0.1.0-x64.msi`, is built and tested by CI on every change and kept as the
+`lag-doctor-msi` artifact of each [CI run](https://github.com/Ali0600/lag-doctor/actions/workflows/ci.yml) (GitHub
+asks you to sign in to download one). There is no release yet and the MSI is not signed (`docs/INSTALLER-PLAN.md`,
+Stage 5), so SmartScreen may warn before it runs, and a PC with Smart App Control on is expected to refuse it.
+
+```powershell
+msiexec /i lag-doctor-0.1.0-x64.msi          # or double-click it: one UAC prompt, no questions
+lagdoctor check                              # in a new terminal window: PATH changes reach new windows only
+```
+
+- It installs to `C:\Program Files\lag-doctor`: python.org's embeddable Python 3.13.17 (signed by the Python
+  Software Foundation), lag-doctor's code, and Intel's PresentMon 2.6.0, byte for byte the release `lagdoctor setup`
+  pins, with Intel's licence. Only its `bin\` folder, which holds `lagdoctor.cmd`, goes on the system PATH, so the
+  bundled Python never stands in for your own `python`. `lagdoctor setup` finds that PresentMon: nothing to download.
+- Each recording still asks for one UAC prompt (`watch --elevate`) until the capture service lands (Stage 4); the
+  elevated recording then runs only code from Program Files, which only an administrator can change.
+- Uninstall it from Settings > Apps > Installed apps, or with `msiexec /x lag-doctor-0.1.0-x64.msi`; CI checks that
+  no file, PATH entry or Windows Installer key is left.
+- After Ctrl+C ends a recording in the same window, cmd may ask "Terminate batch job (Y/N)?": the recording is
+  already saved, so either answer is fine.
 
 ## Run it
 
@@ -76,10 +100,11 @@ uv run lagdoctor analyze CAPTURE                        # re-run the analysis on
 
 - **GPU heat, clocks and throttling are NVIDIA-only** (NVML). On other GPUs the load and video memory still
   come from Windows counters.
-- **`--elevate`, `scripts/e2e.py` and `scripts/etw_access.py` run this checkout's Python code as administrator.**
-  A program already running as you could edit that code and ride along on the prompt you approve. Approve them
-  only for a checkout you trust. For recordings, joining Performance Log Users skips elevation (frame timing then
-  works without it; the game-server tracker does not).
+- **From a checkout, `--elevate`, `scripts/e2e.py` and `scripts/etw_access.py` run its Python code as
+  administrator.** A program already running as you could edit that code and ride along on the prompt you approve.
+  Approve them only for a checkout you trust, or install the MSI, whose `--elevate` runs only code under Program
+  Files. For recordings, joining Performance Log Users skips elevation (frame timing then works without it; the
+  game-server tracker does not).
 - **Frame caps a hair under the refresh rate** (about 143.3–144 FPS on a 144 Hz screen) can still count a
   frame held one refresh longer than usual as a stutter.
 - **The low-frame-rate threshold** (80 % of the refresh rate) comes from a study of 60–120 Hz screens and is
@@ -143,11 +168,49 @@ uv run python scripts/wheel_check.py dist                      # install the whe
   `lagdoctor/`, every module must import from that venv, `--version` must name the wheel's version, and `analyze`
   must write its report for a synthetic capture. `--help` and `analyze` alone would miss most of that: `analyze`
   never imports most of `capture/`, `fixes/` and `winapi/`.
+- **The MSI, installed**: a third CI job builds the MSI with WiX v7 from the wheel, the pinned Python runtime and the
+  pinned PresentMon (`scripts/msi_build.py`), installs it on the throwaway runner, runs `lagdoctor` from a fresh shell
+  (cmd and Windows PowerShell, with the environment a new sign-in gets), uninstalls it, and reads back that no file,
+  PATH entry or Windows Installer key is left (`scripts/msi_check.py`, which refuses to run anywhere but a
+  GitHub-hosted runner). Three MSIs broken on purpose each failed it where they should: one missing a module, one
+  whose uninstall left its PATH entry, and one without its bytecode, where an administrator's run wrote into
+  Program Files and the uninstall left that behind.
 - **Downloaded test data**: the tests that replay or verify the real PresentMon need its pinned release and its gold
   captures. `uv run lagdoctor setup` gets the first, `uv run python -m tests.downloads fetch-gold` the
   second; without them those tests skip with the reason. CI gets both the same way before the tests, checks them
   against the tests' own pins, caches them, and sets `LAGDOCTOR_REQUIRE` so a missing one fails those tests
   instead; each job's summary counts them.
+
+## Code signing policy
+
+Nothing is signed yet. Once a first unsigned preview is released, lag-doctor applies to SignPath Foundation for free
+code signing (`docs/INSTALLER-PLAN.md`, Stage 5), and from then on: Free code signing provided by
+[SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+
+- **What is signed**: the MSI, built by this repository's CI from its own source (the msi job in
+  `.github/workflows/ci.yml`). The upstream files inside it are signed by their makers and verified, not re-signed:
+  python.org's runtime by the Python Software Foundation, PresentMon by Intel. `lagdoctor.cmd` is a batch file, which
+  cannot carry a signature.
+- **Product name and version**: every signed file names the product `lag-doctor` and the version in
+  `pyproject.toml`; CI's build reads back the MSI's product name, version and publisher and its summary's subject and
+  author.
+- **Team roles**: committers and reviewers: the maintainer, [Ali0600](https://github.com/Ali0600); approver of each
+  signing request: the same.
+
+## Privacy
+
+lag-doctor sends no data about you or your PC anywhere: no telemetry, crash reports, update checks or account.
+Recordings, reports and the fix journal stay on your PC, under `%LOCALAPPDATA%\lag-doctor`. This program will not
+transfer any information to other networked systems unless specifically requested by the user or the person
+installing or operating it.
+
+While it records, lag-doctor measures your connection, which `--no-network` turns off:
+- it pings your router, `1.1.1.1` (Cloudflare's public DNS, the internet anchor) and the game's server, each twice
+  a second; a ping carries no data, though each receiver sees your IP address, as with any traffic;
+- the game-server tracker checks itself once per recording by looking up `example.com` through `1.1.1.1`, over UDP
+  and TCP ([Cloudflare's privacy policy for it](https://developers.cloudflare.com/1.1.1.1/privacy/public-dns-resolver/)).
+
+`lagdoctor setup` downloads PresentMon from GitHub only when you agree, and the installer already carries it.
 
 ## Experience Gained
 
@@ -161,19 +224,20 @@ uv run python scripts/wheel_check.py dist                      # install the whe
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 2,756 tests, run in CI on GitHub's Windows runners for 2 Python versions with
-  SHA-pinned actions, beside a job that installs the built wheel into a fresh venv and runs it there; the hardware
-  a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides the
-  hardware, and the 32 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 1,628 deliberate sabotages in
-  32 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+- **Testing that proves itself**: 2,803 tests, run in CI on GitHub's Windows runners for 2 Python versions with
+  SHA-pinned actions, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway runner; the
+  hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
+  the hardware, and the 40 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
+  there, failing rather than skipping if they go missing; plus a mutation harness of 1,689 deliberate sabotages in
+  33 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
-- **Supply chain and least privilege**: PresentMon pinned by SHA-256, checked through a deny-write handle and
-  launched by that handle's resolved path; only the capture runs elevated, behind 1 UAC prompt and a
-  machine-wide one-recording lock; the planned capture service measured on GitHub's throwaway runners before a
-  line of it ships: a 1-privilege LocalService service enabling all 13 ETW providers, a named-pipe trigger starting
-  it in 0.08 s, and a 30-binary signed Python runtime, all read back from the running token.
+- **Supply chain and least privilege**: a per-machine WiX MSI of 152 files built in CI from pinned inputs (Python
+  runtime and PresentMon by SHA-256, WiX by SHA-512), installed, run from a fresh shell and uninstalled on a
+  throwaway runner with nothing left behind, its check proven by 3 sabotaged builds; PresentMon checked through a
+  deny-write handle and launched by that handle's resolved path; only the capture runs elevated, behind 1 UAC
+  prompt; the planned capture service measured on GitHub's runners before a line of it ships: a 1-privilege
+  LocalService service enabling all 13 ETW providers and a named-pipe trigger starting it in 0.08 s.
 - **Review to fix**: closed all 49 findings (12 high) of an adversarial code review in 3 verified fix waves,
   cut the capture save from 36 s to 2.6 s to fit the 5 s Windows gives a closing console, and traced a 14-minute
   game recording with no frame timing to Windows keeping a packaged app's AppData files in a private copy.
@@ -181,10 +245,12 @@ uv run python scripts/wheel_check.py dist                      # install the whe
 ## Credits
 
 Frame timing comes from [Intel PresentMon](https://github.com/GameTechDev/PresentMon) 2.6.0 (MIT licence),
-downloaded and hash-verified at setup. The tests replay PresentMon's own gold ETW captures. The repo carries
+downloaded and hash-verified at setup, or bundled in the MSI with Intel's licence text
+(`installer/PresentMon-LICENSE.txt`). The tests replay PresentMon's own gold ETW captures. The repo carries
 some of PresentMon's own output, Copyright Intel Corporation under the MIT licence: its `--help` text
 (`docs/research/presentmon-2.6.0-help.txt`) and trimmed captures in `tests/fixtures/presentmon/`, whose README
-holds the licence text.
+holds the licence text. The MSI bundles python.org's embeddable Python 3.13.17 unchanged (Python Software
+Foundation licence, its `LICENSE.txt` included) and is built with the [WiX Toolset](https://wixtoolset.org) v7.
 
 ## Licence
 
