@@ -24,11 +24,9 @@ import winreg
 from ctypes import wintypes
 from typing import Any, Callable, Iterable
 
-import psutil
-
 from lagdoctor.fixes.base import is_absent
 from lagdoctor.fixes.registry import RegistryBackend
-from lagdoctor.winapi import display, dxgi, power, storage
+from lagdoctor.winapi import display, dxgi, memory, power, storage
 
 log = logging.getLogger(__name__)
 
@@ -262,7 +260,7 @@ def _cpu(reg: RegistryBackend) -> dict:
 
 
 def _ram_gb() -> float:
-    return round(psutil.virtual_memory().total / 2**30, 1)
+    return round(memory.total_physical_bytes() / 2**30, 1)
 
 
 def _power(errors: dict[str, str]) -> dict:

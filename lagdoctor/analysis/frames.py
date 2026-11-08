@@ -58,6 +58,10 @@ CAP_WINDOW_MIN_FRAMES = 20   # [inferred] a 5 s window with fewer frames (< 4 FP
 BOUND_MIN_S = 10.0           # LC 2.6: a bound verdict needs >= 10 s ...
 BOUND_MIN_FRAMES = 300       # LC 2.6: ... and >= 300 app frames of steady state
 ENGINE_GPU_PCT = 95.0        # LC 3.4: frames not measured -> 3D engine >= 95 % = "GPU-limited (probable)"
+PROBABLE_GPU_SHARE = 0.10    # [inferred, the 10 % share the focus and pacing rules use] without frame timing, the GPU
+                             # probably limits the game for part of the capture when the engine is at ENGINE_GPU_PCT in
+                             # this share of its 1 s windows (and in BOUND_MIN_S of them) ...
+PROBABLE_GPU_MARKS = 0.5     # [inferred] ... or at half of the moments the user marked, or more
 CONF_MARGIN = 0.05           # [inferred] a ratio this close to a threshold makes the verdict "medium"
 SHARED_GPU_PCT = 10.0        # LC 4.6, 10 row 4.6: other programs on the game adapter's engine >= 10 % share it;
                              # the game's own GPU busy then reads short (PM 3.2), whatever holds its frame rate
@@ -385,8 +389,8 @@ def _steady_rows(fr: dict[str, list], spans: list[tuple[float, float]]) -> list[
             and not _in_spans(float(t[i]), spans, starts)]
 
 
-def _window_means(cap: Capture, column: str, spans: list[tuple[float, float]]) -> list[float]:
-    """Means over 1 s windows of a 4 Hz system column, skipping any window that touches an event."""
+def _window_bins(cap: Capture, column: str, spans: list[tuple[float, float]]) -> dict[int, float]:
+    """{1 s window index: mean} of a 4 Hz system column, skipping any window that touches an event."""
     t, v = _col(cap.system, S.T), _col(cap.system, column)
     starts = [a for a, _ in spans]
     bins: dict[int, list[float]] = {}
@@ -400,7 +404,31 @@ def _window_means(cap: Capture, column: str, spans: list[tuple[float, float]]) -
             tainted.add(b)
         elif vi is not None:
             bins.setdefault(b, []).append(float(vi))
-    return [math.fsum(xs) / len(xs) for b, xs in bins.items() if b not in tainted and len(xs) >= 3]
+    return {b: math.fsum(xs) / len(xs) for b, xs in bins.items() if b not in tainted and len(xs) >= 3}
+
+
+def _window_means(cap: Capture, column: str, spans: list[tuple[float, float]]) -> list[float]:
+    """Means over 1 s windows of a 4 Hz system column, skipping any window that touches an event."""
+    return list(_window_bins(cap, column, spans).values())
+
+
+def probable_gpu(cap: Capture, events: Iterable[LagEvent], tick_spans: list[tuple[float, float]]) -> dict[str, Any]:
+    """Item 1: LC 3.4's no-frames fallback taken per second, not over the whole capture. The 1 s windows in which
+    the game kept its 3D engine ENGINE_GPU_PCT or more busy, when the GPU was probably the limit, and the marks
+    at which it did (any 1 s window their span touches). A game that idles in menus and loading screens has a low
+    median while the GPU limits it in play: the first real capture's median was 71 %, yet 98-99 % through its
+    last three minutes and at all three marks. `holds`: enough of the capture (PROBABLE_GPU_SHARE and BOUND_MIN_S)
+    or of the marks (PROBABLE_GPU_MARKS) for a GPU-side cause to matter there."""
+    bins = _window_bins(cap, S.GAME_GPU_PCT, tick_spans)
+    busy = {b for b, m in bins.items() if m >= ENGINE_GPU_PCT}
+    marks = [e for e in events if e.kind == "mark" and _bounded(e.t_start) is not None and _bounded(e.t_end) is not None]
+    at_marks = sum(1 for e in marks if any(b in busy for b in range(int(math.floor(e.t_start / THREAD_WINDOW_S)),
+                                                                    int(math.floor(e.t_end / THREAD_WINDOW_S)) + 1)))
+    share = len(busy) / len(bins) if bins else 0.0
+    holds = ((len(busy) * THREAD_WINDOW_S >= BOUND_MIN_S and share >= PROBABLE_GPU_SHARE)
+             or (bool(marks) and at_marks >= PROBABLE_GPU_MARKS * len(marks)))
+    return {"seconds": len(busy) * THREAD_WINDOW_S, "share": share, "windows": len(bins), "marks": len(marks),
+            "marks_busy": at_marks, "holds": holds}
 
 
 def gpu_others_median(cap: Capture, tick_spans: list[tuple[float, float]]) -> float | None:
@@ -478,7 +506,11 @@ def bound(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent]) -> dict
     events = list(events)
     spans = _merged_spans(events, FRAME_EVENT_KINDS)
     tick_spans = _merged_spans(events, FRAME_EVENT_KINDS, pad=TICK_PAD_S)
-    return _classify(cap, fr, _steady_rows(fr, spans), tick_spans)
+    out = _classify(cap, fr, _steady_rows(fr, spans), tick_spans)
+    # item 1: without frame timing the whole-capture median is only a verdict; the seconds say where the GPU limited
+    out["gpu_probable"] = (probable_gpu(cap, events, tick_spans) if not fr.get(F.T) and out["verdict"] == "unknown"
+                           else None)
+    return out
 
 
 def _classify(cap: Capture, fr: dict[str, list], rows: list[int],

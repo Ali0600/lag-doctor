@@ -425,10 +425,11 @@
  {
   "name": "default check never sees the game go",
   "file": "lagdoctor/capture/presentmon.py",
-  "old": "is_alive = self._is_alive or (lambda: self.pid in psutil.pids())",
+  "old": "is_alive = self._is_alive or self._pid_listed",
   "new": "is_alive = self._is_alive or (lambda: True)",
   "tests": [
-   "tests/test_presentmon_source.py::test_the_default_liveness_check_uses_the_pid_list_only"
+   "tests/test_presentmon_source.py::test_the_default_liveness_check_uses_the_pid_list_only",
+   "tests/test_presentmon_source.py::test_the_default_liveness_check_follows_a_real_process"
   ]
  },
  {

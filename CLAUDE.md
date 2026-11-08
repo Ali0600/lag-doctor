@@ -28,12 +28,15 @@ minor version, and `tests/test_wheel_check.py` fails when the two part) and then
 
 ## Rules an agent must not guess
 
-- **Never touch the game process.** No injection, hooks, memory reads, or `OpenProcess` on the game.
-  `psutil.Process(pid)` (even constructing it), `psutil.process_iter()` and `psutil.pid_exists()` open a
-  handle: use `winapi/ntquery.py` for other processes' names, paths, CPU, threads, I/O and parents;
-  `psutil.pids()` is the only psutil call allowed on other processes. `OpenProcess` lives only in
-  `winapi/process.py` (fixes on the user's own background processes). `tests/test_no_handles.py` enforces
-  both. The one exception is PresentMon's own child process (DESIGN.md, Principles).
+- **Never touch the game process.** No injection, hooks, memory reads, or `OpenProcess` on the game. Use
+  `winapi/ntquery.py` for other processes' PIDs, names, paths, CPU, threads, I/O and parents. `OpenProcess` lives
+  only in `winapi/process.py` (fixes on the user's own background processes). `tests/test_no_handles.py` enforces
+  both. The one exception is PresentMon's own child process (DESIGN.md, Principles). In tests, where psutil stays as
+  an independent readout, `psutil.Process(pid)` (even constructing it), `psutil.process_iter()` and
+  `psutil.pid_exists()` open a handle: `psutil.pids()` is the only psutil call allowed on other processes.
+- **`lagdoctor/` imports only the standard library and itself** (`tests/test_stdlib_only.py`): the installer ships
+  python.org's embeddable runtime, and Smart App Control would block psutil's unsigned native module. Read Windows
+  through `lagdoctor/winapi/` (ctypes), and name a dynamically imported module in a string literal.
 - **Tests never change real settings.** Registry fixes run against the `reg_sandbox` fixture
   (`HKCU\Software\LagDoctorTest\<uuid>`, deleted afterwards); power, display and GPU-preference backends
   are faked. Process-priority tests act only on a child process the test spawned. `LAGDOCTOR_HOME` is

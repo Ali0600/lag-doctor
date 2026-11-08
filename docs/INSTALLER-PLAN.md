@@ -81,14 +81,17 @@ but a GitHub-hosted runner. Measured (research note section 8):
 
 ## Stage 3: the MSI
 
-- Done (2026-11-07): the uv_build backend and a `lagdoctor` console entry point in `pyproject.toml`
-  (DECISIONS 2026-11-07). The wheel holds the `lagdoctor` package alone. CI's wheel job builds it, installs it into a
+- [x] A build backend and a `lagdoctor` console entry point in `pyproject.toml`. Done 2026-11-07: uv_build
+  (DECISIONS 2026-11-07); the wheel holds the `lagdoctor` package alone. CI's wheel job builds it, installs it into a
   fresh venv and runs it outside the checkout (`scripts/wheel_check.py`: the files git tracks, every module imported,
   `--help`, `--version`, `analyze`); seven wheels broken on purpose each failed it.
-- Replace psutil, whose native module is unsigned (Smart App Control would block it): the product has one call
-  site each, `capture/presentmon.py` (`pids`), `capture/netflows.py` (`net_if_addrs`) and `capture/inventory.py`
-  (`virtual_memory`), all available from ctypes. The tests may keep it as a dev dependency for their independent
-  readouts.
+- [x] Replace psutil, whose native module is unsigned (Smart App Control would block it). Done 2026-11-07:
+  `capture/presentmon.py` reads the PID list from `winapi/ntquery.pids()` (the handle-free snapshot),
+  `capture/netflows.py` this PC's addresses from `winapi/iphlp.adapter_addresses()` (GetAdaptersAddresses) and
+  `capture/inventory.py` the RAM size from `winapi/memory.py` (GlobalMemoryStatusEx), each checked against psutil
+  on the live machine. `tests/test_stdlib_only.py` keeps every module under `lagdoctor/` on the standard library,
+  which is all the embeddable runtime holds. The tests keep psutil for their independent readouts, so it can move to
+  a dev-only dependency in `pyproject.toml`.
 - WiX v7 per-machine MSI built in CI: the embeddable Python, lag-doctor's code, the byte-identical Intel-signed
   PresentMon 2.6.0 with Intel's licence text, `lagdoctor` on PATH, and lag-doctor looking for PresentMon under
   Program Files first. CI installs, runs and uninstalls it on the runner (part of E7).

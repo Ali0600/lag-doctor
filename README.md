@@ -142,7 +142,7 @@ uv run python scripts/wheel_check.py dist                      # install the whe
   there, outside the checkout (`scripts/wheel_check.py`). The wheel must hold exactly the files git tracks under
   `lagdoctor/`, every module must import from that venv, `--version` must name the wheel's version, and `analyze`
   must write its report for a synthetic capture. `--help` and `analyze` alone would miss most of that: `analyze`
-  never imports psutil, nor most of `capture/`, `fixes/` and `winapi/`.
+  never imports most of `capture/`, `fixes/` and `winapi/`.
 - **Downloaded test data**: the tests that replay or verify the real PresentMon need its pinned release and its gold
   captures. `uv run lagdoctor setup` gets the first, `uv run python -m tests.downloads fetch-gold` the
   second; without them those tests skip with the reason. CI gets both the same way before the tests, checks them
@@ -151,21 +151,22 @@ uv run python scripts/wheel_check.py dist                      # install the whe
 
 ## Experience Gained
 
-- **Windows systems programming from Python**: 15 ctypes modules over 17 Windows DLLs plus NVIDIA's NVML
-  (real-time and private ETW sessions, PDH, NtQuerySystemInformation, DXGI/DXCore, ICMP, WLAN), with zero
-  handles opened to the game, enforced by a syntax-tree scan of the code.
+- **Windows systems programming from Python**: 16 ctypes modules over 17 Windows DLLs plus NVIDIA's NVML
+  (real-time and private ETW sessions, PDH, NtQuerySystemInformation, DXGI/DXCore, ICMP, WLAN) and no third-party
+  package at run time, with zero handles opened to the game and standard-library-only imports, both enforced by
+  syntax-tree scans of the code.
 - **Telemetry on one clock**: 5 collectors (per-frame timing, a 4 Hz system sampler, 1 Hz NVIDIA telemetry,
   2 Hz network probes, an ETW packet tracker) stamped by QueryPerformanceCounter, so a stutter lines up with
   the samples around it.
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 2,645 tests, run in CI on GitHub's Windows runners for 2 Python versions with
+- **Testing that proves itself**: 2,689 tests, run in CI on GitHub's Windows runners for 2 Python versions with
   SHA-pinned actions, beside a job that installs the built wheel into a fresh venv and runs it there; the hardware
   a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides the
   hardware, and the 32 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 1,485 deliberate sabotages in
-  29 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 1,525 deliberate sabotages in
+  30 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
 - **Supply chain and least privilege**: PresentMon pinned by SHA-256, checked through a deny-write handle and
