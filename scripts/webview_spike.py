@@ -124,6 +124,9 @@ HARDENED_ENV = {
 SLOTS = {
     "ICoreWebView2Environment": {"CreateCoreWebView2Controller": 3, "get_BrowserVersionString": 5},
     "ICoreWebView2Environment5": {"add_BrowserProcessExited": 12},
+    "ICoreWebView2Environment8": {"GetProcessInfos": 18},                       # DIAG
+    "ICoreWebView2ProcessInfoCollection": {"get_Count": 3, "GetValueAtIndex": 4},
+    "ICoreWebView2ProcessInfo": {"get_ProcessId": 3, "get_Kind": 4},
     "ICoreWebView2Controller": {"put_IsVisible": 4, "get_Bounds": 5, "put_Bounds": 6, "get_ZoomFactor": 7, "add_ZoomFactorChanged": 9, "MoveFocus": 12, "add_GotFocus": 15, "add_LostFocus": 17, "add_AcceleratorKeyPressed": 19, "NotifyParentWindowPositionChanged": 23, "Close": 24, "get_CoreWebView2": 25},
     "ICoreWebView2Controller3": {"put_DefaultBackgroundColor": 27, "get_RasterizationScale": 28, "get_ShouldDetectMonitorScaleChanges": 30, "add_RasterizationScaleChanged": 32, "get_BoundsMode": 34},
     "ICoreWebView2": {"get_Settings": 3, "Navigate": 5, "add_NavigationStarting": 7, "add_NavigationCompleted": 15, "add_FrameNavigationStarting": 17, "add_ScriptDialogOpening": 21, "add_PermissionRequested": 23, "add_ProcessFailed": 25, "PostWebMessageAsJson": 32, "add_WebMessageReceived": 34, "remove_WebMessageReceived": 35, "get_BrowserProcessId": 37, "add_NewWindowRequested": 44, "OpenDevToolsWindow": 51},
@@ -155,6 +158,9 @@ IIDS = {
     "IUnknown": "00000000-0000-0000-C000-000000000046",
     "ICoreWebView2Environment": "B96D755E-0319-4E92-A296-23436F46A1FC",
     "ICoreWebView2Environment5": "319E423D-E0D7-4B8D-9254-AE9475DE9B17",
+    "ICoreWebView2Environment8": "D6EB91DD-C3D2-45E5-BD29-6DC2BC4DE9CF",        # DIAG
+    "ICoreWebView2ProcessInfoCollection": "402B99CD-A0CC-4FA5-B7A5-51D86A1D2339",
+    "ICoreWebView2ProcessInfo": "84FA7612-3F3D-4FBF-889D-FAD000492D72",
     "ICoreWebView2Controller": "4D00C0D1-9434-4EB6-8078-8697A560334F",
     "ICoreWebView2Controller3": "F9614724-5D2B-41DC-AEF7-73D62B51543B",
     "ICoreWebView2": "76ECEACB-0462-4D94-AC83-423A6793775E",
@@ -1018,6 +1024,99 @@ def open_sockets(pids: set[int]) -> list[dict]:
                 item["state"] = "bound"
             out.append(item)
     return out
+
+
+# DIAG (diag/spike-udp-before, never merged): what each socket of WebView2's looks like, over the whole run.
+class _UDPMOD4(ctypes.Structure):
+    _fields_ = [("dwLocalAddr", wintypes.DWORD), ("dwLocalPort", wintypes.DWORD), ("dwOwningPid", wintypes.DWORD),
+                ("liCreateTimestamp", ctypes.c_longlong), ("dwFlags", ctypes.c_int),
+                ("OwningModuleInfo", ctypes.c_ulonglong * 16)]
+
+
+class _UDPMOD6(ctypes.Structure):
+    _fields_ = [("ucLocalAddr", ctypes.c_ubyte * 16), ("dwLocalScopeId", wintypes.DWORD),
+                ("dwLocalPort", wintypes.DWORD), ("dwOwningPid", wintypes.DWORD),
+                ("liCreateTimestamp", ctypes.c_longlong), ("dwFlags", ctypes.c_int),
+                ("OwningModuleInfo", ctypes.c_ulonglong * 16)]
+
+
+def _a4(v):
+    return socket.inet_ntop(socket.AF_INET, (v & 0xFFFFFFFF).to_bytes(4, "little"))
+
+
+def detail_sockets(pids: set[int]) -> list[dict]:
+    out = []
+    for r in _table(GetExtendedTcpTable, AF_INET, TCP_TABLE_OWNER_PID_ALL, MIB_TCPROW_OWNER_PID):
+        if r.dwOwningPid in pids:
+            out.append({"proto": "tcp4", "pid": r.dwOwningPid, "port": socket.ntohs(r.dwLocalPort & 0xFFFF),
+                        "addr": _a4(r.dwLocalAddr), "state": r.dwState, "remote": _a4(r.dwRemoteAddr),
+                        "remote_port": socket.ntohs(r.dwRemotePort & 0xFFFF)})
+    for r in _table(GetExtendedTcpTable, AF_INET6, TCP_TABLE_OWNER_PID_ALL, MIB_TCP6ROW_OWNER_PID):
+        if r.dwOwningPid in pids:
+            out.append({"proto": "tcp6", "pid": r.dwOwningPid, "port": socket.ntohs(r.dwLocalPort & 0xFFFF),
+                        "addr": socket.inet_ntop(socket.AF_INET6, bytes(r.ucLocalAddr)), "state": r.dwState,
+                        "remote": socket.inet_ntop(socket.AF_INET6, bytes(r.ucRemoteAddr)),
+                        "remote_port": socket.ntohs(r.dwRemotePort & 0xFFFF)})
+    for r in _table(GetExtendedUdpTable, AF_INET, 2, _UDPMOD4):
+        if r.dwOwningPid in pids:
+            out.append({"proto": "udp4", "pid": r.dwOwningPid, "port": socket.ntohs(r.dwLocalPort & 0xFFFF),
+                        "addr": _a4(r.dwLocalAddr), "specific": bool(r.dwFlags & 1), "flags": r.dwFlags,
+                        "created": r.liCreateTimestamp})
+    for r in _table(GetExtendedUdpTable, AF_INET6, 2, _UDPMOD6):
+        if r.dwOwningPid in pids:
+            out.append({"proto": "udp6", "pid": r.dwOwningPid, "port": socket.ntohs(r.dwLocalPort & 0xFFFF),
+                        "addr": socket.inet_ntop(socket.AF_INET6, bytes(r.ucLocalAddr)),
+                        "specific": bool(r.dwFlags & 1), "flags": r.dwFlags, "created": r.liCreateTimestamp})
+    return out
+
+
+class SocketWatch:
+    """DIAG: every socket any WebView2 process holds, polled every 20 ms, with when it was first and last seen."""
+
+    def __init__(self, spike) -> None:
+        self.spike = spike
+        self.seen: dict = {}
+        self.polls = 0
+        self.errors: list[str] = []
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self.run, name="diag-socket-watch", daemon=True)
+
+    def run(self) -> None:
+        snap = ntquery.Snapshotter()
+        pids: set[int] = set()
+        names: dict[int, int] = {}
+        last_tree = -1.0
+        while not self.stop.is_set():
+            now = time.perf_counter()
+            try:
+                if now - last_tree > 0.25:
+                    bp = self.spike.browser_pid
+                    tree = process_tree(snap.snapshot(), bp) if bp else {}
+                    pids = set(tree)
+                    for p in tree.values():
+                        names[p.pid] = p.ppid
+                    last_tree = now
+                rows = detail_sockets(pids)
+            except Exception as exc:  # noqa: BLE001 - diag
+                if len(self.errors) < 20:
+                    self.errors.append(repr(exc))
+                rows = []
+            self.polls += 1
+            t = round(now - self.spike.t0, 3)
+            for r in rows:
+                key = (r["proto"], r["pid"], r["port"], r.get("addr"), r.get("remote"), r.get("remote_port"),
+                       r.get("created"))
+                e = self.seen.get(key)
+                if e is None:
+                    self.seen[key] = e = dict(r, first=t, last=t, n=0, states=[], ppid=names.get(r["pid"]))
+                e["last"] = t
+                e["n"] += 1
+                if r.get("state") not in e["states"]:
+                    e["states"].append(r.get("state"))
+            self.stop.wait(0.02)
+
+
+KIND_NAMES = ("browser", "renderer", "utility", "sandbox helper", "gpu", "ppapi plugin", "ppapi broker")
 
 
 def text_scale() -> float:
@@ -2303,8 +2402,50 @@ class Spike:
 
     # ---------------------------------------------------------------- checks: the main script
 
+    def record_kinds(self) -> None:
+        """DIAG: each WebView2 process's kind, from the environment's own list (no handle on any process)."""
+        if not hasattr(self, "kinds"):
+            self.kinds = {}
+        try:
+            env8 = self.env.qi("ICoreWebView2Environment8")
+            if not env8:
+                self.kinds["error"] = "no ICoreWebView2Environment8"
+                return
+            out = ctypes.c_void_p()
+            env8.do("GetProcessInfos", (ctypes.POINTER(ctypes.c_void_p),), ctypes.byref(out))
+            coll = Com(out.value, "ICoreWebView2ProcessInfoCollection")
+            for i in range(coll.get_u32("get_Count")):
+                p = ctypes.c_void_p()
+                coll.do("GetValueAtIndex", (ctypes.c_uint32, ctypes.POINTER(ctypes.c_void_p)), i, ctypes.byref(p))
+                info = Com(p.value, "ICoreWebView2ProcessInfo")
+                pid, kind = info.get_int("get_ProcessId"), info.get_int("get_Kind")
+                self.kinds[pid] = KIND_NAMES[kind] if 0 <= kind < len(KIND_NAMES) else f"kind {kind}"
+                info.release()
+            coll.release()
+            env8.release()
+        except OSError as exc:
+            self.kinds["error"] = repr(exc)
+
+    def watch_report(self) -> None:
+        """DIAG: everything the socket watch saw, with each holder's kind."""
+        self.watch.stop.set()
+        self.watch.thread.join(2)
+        self.record_kinds()
+        rows = []
+        for e in self.watch.seen.values():
+            rows.append(dict(e, kind=self.kinds.get(e["pid"]), life_s=round(e["last"] - e["first"], 3)))
+        rows.sort(key=lambda e: (e["first"], e["proto"]))
+        self.info("socket-watch", "DIAG: every socket WebView2 held during the run",
+                  f"{len(rows)} sockets over {self.watch.polls} polls; "
+                  f"{sum(r['proto'].startswith('udp') for r in rows)} UDP",
+                  sockets=rows, kinds={str(k): v for k, v in self.kinds.items()}, errors=self.watch.errors,
+                  browser_pids=list(self.browser_pids_seen))
+
     def script_main(self):
         self.status("Automated checks for about 40 seconds: please leave the mouse and keyboard alone.")
+        self.watch = SocketWatch(self)
+        self.watch.thread.start()
+        self.record_kinds()
         self.check_startup()
         self.check_settings("settings", "Every setting reads back as set")
         self.check_view("view", "at the first page")
@@ -2336,6 +2477,7 @@ class Spike:
         if self.interactive:
             yield from self.owner_checks()
         self.stop_window_watch()
+        self.watch_report()
         self.script_done = True
         self.status("Done. The window closes in two seconds.")
         yield Sleep(2000)
@@ -2440,6 +2582,7 @@ class Spike:
         """No server: no listening TCP socket and no bound UDP endpoint in the spike or its WebView2 processes.
         WebView2's own outgoing connections are counted, not failed: they are the runtime's, not the app's."""
         own = os.getpid()
+        self.record_kinds()
         tree = set(process_tree(self.snapshotter.snapshot(), self.browser_pid)) if self.browser_pid else set()
         # The control: a listener, a connected pair and UDP, IPv4 and IPv6, all the spike's own, must be read back
         # with their states, or a clean result proves nothing.
@@ -2477,7 +2620,9 @@ class Spike:
                   f"the spike; WebView2's own outgoing connections: {len(outgoing)}; the control's "
                   f"{len(expected)} sockets {'were' if control_ok else 'were NOT'} read back"),
                  servers=servers, mine=mine, outgoing=[{"proto": x["proto"], "state": x["state"],
-                                                        "remote_port": x.get("remote_port")} for x in outgoing])
+                                                        "remote_port": x.get("remote_port")} for x in outgoing],
+                 diag_detail=[dict(d, kind=self.kinds.get(d["pid"])) for d in detail_sockets(tree)],
+                 diag_kinds={str(k): v for k, v in self.kinds.items()})
 
     def check_csp(self, r) -> None:
         if not r:
