@@ -138,6 +138,12 @@ uv run lagdoctor app                                    # your recorded games an
 - **The low-frame-rate threshold** (80 % of the refresh rate) comes from a study of 60–120 Hz screens and is
   not tuned above that.
 - **Long recordings use RAM**: about 0.7 KB per frame, so a 3-hour evening at 240 FPS needs about 1.8 GiB.
+- **Recording costs about 5–10 % of one logical CPU**, plus 1–2 % for the game-server tracker, which may take 10–40 %
+  while something else on the PC downloads fast. On a test game, recording without admin rights (no frame timing, no
+  tracker) left the average frame rate unchanged within the noise, with a hint of rare 4–13 ms hitches in a
+  CPU-bound workload ([what it costs](docs/research/overhead.md)). Frame timing was not tested that way, and it
+  switches on the latency-ping code of games built with NVIDIA's Reflex latency markers for the whole recording: one
+  report ties stutter in FINAL FANTASY VII REBIRTH to that.
 - **Single-player games: add `--no-network`.** The game-traffic tracker follows UDP only, so it cannot tell an
   offline game from one that talks to its server over TCP. Without the flag, internet ping spikes and lost
   pings count as network lag even in a game that never goes online.
@@ -273,7 +279,9 @@ connection to Microsoft, as the runtime does on its own.
   prove both recover.
 - **Telemetry on one clock**: 5 collectors (per-frame timing, a 4 Hz system sampler, 1 Hz NVIDIA telemetry,
   2 Hz network probes, an ETW packet tracker) stamped by QueryPerformanceCounter, so a stutter lines up with
-  the samples around it.
+  the samples around it; the recorder takes 5–10 % of one logical CPU in a real game recording, and attaching and
+  detaching it in turns on a test game (without frame timing, which needs admin rights) moved the mean frame time by
+  less than 0.1 % in a CPU-bound workload.
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.

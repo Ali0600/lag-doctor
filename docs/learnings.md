@@ -740,3 +740,44 @@ back-to-back trials reported a 38 % difference between identical systems at 95 %
 power mode ran the GPU 5 to 10 % slower than the next (`docs/research/settings-sweeps.md`, section 4).
 **Takeaway**: never measure all of one variant before the next; block and shuffle, keep the baseline in every block,
 and run A/A first.
+
+### A laptop's boost window fakes a regression unless the A/B warms up first
+A laptop often runs a new heavy load faster for its first seconds (a short-term boost or power limit) and then
+settles lower, so in back-to-back short runs whichever condition runs second inherits the slower state.
+**Why it came up**: measuring what attaching lag-doctor costs a game, two separate 22 s runs of uncapped LagLab read
+as a 44 % slowdown with the recorder: the first held about 1,950 FPS throughout, while the second fell after about
+3 s, with the recorder starting and nearly twice the background load. In a quiet 380 s run LagLab held about
+2,050 FPS for 22 s and then about 1,600 FPS before any recorder ran (the cause is inferred: there is no power readout,
+and the one limit counter read no limit). One long run with a 60 s warm-up and 10 s windows, attached and detached in
+turns, showed no change beyond the noise between two detached windows (+1.0 %, 95 % interval −1.3 to +3.0 %).
+**Takeaway**: on top of interleaving (the entry above), warm the load until the metric settles before the first
+window, and log the machine's busy CPUs in every window, so background load, your own jobs included, can be told
+apart from your change.
+
+### Turning on a game's ETW provider can change what the game does
+An ETW provider gets an enable callback, so a program can act when a trace session starts listening to it. NVIDIA's PC
+Latency (Reflex) stats code in a game starts a ping thread at launch that idles until a session enables its provider;
+from then on the game gets a ping every 100-299 ms, and every latency marker becomes a real ETW write.
+**Why it came up**: lag-doctor passes `--track_pc_latency` to PresentMon on every capture, and in PresentMon issue
+#570 a CapFrameX developer tied stutter in FINAL FANTASY VII REBIRTH to that switch, blaming the game's own latency
+code rather than PresentMon (one report, closed with no maintainer reply). lag-doctor stores no PC-latency column; for
+such games the flag only changes how PresentMon computes the animation error (`docs/research/overhead.md`, section
+5.1).
+**Takeaway**: enabling a provider is an action, not just an observation: a system provider adds work on the target's
+own threads (DXGI writes its present events there), and a provider the target owns can change what it does; enable
+only the providers and keywords whose data you use, and read what each does when enabled.
+
+### Testing whether a periodic task causes stutter: shift the events, then check the test with decoys
+Comparing the frames that overlap a sampler tick with all frames is biased, because a long frame overlaps more
+moments, and a game locked to 60 Hz keeps a fixed phase with a 4 Hz sampler. Moving every event by one random offset
+keeps both effects, so the real statistic can be ranked among the shifted ones. On heavy-tailed frame times that test
+still flagged 25-28 % of synthetic no-effect runs at a nominal 5 %; decoy event trains at other periods, on the same
+frames, measure its real false-positive rate, and planted stutters measure what it can see.
+**Why it came up**: checking whether lag-doctor's 4 Hz sampler and 1 Hz NVML reads made the owner's real recording
+stutter. The plain shift test said p = 0.001 for both; ranked against every phase of the period, neither was
+significant (the sampler +0.3 ms on the overlapping frames, calibrated p 0.02-0.06; NVML 1.5 times the stutters,
+calibrated p 0.025-0.04, borderline). 100-400 decoy trains showed the calibrated verdict still flagging 5-12 % of
+trains with no link at a nominal 5 %, and planted stutters of +1.6 to +2.5 a minute at the sampler's ticks went unseen.
+**Takeaway**: for an event-locked effect in a time series, use a shift null for the bias, rank against every phase for
+the p-value, run decoys to measure the false-positive rate that remains, and report the planted effects of known size
+the test missed.
