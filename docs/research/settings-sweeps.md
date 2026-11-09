@@ -2,7 +2,8 @@
 
 Research date: 2026-11-08. Question: could lag-doctor run short automated runs of a single-player game with different
 settings (config-file edits, or a mod's files present or absent), record each run and rank the settings? Online games
-with anti-cheat are out of scope. No plan is built on this yet: the owner has not decided.
+with anti-cheat are out of scope. The owner chose the assisted sweep on 2026-11-09 (`docs/DECISIONS.md`): lag-doctor
+edits the settings file and ranks the runs, and the player plays each run.
 
 Method: one research workflow of 9 agents on main at 4e93ada. One mapped lag-doctor's code and docs. Four searched the
 web: FINAL FANTASY VII REBIRTH; unattended benchmarks and existing tools; repeatability, heat and statistics; scripted

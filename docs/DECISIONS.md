@@ -96,8 +96,35 @@
 - **Keep the app's view showing while its window can still be seen** during a recording (a second monitor), if
   Windows' own occlusion state can tell "in sight" from "covered by the game"; today an inactive window hides its view
   and draws one still line. Revisit hook: `AppWindow.shown` (DECISIONS 2026-11-09, M4's end).
+- **An unattended settings sweep** (B of 2026-11-09's sweep fork): the assisted sweep plus key presses lag-doctor sends
+  to the game's menus and a close request between runs, so nobody has to sit through each run. Needs frame timing
+  without a UAC prompt per launch (Performance Log Users, E2 in `docs/INSTALLER-PLAN.md`, or Stage 4's capture
+  service), a game known to take injected keys (`docs/research/settings-sweeps.md`, section 8, question 4), and the
+  owner lifting the rule that nothing types on the player's PC. Revisit hook: the per-run steps of the sweep runner,
+  where the player now starts the game, presses the start key and quits.
 
 ---
+
+## 2026-11-09: A settings sweep, assisted first: lag-doctor edits the settings file, the player plays each run
+
+Asked on 2026-11-08: could lag-doctor run short runs of a game with different settings (config files edited, or a
+mod's files set aside), record each and rank them? The research (`docs/research/settings-sweeps.md`) found it possible
+for single-player games, with every run restarting the game, and the hard parts in reaching the same scene each time,
+the run-to-run noise and heat. Put to the owner with A recommended; the owner answered "do A) Assisted: lag-doctor
+edits the settings file for each variant and undoes it afterwards. You start the game, load the save, press a key at
+the spot and quit. It ranks the results with their noise."
+- **A: assisted (chosen)**: lag-doctor writes each setting into the game's settings file while the game is closed,
+  through the fix journal, and puts the original back at the end; the player starts the game, loads a save, presses a
+  start key at a chosen spot and quits; each run is a recording measured over a fixed window from the key, and the
+  settings are ranked against their own run-to-run spread. Nothing is typed on the player's PC. Each run still asks
+  one UAC prompt, unless the account records frame timing without one.
+  - This is an exception to DESIGN's "in-game settings are advice only", which the owner asked for: only for the
+    length of a sweep, only keys already in the file, only while the game is closed, journaled and put back at the
+    end, and never offered by `lagdoctor fix`.
+- **B: unattended**, A plus menu keys and a close request sent by lag-doctor: deferred, worth trying (Backlog).
+- **C: not now**: not chosen.
+
+The build's own choices are recorded below as it lands.
 
 ## 2026-11-09: M4's end flashes the taskbar button and never brings the window forward
 
