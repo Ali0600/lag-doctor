@@ -54,7 +54,8 @@ def test_each_request_kind_parses_with_exactly_its_fields():
     sid = "20261104-194500-b_quest__b"
     cases = {"library": {}, "game": {"game": "g-0123456789abcdef"}, "results": {"session": sid},
              "moment": {"session": sid, "event": 7}, "compare": {"a": sid, "b": "20261101-201500-demoracer"},
-             "settings": {}, "open_report": {"session": sid}, "open_folder": {}, "test_sound": {}}
+             "settings": {}, "open_report": {"session": sid}, "open_folder": {}, "test_sound": {}, "record": {},
+             "stop_recording": {}, "cancel_recording": {}, "recording": {}}
     assert set(cases) == set(bridge.REQUESTS)
     for kind, args in cases.items():
         req = bridge.parse(msg(type="request", id=3, kind=kind, **args))

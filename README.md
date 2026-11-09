@@ -76,14 +76,18 @@ uv run lagdoctor fix --list                             # the automatic fixes th
 uv run lagdoctor fix power_plan                         # shows before -> after and asks
 uv run lagdoctor undo                                   # what lag-doctor changed; undo an ID, or --all
 uv run lagdoctor analyze CAPTURE                        # re-run the analysis on a saved capture
-uv run lagdoctor app                                    # your recorded games and their results, in a window
+uv run lagdoctor app                                    # your games, their results and recording, in a window
 ```
 
 - **`lagdoctor app` opens lag-doctor's own window** (or **lag-doctor** in the Start menu, once installed): every game
   you have recorded, each game's recordings, and Results to explore (the verdict and causes, zoomable frame-time,
   CPU/GPU, NVIDIA and ping charts, the lag moments with what the PC did around each, checked and fine, not
   measured), plus Compare for two recordings of a game, with the conditions each ran under and what changed in the
-  game itself between them. Recording from the window comes next; for now record with `lagdoctor watch`.
+  game itself between them. **Record the game that's running** records the busiest game with a window for 10
+  minutes (Stop, or the game's exit, ends it sooner), with one UAC prompt from the window for frame timing. While you
+  play, the window keeps still and only sounds: a knock if Windows' prompt waits behind the game, a chime when
+  recording starts, a blip for each lag mark, and a chime when the results are ready. Its taskbar button flashes
+  then too, once no full-screen game or presentation is in front.
 
 - **Judging a fan fix**: record, install the fix, record again, and compare the two. When a recording starts,
   lag-doctor reads the game's folder (never the game itself) for the files a fan fix adds: the DLLs Windows would
@@ -96,6 +100,8 @@ uv run lagdoctor app                                    # your recorded games an
   no network connection.
 
 ![lag-doctor's window: the library of recorded games](docs/images/app-library.png)
+
+![lag-doctor's window: recording the game that's running](docs/images/app-recording.png)
 
 ![lag-doctor's window: a recording's results](docs/images/app-results.png)
 
@@ -277,9 +283,9 @@ connection to Microsoft, as the runtime does on its own.
   (real-time and private ETW sessions, PDH, NtQuerySystemInformation, DXGI/DXCore, ICMP, WLAN) and no third-party
   package at run time, with zero handles opened to the game and imports limited to the 264 standard-library modules
   the shipped Python runtime itself reports it can import, both enforced by syntax-tree scans of the code; and a
-  desktop app in its own WebView2 window over raw COM vtables, with no loader DLL and its 98 slots and 34 IIDs pinned
-  against Microsoft's SDK IDL, whose tests drive the real window on CI and crash its page and its browser process to
-  prove both recover.
+  desktop app in its own WebView2 window over raw COM vtables, with no loader DLL and its 100 slots and 35 IIDs pinned
+  against Microsoft's SDK IDL, whose tests drive the real window on CI through a whole recording (a stand-in recorder
+  on the real control channel) and crash its page and its browser process mid-recording to prove both recover.
 - **Telemetry on one clock**: 5 collectors (per-frame timing, a 4 Hz system sampler, 1 Hz NVIDIA telemetry,
   2 Hz network probes, an ETW packet tracker) stamped by QueryPerformanceCounter, so a stutter lines up with
   the samples around it; the recorder takes 5–10 % of one logical CPU in a real game recording, and attaching and
@@ -288,14 +294,14 @@ connection to Microsoft, as the runtime does on its own.
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 3,512 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 3,606 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 43 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 2,298 deliberate sabotages in
-  47 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 2,389 deliberate sabotages in
+  48 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
 - **Supply chain and least privilege**: a per-machine WiX MSI of 179 files built in CI from pinned inputs (Python

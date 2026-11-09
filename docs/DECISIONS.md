@@ -90,8 +90,52 @@
 - **Stop and save at once when lag-doctor's window goes away** during a recording, instead of recording on to the
   game's exit: worth it if recordings left running by a closed window turn out to be a nuisance. Revisit hook: the end
   of `Channel._read_loop` in `lagdoctor/control.py`.
+- **Bring lag-doctor's window forward at a recording's end**, flashing its taskbar button only when Windows refuses,
+  once Play (M6) ends a recording after the game has closed. Revisit hook: the end branch of `App.on_recorder` in
+  `lagdoctor/app/main.py` (DECISIONS 2026-11-09, M4's end).
+- **Keep the app's view showing while its window can still be seen** during a recording (a second monitor), if
+  Windows' own occlusion state can tell "in sight" from "covered by the game"; today an inactive window hides its view
+  and draws one still line. Revisit hook: `AppWindow.shown` (DECISIONS 2026-11-09, M4's end).
 
 ---
+
+## 2026-11-09: M4's end flashes the taskbar button and never brings the window forward
+
+Play's step 7 has the window come back at the end, or flash on the taskbar if Windows will not bring it forward. In
+M4 a recording can end by its length while the game is still running in front. The implementing session chose; the
+owner has not weighed in.
+- **Flash only (chosen)**: at `done`, while another window is in front, the taskbar button flashes until the window is
+  activated (FlashWindowEx with FLASHW_TRAY and FLASHW_TIMERNOFG), and the "done" sound plays; the window stays put.
+  The same goes for a prompt raised while the game is in front, with a knock instead of the chime.
+  - **Bring the window forward, flashing when Windows refuses**: deferred, worth trying (Backlog), once Play (M6) ends
+    a recording only after the game has closed. Today it would take the keyboard from a game still being played, and
+    a fullscreen game minimizes when it loses the foreground.
+- **The flash runs only on Windows' say-so (chosen, M4b's review)**: only while SHQueryUserNotificationState answers
+  QUNS_ACCEPTS_NOTIFICATIONS, the one state Microsoft's page allows notifications in. The heartbeat asks again,
+  stopping the flash (FLASHW_STOP) on any other answer and starting it on that one, so a player who steps out of the
+  game and back does not leave it flashing over the game; coming to the front ends the wish, and an answered prompt
+  drops its own. A flashing button can show an auto-hidden taskbar over a borderless game and keep it there; the sound
+  already tells the player in the game.
+  - **Flash at once**: rejected, for that taskbar.
+  - **No flash, sound only**: rejected. A player who left the game and the room has nothing to see on return.
+- **The view hides only while the game records (chosen)**: from `recording` until `stopping`, and only while the window
+  is not the active one or is minimized. Before (the wait for the game, the prompt) and after (saving, analysing) it
+  shows, since nothing is measured then.
+  - **Hidden from Record to the end**: rejected. The prompt and the analysis would sit behind a blank window, with no
+    measurement to protect.
+- **A hidden view's window draws one still line of its own (chosen, M4b's review)**: "Recording. This window stays
+  still while you play; switch to it to see the recording.", with "lag-doctor: recording" as its title, painted by the
+  window itself (GDI), so a window still in sight on a second monitor is never a blank rectangle.
+  - **Leave it blank**: rejected; a blank window reads as hung.
+  - **Keep the view showing while the window can still be seen**: deferred, worth trying, if Windows' own occlusion
+    state can tell "in sight" from "covered by the game". Revisit hook: `AppWindow.shown`.
+- **A fixed length of 10 minutes (chosen)**, the plan's default, until M5 brings a choice and the start key. Stop ends
+  it sooner, and so does the game's exit.
+  - **Until Stop, as `watch` runs without `--duration`**: rejected. Stopping would mean switching to the window, which
+    is what changes the measurement.
+
+Revisit hooks: the end branch of `App.on_recorder` (`lagdoctor/app/main.py`), `AppWindow.update_view`
+(`lagdoctor/app/window.py`) and `recording.LENGTH_S`.
 
 ## 2026-11-09: M4's relay prompt is raised by the window, which hands the relay's handle to the recorder
 
@@ -112,7 +156,10 @@ failed its check). The implementing session chose; the owner has not weighed in.
   and the capture is kept, as the CLI promises that nothing the user does loses a started recording.
   - **Discard a started recording on Cancel**: rejected. It breaks that promise, and the player has spent the time.
 - **A closed window never ends a recording (chosen)**: stdin's end is no stop; the recorder records on to the game's
-  exit or the duration, saves, and the app lists the session when it opens again.
+  exit or the duration, saves, and the app lists the session when it opens again. Amended in M4b's review: this holds
+  once the recording has begun. Before that, a window that goes away is a Cancel, because otherwise a window closed
+  during the prompt left a 10-minute recording without frame timing that no window could stop, and that held the
+  capture lock against the next Record.
   - **Stop and save at once when the window goes**: deferred, worth trying (Backlog).
 - **The recorder takes its parent for the window (chosen)**: a Python that started before it counts alone
   (`tool_alone`), and its `msedgewebview2.exe` children are roots found in each snapshot (`tool_roots`), while the

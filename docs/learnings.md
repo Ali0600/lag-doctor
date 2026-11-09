@@ -875,3 +875,32 @@ it, and the test hung. The channel's tests now end a reader by closing the pipe'
 (`tests/test_control.py`, `_pipe`), so the reader sees end of file.
 **Takeaway**: end a reader blocked on a pipe from the other side (close the writer), never by closing the reader's own
 buffered object from another thread.
+
+### winsound plays a sound held in memory only while its caller waits
+`winsound.PlaySound` with `SND_MEMORY` cannot be combined with `SND_ASYNC` (Python raises RuntimeError), so a sound
+built in memory holds up whatever thread plays it. From a file, `SND_FILENAME | SND_ASYNC` returns at once, and
+`SND_NODEFAULT` keeps Windows' default sound from standing in for one that will not play.
+**Why it came up**: M4b's recording sounds play on the window's own thread, which must never wait. lag-doctor makes
+its tones itself (`app/sounds.py`), writes each once as a WAV file under its home, and plays the file.
+**Takeaway**: to play a generated sound without blocking, write it to a file once and play the file asynchronously.
+
+### Before drawing attention over a game, ask Windows whether this is the moment
+`SHQueryUserNotificationState` (Shell32) says whether a full-screen game (QUNS_BUSY, or
+QUNS_RUNNING_D3D_FULL_SCREEN for exclusive Direct3D), a presentation or a locked screen is in front; Microsoft's page
+says to notify only when it answers QUNS_ACCEPTS_NOTIFICATIONS. No message comes when a full-screen program starts or
+stops, so ask again later.
+**Why it came up**: M4b's review: flashing the taskbar button at a recording's end can show an auto-hidden taskbar
+over a borderless game and keep it there. The window now flashes once Windows answers that state, asking again on its
+250 ms heartbeat, and gives up once the player comes to the window.
+**Takeaway**: anything meant to catch a player's eye asks SHQueryUserNotificationState first and waits for
+QUNS_ACCEPTS_NOTIFICATIONS; the game's own sound channel is the polite way in meanwhile.
+
+### Hold a background thread at a seam to make a race a test can repeat
+A race between a user's action and a background step (a Cancel while a prompt is being raised) usually passes or
+fails by luck. Give the step an injectable seam (here the snapshot and the launcher the prompt thread calls), make the
+test's stand-in signal that it was reached and then wait for the test's go-ahead, act in between, and release it.
+**Why it came up**: M4b's review found that a Cancel crossing the relay's prompt could still raise it. The tests hold
+the prompt thread in its snapshot (Cancel before the prompt: no prompt) and in its launcher (Cancel while Windows asks:
+the relay is let go), each order made certain rather than likely (`tests/test_app_recording.py`, `Gate`).
+**Takeaway**: to test "X happens between A and B", stop the code at A with a gated seam, do X, then let it reach B;
+never sleep and hope.

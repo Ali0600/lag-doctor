@@ -22,6 +22,7 @@ uv run pytest -q tests/test_msi.py                       # the MSI's build, WiX 
 uv run python scripts/runtime_modules.py --zip <path>.zip [--write]   # what the pinned runtime imports, asked of it
 uv run python scripts/webview_spike.py --auto            # M0: the WebView2 window's automated checks (the owner runs it bare)
 uv run pytest -q tests/test_app_page.py                  # M1: the app's real window, driven on a demo library (~10 s)
+uv run pytest -q tests/test_app_recording.py             # M4: the recorder the app starts, with a stand-in for it
 uv run python -m tests.app_demo <home> [--pictures]      # a demo library of made-up games, under <home>\sessions
 uv run python -m tests.app_harness <home> <out.json> [<shots>]   # drive the window on it; LAGDOCTOR_HOME=<home>
 uv run python scripts/make_icon.py                       # rewrite lag-doctor's icon, lagdoctor/app/lag-doctor.ico
@@ -179,7 +180,7 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   stdout is the channel, so nothing but `Channel` may write there: `serve` points stdout at stderr before anything
   else runs, and a new message or field goes through `control.from_app` or `from_recorder` with its checks. An agent
   starts one only as `tests/test_control.py` does (a pid that does not exist, a home under `%TEMP%`), never against a
-  running game: from M4's app half on, the app raises the UAC prompt for it.
+  running game: the app starts it with `--elevate` and raises the UAC prompt for it (`lagdoctor/app/recording.py`).
 - **An agent never starts the app.** `lagdoctor app` (and the MSI's Start-menu shortcut) is the owner's: the
   agent's shell has another app's private copy of AppData, where `app` refuses (exit 5, `cli.PRIVATE_COPY_POLICY`),
   and from M4 on the app raises a UAC prompt. What an agent may run is the app's tests: `tests/test_app_page.py`
@@ -187,6 +188,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   (`tests/app_demo.py`) under the test's own `LAGDOCTOR_HOME` in `%TEMP%`, crashes its page and ends its WebView2
   browser process on purpose (both recover), and closes it; run it when the owner is not mid-game. The library the
   repo shows is only ever the demo one: never put the owner's games or sessions in a test, a fixture or a picture.
+  The app's recording runs in its tests only through stand-ins: `tests/fake_recorder.py` in the recorder's place
+  (the real control channel, recording nothing) and `fake_recorder.stand_in_prompt`, a harmless process of the
+  test's own, in the relay's. An `App` a test builds passes its own `recorder` and `launcher`: the defaults start
+  `watch --control stdio --elevate` and raise the real UAC prompt (`tests/test_app_recording.py` also makes
+  `launch_elevated` refuse, so a slip fails instead of prompting).
 - **The app's page puts outside text on screen as text only.** Game, process and window names, evidence,
   reasons and the player's note (`watch --note`, cleaned by `model.clean_note` in every writer and reader) reach the
   page as JSON and go into the DOM through `el()` in `lagdoctor/app/assets/app.js`, which makes
@@ -335,7 +341,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   test about 2 s slower on CI and failed it 3 times in 16 runs (2026-11-07, before the window).
   `tests/test_nvidia_live.py::test_sampler_
   reads_each_row_just_after_a_driver_refresh` failed on 2026-11-07, alone too, with the NVIDIA GPU idle in P8 (no
-  training job) and the screen locked; it had passed with the GPU busy. Two more depend on the PC's state: `tests/test_cli.py::test_a_real_console_event_
+  training job) and the screen locked; it had passed with the GPU busy. `tests/test_nvidia.py::test_rows_stay_exact_
+  at_a_faster_rate` failed once in a full local run (2026-11-09: the last of five readings None), then passed 3 of 3
+  alone, on M4b's branch and on main alike. Two more depend on the PC's state: `tests/test_cli.py::test_a_real_console_event_
   while_recording_still_saves_the_capture` (its child hit the 60 s timeout once under full-suite load, then 3/3
   alone), and `tests/test_sysmon_target.py::test_auto_picks_a_windowed_renderer_and_never_a_windowless_gpu_job`, which
   needs LagLab to render where Windows counts it: on 2026-11-07 at 00:30 (Silent mode, display asleep) it failed on

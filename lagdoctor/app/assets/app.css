@@ -122,3 +122,16 @@ td.better { color: var(--good); font-weight: 600; }
 td.differs { color: var(--warn); font-weight: 600; }
 .u-legend { font-size: 12px; }
 .u-legend .u-marker { border-radius: 2px; }
+
+/* Screen 3: a recording the window started. */
+.running { max-width: 760px; }
+.running h1 { margin-bottom: 2px; }
+.rec-game { font-size: 1.15rem; font-weight: 600; margin: 0 0 10px; overflow-wrap: anywhere; }
+.clock { font-size: 2.6rem; font-variant-numeric: tabular-nums; margin: 6px 0 10px; }
+.notes { padding-left: 20px; }
+.notes li { margin: 4px 0; }
+pre.said { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 8px; padding: 10px 12px; max-height: 320px; overflow: auto; font-size: 0.85rem; user-select: text; }
+#bar nav #rec { color: var(--bad); font-weight: 600; }
+#bar nav #rec::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: currentColor; margin-right: 6px; vertical-align: 1px; }

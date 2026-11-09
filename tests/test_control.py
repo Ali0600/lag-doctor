@@ -290,10 +290,24 @@ def test_what_the_window_answers_is_what_launch_elevated_would_raise(reply, rais
         assert str(raised) == reply["why"]
 
 
-def test_a_window_that_goes_away_during_the_prompt_lets_the_recording_go_on_without_it():
+def test_a_window_that_goes_away_during_the_prompt_cancels_the_recording():
     window = Window(lambda w, msg: msg["t"] == "elevate" and w.to_recorder.close())
-    child, raised = _launch(_channel(window))
-    assert isinstance(raised, OSError) and "went away" in str(raised), raised
+    channel = _channel(window)
+    child, raised = _launch(channel)
+    assert child is None and isinstance(raised, cli.Cancelled), raised
+    assert channel.cancel.is_set() and not channel.stop.is_set()
+
+
+@pytest.mark.parametrize("began", [False, True])
+def test_a_window_gone_before_the_recording_begins_is_a_cancel_and_after_it_is_nothing(began):
+    inp, to_recorder = _pipe()
+    channel = control.Channel(inp, _pipe()[1], log=lambda text: None)
+    channel.start()
+    if began:
+        channel.event("recording", {"duration_s": None, "hotkey": False, "frames": False, "network": True})
+    to_recorder.close()                           # the window's end of stdin goes
+    assert channel.gone.wait(5)
+    assert channel.cancel.is_set() is not began and not channel.stop.is_set()
 
 
 def test_a_window_that_cannot_read_the_request_is_given_up_on():
@@ -586,10 +600,22 @@ def _recorder(tmp_path):
 
 def test_a_real_recorder_speaks_only_json_lines_on_stdout(tmp_path):
     argv, env = _recorder(tmp_path)
-    proc = subprocess.run(argv, cwd=ROOT, env=env, input=b"", capture_output=True, timeout=120)
-    messages = [control.from_recorder(line + b"\n") for line in proc.stdout.splitlines()]   # each one, or it fails
+    log = tmp_path / "recorder.log"
+    with open(log, "wb") as err:                  # stdin stays open, as the window's does: one gone at once cancels
+        proc = subprocess.Popen(argv, cwd=ROOT, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err)
+        timer = threading.Timer(120, proc.kill)            # never a hang
+        timer.start()
+        try:
+            raw = proc.stdout.read()
+            proc.wait(60)
+        finally:
+            timer.cancel()
+            if proc.poll() is None:
+                proc.kill()
+            proc.stdin.close()
+    messages = [control.from_recorder(line + b"\n") for line in raw.splitlines()]   # each one, or it fails
     kinds = [m["t"] for m in messages if m["t"] != "say"]
-    assert kinds == ["hello", "waiting", "done"], (kinds, proc.stderr[-2000:])
+    assert kinds == ["hello", "waiting", "done"], (kinds, log.read_bytes()[-2000:])
     assert messages[-1] == {"t": "done", "reason": "no_game", "code": cli.EXIT_BAD_ARGS, "session": None}
     assert proc.returncode == cli.EXIT_BAD_ARGS
     assert any("Could not find the game" in m["text"] for m in messages if m["t"] == "say")

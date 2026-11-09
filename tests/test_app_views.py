@@ -436,7 +436,8 @@ def test_compare_says_when_an_older_recording_has_no_conditions(demo):
 
 
 def test_readiness_says_whether_frame_timing_works_and_whether_windows_will_ask():
-    assert views.readiness_view(True, "", "now")["text"].endswith("no permission prompt")
+    # The app's recordings always ask (they run with --elevate): one in Performance Log Users, for the tracker alone.
+    assert views.readiness_view(True, "", "now")["text"].endswith("asks Windows once, for the game-server check")
     assert views.readiness_view(True, "", "no")["text"].endswith("each recording asks Windows once")
     assert views.readiness_view(True, "", "unknown")["text"].endswith("each recording asks Windows once")
     off = views.readiness_view(False, "PresentMon 2.6.0 is not installed", "now")

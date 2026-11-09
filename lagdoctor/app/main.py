@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from lagdoctor import __version__, paths
-from lagdoctor.app import APP_ID, ASSETS, ICON, bridge, library, views
+from lagdoctor.app import APP_ID, ASSETS, ICON, bridge, library, recording, sounds, views
 from lagdoctor.app.window import AppWindow
 from lagdoctor.winapi import webview2 as wv
 
@@ -92,11 +92,17 @@ def open_log(home: Path):
 
 
 class App:
-    """The controller: owns the window, the session listing and the last capture it loaded."""
+    """The controller: owns the window, the session listing, the last capture it loaded and the recording it started.
+
+    What a test replaces (each defaulting to the real one): `recorder()`, the recorder's command line; `launcher`,
+    which raises the relay's UAC prompt (elevation.launch_elevated); `play(name)`, the recording's sounds; `flash()`,
+    the taskbar button's flash at a recording's end."""
 
     def __init__(self, *, home: Path, runtime: dict, create_fn, log: Callable[[str], None],
                  tell: Callable[[str], None] = tell, activate: bool = True, on_ready: Callable[["App"], None] | None
-                 = None, opener: Callable[[str], None] | None = None) -> None:
+                 = None, opener: Callable[[str], None] | None = None,
+                 recorder: Callable[[], list[str]] | None = None, launcher: Callable[..., Any] | None = None,
+                 play: Callable[[str], Any] | None = None, flash: Callable[[], Any] | None = None) -> None:
         self.home = Path(home)
         self.sessions = self.home / "sessions"
         self.sessions.mkdir(parents=True, exist_ok=True)
@@ -114,6 +120,14 @@ class App:
         self.window = AppWindow(runtime=runtime, create_fn=create_fn, data_folder=self.home / "webview",
                                 assets=ASSETS, icon=ICON, class_name=CLASS + instance_tag(self.home),
                                 on_message=self.on_message, on_failed=self.on_failed, log=log, activate=activate)
+        self.recorder = recorder or recording.recorder_argv
+        self.launcher = launcher
+        self.play = play or sounds.Player(self.home, log).play
+        self.window.flasher = flash or self.window.flash        # when the window wants the player's attention
+        self.rec: recording.Recorder | None = None             # the recording this window started last
+        self.rec_state: recording.RecordingState | None = None
+        self.push_seq = 0                                       # numbers each view of it, newest highest
+        self.window.on_shown = self.push_recording
 
     def run(self) -> None:
         self.window.run()
@@ -279,9 +293,92 @@ class App:
         return Open(self.sessions)
 
     def do_test_sound(self) -> dict:
-        import winsound
-        winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC)
+        self.play("start")                          # the sound a recording starts with
         return {}
+
+    # ---------------------------------------------------------------- recording (M4)
+
+    def do_record(self) -> dict:
+        """Start recording the game that is running: the recorder, a child of this window, does the rest."""
+        with self.lock:
+            if self.rec_state is not None and self.rec_state.active:
+                raise Gone("A recording is already running.")
+            rec = recording.Recorder(home=self.home, log=self.log, hwnd=lambda: self.window.hwnd,
+                                     argv=self.recorder(), launcher=self.launcher,
+                                     post=lambda msg: self.window.call_soon(lambda: self.on_recorder(rec, msg)))
+            self.rec, self.rec_state = rec, recording.RecordingState()
+        try:
+            rec.start()
+        except BaseException as exc:
+            with self.lock:                         # nothing started: the next Record may try again
+                if self.rec is rec:
+                    self.rec, self.rec_state = None, None
+            if isinstance(exc, OSError):
+                self.log(f"starting the recorder: {exc}")
+                raise Gone(f"The recording could not start ({exc.strerror or exc}).") from None
+            raise
+        self.log(f"recording: the recorder started, pid {rec.proc.pid}")
+        return self.recording_view()
+
+    def _running(self) -> recording.Recorder:
+        with self.lock:
+            if self.rec is None or self.rec_state is None or not self.rec_state.active:
+                raise Gone("No recording is running.")
+            return self.rec
+
+    def do_stop_recording(self) -> dict:
+        if not self._running().stop():
+            raise Gone("The recorder can no longer be reached. The recording stops by itself.")
+        return self.recording_view()
+
+    def do_cancel_recording(self) -> dict:
+        if not self._running().cancel():
+            raise Gone("The recorder can no longer be reached. The recording stops by itself.")
+        return self.recording_view()
+
+    def do_recording(self) -> dict:
+        return self.recording_view()
+
+    def recording_view(self) -> dict:
+        with self.lock:
+            self.push_seq += 1
+            return dict(views.recording_view(self.rec_state, time.monotonic(), LAG_KEY, self.home / recording.LOG_NAME),
+                        seq=self.push_seq)
+
+    def push_recording(self) -> None:
+        """Tell the page where the recording has got to; never while its view is hidden, which a message might
+        wake: the window pushes the newest when the view comes back (on_shown)."""
+        if self.window.view_hidden:
+            return
+        view = self.recording_view()
+        if view["phase"] is not None:
+            self.window.post(bridge.push("recording", view))
+
+    def on_recorder(self, rec: recording.Recorder, msg: dict) -> None:
+        """A message about the recording, on the UI thread: the state moves on, the view hides while the game
+        records (unless the window is shown), the sounds play and the page is told. When the relay's prompt is raised
+        or the recording ends while another window is in front (the game), a sound says so and the taskbar button
+        flashes once Windows says it is a moment for that (AppWindow.want_attention)."""
+        with self.lock:
+            state = self.rec_state
+            if rec is not self.rec or state is None or not state.active:
+                return                              # an older recording's, or after the end
+            sounds_called = state.apply(msg, time.monotonic())
+            phase, ended = state.phase, not state.active
+        if msg["t"] == "say":
+            self.log(f"recorder: {msg['text']}")
+        self.window.set_recording(phase == "recording")
+        if msg["t"] == "elevate" and not self.window.in_front():
+            sounds_called.append("ask")             # the prompt may only blink on the taskbar behind the game
+        for name in sounds_called:
+            self.play(name)
+        self.push_recording()
+        if ended:
+            self.log(f"recording: {state.reason}, code {state.code}, session {state.session}")
+        if msg["t"] == "prompt":
+            self.window.drop_attention()            # the prompt it pointed at has been answered
+        if (ended or msg["t"] == "elevate") and not self.window.in_front():
+            self.window.want_attention()
 
 
 class Gone(Exception):
@@ -340,6 +437,10 @@ def run() -> int:
         finally:
             app.window.destroy_icons()
             wv.CoUninitialize()
+            if app.rec_state is not None and app.rec_state.active:
+                log("closed during a recording: the recorder goes on, then saves and analyses it"
+                    if app.rec_state.started is not None else
+                    "closed before the recording began: the recorder cancels it, and nothing is recorded")
             log("closed" + (f" after a fault: {app.window.fatal}" if app.window.fatal else ""))
         if app.window.fatal:
             tell("lag-doctor's window hit an internal error and closed. The details are in app.log in lag-doctor's "

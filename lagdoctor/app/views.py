@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import array
 import math
+import re
 import sys
 from collections import defaultdict
 from datetime import datetime
@@ -157,8 +158,9 @@ def game_view(entries: list[Entry], game_id: str, last_id: str | None) -> dict[s
                                ["Stutters / min", fmt(n["stutters_per_min"], "{:.1f}")],
                                ["Top cause", labels.cause_text(n["top_cause"]) if n["top_cause"] else "-"]]},
             "sessions": [_session_row(e, last_id) for e in recs],
-            "play_note": "Recording from the app comes next. For now, start the game and run "
-                         "`lagdoctor watch` in a terminal; the recording appears here when it is analysed."}
+            "play_note": "To record it again, start the game, then press Record the game that's running in the "
+                         "Library; the recording appears here once it is analysed. Starting games from here comes "
+                         "later."}
 
 
 # ------------------------------------------------------------------------------------------------ results --
@@ -465,8 +467,8 @@ def compare_view(a: Entry, b: Entry) -> dict[str, Any]:
 
 def settings_view(readiness: dict[str, Any], sessions_dir: str, runtime_version: str | None, app_version: str,
                   lag_key: str) -> dict[str, Any]:
-    """Screen 7: readiness, the keys, a sound test and where sessions are kept. Recording from the app, its start
-    key and its default length come later; the library's stores come with Play."""
+    """Screen 7: readiness, the keys, a sound test (one of the recording's own sounds) and where sessions are kept. A
+    start key and a choice of length come later; the library's stores come with Play."""
     return {"readiness": readiness,
             "keys": [["Mark a lag while recording", lag_key.title()]],
             "sessions_folder": sessions_dir,
@@ -475,10 +477,130 @@ def settings_view(readiness: dict[str, Any], sessions_dir: str, runtime_version:
 
 
 def readiness_view(presentmon_ok: bool, presentmon_why: str, rights: str) -> dict[str, Any]:
-    """The one-line readiness strip: whether frame timing can be recorded, and whether each recording asks Windows
-    for permission (trace_rights: "now" needs no prompt)."""
+    """The one-line readiness strip: whether frame timing can be recorded, and that each recording from the app
+    asks Windows for permission once: it records with --elevate, so an account that may already trace (trace_rights
+    "now": in Performance Log Users, since the app never runs elevated) is asked for the game-server check alone."""
     if not presentmon_ok:
         return {"ok": False, "text": "Frame timing is not set up: run `lagdoctor setup` in a terminal",
                 "detail": presentmon_why}
-    asks = "no permission prompt" if rights == "now" else "each recording asks Windows once"
+    asks = ("each recording asks Windows once, for the game-server check" if rights == "now" else
+            "each recording asks Windows once")
     return {"ok": True, "text": f"Frame timing ready · {asks}", "detail": ""}
+
+
+# ---------------------------------------------------------------------------------------------- recording --
+
+RECORDING_TITLES = {
+    "starting": "Starting the recording",
+    "waiting": "Looking for the game",
+    "asking": "Windows asks for permission",
+    "preparing": "Getting ready to record",
+    "recording": "Recording",
+    "stopping": "Stopping the recording",
+    "saving": "Saving the recording",
+    "analysing": "Analysing the recording",
+}
+RECORDING_DETAILS = {
+    "starting": "lag-doctor is starting its recorder.",
+    "waiting": "lag-doctor is looking for the game that is running: the busiest program with a window.",
+    "asking": ("Frame timing and the game-server check need administrator rights for this recording: answer "
+               "Windows' prompt, and if it only blinks on the taskbar, click it there. Only the small part of "
+               "lag-doctor that reads them runs with those rights."),
+    "preparing": "Windows answered: lag-doctor is starting frame timing and its other measurements.",
+    "recording": ("Play normally. This window stays still while you play, so it does not change what is measured. "
+                  "The recording stops by itself{length}, or when the game closes."),
+    "stopping": "The recording is stopping.",
+    "saving": "The recording is being saved.",
+    "analysing": "lag-doctor is looking for what made it lag.",
+}
+# "preparing" by how the prompt went, when it did not start the relay.
+PREPARING_DETAILS = {
+    "declined": ("Windows' prompt was declined: lag-doctor is starting the recording, with what needed that "
+                 "permission off."),
+    "refused": ("Windows' prompt could not be used: lag-doctor is starting the recording, with what needed that "
+                "permission off."),
+    "failed": ("Windows' prompt could not be shown: lag-doctor is starting the recording, with what needed that "
+               "permission off."),
+    "withdrawn": "The recording is being cancelled.",
+}
+# How a recording ended (control.REASONS): a title and a sentence.
+RECORDING_ENDS = {
+    "completed": ("Recorded", "The recording ran its full length and is analysed."),
+    "stopped": ("Recorded", "The recording was stopped and is analysed."),
+    "game_exited": ("Recorded", "The game closed, so the recording stopped there. It is analysed."),
+    "cancelled": ("Cancelled", "Nothing was recorded."),
+    "busy": ("Not recorded", "Another recording is running. Try again once it has finished."),
+    "not_ready": ("Not recorded", "Frame timing is not set up, so nothing was recorded: run `lagdoctor setup` in a "
+                                  "terminal, then try again."),
+    "no_game": ("No game found", "lag-doctor found no game running. Start the game, then press Record again."),
+    "refused": ("Not recorded", "lag-doctor could not record that game."),
+    "game_changed": ("Not recorded", "The game closed or restarted while Windows asked for permission, so nothing "
+                                     "was recorded. Start it again, then press Record."),
+    "relay_failed": ("Not recorded", "The recording stopped on an error before it was saved."),
+    "analysis_failed": ("Saved, not analysed", "The recording was saved, but analysing it failed. Its results may "
+                                               "still open: lag-doctor analyses it again."),
+    "private_copy": ("Not recorded", "lag-doctor cannot record from here."),
+    "failed": ("Not recorded", "Something went wrong."),
+}
+PROMPT_TEXTS = {"declined": "Windows' prompt was declined",
+                "refused": "lag-doctor's window refused the prompt's command",
+                "failed": "Windows' prompt could not be shown"}
+SAID_SHOWN = 12                       # lines the recorder said, shown when a recording failed
+# What the recorder says for a console only (its options, Ctrl+C, a command to type), which the window cannot take.
+CONSOLE_ONLY = re.compile(r"--[a-z]|Ctrl\+C|`lagdoctor ")
+
+
+def recording_view(state: Any, now: float, lag_key: str, log: Any = None) -> dict[str, Any]:
+    """Screen 3, the running state of a recording the app started (recording.RecordingState): where it has got to,
+    the one thing to press now (Cancel before it records, Stop while it does), what is off, and at the end how it
+    ended, with what the recorder said (`log`: the recorder's log, named when something went wrong). {"active":
+    False, "phase": None} when the app has started none."""
+    if state is None:
+        return {"active": False, "phase": None}
+    elapsed = None
+    if state.started is not None:
+        elapsed = max(0.0, (state.ended if state.ended is not None else now) - state.started)
+    notes = []
+    if state.fault:
+        notes.append(f"lag-doctor stopped this recording: {state.fault}.")
+    if state.frames is False:
+        notes.append(f"Frame timing is off for this recording: {PROMPT_TEXTS.get(state.prompt or '', 'it could not start')}.")
+    if state.prompt in PROMPT_TEXTS:
+        notes.append("The game-server check is off for this recording: it needs the same permission.")
+    if state.network is False:
+        notes.append("The network checks are off for this recording.")
+    if state.started is not None and not state.hotkey:
+        notes.append(f"The lag key is off for this recording: Windows did not give lag-doctor {lag_key.title()}, so "
+                     "another program may be using it.")
+    if state.frames_lost:
+        notes.append(f"Frame timing stopped during the recording: {state.frames_lost}")
+    if state.marks:
+        notes.append(f"Lag marked {state.marks} time{'' if state.marks == 1 else 's'}.")
+    failed = state.phase == "done" and not state.ok and (state.reason != "cancelled" or state.fault is not None)
+    said = [line for line in state.said if not CONSOLE_ONLY.search(line)][-SAID_SHOWN:] if failed else []
+    if state.phase == "done":
+        title, detail = RECORDING_ENDS.get(state.reason or "failed", RECORDING_ENDS["failed"])
+        if state.fault:
+            title, detail = "Not recorded", "lag-doctor stopped it."
+        if said:
+            detail += " What lag-doctor said is below."
+        if failed and log is not None and state.unexplained:
+            detail += f" The details are in {log}."
+    else:
+        title, detail = RECORDING_TITLES[state.phase], RECORDING_DETAILS[state.phase]
+        if state.phase == "preparing":
+            detail = PREPARING_DETAILS.get(state.prompt or "", detail)
+        if state.phase == "recording":
+            length = state.length_s
+            words = f"{int(length // 60)} minutes" if length and length >= 120 and length % 60 == 0 else \
+                fmt_elapsed(length)
+            detail = detail.format(length=f" after {words}" if length else "")
+            if state.hotkey:
+                detail += f" Press {lag_key.title()} the moment it lags."
+    return {"active": state.active, "phase": state.phase, "title": title, "detail": detail, "game": state.game,
+            "elapsed_s": elapsed, "length_s": state.length_s, "notes": notes,
+            "action": ("cancel" if state.phase in ("starting", "waiting", "asking", "preparing") else
+                       "stop" if state.phase == "recording" else None),
+            "ok": state.phase == "done" and state.ok,
+            "session": state.session if state.phase == "done" else None,
+            "said": said}

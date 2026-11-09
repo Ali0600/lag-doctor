@@ -40,7 +40,8 @@ SLOTS = {
     "ICoreWebView2Environment": {"CreateCoreWebView2Controller": 3, "get_BrowserVersionString": 5},
     "ICoreWebView2Environment5": {"add_BrowserProcessExited": 12},
     "ICoreWebView2Environment12": {"CreateSharedBuffer": 24},
-    "ICoreWebView2Controller": {"put_IsVisible": 4, "get_Bounds": 5, "put_Bounds": 6, "get_ZoomFactor": 7,
+    "ICoreWebView2Controller": {"get_IsVisible": 3, "put_IsVisible": 4, "get_Bounds": 5, "put_Bounds": 6,
+                                "get_ZoomFactor": 7,
                                 "MoveFocus": 12, "NotifyParentWindowPositionChanged": 23, "Close": 24,
                                 "get_CoreWebView2": 25},
     "ICoreWebView2Controller3": {"put_DefaultBackgroundColor": 27, "get_RasterizationScale": 28},
@@ -49,7 +50,7 @@ SLOTS = {
                       "add_PermissionRequested": 23, "add_ProcessFailed": 25, "ExecuteScript": 29,
                       "PostWebMessageAsJson": 32, "add_WebMessageReceived": 34, "get_BrowserProcessId": 37,
                       "add_NewWindowRequested": 44},
-    "ICoreWebView2_3": {"TrySuspend": 68, "Resume": 69, "SetVirtualHostNameToFolderMapping": 71},
+    "ICoreWebView2_3": {"TrySuspend": 68, "Resume": 69, "get_IsSuspended": 70, "SetVirtualHostNameToFolderMapping": 71},
     "ICoreWebView2_4": {"add_DownloadStarting": 75},
     "ICoreWebView2_17": {"PostSharedBufferToScript": 116},
     "ICoreWebView2_18": {"add_LaunchingExternalUriScheme": 117},
@@ -122,6 +123,7 @@ IIDS = {
     "ICoreWebView2LaunchingExternalUriSchemeEventHandler": "74F712E0-8165-43A9-A13F-0CCE597E75DF",
     "ICoreWebView2ScriptDialogOpeningEventHandler": "EF381BF9-AFA8-4E37-91C4-8AC48524BDFB",
     "ICoreWebView2ExecuteScriptCompletedHandler": "49511172-CC67-4BCA-9923-137112F4C4CC",
+    "ICoreWebView2TrySuspendCompletedHandler": "00F206A7-9D17-4605-91F6-4E8E4DE192E3",
 }
 
 # Enum values, from the same IDL (an enum without explicit values counts from 0).
@@ -171,12 +173,27 @@ class COREWEBVIEW2_COLOR(ctypes.Structure):
     _fields_ = [("A", ctypes.c_ubyte), ("R", ctypes.c_ubyte), ("G", ctypes.c_ubyte), ("B", ctypes.c_ubyte)]
 
 
+class FLASHWINFO(ctypes.Structure):
+    # WinUser.h, as Microsoft's FLASHWINFO page declares it: UINT cbSize; HWND hwnd; DWORD dwFlags; UINT uCount;
+    # DWORD dwTimeout.
+    _fields_ = [("cbSize", wintypes.UINT), ("hwnd", wintypes.HWND), ("dwFlags", wintypes.DWORD),
+                ("uCount", wintypes.UINT), ("dwTimeout", wintypes.DWORD)]
+
+
+class PAINTSTRUCT(ctypes.Structure):
+    # WinUser.h: HDC hdc; BOOL fErase; RECT rcPaint; BOOL fRestore; BOOL fIncUpdate; BYTE rgbReserved[32].
+    _fields_ = [("hdc", wintypes.HDC), ("fErase", wintypes.BOOL), ("rcPaint", wintypes.RECT),
+                ("fRestore", wintypes.BOOL), ("fIncUpdate", wintypes.BOOL), ("rgbReserved", ctypes.c_ubyte * 32)]
+
+
 # x64 sizes these layouts must produce (WinUser.h, WebView2.h).
 assert ctypes.sizeof(ctypes.c_void_p) == 8, "lag-doctor's window targets 64-bit Python only"
 assert ctypes.sizeof(GUID) == 16
 assert ctypes.sizeof(WNDCLASSEXW) == 80
 assert ctypes.sizeof(MINMAXINFO) == 40
 assert ctypes.sizeof(COREWEBVIEW2_COLOR) == 4
+assert ctypes.sizeof(FLASHWINFO) == 32 and FLASHWINFO.hwnd.offset == 8
+assert ctypes.sizeof(PAINTSTRUCT) == 72 and PAINTSTRUCT.rcPaint.offset == 12
 
 # ----------------------------------------------------------------------------------------- Win32 bindings --
 
@@ -221,8 +238,22 @@ GetSystemMetricsForDpi = _bind(_user32, "GetSystemMetricsForDpi", I, I, U)
 SetProcessDpiAwarenessContext = _bind(_user32, "SetProcessDpiAwarenessContext", B, ctypes.c_ssize_t)
 FindWindowW = _bind(_user32, "FindWindowW", H, wintypes.LPCWSTR, wintypes.LPCWSTR)
 IsIconic = _bind(_user32, "IsIconic", B, H)
+GetForegroundWindow = _bind(_user32, "GetForegroundWindow", H)
+FlashWindowEx = _bind(_user32, "FlashWindowEx", B, ctypes.POINTER(FLASHWINFO))   # returns the window's state before
 MessageBoxW = _bind(_user32, "MessageBoxW", I, H, wintypes.LPCWSTR, wintypes.LPCWSTR, U)
+SetWindowTextW = _bind(_user32, "SetWindowTextW", B, H, wintypes.LPCWSTR)
+InvalidateRect = _bind(_user32, "InvalidateRect", B, H, ctypes.POINTER(wintypes.RECT), B)
+BeginPaint = _bind(_user32, "BeginPaint", wintypes.HDC, H, ctypes.POINTER(PAINTSTRUCT))
+EndPaint = _bind(_user32, "EndPaint", B, H, ctypes.POINTER(PAINTSTRUCT))
+DrawTextW = _bind(_user32, "DrawTextW", I, wintypes.HDC, wintypes.LPCWSTR, I, ctypes.POINTER(wintypes.RECT), U)
 CreateSolidBrush = _bind(_gdi32, "CreateSolidBrush", wintypes.HBRUSH, wintypes.COLORREF)
+CreateFontW = _bind(_gdi32, "CreateFontW", wintypes.HFONT, I, I, I, I, I, *([wintypes.DWORD] * 8), wintypes.LPCWSTR)
+SelectObject = _bind(_gdi32, "SelectObject", wintypes.HGDIOBJ, wintypes.HDC, wintypes.HGDIOBJ)
+DeleteObject = _bind(_gdi32, "DeleteObject", B, wintypes.HGDIOBJ)
+SetBkMode = _bind(_gdi32, "SetBkMode", I, wintypes.HDC, I)
+SetTextColor = _bind(_gdi32, "SetTextColor", wintypes.COLORREF, wintypes.HDC, wintypes.COLORREF)
+# shellapi.h, Shell32.dll (Windows Vista on): whether this is a moment to draw the player's attention.
+SHQueryUserNotificationState = _bind(_shell32, "SHQueryUserNotificationState", ctypes.c_long, ctypes.POINTER(I))
 GetModuleHandleW = _bind(_kernel32, "GetModuleHandleW", wintypes.HMODULE, wintypes.LPCWSTR)
 GetCurrentThreadId = _bind(_kernel32, "GetCurrentThreadId", wintypes.DWORD)
 SetEnvironmentVariableW = _bind(_kernel32, "SetEnvironmentVariableW", B, wintypes.LPCWSTR, wintypes.LPCWSTR)
@@ -241,6 +272,17 @@ GetCurrentProcessExplicitAppUserModelID = _bind(_shell32, "GetCurrentProcessExpl
 WM_DESTROY, WM_MOVE, WM_SIZE, WM_SETFOCUS, WM_CLOSE = 0x0002, 0x0003, 0x0005, 0x0007, 0x0010
 WM_GETMINMAXINFO, WM_SETICON, WM_TIMER, WM_MOVING, WM_DPICHANGED = 0x0024, 0x0080, 0x0113, 0x0216, 0x02E0
 WM_APP = 0x8000
+WM_ACTIVATE = 0x0006
+WA_INACTIVE = 0                      # WM_ACTIVATE's low word of wParam; 1 and 2 are active, 2 by a click
+SIZE_RESTORED, SIZE_MINIMIZED = 0, 1  # WM_SIZE's wParam
+FLASHW_STOP, FLASHW_TRAY, FLASHW_TIMERNOFG = 0x0, 0x2, 0xC  # the taskbar button: stop; until it comes forward
+WM_PAINT = 0x000F
+DT_CENTER, DT_VCENTER, DT_SINGLELINE, DT_NOPREFIX, DT_END_ELLIPSIS = 0x1, 0x4, 0x20, 0x800, 0x8000
+TRANSPARENT = 1                              # SetBkMode: text drawn over what is there
+FW_NORMAL, DEFAULT_CHARSET, CLEARTYPE_QUALITY, FF_SWISS = 400, 1, 5, 0x20
+# QUERY_USER_NOTIFICATION_STATE (shellapi.h): Microsoft's page says to show notifications only at 5.
+QUNS_NOT_PRESENT, QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MODE = 1, 2, 3, 4
+QUNS_ACCEPTS_NOTIFICATIONS, QUNS_QUIET_TIME, QUNS_APP = 5, 6, 7
 WS_OVERLAPPEDWINDOW = 0x00CF0000
 CW_USEDEFAULT = -0x80000000
 SW_SHOWNORMAL, SW_SHOWNOACTIVATE, SW_RESTORE = 1, 4, 9
@@ -390,6 +432,7 @@ REF_PROTO = ctypes.WINFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
 EVENT = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p)        # sender, args
 DONE_PTR = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_long, ctypes.c_void_p)    # errorCode, result
 DONE_STR = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_long, ctypes.c_wchar_p)   # errorCode, json
+DONE_BOOL = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_long, wintypes.BOOL)     # errorCode, result
 GET_STR = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p))
 PUT_STR = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_wchar_p)
 GET_BOOL = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.POINTER(wintypes.BOOL))
@@ -531,6 +574,13 @@ class EnvOptions:
     def _release(self, this):
         self.refs = max(0, self.refs - 1)
         return self.refs
+
+
+def notification_state() -> int | None:
+    """Windows' own answer to whether this is a moment to draw the user's attention: one of the QUNS_* values (only
+    QUNS_ACCEPTS_NOTIFICATIONS means yes), or None when it cannot say."""
+    state = ctypes.c_int(0)
+    return state.value if SHQueryUserNotificationState(ctypes.byref(state)) >= 0 else None
 
 
 # --------------------------------------------------------------------------------------------- the runtime --

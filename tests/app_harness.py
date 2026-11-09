@@ -19,10 +19,13 @@ import subprocess
 import sys
 import time
 import traceback
+import types
 from pathlib import Path
 
+from lagdoctor.app import library
 from lagdoctor.app.main import App
 from lagdoctor.winapi import webview2 as wv
+from tests import app_demo, fake_recorder
 
 STEP_TIMEOUT_S = 30.0
 RUN_TIMEOUT_S = 150.0
@@ -64,6 +67,31 @@ def shot(name: str) -> tuple:
 def until_ready(n: int, seconds: float = STEP_TIMEOUT_S) -> tuple:
     """Wait until the page has said it is ready n times (each load of it says so once)."""
     return ("ready", n, seconds)
+
+
+def activate(on: bool) -> tuple:
+    """Tell the window it is (or is no longer) the active one, through its own WM_ACTIVATE branch, which the
+    harness calls itself: posted, the message would also reach DefWindowProc, which gives the window the focus."""
+    return ("activate", on)
+
+
+def wait(predicate, seconds: float = STEP_TIMEOUT_S) -> tuple:
+    """Wait until predicate() is true, on the window's thread (for what only Python can read, such as the view's
+    own IsVisible and IsSuspended)."""
+    return ("wait", predicate, seconds)
+
+
+def window_title(app: App) -> str:
+    buf = ctypes.create_unicode_buffer(256)
+    ctypes.windll.user32.GetWindowTextW(ctypes.c_void_p(app.window.hwnd), buf, 256)
+    return buf.value
+
+
+def view_state(app: App) -> dict:
+    """The view as WebView2 itself reports it, beside what the window believes."""
+    w = app.window
+    return {"visible": w.controller.get_bool("get_IsVisible"), "suspended": w.webview3.get_bool("get_IsSuspended"),
+            "hidden": w.view_hidden, "recording": w.recording}
 
 
 CLICK_GAME = ("[...document.querySelectorAll('#games .game')].find((b) => "
@@ -164,16 +192,100 @@ def script(facts: dict, app: App):
     facts["options_asked"] = sorted(set(app.window.options_asked[0])) if app.window.options_asked else []
     facts["env_restored"] = app.window.env_restored
 
+    # Recording from the app (M4), with tests/fake_recorder.py in the recorder's place and a harmless process in the
+    # relay's (App's recorder and launcher): the window is told it is the active one, then Record.
+    rig = app.harness
+    yield activate(True)
+    yield js("document.querySelector('[data-go=library]').click(); true")
+    yield until("!!document.getElementById('record')")
+    yield js("document.getElementById('record').click(); true")
+    yield until("!!document.getElementById('rec-clock') && !!document.getElementById('rec-stop')")
+    facts["rec_running"] = yield js(f"""(() => ({{
+        title: document.getElementById('rec-title').textContent,
+        game: document.getElementById('rec-game').textContent,
+        clock: document.getElementById('rec-clock').textContent,
+        detail: document.getElementById('rec-detail').textContent,
+        bar: !document.getElementById('rec').hidden, made: {MADE}, pwned: window.__pwned === 1}}))()""")
+    facts["rec_view_shown"] = view_state(app)
+    yield shot("recording")
+    yield activate(False)                              # the player goes back to the game
+    yield wait(lambda: app.window.suspended is True)
+    facts["rec_view_hidden"] = view_state(app)
+    facts["rec_title_hidden"] = window_title(app)
+    yield activate(True)                               # and comes back to the window
+    yield wait(lambda: view_state(app)["visible"] and not view_state(app)["suspended"])
+    facts["rec_view_back"] = view_state(app)
+    yield until("!!document.getElementById('rec-stop')")
+    # The page crashes while the view is hidden: it loads again hidden, is suspended again, and is back on the
+    # running screen once the window is shown.
+    readies = facts["readies"]
+    yield activate(False)
+    yield wait(lambda: view_state(app)["suspended"])
+    yield ("crash_renderer",)
+    yield until_ready(readies + 1)
+    yield wait(lambda: view_state(app)["suspended"] and not view_state(app)["visible"])
+    facts["rec_after_page_crash"] = view_state(app)
+    yield activate(True)
+    yield wait(lambda: view_state(app)["visible"] and not view_state(app)["suspended"])
+    yield until("!!document.getElementById('rec-stop')")
+    facts["rec_after_page_crash_screen"] = yield js("document.getElementById('rec-title').textContent")
+    # The browser process ends while the view is hidden: the new environment's view is hidden and suspended too.
+    yield activate(False)
+    yield wait(lambda: view_state(app)["suspended"])
+    yield ("end_browser",)
+    yield until_ready(readies + 2, 60.0)
+    yield wait(lambda: view_state(app)["suspended"] and not view_state(app)["visible"], 30.0)
+    facts["rec_after_browser_exit"] = view_state(app)
+    yield activate(True)
+    yield wait(lambda: view_state(app)["visible"] and not view_state(app)["suspended"])
+    yield until("!!document.getElementById('rec-stop')")
+    # The player goes to the Library and the recording ends meanwhile (stopped from there): the bar keeps a way back to
+    # the end, and the Library is asked again, since it now holds the new recording.
+    yield js("document.querySelector('[data-go=library]').click(); true")
+    yield until("document.querySelectorAll('#games .game').length > 0")
+    asks_before = len(rig.library_asks)
+    yield js("ask('stop_recording'); true")
+    yield until("!document.getElementById('rec').hidden && document.getElementById('rec').textContent === "
+                "'Recording ended'")
+    yield until("document.querySelectorAll('#games .game').length > 0")
+    facts["rec_left_for_the_library"] = {"library_asked_again": len(rig.library_asks) - asks_before,
+                                         "bar": (yield js("document.getElementById('rec').textContent"))}
+    yield js("document.getElementById('rec').click(); true")
+    yield until("!!document.getElementById('rec-results')")
+    facts["rec_done"] = yield js("""(() => ({title: document.getElementById('rec-title').textContent,
+        bar: !document.getElementById('rec').hidden,
+        notes: [...document.querySelectorAll('#rec-notes li')].map((n) => n.textContent)}))()""")
+    yield shot("recording-done")
+    # A view of the recording older than the one shown changes nothing (a reply and a push that crossed).
+    facts["rec_older_view"] = yield js("""(() => {
+        recordingPushed(Object.assign({}, rec, {seq: rec.seq - 1, phase: 'recording', active: true,
+                                               title: 'Recording', action: 'stop'}));
+        return {title: document.getElementById('rec-title').textContent, bar: !document.getElementById('rec').hidden};
+    })()""")
+    facts["rec_title_done"] = window_title(app)
+    yield js("document.getElementById('rec-results').click(); true")
+    yield until("!!document.querySelector('.verdict')")
+    facts["rec_results"] = yield js("document.querySelector('#view h1').textContent")
+    facts["rec_played"], facts["rec_flashes"] = list(rig.played), list(rig.flashes)
+    facts["rec_prompts"] = [{"hwnd_is_the_window": c["hwnd"] == app.window.hwnd, "argv": c["argv"]}
+                            for c in rig.prompts]
+    yield wait(lambda: rig.report.is_file())
+    facts["rec_report"] = json.loads(rig.report.read_text(encoding="utf-8"))
+
     # Recovery. The renderer crashes: the window loads its page again.
     yield ("crash_renderer",)
-    yield until_ready(2)
+    yield until_ready(facts["readies"] + 1)
     yield until("document.querySelectorAll('#games .game').length > 0")
     facts["after_renderer_crash"] = yield js("location.href")
+    # The page loaded again after the recording's end: the bar still offers the way back to it, once (its answer to
+    # the page's own ask('recording') may come after the library has drawn, so wait for it).
+    yield until("!document.getElementById('rec').hidden")
+    facts["bar_after_reload"] = yield js("document.getElementById('rec').textContent")
     # The browser process ends: once BrowserProcessExited says the data folder is free, a new environment, with the
     # options object again, and the page again.
     pid = app.window.browser_pid
     yield ("end_browser",)
-    yield until_ready(3, 60.0)
+    yield until_ready(facts["readies"] + 1, 60.0)
     yield until("document.querySelectorAll('#games .game').length > 0")
     facts["after_browser_exit"] = {"generation": app.window.generation, "old_pid": pid,
                                    "new_pid": app.window.browser_pid,
@@ -220,6 +332,12 @@ class Driver:
         elif op[0] == "ready":
             self.deadline = time.monotonic() + op[2]
             self.wait_ready(op[1])
+        elif op[0] == "activate":
+            w.on_window_message(w.hwnd, wv.WM_ACTIVATE, 1 if op[1] else wv.WA_INACTIVE, 0)
+            w.after(50, lambda: self.resume(None))
+        elif op[0] == "wait":
+            self.deadline = time.monotonic() + op[2]
+            self.wait_for(op[1])
         elif op[0] == "crash_renderer":
             done = w.handler(DEVTOOLS_DONE, wv.DONE_STR, lambda hr, res: None)
             hr = wv.vcall(w.webview.ptr, CALL_DEVTOOLS_SLOT, (ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_void_p),
@@ -280,6 +398,21 @@ class Driver:
         else:
             self.app.window.after(POLL_MS, lambda: self.wait_ready(n))
 
+    def wait_for(self, predicate) -> None:
+        try:
+            ok = bool(predicate())
+        except Exception:  # noqa: BLE001 - a failed read is a failed wait, said in full
+            self.facts["error"] = traceback.format_exc()
+            self.finish()
+            return
+        if ok:
+            self.resume(True)
+        elif time.monotonic() > self.deadline:
+            self.facts["error"] = "timed out waiting for a condition only Python can read"
+            self.finish()
+        else:
+            self.app.window.after(POLL_MS, lambda: self.wait_for(predicate))
+
     def poll(self, code: str) -> None:
         def check(hr, res):
             if self.decode(hr, res) is True:
@@ -313,8 +446,30 @@ def main(argv: list[str]) -> int:
     create = wv.environment_creator(runtime["dll"])
     wv.SetProcessDpiAwarenessContext(wv.DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
     wv.CoInitializeEx(None, wv.COINIT_APARTMENTTHREADED)
+    # The recording's stand-ins: the recorder records nothing and saves no file, the prompt is a harmless process of
+    # this harness's own, and the sounds and the taskbar flash are only noted.
+    rig = types.SimpleNamespace(played=[], flashes=[], prompts=[], relays=[], report=home / "fake-recorder-report.json",
+                                library_asks=[])
+    recordings = [e for e in library.scan(home / "sessions") if e.is_recording]
+    # The markup-named game the tests use, else (the README's pictures library) the newest recording's game.
+    picked = next((e for e in recordings if e.game == app_demo.MARKUP_TITLE), recordings[0])
+    plan = home / "fake-recorder-plan.json"
+    plan.write_text(json.dumps({"elevate": True, "game": picked.game, "marks": 2, "session": picked.id,
+                                "end": "stop", "report": str(rig.report)}), encoding="utf-8")
     app = App(home=home, runtime=runtime, create_fn=create, log=facts["log"].append, tell=facts["told"].append,
-              activate=False, opener=facts["opened"].append)
+              activate=False, opener=facts["opened"].append,
+              recorder=lambda: [str(fake_recorder.BASE_PY), "-B", "-E", "-s", "-m", "tests.fake_recorder", str(plan)],
+              launcher=fake_recorder.stand_in_prompt(rig.prompts, rig.relays), play=rig.played.append,
+              flash=rig.flashes.append)
+    app.harness = rig
+    real_library = app.do_library
+    app.do_library = lambda: (rig.library_asks.append(1), real_library())[1]     # counts the page's asks
+    app.window.notify_state = lambda: wv.QUNS_ACCEPTS_NOTIFICATIONS   # the flash's own wait is tested apart
+    from lagdoctor.winapi import elevation
+
+    def no_real_prompt(*args, **kwargs):           # whatever slips, this run never raises Windows' UAC prompt
+        raise AssertionError("the harness reached the real UAC prompt")
+    elevation.launch_elevated = no_real_prompt
     driver = Driver(app, facts, shots)
     app.on_ready = driver.start
 
@@ -330,6 +485,10 @@ def main(argv: list[str]) -> int:
     finally:
         facts["fatal"] = app.window.fatal
         app.window.destroy_icons()
+        for p in rig.relays:
+            p.kill()
+        if app.rec is not None and app.rec.proc is not None and app.rec.proc.poll() is None:
+            app.rec.proc.kill()                         # a run that failed mid-recording leaves no recorder behind
         out.write_text(json.dumps(facts, indent=1, default=str), encoding="utf-8")
     return 0 if facts.get("finished") and "error" not in facts else 1
 

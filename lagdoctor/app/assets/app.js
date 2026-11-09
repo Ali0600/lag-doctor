@@ -1,7 +1,7 @@
 'use strict';
-// lag-doctor's screens: Library, a game's page, Results, Compare and Settings. Everything shown comes from the app
-// over JSON web messages (lagdoctor/app/bridge.py). Text from a capture or the PC (a game's title, a process name,
-// evidence) is put on the page as text only: el() makes text nodes, and nothing here parses markup.
+// lag-doctor's screens: Library, a game's page, Results, Compare, Settings and a running recording. Everything shown
+// comes from the app over JSON web messages (lagdoctor/app/bridge.py). Text from a capture or the PC (a game's title,
+// a process name, evidence) is put on the page as text only: el() makes text nodes, and nothing here parses markup.
 
 const wv = window.chrome && window.chrome.webview;
 const $ = (id) => document.getElementById(id);
@@ -59,6 +59,7 @@ function ask(kind, args) {
 if (wv) {
   wv.addEventListener('message', (e) => {
     const m = e.data;
+    if (m && typeof m === 'object' && m.type === 'push' && m.kind === 'recording') { recordingPushed(m.data); return; }
     if (!m || typeof m !== 'object' || m.type !== 'reply' || !waiting.has(m.id)) return;
     const w = waiting.get(m.id);
     waiting.delete(m.id);
@@ -98,6 +99,7 @@ function go(name, args, push = true) {
   current = {name, args: args || {}};
   $('back').hidden = stack.length === 0;
   for (const b of document.querySelectorAll('#bar nav button')) b.classList.toggle('on', b.dataset.go === name);
+  if (recClock) { clearInterval(recClock); recClock = null; }
   charts.forEach((c) => c.destroy());
   charts.length = 0;
   const mine = ++token;
@@ -241,8 +243,8 @@ const SCREENS = {
     if (!data.games.length) {
       show(strip, el('h1', null, 'Your games'), el('div', {class: 'empty'},
         el('p', null, 'No recordings yet.'),
-        el('p', {class: 'muted'}, ...prose('Start a game, then run `lagdoctor watch` in a terminal. When the recording ' +
-          'is analysed, the game appears here with its results.'))));
+        el('p', {class: 'muted'}, 'Start a game, then press Record the game that\'s running. When the recording is ' +
+          'analysed, the game appears here with its results.'), recordButton()));
       return;
     }
     let filter = 'all', query = '';
@@ -263,7 +265,7 @@ const SCREENS = {
     show(strip,
       el('div', {class: 'row tools'}, search, ...chips, el('span', {class: 'spacer'}),
         el('span', {class: 'muted'}, `${data.games.length} game${data.games.length === 1 ? '' : 's'}, ` +
-          `${data.recordings} recording${data.recordings === 1 ? '' : 's'}`)),
+          `${data.recordings} recording${data.recordings === 1 ? '' : 's'}`), recordButton()),
       // The Recent row only when the library holds more than it: with a few games it would repeat them all.
       data.games.length > recent.length ? el('section', {class: 'recent'}, el('h2', null, 'Recent'),
         el('div', {class: 'grid'}, ...recent.map(gameCard))) : null,
@@ -413,8 +415,9 @@ const SCREENS = {
       el('table', null, el('tbody', null, ...s.keys.map(([what, key]) => el('tr', null, el('td', null, what),
         el('td', null, el('code', null, key)))))),
       el('h2', null, 'Sound'),
-      el('p', {class: 'muted'}, 'Recording from the app will play short sounds while you play: check that you ' +
-        'can hear them.'), sound,
+      el('p', {class: 'muted'}, 'While a recording runs, lag-doctor plays short sounds: a double knock when Windows ' +
+        'asks for permission while the game is in front, a chime when it starts, a blip when it hears the lag key, a ' +
+        'chime when it ends, and a low tone when something stops working. Check that you can hear this one.'), sound,
       el('h2', null, 'Library'), el('p', null, s.library_sources),
       el('h2', null, 'Where recordings are kept'),
       el('div', {class: 'row'}, el('code', null, s.sessions_folder),
@@ -422,7 +425,120 @@ const SCREENS = {
       el('h2', null, 'About'),
       el('table', null, el('tbody', null, ...s.about.map(([k, v]) => el('tr', null, el('td', null, k), el('td', null, v))))));
   },
+
+  async recording(args, live) {
+    const r = await ask('recording');
+    if (!live()) return;
+    recordingPushed(r);
+    drawRecording();
+  },
 };
+
+// ------------------------------------------------------------------------------------- a running recording --
+
+// The app's newest view of the recording it started (lagdoctor/app/views.py, recording_view), or null. Its seq rises
+// with every view the app makes, so a reply and a push that cross keep the newest.
+let rec = null;
+let recSeq = 0;
+let recClock = null;
+let endSeen = false;             // the last recording's end has been shown on its own screen (a page loaded
+                                 // again after an end offers the way back to it once)
+
+function recordingPushed(r) {
+  if (!r || typeof r !== 'object' || typeof r.seq !== 'number' || r.seq <= recSeq) return;
+  const wasActive = !!(rec && rec.active);
+  recSeq = r.seq;
+  rec = Object.assign({}, r, {at: performance.now()});
+  if (r.active) endSeen = false;
+  if (current && current.name === 'recording') drawRecording();
+  else if (wasActive && !r.active && current && current.name === 'library') go('library', {}, false);   // it is new
+  updateBar();
+}
+
+// The bar's button back to the running screen: while a recording runs, and after it ends until its end is seen.
+function updateBar() {
+  const bar = $('rec');
+  bar.hidden = !(rec && (rec.active || (rec.phase === 'done' && !endSeen)));
+  bar.textContent = rec && rec.active ? 'Recording' : 'Recording ended';
+}
+
+function recError(err) {
+  const old = $('rec-error');
+  if (old) old.remove();
+  view().prepend(el('p', {class: 'error', id: 'rec-error'}, String(err && err.message || err)));
+}
+
+function startRecording(button) {
+  if (button) button.disabled = true;
+  ask('record').then((r) => {
+    recordingPushed(r);
+    stack.length = 0;
+    go('recording', {}, false);
+  }).catch((err) => {
+    if (button) button.disabled = false;
+    recError(err);
+  });
+}
+
+function recordButton(label) {
+  return el('button', {class: 'btn primary', type: 'button', id: 'record', on: {click: (e) => startRecording(e.target)}},
+    label || 'Record the game that\'s running');
+}
+
+// "07:12 of 10:00": the running clock, counted on from the app's last view while the recording runs.
+function clockText(r) {
+  const two = (v) => String(v).padStart(2, '0');
+  const mmss = (v) => {
+    v = Math.max(0, Math.floor(v));
+    const h = Math.floor(v / 3600), m = Math.floor((v % 3600) / 60);
+    return (h ? `${h}:${two(m)}` : two(m)) + `:${two(v % 60)}`;
+  };
+  let s = (Number(r.elapsed_s) || 0) + (r.phase === 'recording' ? (performance.now() - r.at) / 1000 : 0);
+  if (r.length_s) s = Math.min(s, r.length_s);
+  return r.length_s ? `${mmss(s)} of ${mmss(r.length_s)}` : mmss(s);
+}
+
+function drawRecording() {
+  if (recClock) { clearInterval(recClock); recClock = null; }
+  const r = rec;
+  if (!r || !r.phase) {
+    show(el('h1', null, 'Record a game'), el('p', {class: 'muted'}, 'No recording is running. Start a game first.'),
+      recordButton());
+    return;
+  }
+  const answer = (kind) => (e) => { e.target.disabled = true; ask(kind).then(recordingPushed).catch(recError); };
+  const buttons = [];
+  if (r.action === 'cancel') {
+    buttons.push(el('button', {class: 'btn', type: 'button', id: 'rec-cancel', on: {click: answer('cancel_recording')}},
+      'Cancel'));
+  } else if (r.action === 'stop') {
+    buttons.push(el('button', {class: 'btn primary', type: 'button', id: 'rec-stop', on: {click: answer('stop_recording')}},
+      'Stop and save'));
+  }
+  if (r.phase === 'done') {
+    if (r.session) {
+      buttons.push(el('button', {class: 'btn primary', type: 'button', id: 'rec-results',
+        on: {click: () => go('results', {session: r.session})}}, 'Open its results'));
+    }
+    buttons.push(recordButton(r.ok ? 'Record again' : 'Try again'));
+    buttons.push(el('button', {class: 'btn', type: 'button', on: {click: () => { stack.length = 0; go('library', {}, false); }}},
+      'Back to the library'));
+  }
+  const clock = r.phase === 'recording' ? el('p', {class: 'clock', id: 'rec-clock'}, clockText(r)) : null;
+  show(el('div', {class: 'running', id: 'running', 'data-phase': r.phase},
+    el('h1', {id: 'rec-title'}, r.title),
+    r.game ? el('p', {class: 'rec-game', id: 'rec-game'}, r.game) : null,
+    clock,
+    r.phase === 'done' && r.elapsed_s ? el('p', {class: 'muted'}, `Recorded ${fmtElapsed(r.elapsed_s)}.`) : null,
+    el('p', {id: 'rec-detail'}, ...prose(r.detail)),
+    r.notes.length ? el('ul', {class: 'notes', id: 'rec-notes'}, ...r.notes.map((n) => el('li', null, ...prose(n)))) : null,
+    el('div', {class: 'row'}, ...buttons),
+    r.said.length ? [el('h2', null, 'What lag-doctor said'), el('pre', {class: 'said', id: 'rec-said'}, r.said.join('\n'))]
+      : null));
+  if (clock) recClock = setInterval(() => { clock.textContent = clockText(r); }, 1000);
+  if (r.phase === 'done') endSeen = true;
+  updateBar();
+}
 
 async function openMoment(session, eventId, box) {
   for (const tr of document.querySelectorAll('tr[data-event]')) tr.classList.toggle('chosen', tr.dataset.event === String(eventId));
@@ -464,6 +580,11 @@ async function openMoment(session, eventId, box) {
 if (wv) {
   go('library', {}, false);
   wv.postMessage({type: 'ready'});
+  // A page loaded again during a recording (after a crash of its own) goes back to it.
+  ask('recording').then((r) => {
+    recordingPushed(r);
+    if (r && r.active && current && current.name === 'library') go('recording', {}, false);
+  }).catch(() => {});
 } else {
   show(el('p', {class: 'error'}, 'This page only works inside lag-doctor\'s window.'));
 }
