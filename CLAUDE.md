@@ -152,6 +152,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   user's Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`). Nor does an agent open a
   store link (`steam://`, `com.epicgames.launcher://`), which starts a game on the owner's screen: Steam's own logs
   and `appcache\appinfo.vdf`, read-only, show how a launch behaves (`docs/research/desktop-app.md`, section 14).
+  `check` and `analyze` only print a note there, yet each writes a new folder under `paths.sessions_dir()`, into that
+  private copy, where the owner never sees it: to re-run today's analysis on one of the owner's recordings, load it
+  and call `diagnose()` in memory (`Capture.load(path)`; the agent's shell reads the real sessions folder, as it did on
+  2026-11-09).
 - **`scripts/stage2` creates throwaway Windows services** (the capture-service experiments, `docs/INSTALLER-PLAN.md`
   Stage 2). It runs only on GitHub's hosted runners, from `.github/workflows/experiments.yml` (started by hand, or by
   a pull request that changes it, `scripts/stage2` or a module the experiments import, which its `paths:` lists and
