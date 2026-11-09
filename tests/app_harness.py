@@ -125,6 +125,8 @@ def script(facts: dict, app: App):
     yield until("!!document.getElementById('compare-table')")
     facts["compare"] = yield js("""[...document.querySelectorAll('#view table tbody tr')].map(
         (tr) => [...tr.children].map((td) => td.textContent))""")
+    facts["compare_differs"] = yield js("""[...new Set([...document.querySelectorAll('#view td.differs')].map(
+        (td) => td.parentElement.children[0].textContent))]""")
     yield shot("compare")
     yield js("document.getElementById('back').click(); true")
     yield until("!!document.getElementById('game-name')")

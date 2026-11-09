@@ -432,6 +432,47 @@ def _yes_no(v: Any) -> str:
     return "unknown" if v is None else ("on" if v else "off")
 
 
+def _count(v: Any) -> int:
+    return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
+
+
+def _files_text(files: list, more: int, folders: bool = False) -> str:
+    items = [labels.file_text(f["name"], f.get("bytes"), f.get("modified"))
+             + (f" in {ntpath.dirname(f['path'])}" if folders and isinstance(f.get("path"), str) else "")
+             for f in files if isinstance(f, dict) and isinstance(f.get("name"), str)]
+    return "; ".join(items) + (f"; and {more} more" if more else "")
+
+
+def _game_files_rows(game: dict, errors: dict) -> list[tuple[str, str]]:
+    """What lay beside the game when the recording started (capture/gamefiles.py): none for a capture from before
+    lag-doctor looked."""
+    if "drop_ins" not in game:
+        return []
+
+    def not_read(section: str) -> str:
+        why = labels.error_text(errors.get(f"game.{section}")) or (None if game.get("exe") else labels.NO_EXE)
+        return f"not read: {why}" if why else "not read"
+
+    rows = []
+    drop, ue = game.get("drop_ins"), game.get("unreal")
+    ue_found = isinstance(ue, dict) and ue.get("found") is True
+    if isinstance(drop, dict):
+        files = _list(drop.get("files")) + (_list(ue.get("mods")) if ue_found else [])
+        more = _count(drop.get("more")) + (_count(ue.get("mods_more")) if ue_found else 0)
+        rows.append(("Drop-in files", _files_text(files, more) if files or more else
+                     "none found beside the game's exe" + (" or in its ~mods folder" if ue_found else "")))
+    else:
+        rows.append(("Drop-in files", not_read("drop_ins")))
+    if ue_found:
+        config, more = _list(ue.get("config")), _count(ue.get("config_more"))
+        looked = ", ".join(x for x in _list(ue.get("looked_in")) if isinstance(x, str))
+        rows.append(("Unreal settings files", _files_text(config, more, folders=True) if config or more else
+                     f"none found in the Saved\\Config folders of {looked}"))
+    elif ue is None:
+        rows.append(("Unreal settings files", not_read("unreal")))
+    return rows
+
+
 def _pc(cap: Capture) -> str:
     inv = _dict(cap.inventory)
     rows: list[tuple[str, str]] = []
@@ -468,8 +509,12 @@ def _pc(cap: Capture) -> str:
                                  f"{_yes_no(st.get('memory_integrity'))}"))
     game = _dict(inv.get("game"))
     if game:
+        date = labels.date_text(game.get("exe_modified"))
+        dated = [x for x in (labels.size_text(game.get("exe_bytes")), f"dated {date}" if date else None) if x]
         rows.append(("Game file", f"{game.get('exe') or '?'} on {game.get('drive') or '?'} "
-                                  f"({game.get('media') or 'unknown'} drive)"))
+                                  f"({game.get('media') or 'unknown'} drive)"
+                                  + (f", {', '.join(dated)}" if dated else "")))
+        rows.extend(_game_files_rows(game, _dict(inv.get("errors"))))
     net = _dict(inv.get("network"))
     if net:
         rows.append(("Network", f"{net.get('kind') or '?'} {net.get('name') or ''}".strip()))

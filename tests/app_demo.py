@@ -36,11 +36,43 @@ class Demo:
     when: datetime       # when the recording started
     summary: bool = True  # False: an older session, from before summaries existed
     last: bool = False    # the session `lagdoctor fix` acts on
+    files: str = ""       # what its game's folder held (GAME_FILES); "": a capture from before lag-doctor looked
+
+
+# A made-up Unreal game's folder before and after a fan fix: a drop-in DLL and an ASI plugin added, and the settings
+# changed in its own menu; its Engine.ini and its exe stay the same.
+_EXE = {"exe_bytes": 81_234_567, "exe_modified": "2026-10-30T09:12:44-07:00"}
+_ENGINE_INI = {"path": "C:\\Users\\Demo Player\\AppData\\Local\\DemoRacer\\Saved\\Config\\Windows\\Engine.ini",
+               "name": "Engine.ini", "bytes": 412, "modified": "2026-10-30T09:20:01-07:00", "sha256": "1" * 64,
+               "why": None}
+_SETTINGS = {"path": "C:\\Users\\Demo Player\\AppData\\Local\\DemoRacer\\Saved\\Config\\Windows\\"
+                     "GameUserSettings.ini", "name": "GameUserSettings.ini", "bytes": 3_210,
+             "modified": "2026-11-01T20:10:00-07:00", "sha256": "2" * 64, "why": None}
+_FIX = [{"path": "C:\\Games\\Demo Racer\\DemoRacer\\Binaries\\Win64\\dxgi.dll", "name": "dxgi.dll",
+         "bytes": 1_843_200, "modified": "2026-11-02T18:00:00-07:00", "sha256": "3" * 64, "why": None},
+        {"path": "C:\\Games\\Demo Racer\\DemoRacer\\Binaries\\Win64\\scripts\\FrameFix.asi",
+         "name": "scripts\\FrameFix.asi", "bytes": 96_256, "modified": "2026-11-02T18:00:00-07:00",
+         "sha256": "4" * 64, "why": None}]
+
+
+def _unreal(settings: dict) -> dict:
+    return {"found": True, "project": "DemoRacer", "looked_in": ["C:\\Users\\Demo Player\\AppData\\Local\\DemoRacer"],
+            "config": [_ENGINE_INI, settings], "config_more": 0, "mods": [], "mods_more": 0}
+
+
+GAME_FILES = {
+    "before": {**_EXE, "drop_ins": {"folder": "C:\\Games\\Demo Racer\\DemoRacer\\Binaries\\Win64", "files": [],
+                                    "more": 0}, "unreal": _unreal(_SETTINGS)},
+    "after": {**_EXE, "drop_ins": {"folder": "C:\\Games\\Demo Racer\\DemoRacer\\Binaries\\Win64", "files": _FIX,
+                                   "more": 0},
+              "unreal": _unreal(dict(_SETTINGS, bytes=3_208, modified="2026-11-03T20:55:00-07:00",
+                                     sha256="5" * 64))},
+}
 
 
 DEMOS = (
-    Demo("Demo Racer", "demoracer.exe", "hitch", datetime(2026, 11, 1, 20, 15, 0)),
-    Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0)),
+    Demo("Demo Racer", "demoracer.exe", "hitch", datetime(2026, 11, 1, 20, 15, 0), files="before"),
+    Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0), files="after"),
     Demo("Star Planner", "starplanner.exe", "hog", datetime(2026, 11, 2, 18, 30, 0), summary=False),
     Demo(MARKUP_TITLE, MARKUP_EXE, "hitch", datetime(2026, 11, 4, 19, 45, 0), last=True),
 )
@@ -48,8 +80,8 @@ DEMOS = (
 
 # For the README's pictures: the same steps work on it (the harness opens the game whose name holds "Quest").
 PICTURES = (
-    Demo("Demo Racer", "demoracer.exe", "hitch", datetime(2026, 11, 1, 20, 15, 0)),
-    Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0)),
+    Demo("Demo Racer", "demoracer.exe", "hitch", datetime(2026, 11, 1, 20, 15, 0), files="before"),
+    Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0), files="after"),
     Demo("Star Planner", "starplanner.exe", "hog", datetime(2026, 11, 2, 18, 30, 0)),
     Demo("Night Harbour", "nightharbour.exe", "pace", datetime(2026, 10, 28, 22, 10, 0)),
     Demo("Ember Quest", "emberquest.exe", "hitch-io", datetime(2026, 11, 4, 19, 45, 0), last=True),
@@ -68,6 +100,8 @@ def build(home: Path, demos: tuple[Demo, ...] = DEMOS, seconds: float = 30.0) ->
         cap.target = dict(cap.target, name=demo.exe, exe=f"C:\\Games\\{demo.exe}", window_title=demo.title)
         cap.started_at = demo.when.astimezone().isoformat(timespec="seconds")
         cap.tool_version = "0.1.0"
+        if demo.files:
+            cap.inventory = dict(cap.inventory, game=dict(cap.inventory["game"], **GAME_FILES[demo.files]))
         folder = session_dir(sessions, cap.target, when=demo.when)
         cap_path = folder / "capture.ldcap.json.gz"
         cap.save(cap_path)

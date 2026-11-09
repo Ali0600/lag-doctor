@@ -16,12 +16,13 @@ import sys
 import time
 import winreg
 from ctypes import wintypes
+from datetime import datetime
 from pathlib import Path
 
 import psutil
 import pytest
 
-from lagdoctor.capture import inventory
+from lagdoctor.capture import gamefiles, inventory
 from lagdoctor.fixes.registry import dword, sz
 from lagdoctor.winapi import display, dxgi, power, storage
 
@@ -44,6 +45,13 @@ SCHEMES = [("381b4222-f694-41f0-9685-ff5bb260df2e", "Balanced"), ("64a64f24-65b9
 # This laptop's "Silent" plan, read on 2026-11-05: the CPU set exactly as in Balanced.
 PLAN = {"max_cpu_ac": 100, "max_cpu_dc": 100, "max_cpu1_ac": 100, "max_cpu1_dc": 100, "boost_ac": 2, "boost_dc": 2,
         "cooling_ac": 1, "cooling_dc": 0}
+# What the game's folder held (capture/gamefiles.py, tested on real folders in tests/test_gamefiles.py).
+EXE_FILE = (123_456_789, "2026-11-01T10:00:00+00:00")
+DROP_INS = {"folder": r"D:\SteamLibrary\steamapps\common\Some Game", "more": 0,
+            "files": [{"path": r"D:\SteamLibrary\steamapps\common\Some Game\dxgi.dll", "name": "dxgi.dll",
+                       "bytes": 2048, "modified": "2026-11-01T10:00:00+00:00", "sha256": "a" * 64, "why": None}]}
+NOT_UNREAL = {"found": False, "project": None, "looked_in": [], "config": [], "config_more": 0, "mods": [],
+              "mods_more": 0}
 
 
 def guard_child(script: str) -> list[str]:
@@ -86,6 +94,12 @@ def machine(monkeypatch, reg_sandbox):
                         + [(0, c, 0) for c in range(12, 16)])
     monkeypatch.setattr(inventory, "_ram_gb", lambda: 31.6)
     monkeypatch.setattr(inventory, "_device_guard_argv", lambda: guard_answer([2]))
+    monkeypatch.setattr(inventory, "_exe_file", lambda exe: state.setdefault("exe_file_for", []).append(exe)
+                        or EXE_FILE)
+    monkeypatch.setattr(gamefiles, "drop_ins", lambda exe, prints=None: state.setdefault("drop_ins_for", []).append(
+        (exe, prints)) or json.loads(json.dumps(DROP_INS)))
+    monkeypatch.setattr(gamefiles, "unreal", lambda exe, prints=None, user_folders=None: state.setdefault(
+        "unreal_for", []).append((exe, prints)) or dict(NOT_UNREAL))
     reg = reg_sandbox
     reg.set("HKLM", inventory.NT_CURRENT_VERSION, "ProductName", sz("Windows 10 Home"))
     reg.set("HKLM", inventory.CPU_KEY, "ProcessorNameString", sz("12th Gen Intel(R) Core(TM) i7-12650H  "))
@@ -107,7 +121,8 @@ DESIGN_KEYS = {
               "battery_pct", "saver", "plan"},
     "settings": {"game_mode", "game_dvr", "background_recording", "hags", "windowed_optimizations", "vrr",
                  "memory_integrity"},
-    "game": {"exe", "drive", "media", "free_gb", "gpu_preference", "monitor_device", "launcher"},
+    "game": {"exe", "drive", "media", "free_gb", "gpu_preference", "monitor_device", "launcher", "exe_bytes",
+             "exe_modified", "drop_ins", "unreal"},
     "oem": {"tools"},
 }
 
@@ -133,7 +148,12 @@ def test_collect_returns_every_design_key(machine):
     assert machine["personality_calls"] == [(SCHEMES[1][0], True)]   # the active plan's type, for that source
     assert machine["plan_for"] == [SCHEMES[1][0]]                    # the active plan's own settings
     assert inv["game"] == {"exe": EXE, "drive": "D:", "media": "SSD", "free_gb": 68.81, "gpu_preference": None,
-                           "monitor_device": PANEL["device"], "launcher": "steam"}
+                           "monitor_device": PANEL["device"], "launcher": "steam", "exe_bytes": EXE_FILE[0],
+                           "exe_modified": EXE_FILE[1], "drop_ins": DROP_INS, "unreal": NOT_UNREAL}
+    # Both folder reads look at the game's exe and share one budget and deadline.
+    assert machine["exe_file_for"] == [EXE]
+    assert [x[0] for x in machine["drop_ins_for"] + machine["unreal_for"]] == [EXE, EXE]
+    assert machine["drop_ins_for"][0][1] is machine["unreal_for"][0][1] is not None
     assert inv["displays"] == [PANEL]
     json.dumps(inv)                                                  # it must survive the capture file
 
@@ -153,6 +173,33 @@ def test_without_a_target_the_game_is_unknown_and_oem_not_checked(machine):
 def test_a_relative_exe_path_is_reported_not_used(machine):
     inv = collect(machine, {"exe": "Game.exe"})
     assert inv["game"]["exe"] is None and "absolute" in inv["errors"]["game"]
+    assert "drop_ins_for" not in machine and inv["game"]["drop_ins"] is None       # no folder is looked at
+
+
+def test_a_game_folder_that_cannot_be_read_is_reported_and_the_rest_still_arrive(machine, monkeypatch):
+    def denied(exe, prints=None):
+        raise OSError(r"D:\SteamLibrary\steamapps\common\Some Game could not be read: Access is denied")
+
+    def gone(exe):
+        raise OSError(f"{exe} could not be read: The system cannot find the file specified")
+    monkeypatch.setattr(gamefiles, "drop_ins", denied)
+    monkeypatch.setattr(inventory, "_exe_file", gone)
+    inv = collect(machine, {"exe": EXE})
+    assert inv["game"]["drop_ins"] is None and inv["game"]["exe_bytes"] is None
+    assert inv["errors"]["game.drop_ins"] == ("OSError: " + r"D:\SteamLibrary\steamapps\common\Some Game could not "
+                                              "be read: Access is denied")
+    assert inv["errors"]["game.exe_file"].endswith("could not be read: The system cannot find the file specified")
+    assert inv["game"]["unreal"] == NOT_UNREAL and inv["game"]["launcher"] == "steam"
+
+
+def test_the_exe_file_is_read_by_size_and_date(tmp_path):
+    exe = tmp_path / "Game.exe"
+    exe.write_bytes(b"MZ" + bytes(98))
+    os.utime(exe, (1_790_000_000, 1_790_000_000))
+    size, when = inventory._exe_file(str(exe))
+    assert size == 100 and datetime.fromisoformat(when).timestamp() == 1_790_000_000
+    with pytest.raises(OSError, match="could not be read"):
+        inventory._exe_file(str(tmp_path / "missing.exe"))
 
 
 def test_a_failing_source_is_reported_and_the_rest_still_arrive(machine, monkeypatch):

@@ -705,3 +705,26 @@ imports inside functions too, since they run when the function does) and keep th
 modules the experiments run as a service without starting a run; its closure was 25 files, its filter covered 8.
 **Takeaway**: derive a path filter from the import graph and test it both ways: nothing reached is missing, and
 nothing listed is unreached.
+
+### Windows' KnownDLLs list is longer than its registry key
+The `KnownDLLs` key under `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager` names the DLLs Windows always loads
+from System32, but the list Windows actually uses is the `\KnownDlls` object directory it builds at boot, which also
+holds the DLLs those import: 42 DLLs (beside its `KnownDllPath` link) against the key's 38 on the owner's PC
+(2026-11-08), `ntdll.dll`,
+`kernelbase.dll`, `ucrtbase.dll` and `comctl32.dll` among the extra ones. `NtOpenDirectoryObject` and
+`NtQueryDirectoryObject` list it, as WinObj does.
+**Why it came up**: the game folder check lists DLLs beside a game's exe that Windows would load instead of its own,
+so no name on its list may be one Windows never loads from there. `tests/test_gamefiles.py` checks the list against
+both readouts.
+**Takeaway**: to know which DLL names cannot be planted beside a program, read the object directory, not only the key.
+
+### Reading a OneDrive file that is kept online only downloads it
+A file OneDrive keeps online only carries `FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS` (or `RECALL_ON_OPEN`, or `OFFLINE`):
+its data comes down the moment something reads it. The folder listing already carries those bits, through
+`FindFirstFile`'s data, which `os.scandir` keeps (`DirEntry.stat(follow_symlinks=False)` makes no call), so a file can
+be judged without opening it. A user's Documents folder can sit inside OneDrive, and only `SHGetKnownFolderPath`
+(`FOLDERID_Documents`) says where; `%USERPROFILE%\Documents` may be an empty folder.
+**Why it came up**: some Unreal games keep their user settings in `Documents\My Games\<game>\Saved\Config`, and the
+folder check hashes those files when a recording starts, while the game is running.
+**Takeaway**: before reading a user's files, check the recall bits from the listing; find the user's folders through
+the known-folder API, never by joining names onto the profile folder.

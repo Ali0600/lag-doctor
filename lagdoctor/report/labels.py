@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from typing import Any
 
 from lagdoctor.report.charts import number
@@ -428,3 +429,55 @@ def needs_source(source: str) -> str:
     command included, is in the Not measured list, once; repeating it here chained colons ("needs X, which was not
     measured: frame timing was skipped: ...")."""
     return f"{NEEDS}{source_text(source)}, which was not recorded (see Not measured)"
+
+
+# ------------------------------------------------------------------ the game's files --
+
+MAX_BYTES = 1 << 53                    # a file size past this is no size (a float holds every integer below it)
+
+
+def byte_count(v: Any) -> int | None:
+    """v as a file size: a whole number of bytes from 0 to MAX_BYTES, else None (charts.number stops at 1e7)."""
+    return v if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= MAX_BYTES else None
+
+
+def size_text(n: Any) -> str | None:
+    """1089 -> "1.1 KB"; bytes in powers of 1024, as Explorer shows them."""
+    n = byte_count(n)
+    if n is None:
+        return None
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return ("1 byte" if n == 1 else f"{n:.0f} bytes") if unit == "bytes" else f"{n:.1f} {unit}"
+        n /= 1024
+    return None
+
+
+def date_text(iso: Any) -> str | None:
+    """"2026-11-06T12:20:52-08:00" -> "6 Nov 2026, 12:20", in the time zone the text names."""
+    if not isinstance(iso, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    return f"{dt.day} {dt:%b %Y, %H:%M}"
+
+
+def file_text(name: Any, size: Any, iso: Any) -> str:
+    """"dxgi.dll (1.1 MB, 6 Nov 2026, 12:20)"."""
+    details = [x for x in (size_text(size), date_text(iso)) if x]
+    return f"{name} ({', '.join(details)})" if details else str(name)
+
+
+NO_EXE = "the game's file was not known"
+_OS_ERROR = "OSError: "                 # how the inventory's errors name a folder read that failed (inventory._section)
+
+
+def error_text(why: Any) -> str | None:
+    """An inventory section's reason without the error type the inventory puts first: the folder check's own
+    reasons are sentences ("a folder could not be read: Access is denied")."""
+    if not isinstance(why, str) or not why.strip():
+        return None
+    why = why.strip()
+    return why[len(_OS_ERROR):] if why.startswith(_OS_ERROR) else why

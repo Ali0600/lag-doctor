@@ -69,6 +69,62 @@
 - **A `changes` job with an `if:` on each CI job, instead of the push trigger's `paths-ignore`**, once a CI check is
   ever required: a job skipped by `if:` reports success, while a workflow skipped by its path filter leaves a required
   check Pending. Revisit hook: the `on:` block of `ci.yml`, plus one aggregate job that `needs:` the rest, to require.
+- **More drop-in names, once a primary source states them**: ReShade's (it is said to install as `opengl32.dll` too,
+  with a `ReShade.ini`) and Special K's own file names. No page that could be read on 2026-11-08 named them, so the
+  folder check leaves them out; ReShade or Special K installed under a name the check knows (`dxgi.dll`, `d3d11.dll`)
+  is listed already. Revisit hook: `PROXY_DLLS` and `LOADER_CONFIGS` in `lagdoctor/capture/gamefiles.py`.
+
+---
+
+## 2026-11-08: Compare shows what changed in the game itself, read from the game's folder at record time
+
+Compare (screen 5 of `lagdoctor app`) set two recordings side by side with four conditions (power plan and mode,
+refresh rate, how frames were timed, measured length), none of which a fan fix changes. A fan fix is a file beside
+the game's exe (a DLL Windows loads from there instead of System32, an ASI loader and its plugins), a user
+`Engine.ini`, or an in-game setting, so two recordings could differ in their numbers under identical conditions. Put
+to the owner with A recommended; the owner chose "Both, A first".
+- **A: automatic, at record time (chosen, built first)**: the inventory reads the game's folder (never the game's
+  process) and lists the files a fan fix adds, with a fingerprint of each, and for an Unreal Engine game the user
+  config files. Nothing to type or forget; it cannot see an in-game setting a game keeps elsewhere.
+- **B: a note per recording, `lagdoctor watch --note TEXT` (chosen, its own PR next)**: the player's own words,
+  kept in the capture and the summary, shown in the report and Compare. It catches anything the player names, an
+  in-game setting included, but only when they remember to type it. It changes `cli.py` and
+  `capture/session.py`, which the open M3 relay PR (#23) rewrites, so it follows that PR.
+- **Only A, or only B**: not chosen. Each misses what the other sees.
+
+What A lists (`lagdoctor/capture/gamefiles.py`; the implementing session's choices, from sources read on
+2026-11-08):
+- **The DLL names Ultimate ASI Loader's README says it can be installed as** that Windows itself keeps in System32
+  (`dinput8.dll`, `dxgi.dll`, `d3d9.dll` ... `winmm.dll`, `xinput1_3.dll`), plus `d3d10core.dll` (DXVK's README) and
+  `dwmapi.dll` (UE4SS's default proxy). Its `binkw32.dll`-style names are left out: games ship those DLLs
+  themselves. No name is on Windows' KnownDLLs list, which Windows loads from System32 whatever lies beside the exe:
+  a test reads that list from the registry and from the `\KnownDlls` object directory, which also holds the DLLs
+  those import (42 DLLs against the key's 38 on the owner's PC).
+  - **Every DLL in the exe's folder**: rejected. Games ship dozens of their own, so a game update would read as a fix.
+- **ASI plugins** in the exe's folder and the loader's `scripts`, `plugins` and `update` folders (one level of
+  subfolders, as its `LoadRecursively` default does), and the settings beside them: the loader's `global.ini`, a
+  `<dll name>.ini` per DLL found, a `<plugin>.ini` per plugin, `wndmode.ini`, `dxvk.conf`, `UE4SS-settings.ini`
+  and UE4SS's `Mods\mods.txt`.
+- **For an Unreal Engine game** (the exe in `<project>\Binaries\Win64` or `WinGDK`, with the project's
+  `Content\Paks` or the install's `Engine\Binaries` beside it): every `.ini` in `Saved\Config\<platform>` under
+  `%LOCALAPPDATA%\<name>`, `Documents\My Games\<name>` (Windows' Documents folder, which OneDrive may hold) and the
+  project folder itself, for the project's name and the install folder's, and the `.pak`, `.utoc` and `.ucas` files
+  in `Content\Paks\~mods`. Epic's own page on config files does not give the packaged game's folder, so the places
+  were measured: every Unreal game on the owner's PC kept its config under `%LOCALAPPDATA%\<name>\Saved\Config` in
+  `WindowsNoEditor`, `Windows` or `WinGDK`, one named after its install folder rather than its project; FINAL
+  FANTASY VII REBIRTH keeps it in `Documents\My Games\FINAL FANTASY VII REBIRTH\Saved\Config\WindowsNoEditor`.
+  Every `.ini` there, not only `Engine.ini`: `GameUserSettings.ini` is where many Unreal games keep the settings
+  chosen in their own menus.
+- **The game's exe, by size and date**: a game update between two recordings shows too. It is not hashed: Rebirth's
+  is 119 MB, past the hash limit below.
+- **Each file by its SHA-256 up to 32 MB, within 256 MB and 5 s per recording**; a larger file, one past the budget
+  and one that OneDrive keeps online only (hashing it would download it) are compared by size and date instead, with
+  the reason kept. A folder that cannot be read leaves its section unread with the reason (DESIGN principle 2).
+- **No new summary schema**: the new summary keys are optional within `lagdoctor.summary/1`, so a summary written
+  before them reads as before and Compare shows "-" for them. A `/2` would make today's build ignore every newer
+  summary. Revisit hook: `summary.SCHEMA`.
+Revisit hooks: `PROXY_DLLS`, `LOADER_CONFIGS` and `unreal_config_bases` in `lagdoctor/capture/gamefiles.py`;
+`compare_view` in `lagdoctor/app/views.py`.
 
 ---
 

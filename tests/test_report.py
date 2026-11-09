@@ -753,6 +753,48 @@ def test_the_html_report_never_shows_the_user_folder(monkeypatch):
     assert f"<code>lagdoctor analyze &quot;{custom}&quot;</code>" in page
 
 
+def test_the_pc_details_list_what_lay_beside_the_game_without_the_user_folder(monkeypatch):
+    _profile(monkeypatch)
+    cap = make_capture(with_frames=False)
+    folder = "D:\\Games\\Racer\\Racer\\Binaries\\Win64"
+    config = PROFILE + "\\OneDrive\\Documents\\My Games\\Racer\\Saved\\Config\\WindowsNoEditor"
+    cap.inventory["game"] = {
+        "exe": folder + "\\Racer.exe", "drive": "D:", "media": "SSD", "exe_bytes": 81_234_567,
+        "exe_modified": "2026-10-30T09:12:44-07:00",
+        "drop_ins": {"folder": folder, "more": 0, "files": [
+            {"path": folder + "\\dxgi.dll", "name": "dxgi.dll", "bytes": 1_843_200,
+             "modified": "2026-11-02T18:00:00-07:00", "sha256": "a" * 64, "why": None}]},
+        "unreal": {"found": True, "project": "Racer", "looked_in": [PROFILE + "\\AppData\\Local\\Racer"],
+                   "config": [{"path": config + "\\GameUserSettings.ini", "name": "GameUserSettings.ini",
+                               "bytes": 1089, "modified": "2026-11-06T12:20:52-08:00", "sha256": None, "why": None}],
+                   "config_more": 0, "mods": [{"path": "x", "name": "~mods\\Sky_P.pak", "bytes": 40 << 20,
+                                               "modified": None, "sha256": None, "why": None}], "mods_more": 2}}
+    pc = section(html_report.render(make_diagnosis(), cap), "This PC")
+    assert "tester" not in pc.lower()
+    assert f"<td>{folder}\\Racer.exe on D: (SSD drive), 77.5 MB, dated 30 Oct 2026, 09:12</td>" in pc
+    assert "<tr><th>Drop-in files</th><td>dxgi.dll (1.8 MB, 2 Nov 2026, 18:00); ~mods\\Sky_P.pak (40.0 MB); and 2 " \
+           "more</td></tr>" in pc
+    assert ("<tr><th>Unreal settings files</th><td>GameUserSettings.ini (1.1 KB, 6 Nov 2026, 12:20) in "
+            "%USERPROFILE%\\OneDrive\\Documents\\My Games\\Racer\\Saved\\Config\\WindowsNoEditor</td></tr>") in pc
+
+    cap.inventory["game"]["unreal"].update(config=[], mods=[], mods_more=0)
+    cap.inventory["game"]["drop_ins"]["files"] = []
+    pc = section(html_report.render(make_diagnosis(), cap), "This PC")
+    assert "<td>none found beside the game&#x27;s exe or in its ~mods folder</td>" in pc
+    assert "<td>none found in the Saved\\Config folders of %LOCALAPPDATA%\\Racer</td>" in pc
+
+    cap.inventory["game"].update(drop_ins=None, unreal=None)
+    cap.inventory["errors"] = {"game.drop_ins": "OSError: " + folder + " could not be read: Access is denied"}
+    pc = section(html_report.render(make_diagnosis(), cap), "This PC")
+    assert f"<tr><th>Drop-in files</th><td>not read: {folder} could not be read: Access is denied</td></tr>" in pc
+    assert "<tr><th>Unreal settings files</th><td>not read</td></tr>" in pc
+
+    for key in ("exe_bytes", "exe_modified", "drop_ins", "unreal"):          # a capture from before the check
+        del cap.inventory["game"][key]
+    pc = section(html_report.render(make_diagnosis(), cap), "This PC")
+    assert "Drop-in files" not in pc and "Unreal settings" not in pc and "on D: (SSD drive)</td>" in pc
+
+
 @pytest.mark.parametrize("root, text, shown", [
     (PROFILE, "c:/users/jo tester/appdata/local/lag-doctor/x", "%LOCALAPPDATA%/lag-doctor/x"),   # any case, and /
     (PROFILE, "'C:\\\\Users\\\\Jo Tester\\\\AppData\\\\Roaming\\\\x'", "'%APPDATA%\\\\x'"),     # a repr's doubled \

@@ -97,6 +97,10 @@ def test_compare_puts_two_recordings_side_by_side_and_back_returns_to_the_game(r
     _ok(run)
     rows = {r[0]: r[1:] for r in run["compare"]}
     assert rows["Verdict"] == ["No lag found", "Stutter"] and rows["Refresh rate"] == ["144 Hz", "144 Hz"]
+    # What changed in the game itself: the fan fix's files, and its settings file in another copy.
+    assert rows["Drop-in files"] == ["dxgi.dll, scripts\\FrameFix.asi", "none found"]
+    assert rows["Unreal settings files"] == ["Engine.ini, GameUserSettings.ini (different copy)"] * 2
+    assert sorted(run["compare_differs"]) == ["Drop-in files", "Unreal settings files"]
     assert run["back"] == "Demo Racer"
 
 

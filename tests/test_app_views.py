@@ -241,8 +241,152 @@ def test_compare_puts_the_conditions_beside_the_numbers_and_says_which_is_better
     assert rows["Average FPS"]["better"] == ("a" if views.numbers(a)["avg_fps"] > views.numbers(b)["avg_fps"] else "b")
     assert rows["Stutters / min"]["better"] == "a"              # the smooth recording, newer, stuttered less
     names = [r["name"] for r in v["conditions"]]
-    assert names == ["Power plan and mode", "Refresh rate", "Frames timed", "Measured length"]
+    assert names == ["Power plan and mode", "Refresh rate", "Frames timed", "Measured length", "Game's exe file",
+                     "Drop-in files", "Unreal settings files"]
     assert v["note"] == ""
+
+
+def test_compare_shows_what_changed_in_the_game_between_the_two_recordings(demo):
+    home, _ = demo
+    a, b = (e for e in entries_of(home) if e.game == "Demo Racer")          # newest first: after the fix, before it
+    rows = {r["name"]: r for r in views.compare_view(a, b)["conditions"]}
+    assert rows["Drop-in files"] == {"name": "Drop-in files", "a": "dxgi.dll, scripts\\FrameFix.asi",
+                                     "b": "none found", "better": None, "differs": True}
+    # Settings changed in the game's own menu: the same file in another copy, marked on both sides.
+    assert rows["Unreal settings files"]["a"] == rows["Unreal settings files"]["b"] == \
+        "Engine.ini, GameUserSettings.ini (different copy)"
+    assert rows["Unreal settings files"]["differs"] is True
+    assert rows["Game's exe file"] == {"name": "Game's exe file", "a": "77.5 MB, dated 30 Oct 2026, 09:12",
+                                       "b": "77.5 MB, dated 30 Oct 2026, 09:12", "better": None, "differs": False}
+    same = {r["name"]: r["differs"] for r in views.compare_view(b, b)["conditions"]}
+    assert not any(same.values())
+
+
+def test_compare_shows_a_dash_for_a_recording_from_before_lag_doctor_looked_at_the_game(demo):
+    home, _ = demo
+    racer = next(e for e in entries_of(home) if e.game == "Demo Racer")
+    older = next(e for e in entries_of(home) if e.summary is not None and e.game != "Demo Racer")
+    assert older.summary["drop_ins"] is None                       # a capture with no folder check
+    v = views.compare_view(racer, older)
+    rows = {r["name"]: r for r in v["conditions"]}
+    for name in ("Game's exe file", "Drop-in files", "Unreal settings files"):
+        assert rows[name]["b"] == "-" and rows[name]["a"] != "-" and rows[name]["differs"] is False
+    assert v["note"] == views.OLDER_FILES_NOTE
+
+
+def _files(*rows, state=summary.CHECKED, more=0):
+    return {"state": state, "why": None, "files": [list(r) for r in rows], "more": more}
+
+
+DLL = ("dxgi.dll", "a" * 16, 2048, "2026-11-01T10:00:00+00:00")
+
+
+@pytest.mark.parametrize("a, b, differs", [
+    (_files(DLL), _files(DLL), False),
+    (_files(DLL), _files(("DXGI.DLL",) + DLL[1:]), False),                        # Windows ignores the case
+    (_files(DLL), _files(DLL[:1] + ("b" * 16,) + DLL[2:]), True),                 # another copy, same size and date
+    (_files(DLL), _files(DLL[:1] + (None,) + DLL[2:]), False),                    # one not hashed: size and date
+    (_files(DLL), _files(DLL[:1] + (None, 2049) + DLL[3:]), True),
+    (_files(DLL[:1] + (None,) + DLL[2:]), _files(DLL[:3] + ("2026-11-02T10:00:00+00:00",)), True),
+    (_files(DLL, DLL), _files(DLL), True),                                        # one copy more
+    (_files(DLL, more=1), _files(DLL), True),
+    (_files(), _files(DLL), True),
+    (_files(state=summary.NOT_UNREAL), _files(state=summary.NOT_UNREAL), False),
+    (_files(state=summary.NOT_CHECKED), _files(DLL), False),                      # unread: no difference claimed
+    (None, _files(DLL), False),
+])
+def test_two_lists_of_files_differ_unless_each_file_has_its_match(a, b, differs):
+    assert views.files_row("Drop-in files", a, b, "none found")["differs"] is differs
+    assert views.files_row("Drop-in files", b, a, "none found")["differs"] is differs
+
+
+def test_a_files_row_says_what_it_could_not_read_and_what_did_not_fit():
+    unread = {"state": summary.NOT_CHECKED, "why": "C:\\Games\\scripts could not be read: Access is denied",
+              "files": [], "more": 0}
+    row = views.files_row("Drop-in files", unread, _files(DLL, more=2), "none found")
+    assert row["a"] == "not read: C:\\Games\\scripts could not be read: Access is denied"
+    assert row["b"] == "dxgi.dll, and 2 more"
+    assert views.files_row("Unreal settings files", _files(state=summary.NOT_UNREAL), None, "none found")["a"] == \
+        views.NOT_UNREAL_TEXT
+    assert views.exe_row({"state": summary.NOT_CHECKED, "why": None, "bytes": None, "modified": None},
+                         None)["a"] == "not read"
+    exe = {"state": summary.CHECKED, "why": None, "bytes": 100, "modified": "2026-11-01T10:00:00+00:00"}
+    assert views.exe_row(exe, dict(exe))["differs"] is False
+    assert views.exe_row(exe, dict(exe, modified="2026-11-02T10:00:00+00:00"))["differs"] is True   # an update
+    assert views.exe_row(exe, dict(exe, bytes=101))["differs"] is True
+
+
+# A capture's inventory as the folder check leaves it (capture/gamefiles.py, capture/inventory.py).
+SHA = "0123456789abcdef" * 4
+
+
+def _inv(**game) -> dict:
+    base = {"exe": "D:\\Games\\Racer\\Racer\\Binaries\\Win64\\Racer.exe", "exe_bytes": 81_234_567,
+            "exe_modified": "2026-10-30T09:12:44-07:00",
+            "drop_ins": {"folder": "D:\\Games\\Racer\\Racer\\Binaries\\Win64", "more": 0, "files": [
+                {"path": "D:\\Games\\Racer\\Racer\\Binaries\\Win64\\dxgi.dll", "name": "dxgi.dll", "bytes": 1_843_200,
+                 "modified": "2026-11-02T18:00:00-07:00", "sha256": SHA, "why": None}]},
+            "unreal": {"found": True, "project": "Racer", "looked_in": [], "config_more": 0, "mods_more": 1,
+                       "config": [{"path": "C:\\Users\\Jo Tester\\AppData\\Local\\Racer\\Saved\\Config\\Windows\\"
+                                           "Engine.ini", "name": "Engine.ini", "bytes": 412,
+                                   "modified": "2026-10-30T09:20:01-07:00", "sha256": None, "why": "out of time"}],
+                       "mods": [{"path": "x", "name": "~mods\\Sky_P.pak", "bytes": 40 << 20, "modified": None,
+                                 "sha256": None, "why": "larger than 32 MB"}]}}
+    base.update(game)
+    return {"game": base, "errors": {}}
+
+
+def test_the_summary_keeps_each_game_file_by_name_short_hash_size_and_date():
+    out = summary.game_files(_inv())
+    assert out["game_exe"] == {"state": "checked", "why": None, "bytes": 81_234_567,
+                               "modified": "2026-10-30T09:12:44-07:00"}       # a size charts.number would refuse
+    assert out["drop_ins"] == {"state": "checked", "why": None, "more": 1, "files": [
+        ["dxgi.dll", SHA[:16], 1_843_200, "2026-11-02T18:00:00-07:00"], ["~mods\\Sky_P.pak", None, 40 << 20, None]]}
+    assert out["unreal_config"] == {"state": "checked", "why": None, "more": 0, "files": [
+        ["Engine.ini", None, 412, "2026-10-30T09:20:01-07:00"]]}
+
+
+def test_the_summary_tells_an_unread_folder_from_an_older_capture_and_from_another_engine():
+    assert summary.game_files({"game": {"exe": "D:\\x.exe", "drive": "D:"}}) == dict.fromkeys(summary.GAME_FILE_KEYS)
+    inv = _inv(drop_ins=None, unreal=None, exe_bytes=None)
+    inv["errors"] = {"game.drop_ins": "OSError: D:\\Games could not be read: Access is denied",
+                     "game.unreal": "OSError: Windows did not say where this account's AppData and Documents "
+                                    "folders are (failed)"}
+    out = summary.game_files(inv)
+    assert out["drop_ins"] == {"state": "not_checked", "why": "D:\\Games could not be read: Access is denied",
+                               "files": [], "more": 0}
+    assert out["unreal_config"]["state"] == "not_checked" and out["unreal_config"]["why"].startswith("Windows did")
+    assert out["game_exe"] == {"state": "not_checked", "why": None, "bytes": None, "modified": None}
+    no_exe = summary.game_files(_inv(exe=None, drop_ins=None, unreal=None))
+    assert no_exe["drop_ins"]["why"] == no_exe["unreal_config"]["why"] == labels.NO_EXE
+    other = summary.game_files(_inv(unreal={"found": False, "project": None, "looked_in": [], "config": [],
+                                            "config_more": 0, "mods": [], "mods_more": 0}))
+    assert other["unreal_config"]["state"] == "not_unreal" and [f[0] for f in other["drop_ins"]["files"]] == \
+        ["dxgi.dll"]
+
+
+def test_the_summary_keeps_at_most_its_listed_files_and_counts_the_rest():
+    many = [{"name": f"f{i}.asi", "bytes": 1, "modified": None, "sha256": None} for i in range(summary.MAX_LISTED + 3)]
+    out = summary.game_files(_inv(drop_ins={"files": many, "more": 2}, unreal=None))
+    assert len(out["drop_ins"]["files"]) == summary.MAX_LISTED and out["drop_ins"]["more"] == 5
+
+
+def test_the_game_files_read_back_and_a_damaged_field_reads_as_missing(tmp_path):
+    good = summary.game_files(_inv())
+    base = {"schema": summary.SCHEMA, "kind": "watch"}
+    (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps({**base, **good}), encoding="utf-8")
+    back = summary.read(tmp_path)
+    assert {k: back[k] for k in summary.GAME_FILE_KEYS} == good
+    for bad in ({"state": "checked", "why": None, "files": "dxgi.dll", "more": 0},
+                {"state": "fine", "why": None, "files": [], "more": 0},
+                {"state": "checked", "why": None, "files": [["dxgi.dll", None, 1]], "more": 0},
+                {"state": "checked", "why": None, "files": [[5, None, 1, None]], "more": 0},
+                {"state": "checked", "why": None, "files": [["a", None, 1, None]] * (summary.MAX_LISTED + 1),
+                 "more": 0}):
+        (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps({**base, "drop_ins": bad}), encoding="utf-8")
+        assert summary.read(tmp_path)["drop_ins"] is None, bad
+    (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps(base), encoding="utf-8")       # from before the check
+    assert all(summary.read(tmp_path)[k] is None for k in summary.GAME_FILE_KEYS)
 
 
 def test_compare_says_when_an_older_recording_has_no_conditions(demo):
