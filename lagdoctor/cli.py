@@ -226,9 +226,10 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
     """Record the game, save the capture and analyse it. What a caller other than this console gives it (M4: the
     app's control channel), each defaulting to the console's own behaviour:
     - `stop`: set it (session.request_stop) to stop the recording, as Ctrl+C does;
-    - `cancel`: set it to end watch before the recording begins, with nothing recorded (EXIT_CANCELLED). It is looked
-      at between the steps (before the game is looked for, once it is found, while the relay's prompt is up, and
-      before the recording starts); once the recording has begun, only `stop` ends it;
+    - `cancel`: set it to end watch before the recording begins, with nothing recorded and no session folder
+      (EXIT_CANCELLED). It is looked at between the steps (before the game is looked for, once it is found, while the
+      relay's prompt is up, before the recording starts) and by the session until everything has started
+      (SessionOptions.cancel); once the "recording" event has gone out, only `stop` ends it;
     - `tool_alone`, `tool_roots`: more of lag-doctor's own processes (session.SessionOptions): its window;
     - `say`: every line watch says, the summary included (default: printed here). It must not raise: a line it cannot
       deliver is dropped, as say() drops one for a console that went away;
@@ -290,7 +291,7 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
             _check_cancel(cancel)
             return _record(args, target, exe, frames, frames_why, relay, stop=stop, say=say,
                            interactive=interactive is not False, observers=observers,
-                           tool_alone=tool_alone, tool_roots=tool_roots)
+                           tool_alone=tool_alone, tool_roots=tool_roots, cancel=cancel)
     except Cancelled:
         say("Cancelled: nothing was recorded.")
         return EXIT_CANCELLED
@@ -302,7 +303,7 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
 def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, frames: bool, frames_why: str,
             relay: Any = None, *, stop: threading.Event | None = None, say: Callable[[str], None] | None = None,
             interactive: bool = True, observers: Any = None, tool_alone: tuple[tuple[int, int], ...] = (),
-            tool_roots: Callable[[dict[int, Any]], Any] | None = None) -> int:
+            tool_roots: Callable[[dict[int, Any]], Any] | None = None, cancel: threading.Event | None = None) -> int:
     """Record, save and analyse. Ctrl+C, Ctrl+Break and closing the window all stop the recording; none of them can
     lose it once it is being stopped and saved. With a relay (relay/client.RelayLink), frame timing and the
     game-server tracker come through it, and it is let go as soon as the recording stops. `stop`, `say`, `observers`
@@ -317,6 +318,7 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
                                hotkey=hotkey, presentmon_exe=exe, frames=frames, relay=relay,
                                tool_procs=relay.tool_procs() if relay is not None else ())
     opts.tool_alone, opts.tool_roots = tuple(tool_alone), tool_roots
+    opts.cancel = cancel                              # honoured by the session until the recording has begun
     out_dir = sess.session_dir(args.out or paths.sessions_dir(), target)
     cap_path = out_dir / CAPTURE_NAME
     if not frames:
@@ -337,6 +339,9 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
             finally:
                 if relay is not None:
                     relay.close()
+            if cap.target.get("stop_reason") == sess.CANCELLED:
+                _remove_empty_dir(out_dir)            # nothing was saved in it
+                raise Cancelled()
             if not frames:
                 cap.sources["frames"] = SourceStatus("off", frames_why)
             # The note is the recorder's alone: it never goes to the relay, and it is kept only in the capture.
@@ -800,8 +805,10 @@ def cmd_undo(args: argparse.Namespace) -> int:
     return status
 
 
-def _settle_journal() -> None:
-    """Settle changes a crash left half-done, and session-only changes whose subject has ended."""
+def _settle_journal(say: Callable[[str], None] | None = None) -> None:
+    """Settle changes a crash left half-done, and session-only changes whose subject has ended. `say`: where its
+    lines go (default: printed here; lag-doctor's window for `watch --control`)."""
+    say = _teller(say)
     try:
         from lagdoctor.fixes import catalog
         from lagdoctor.fixes.journal import Journal, JournalCorrupt

@@ -118,8 +118,18 @@ failed its check). The implementing session chose; the owner has not weighed in.
   exit or the duration, saves, and the app lists the session when it opens again.
   - **Stop and save at once when the window goes**: deferred, worth trying (Backlog).
 - **The recorder takes its parent for the window (chosen)**: a Python that started before it counts alone
-  (`tool_alone`), and its `msedgewebview2.exe` children are roots found in each snapshot (`tool_roots`).
-  - **A `--window PID:CT` argument**: rejected. The parent is what started the recorder; an argument would restate it.
+  (`tool_alone`), and its `msedgewebview2.exe` children are roots found in each snapshot (`tool_roots`), while the
+  window is still that process. This holds because the window starts the recorder with its base interpreter, as the
+  recorder starts the relay: through a venv's `python.exe`, a launcher, the parent would be the launcher, and the
+  relay's handle would be handed over into the launcher (M4a's review measured both). So the window also checks
+  `hello.pid` against the process it holds before the hand-over.
+  - **A `--window PID:CT` argument**: rejected. With the base interpreter the parent is what started the recorder,
+    and an argument would only restate it.
+- **A Cancel reaches the session too (chosen)**: until `recording` goes out, the session checks it once everything
+  has started (the inventory and the relay's network trace can take seconds after the last check in `cmd_watch`),
+  stops what it started and keeps no capture and no folder.
+  - **Turn Cancel into Stop once the session starts, and say so with an event**: rejected. The player's natural
+  moment to cancel, on seeing the game `target` names, falls in that gap, and it would save an empty recording.
 
 Revisit hooks: `control.Channel.relay_launcher`, `cli._check_cancel` and its four places in `cmd_watch`,
 `control.window_of`.

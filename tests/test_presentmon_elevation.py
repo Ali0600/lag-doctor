@@ -454,21 +454,27 @@ def test_the_prompt_belongs_to_the_window_it_is_given_and_to_none_by_default(mon
 def test_a_handle_handed_to_another_process_is_one_it_can_wait_on(monkeypatch, tmp_path):
     fake = FakeShellExecute(code=9)
     monkeypatch.setattr(elevation, "_ShellExecuteExW", fake)
+    # The recorder the window started: a process of its own, whose handle (from starting it) may take a copy.
+    recorder = subprocess.Popen([BASE_PY, "-I", "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
     try:
         child = elevation.launch_elevated([sys.executable, "-V"], str(tmp_path))
         pid = child.pid
-        here = elevation._kernel32.GetCurrentProcess()     # the window names the recorder it started
-        value = child.hand_over(here)
+        value = child.hand_over(int(recorder._handle))
         with pytest.raises(ValueError):                     # its own copy is closed
             child.wait(0)
         with pytest.raises(ValueError):
-            child.hand_over(here)
-        adopted = elevation.ElevatedChild.adopt(value)
+            child.hand_over(int(recorder._handle))
+        here = _winapi.GetCurrentProcess()                  # the copy is the recorder's: take it back from there
+        back = _winapi.DuplicateHandle(int(recorder._handle), value, here, 0, False,
+                                       _winapi.DUPLICATE_SAME_ACCESS | _winapi.DUPLICATE_CLOSE_SOURCE)
+        adopted = elevation.ElevatedChild.adopt(back)
         try:
             assert adopted.pid == pid and adopted.wait(10) == 9
         finally:
             adopted.close()
     finally:
+        recorder.stdin.close()
+        recorder.wait(10)
         fake.reap()
 
 

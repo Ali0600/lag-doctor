@@ -81,7 +81,7 @@ def _decode(line: bytes) -> dict[str, Any]:
         raise ProtocolError("a line longer than the protocol allows")
     try:
         msg = json.loads(line.decode("ascii"))
-    except (UnicodeDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:   # RecursionError: nested past Python's limit
         raise ProtocolError(f"a line that is not ASCII JSON ({type(exc).__name__})") from None
     if not isinstance(msg, dict) or not isinstance(msg.get("t"), str):
         raise ProtocolError("a line that is not a message (an object with a name in 't')")
@@ -321,7 +321,7 @@ class Channel:
         from lagdoctor.capture.session import request_stop
         t = msg["t"]
         if t in ("stop", "cancel"):
-            self.cancel.set()                      # before the recording, nothing is recorded
+            self.cancel.set()                      # read only until the recording begins: nothing is recorded
             request_stop(self.stop, STOPPED_REASON)  # once it began, this is what stops it
         else:
             self._replies.put(msg)
@@ -348,6 +348,8 @@ class Channel:
             except queue.Empty:
                 if self.cancel.is_set():
                     raise Cancelled() from None
+                if self.broken.is_set():           # the window can no longer read what it was asked
+                    raise OSError("lag-doctor's window cannot be reached") from None
                 continue
             t = reply["t"]
             if t == "gone":
@@ -382,7 +384,10 @@ def _log(text: str) -> None:
 def window_of(procs: dict[int, Any], me: int | None = None) -> tuple[int, int] | None:
     """lag-doctor's window, the process that started this recorder: (pid, create_time) of this process's parent when
     it is a Python that started first (a parent's number may since have been given to another process). None when
-    there is none, so watch counts nothing more as its own."""
+    there is none, so watch counts nothing more as its own. The window starts the recorder with its base interpreter
+    (Path(sys.base_exec_prefix) / "pythonw.exe", as relay/client.relay_python does for the relay), never a venv's
+    python.exe, which is a launcher: the recorder would then be the launcher's child, this would name the launcher,
+    and the relay's handle would be handed over into the launcher rather than here."""
     me = os.getpid() if me is None else me
     p = procs.get(me)
     parent = procs.get(p.ppid) if p is not None else None
@@ -398,6 +403,9 @@ def webview_roots(window: tuple[int, int]) -> Callable[[dict[int, Any]], list[tu
     pid, created = window
 
     def roots(procs: dict[int, Any]) -> list[tuple[int, int]]:
+        w = procs.get(pid)
+        if w is None or w.create_time != created:  # the window has gone, and its number may now be another's
+            return []
         return [(p.pid, p.create_time) for p in procs.values()
                 if p.ppid == pid and p.create_time >= created and str(p.name).lower() == WEBVIEW2_EXE]
     return roots
@@ -406,17 +414,23 @@ def webview_roots(window: tuple[int, int]) -> Callable[[dict[int, Any]], list[tu
 # ----------------------------------------------------------------------------------------------- serve ---
 
 def _take_std() -> tuple[Any, Any]:
-    """The channel's own stdin and stdout. stdout itself (file 1) is pointed at stderr, the window's log file, so
-    what anything else prints there never reaches the channel."""
+    """The channel's own copies of stdin and stdout. stdout itself (file 1) is pointed at stderr, the window's log
+    file, so what anything else prints there never reaches the channel, and stdin itself (file 0) at nothing. The
+    reader keeps its own copy: blocked in sys.stdin's buffer, it would hold the lock Python needs to close sys.stdin
+    at exit, and Python then aborts (measured: "Fatal Python error: _enter_buffered_busy", exit 0xC0000005)."""
     sys.stdout.flush()
     out = os.fdopen(os.dup(1), "wb", buffering=0)
+    inp = os.fdopen(os.dup(0), "rb")
+    null = os.open(os.devnull, os.O_RDWR)
     try:
-        os.dup2(2, 1)
-    except OSError:                                 # no stderr: what would print goes nowhere
-        null = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(null, 1)
+        os.dup2(null, 0)
+        try:
+            os.dup2(2, 1)
+        except OSError:                             # no stderr: what would print goes nowhere
+            os.dup2(null, 1)
+    finally:
         os.close(null)
-    return sys.stdin.buffer, out
+    return inp, out
 
 
 def serve(args: Any, inp: Any = None, out: Any = None) -> int:
@@ -436,7 +450,7 @@ def serve(args: Any, inp: Any = None, out: Any = None) -> int:
             code = gate
             return code
         if not private:
-            cli._settle_journal()
+            cli._settle_journal(say=channel.say)
         try:
             window = window_of(sess._snapshot())
         except OSError as exc:

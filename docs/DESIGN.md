@@ -197,10 +197,20 @@ session}`; `control.done_reason` maps watch's exit code, the events that went ou
   window has closed or died, and the recording goes on to its end and is saved: a closed window cannot lose a
   recording.
 - **Stop and Cancel.** `stop` and `cancel` from the window both ask the session to stop
-  (`session.request_stop`, reason `control.STOPPED_REASON`). Both also set watch's `cancel`, which `cmd_watch` checks
-  before the game is looked for, once it is found, while the relay's prompt is up and before the recording starts:
-  there a cancel ends watch with nothing recorded and no session folder (`cli.EXIT_CANCELLED`, 130). Once the
-  recording has begun, it is a stop, and the capture is kept.
+  (`session.request_stop`, reason `control.STOPPED_REASON`). Until `recording` has gone out, both also set watch's
+  `cancel`. `cmd_watch` checks it before the game is looked for, once it is found, while the relay's prompt is up and
+  before the recording starts, and the session checks it once everything has started, before it says `recording`
+  (`SessionOptions.cancel`; the inventory and the relay's trace can take seconds). Any of these ends watch with
+  nothing recorded and no session folder (`cli.EXIT_CANCELLED`, 130). After `recording`, it is a stop, and the
+  capture is kept.
+- **The command line comes first.** `main` parses it before the channel exists, so a value the parser refuses ends
+  the recorder with exit 2 and the usage on stderr, and no `hello` or `done`. The window builds only command lines
+  the parser takes (a note no longer than `model.NOTE_MAX`, say).
+- **The window starts the recorder itself, with its base interpreter** (`Path(sys.base_exec_prefix) /
+  "pythonw.exe"`, cwd at the tree, as `relay/client.relay_python` does for the relay), never a venv's
+  `python.exe`, which is a launcher. The recorder is then the window's own child: its parent is the window, and the
+  process handle the window holds is the recorder's, which the relay's handle is handed over into. The window
+  checks `hello.pid` against that handle's pid before it hands anything over.
 - **The relay's prompt is the window's.** Microsoft's guidance says the elevation mechanism uses the HWND passed to
   ShellExecuteEx to decide whether a prompt is foreground or background, and that without one it only blinks on
   the taskbar. It never says a window of another process counts, so the window raises the prompt itself. The
@@ -215,7 +225,8 @@ session}`; `control.done_reason` maps watch's exit code, the events that went ou
   OSError), and a Cancel or a window that went away ends the wait.
 - **The window's processes are lag-doctor's own.** The recorder's parent, when it is a Python that started first,
   counts alone (`tool_alone`), and its children named `msedgewebview2.exe`, its WebView2 browser processes, are
-  roots found again in each snapshot (`tool_roots`).
+  roots found again in each snapshot (`tool_roots`), only while the window is still that process: once it has
+  closed, its number may name another program, whose WebView2 processes are not lag-doctor's.
 
 ### Where files go: another app's private copy
 

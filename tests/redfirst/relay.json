@@ -823,8 +823,8 @@
  {
   "name": "the relay is kept through the save and the analysis",
   "file": "lagdoctor/cli.py",
-  "old": "                if relay is not None:\n                    relay.close()\n            if not frames:",
-  "new": "                pass\n            if not frames:",
+  "old": "                if relay is not None:\n                    relay.close()\n            if cap.target.get(\"stop_reason\") == sess.CANCELLED:",
+  "new": "                pass\n            if cap.target.get(\"stop_reason\") == sess.CANCELLED:",
   "tests": [
    "tests/test_cli.py::test_an_elevated_watch_records_here_with_frame_timing_through_the_relay"
   ]
