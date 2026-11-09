@@ -616,3 +616,36 @@ def test_a_real_recorder_exits_with_watchs_code_while_the_window_still_holds_its
     assert lines and lines[-1]["t"] == "done" and lines[-1]["code"] == cli.EXIT_BAD_ARGS, lines
     assert code == cli.EXIT_BAD_ARGS, (code, said[-2000:])
     assert b"Fatal Python error" not in said
+
+
+# A real recorder whose watch only waits for the window's Stop: the channel itself, over the real pipes, end to end.
+WAITS_FOR_STOP = ("import sys\nfrom lagdoctor import cli\n"
+                  "cli.cmd_watch = lambda args, *, stop, **kw: 0 if stop.wait(30) else 99\n"
+                  "raise SystemExit(cli.main(sys.argv[1:]))\n")
+
+
+def test_the_windows_stop_reaches_a_real_recorder_over_its_stdin(tmp_path):
+    env = {**os.environ, "LAGDOCTOR_HOME": str(tmp_path / "home"), "TEMP": str(tmp_path), "TMP": str(tmp_path)}
+    argv = [sys.executable, "-c", WAITS_FOR_STOP, "watch", "--control", "stdio", "--no-elevate", "--hotkey", "none"]
+    log = tmp_path / "recorder.log"
+    with open(log, "wb") as err:
+        proc = subprocess.Popen(argv, cwd=ROOT, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err)
+        timer = threading.Timer(120, proc.kill)            # never a hang
+        timer.start()
+        try:
+            hello = control.from_recorder(proc.stdout.readline())
+            sent = time.monotonic()
+            proc.stdin.write(control.encode("stop"))        # stdin stays open after it, as the window's does
+            proc.stdin.flush()
+            lines = [control.from_recorder(line) for line in iter(proc.stdout.readline, b"")]
+            took = time.monotonic() - sent
+            code = proc.wait(60)
+        finally:
+            timer.cancel()
+            if proc.poll() is None:
+                proc.kill()
+            proc.stdin.close()
+    said = log.read_bytes()
+    assert hello["t"] == "hello"
+    assert lines and lines[-1] == {"t": "done", "reason": "stopped", "code": 0, "session": None}, (lines, said[-2000:])
+    assert code == 0 and took < 20, (code, took, said[-2000:])
