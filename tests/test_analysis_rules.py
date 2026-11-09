@@ -1655,6 +1655,88 @@ def test_the_games_own_helper_process_is_named_as_such_and_never_told_to_close()
     assert any("helper process of the game, ShaderCompileWorker.exe used 300%" in e.text for e in res.evidence)
 
 
+# Windows' own System process blamed the most, two programs after it, as in a real recording: the report offered to
+# lower System's priority and told the player to pause or close it.
+KERNEL_HOGS = [(4, "System", (2.5, 5.0, 7.5, 10.0, 12.5)), (20000, "hog.exe", (15.0, 17.5, 20.0)),
+               (30000, "other.exe", (22.5, 25.0))]
+
+
+def kernel_hog_capture(hogs_=KERNEL_HOGS):
+    """Each (pid, name, stutter times) at 150 % of a CPU around its own stutters; one event per stutter time."""
+    rows = []
+    for k in range(1, 121):
+        t = k * 0.25
+        procs = [[7777, "python.exe", 100.0, 0.0, 100.0, 134000000000007777]]
+        for pid, prog, times in hogs_:
+            hot = any(te - 0.5 <= t <= te + 0.4 for te in times)
+            procs.append([pid, prog, 150.0 if hot else 0.0, 0.0, 0.0, 134000000000000000 + pid])
+        rows.append([t, procs])
+    evs = [stutter(i, te, "background_cpu", process=prog, process_pids=[pid], process_rises=[[pid, 150.0]])
+           for i, (pid, prog, te) in enumerate(((p, n, te) for p, n, ts in hogs_ for te in ts), 1)]
+    return hogs(rows), evs
+
+
+def with_name(name):
+    return [(pid, name if pid == 4 else prog, times) for pid, prog, times in KERNEL_HOGS]
+
+
+@pytest.mark.parametrize("name, means", [("System", "driver"), ("system", "driver"), ("Registry", "part of Windows"),
+                                         ("Memory Compression", "RAM runs short"), ("Secure System", "part of Windows")])
+def test_windows_own_processes_are_never_offered_a_priority_fix_nor_told_to_close(name, means):
+    cap, evs = kernel_hog_capture(with_name(name))
+    res = run("background_hogs", cap, events=evs, causes={"background_cpu": lift("supports", a=10, n=10)})
+    assert is_finding(res)
+    assert res.title == f"Background programs got busy when the game lagged: Windows itself ({name}), hog.exe, other.exe"
+    said_it = f"{name} used 150% of a CPU during 5 of 10".casefold()       # a sentence starts with a capital
+    assert any(said_it in e.text.casefold() for e in res.evidence)        # it is still the evidence
+    pids = [f.params["pid"] for f in res.fixes if f.fix_id == "background_priority"]
+    assert pids == [20000, 30000]            # the two slots go to programs that can be lowered, in blame order
+    titles = [f.title for f in res.fixes]
+    assert not any(t.startswith(f"Pause or close {name}") for t in titles), titles
+    said = next(f for f in res.fixes if f.title == f"{name} (process 4) is Windows itself, not a program to close")
+    assert means in said.detail
+    assert any(t.startswith("Pause or close hog.exe") for t in titles)
+    assert any(t.startswith("Pause or close other.exe") for t in titles)
+
+
+def test_a_program_merely_named_like_windows_own_processes_is_still_a_program():
+    cap, evs = kernel_hog_capture(with_name("System.exe"))
+    res = run("background_hogs", cap, events=evs, causes={"background_cpu": lift("supports", a=10, n=10)})
+    assert res.title == "Background programs got busy when the game lagged: System.exe, hog.exe, other.exe"
+    assert [f.params["pid"] for f in res.fixes if f.fix_id] == [4, 20000]
+    assert any(f.title.startswith("Pause or close System.exe") for f in res.fixes)
+
+
+def test_a_priority_fix_goes_only_to_a_program_the_title_names():
+    # Two of Windows' own lead: the title names three, so other.exe (the fourth) gets no fix and no advice either
+    four = [(4, "System", (2.5, 5.0, 7.5, 10.0, 12.5)), (300, "Memory Compression", (13.0, 14.0, 15.0, 16.0)),
+            (20000, "hog.exe", (18.0, 19.0, 20.0)), (30000, "other.exe", (22.5, 25.0))]
+    cap, evs = kernel_hog_capture(four)
+    res = run("background_hogs", cap, events=evs, causes={"background_cpu": lift("supports", a=14, n=14)})
+    assert res.title == ("Background programs got busy when the game lagged: Windows itself (System), "
+                         "Windows itself (Memory Compression), hog.exe")
+    assert [f.params["pid"] for f in res.fixes if f.fix_id] == [20000]
+    assert not any("other.exe" in f.title for f in res.fixes)
+
+
+def test_a_lag_only_windows_itself_explains_is_not_put_on_background_programs():
+    cap, evs = kernel_hog_capture([KERNEL_HOGS[0]])
+    res = run("background_hogs", cap, events=evs, causes={"background_cpu": lift("supports", a=5, n=5)})
+    assert res.title == "Windows itself got busy when the game lagged: System"
+    assert res.summary.startswith("Windows' own work rose") and "program" not in res.summary
+    assert not any(f.fix_id for f in res.fixes)
+    assert [f.title for f in res.fixes][0] == "System (process 4) is Windows itself, not a program to close"
+
+
+def test_gpu_contention_never_tells_the_player_to_close_windows_itself():
+    rows = [[0.25 * k, [[7777, "python.exe", 1.0, 0.0, 0.0, 134000000000007777, None],
+                        [4, "System", 3.0, 0.0, 3.0, 134000000000000004, 12.0]]] for k in range(1, 121)]
+    res = run("gpu_contention", contention(80.0, others=rows), stats={"avg_fps": 58.0}, bound=STARVED)
+    assert is_finding(res) and res.title == "Another program kept the game's GPU 80% busy: Windows itself (System)"
+    assert res.fixes[0].title == "System (process 4) is Windows itself, not a program to close"
+    assert not any(f.title.startswith("Pause or close") for f in res.fixes)
+
+
 # --------------------------------------------------------------------------------- disks ---
 
 def test_hdd_streaming():
