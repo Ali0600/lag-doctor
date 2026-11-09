@@ -18,6 +18,7 @@ import pytest
 
 from lagdoctor.app import ASSETS, ICON
 from lagdoctor.app import main as app_main
+from lagdoctor.app import recording
 from lagdoctor.app import window as app_window
 from lagdoctor.winapi import webview2 as wv
 from tests import app_demo
@@ -125,6 +126,51 @@ def test_settings_name_the_sessions_folder_and_the_lag_key(run):
 
 
 @pytest.mark.needs("webview2")
+def test_record_runs_a_recording_the_window_follows_with_the_game_named_as_text(run):
+    # tests/fake_recorder.py stands in for the recorder, under the markup-named game: the running screen and the end
+    # come from its real control channel, and "Open its results" opens the session it named.
+    _ok(run)
+    r = run["rec_running"]
+    assert r["title"] == "Recording" and r["game"] == app_demo.MARKUP_TITLE and r["made"] == 0 and r["pwned"] is False
+    assert re.fullmatch(r"\d\d:\d\d of 10:00", r["clock"]) and "Ctrl+Alt+L" in r["detail"] and r["bar"] is True
+    d = run["rec_done"]
+    assert d["title"] == "Recorded" and d["bar"] is False and "Lag marked 2 times." in d["notes"]
+    assert run["rec_results"] == app_demo.MARKUP_TITLE
+    # The harness's window is never the one in front: the prompt knocks and flashes, and so does the end.
+    assert run["rec_played"] == ["ask", "start", "mark", "mark", "done"]
+    assert run["rec_flashes"] == [True, False, True]     # the prompt's, stopped once it was answered, and the end's
+    assert run["bar_after_reload"] == "Recording ended"  # a page loaded again after the end still leads back to it
+    assert run["rec_older_view"] == {"title": "Recorded", "bar": False}       # an older view changes nothing
+    # Ended while the player was in the Library: the bar led back to the end, and the Library was asked again.
+    assert run["rec_left_for_the_library"] == {"library_asked_again": 1, "bar": "Recording ended"}
+    assert (run["rec_title_hidden"], run["rec_title_done"]) == ("lag-doctor: recording", "lag-doctor")
+
+
+@pytest.mark.needs("webview2")
+def test_the_view_hides_and_suspends_while_the_game_records_and_comes_back_with_the_window(run):
+    # What WebView2 itself answers (IsVisible, IsSuspended), not only what the window meant to do.
+    _ok(run)
+    hidden = {"visible": False, "suspended": True, "hidden": True, "recording": True}
+    assert run["rec_view_shown"] == {"visible": True, "suspended": False, "hidden": False, "recording": True}
+    assert run["rec_view_hidden"] == hidden
+    assert run["rec_view_back"] == {"visible": True, "suspended": False, "hidden": False, "recording": True}
+    # A page that crashed, and a browser process that ended, while hidden: hidden and suspended again, and the page
+    # back on the running screen.
+    assert run["rec_after_page_crash"] == hidden and run["rec_after_page_crash_screen"] == "Recording"
+    assert run["rec_after_browser_exit"] == hidden
+
+
+@pytest.mark.needs("webview2")
+def test_the_relays_prompt_belongs_to_the_window_and_its_handle_reaches_the_recorder(run):
+    _ok(run)
+    [prompt] = run["rec_prompts"]
+    assert prompt["hwnd_is_the_window"] and prompt["argv"][1:6] == recording.RELAY_HEAD
+    rep = run["rec_report"]
+    assert rep["prompt"] == "approved" and rep["relay_running"] is True
+    assert [g["t"] for g in rep["got"]] == ["elevated", "stop"]
+
+
+@pytest.mark.needs("webview2")
 def test_the_page_cannot_leave_open_windows_or_ask_for_what_it_may_not(run):
     _ok(run)
     assert run["window_open"] is True                              # window.open returned null: no new window
@@ -137,10 +183,11 @@ def test_a_crashed_page_loads_again_and_an_ended_browser_process_gets_a_new_envi
     _ok(run)
     assert run["crash_call"] == "0x00000000" and run["after_renderer_crash"] == "https://app.lagdoctor.example/index.html"
     after = run["after_browser_exit"]
-    assert run["end_browser"] == 0 and after["generation"] == 2 and after["new_pid"] != after["old_pid"]
+    # The second browser exit: the recording's run ended one too (test_the_view_hides_and_suspends...).
+    assert run["end_browser"] == 0 and after["generation"] == 3 and after["new_pid"] != after["old_pid"]
     assert {"ExclusiveUserDataFolderAccess", "IsCustomCrashReportingEnabled"} <= set(after["options_asked_again"])
     assert after["env_restored"] is True and after["names"] == run["library"]["names"]
-    assert run["readies"] == 3 and run["fatal"] == []
+    assert run["readies"] == 5 and run["fatal"] == []
 
 
 @pytest.mark.needs("webview2")

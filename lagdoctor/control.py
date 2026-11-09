@@ -10,8 +10,9 @@ prompt only blinks on the taskbar).
 Before anything can print, `serve` keeps a private copy of stdout for the channel and points stdout itself at stderr
 (the window's log file), so a stray print anywhere cannot corrupt the channel. One writer thread drains a bounded
 queue, so nothing that tells the window anything ever waits on the pipe; a full queue drops lines, counted, and a write
-that fails ends the channel quietly. The recording goes on when the window is gone (stdin ends): a closed window cannot
-lose a recording.
+that fails ends the channel quietly. Once the recording has begun it goes on when the window is gone (stdin ends): a
+closed window cannot lose a recording. Before it begins, a window gone away is a Cancel: nobody is left to answer the
+prompt or to stop what would start.
 
 From the recorder (`from_recorder` checks them):
   hello        {v, pid}                         the channel is up
@@ -314,6 +315,8 @@ class Channel:
         except (OSError, ValueError):
             return
         finally:
+            if "recording" not in self.seen:      # gone before the recording began: a Cancel, since nobody is
+                self.cancel.set()                 # left to answer the prompt, stop it or read how it went
             self.gone.set()
             self._replies.put({"t": "gone"})      # wakes a prompt that waits
 
@@ -331,7 +334,7 @@ class Channel:
         """relay/client.launch's launcher here: the window raises the prompt with its own window and hands the relay's
         process handle to this process (elevation.ElevatedChild.hand_over). As launch_elevated does, it raises
         PermissionError when the prompt is declined, ValueError when the command was refused and OSError when the
-        prompt could not be shown (or the window went away); cli.Cancelled for the window's Cancel."""
+        prompt could not be shown; cli.Cancelled for the window's Cancel, and for a window that went away."""
         from lagdoctor.cli import Cancelled
         from lagdoctor.winapi import elevation
         if self.cancel.is_set():
@@ -352,9 +355,9 @@ class Channel:
                     raise OSError("lag-doctor's window cannot be reached") from None
                 continue
             t = reply["t"]
-            if t == "gone":
-                self._replies.put(reply)
-                raise OSError("lag-doctor's window went away before the prompt was answered")
+            if t == "gone":                        # the window went away before the recording: the reader has
+                self._replies.put(reply)           # made that a Cancel
+                raise Cancelled()
             if t == "declined":
                 raise PermissionError(13, "the administrator prompt was declined", None, elevation.ERROR_CANCELLED)
             if t == "elevate_refused":

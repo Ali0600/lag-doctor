@@ -46,6 +46,10 @@ REQUESTS = {
     "open_report": {"session": _session},
     "open_folder": {},
     "test_sound": {},
+    "record": {},                  # start recording the game that is running (M4)
+    "stop_recording": {},
+    "cancel_recording": {},
+    "recording": {},               # where that recording has got to
 }
 # Messages that are not requests: the page is ready, or it let go of a shared buffer the app sent it.
 NOTICES = {"ready": {}, "frames_done": {"token": _count}}
@@ -113,3 +117,9 @@ def reply(request_id: int, data: Any = None, error: str | None = None) -> dict[s
     if error is not None:
         return {"type": "reply", "id": request_id, "ok": False, "error": error}
     return {"type": "reply", "id": request_id, "ok": True, "data": data}
+
+
+def push(kind: str, data: Any) -> dict[str, Any]:
+    """What the app sends unasked: the newest state of something the page shows (the running recording, whose
+    "seq" lets the page keep the newest when two arrive out of turn)."""
+    return {"type": "push", "kind": kind, "data": data}

@@ -222,7 +222,8 @@ session}`; `control.done_reason` maps watch's exit code, the events that went ou
   pid), so from there everything is as in a console's recording: the handle pins the relay's pid, its exit codes
   reach `_relay_failure`, and `server_pid`, the pipe's owner and the hello are checked as before. `declined`,
   `elevate_refused` and `elevate_failed` raise what launch_elevated would raise (PermissionError, ValueError,
-  OSError), and a Cancel or a window that went away ends the wait.
+  OSError), and a Cancel or a window that went away ends the wait. A window that goes away before the recording
+  begins (its end of stdin closes before `recording` went out) is a Cancel; after that, the recording goes on.
 - **The window's processes are lag-doctor's own.** The recorder's parent, when it is a Python that started first,
   counts alone (`tool_alone`), and its children named `msedgewebview2.exe`, its WebView2 browser processes, are
   roots found again in each snapshot (`tool_roots`), only while the window is still that process: once it has
@@ -1209,8 +1210,9 @@ lagdoctor app                        lag-doctor's window: recorded games and the
 
 ## The app (lagdoctor/app)
 
-`lagdoctor app` opens lag-doctor's own window (`docs/LAUNCHER-PLAN.md`): in M1, the recorded games and their results.
-Recording from it comes with M4. The window code is ported from M0's spike, which passed the owner's run.
+`lagdoctor app` opens lag-doctor's own window (`docs/LAUNCHER-PLAN.md`): the recorded games and their results (M1),
+and a recording of the game that is running (M4). The window code is ported from M0's spike, which passed the
+owner's run.
 
 - **Start order** (`main.run`): the AppUserModel ID (`app.APP_ID`, also on the MSI's shortcut); per-monitor DPI
   awareness; one instance per lag-doctor home (the named mutex `Local\lag-doctor-app-<tag>`, the window class
@@ -1233,9 +1235,46 @@ Recording from it comes with M4. The window code is ported from M0's spike, whic
 - **The bridge** (`bridge.py`): `origin_ok`, `navigation_allowed` and `parse` are pure. A request is
   `{type: "request", id, kind, ...}` with exactly its fields: `library`; `game` (a game id); `results` and
   `open_report` (a session id); `moment` (a session id and an event id); `compare` (`a`, `b`); `settings`,
-  `open_folder`, `test_sound`. Notices: `ready`, `frames_done` (`token`). The answer is
-  `{type: "reply", id, ok, data | error}`; a failure the app did not expect is logged with its traceback and answered
-  with one sentence naming the log.
+  `open_folder`, `test_sound`; `record`, `stop_recording`, `cancel_recording` and `recording` (M4, below). Notices:
+  `ready`, `frames_done` (`token`). The answer is `{type: "reply", id, ok, data | error}`; a failure the app did not
+  expect is logged with its traceback and answered with one sentence naming the log. The one message the app sends
+  unasked is `{type: "push", kind: "recording", data}`: the running screen's newest view.
+- **Recording** (`recording.py`, M4): `record` starts the recorder, the window's own child: `recording.python()`
+  (pythonw.exe beside the base interpreter, as `relay/client.relay_python`) with `recording.RECORDER_HEAD` and
+  `--duration` `LENGTH_S` (600), run from `recording.ROOT` (the folder holding `lagdoctor/`) with `LAGDOCTOR_HOME` set
+  to the app's home and stderr in `recorder.log` there (the previous one kept as `recorder-previous.log`). A recorder
+  that cannot start leaves Record free for the next press. A reader thread checks each line with
+  `control.from_recorder` and posts it to the window's thread, with three messages of the app's own: `prompt {how}`
+  (approved, declined, refused, failed, withdrawn), `fault {why}` and `exited {code}`. The first `hello` must name the
+  child's pid, and a second one is a fault too: the app sends `cancel` and never raises the prompt for it. One
+  `elevate` a recording gets a prompt; a second is answered `elevate_refused` at once. On it, a thread of its own checks
+  the command with `recording.relay_problem` (argv[0] is `python()`, then `RELAY_HEAD`, the folder is `ROOT`,
+  `relay.server.parse_args` takes the rest, its recorder is the child's pid and create time from a snapshot, its SID
+  the app's) and answers `elevate_refused` when it fails. A Stop or Cancel sent before the prompt (or a recorder that
+  has ended) means no prompt; one sent while Windows asks lets the relay go (its handle closed, `elevate_failed`).
+  Otherwise it raises the prompt (`launch_elevated` with the window's HWND, STA COM on that thread) and answers
+  `declined`, `elevate_failed`, or `elevated` once `ElevatedChild.hand_over` has put the relay's handle into the child
+  (Popen's own handle to it). Every answer is cut to the protocol's length, so the recorder always hears one.
+  `RecordingState.apply` turns each message into the running screen's state (phases `starting`, `waiting`, `asking`,
+  `preparing` once the prompt is answered, `recording`, `stopping`, `saving`, `analysing`, `done`; nothing after
+  `done` changes it; a failure after `saved` ends as `analysis_failed`, its session kept) and names the sounds it calls
+  for; `views.recording_view` makes the screen (Cancel until `recording`, Stop while it runs, what is off: frame
+  timing, the game-server check, the lag key; every `control.REASONS` in words of its own; when it failed, what the
+  recorder said, less its console-only lines (`views.CONSOLE_ONLY`), and, when it ended without saying why
+  (`RecordingState.unexplained`), the log's path), numbered by `seq`. Sounds
+  (`sounds.py`): ask, start, mark, problem and done, 16-bit mono WAV files written once under the home's `sounds`
+  folder and played with SND_FILENAME, SND_ASYNC and SND_NODEFAULT; one that cannot play is logged and left out. While
+  the state is `recording`, `AppWindow.update_view` hides the view (`put_IsVisible` false, then `TrySuspend`) unless
+  the window is shown (its last WM_ACTIVATE active, and not minimized): the window then draws one still line of its own
+  (WM_PAINT, `HIDDEN_TEXT`, drawn again on every resize), its title reads `RECORDING_TITLE`, nothing is posted to the
+  hidden page, and a view something woke is suspended again. It shows the view again (resumed) when the window is
+  shown, and the app pushes
+  the newest screen. A WebView2 call that fails there is logged, and the caller goes on. When the prompt is raised, or
+  the recording ends, while another window is in front (`GetForegroundWindow`), the "ask" sound plays (for the prompt)
+  and `want_attention` flashes the taskbar button (FLASHW_TRAY | FLASHW_TIMERNOFG) only while
+  `SHQueryUserNotificationState` answers QUNS_ACCEPTS_NOTIFICATIONS: the heartbeat asks again, stops the flash
+  (FLASHW_STOP) on any other answer and starts it on that one, until the window comes to the front. An answered
+  prompt drops its wish (`drop_attention`). The window is never brought forward.
 - **The library** (`library.py`): one Entry per session folder named as `session_dir` names them, from its
   `summary.json`, else from the folder's name (stamp and game stem). A recording is a `watch` folder holding its
   capture; check-ups and `analyze` folders are left out. A game's key is `paths.folder_stem` of its exe name, case
@@ -1296,14 +1335,20 @@ def window(cap, t0, t1, frames=None) -> dict      # {t0, t1, frames, system, gpu
   `nvidia-smi`, `Get-NetRoute`).
 - **ETW without rights**: a private in-process session (allowed for standard users) proves the consumer
   path (NE 5.6); PresentMon's `--etl_file` replay proves the frames path.
+- **The app's recording**: `tests/test_app_recording.py`, with `tests/fake_recorder.py` in the recorder's place (the
+  recorder's side of the real control channel, through `control.Channel`, recording nothing) and a harmless process
+  of the test's own in the relay's (`fake_recorder.stand_in_prompt`, handed over as the real one is); no test can reach
+  the real UAC prompt. The window's own run (below) records through the same stand-ins.
 - **The app**: the bridge, the library, the summary, the views and `analysis.window` in plain pytest; the window
   itself in `tests/test_app_page.py`, behind the declared `webview2` capability (CI's runner has it): a child process
   (`tests/app_harness.py`) opens the real window without the focus on a demo library of made-up games
   (`tests/app_demo.py`) and drives the page through the host's own script hook, `ExecuteScript` (WebDriver for
   WebView2 is broken since runtime 133): the library, a game named like markup shown as text, Results with every
   frame of the shared buffer drawn, a lag moment, Compare, Settings, a navigation, a new window and malformed
-  messages refused, then a render process crashed (DevTools' `Page.crash`) and the browser process ended, each
-  recovered.
+  messages refused; a recording through the stand-ins above, its game named like markup, with the view hidden and
+  suspended (WebView2's own IsVisible and IsSuspended, read back) while the window is told it is not the active one
+  and back when it is (the harness calls the window's WM_ACTIVATE branch itself, so the focus never moves); then a
+  render process crashed (DevTools' `Page.crash`) and the browser process ended, each recovered.
 - **WebView2's vtables**: `python -m tests.downloads fetch-webview2-idl` takes `WebView2.idl` out of
   Microsoft.Web.WebView2 1.0.4314.35's nupkg, opened only after its SHA-256 matches the pin and read by its exact name;
   the IDL has its own pin, checked on every use. `tests/webview2_idl.py` reads it, and `tests/test_webview2_idl.py`

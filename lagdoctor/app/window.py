@@ -30,6 +30,11 @@ from lagdoctor.winapi import webview2 as wv
 from lagdoctor.winapi.webview2 import Com, ComError, Handler
 
 WINDOW_TITLE = "lag-doctor"
+RECORDING_TITLE = "lag-doctor: recording"      # the title bar and the taskbar while a game records
+# What the window draws itself while its view is hidden during a recording (paint_hidden): still, and in words.
+HIDDEN_TEXT = "Recording. This window stays still while you play; switch to it to see the recording."
+HIDDEN_TEXT_PT = 12
+HIDDEN_INK = (0x6B, 0x65, 0x60)       # the page's own muted ink
 WM_APP_CALL = wv.WM_APP + 1          # run queued calls on the UI thread, outside any COM callback
 HEARTBEAT_TIMER = 1                  # wakes the loop now and then, so a stop request is noticed
 WINDOW_DIP = (1180, 800)             # the first size, in 96-DPI pixels
@@ -149,6 +154,17 @@ class AppWindow:
         self.buffers: dict[int, Com] = {}     # shared buffers the page has not let go of yet, by token
         self.next_token = 1
         self.refused: collections.Counter = collections.Counter()   # what the policy turned away, by kind
+        # While a game records, the view is hidden and suspended unless the window is shown (update_view).
+        self.active = False                   # the last WM_ACTIVATE said this window is the active one
+        self.recording = False
+        self.view_hidden = False
+        self.suspended: bool | None = None    # what the last TrySuspend answered
+        self.suspend_done: Handler | None = None
+        self.on_shown: Callable[[], None] | None = None     # the view came back during a recording
+        self.attention = False                # a taskbar flash is wanted (want_attention)
+        self.flashing = False                 # and the button flashes now
+        self.notify_state: Callable[[], int | None] = wv.notification_state
+        self.flasher: Callable[[bool], None] = self.flash
 
     # ---------------------------------------------------------------- guarded entry points from C
 
@@ -290,6 +306,8 @@ class AppWindow:
                 if self.stop_requested and not self.closing:
                     self.log("stop requested" + (f" after a fault: {self.fatal}" if self.fatal else ""))
                     self.begin_close()
+                elif self.attention:
+                    self.try_attention()
                 return 0
             fn = self.timers.pop(wp, None)
             wv.KillTimer(hwnd, wp)
@@ -299,7 +317,16 @@ class AppWindow:
         if msg == wv.WM_SIZE:
             if self.controller and not self.recreating:
                 self.controller.do("put_Bounds", (wintypes.RECT,), self.client_rect())
+            self.update_view()                    # minimized or restored
+            if self.view_hidden:
+                self.repaint()                    # the still line, centred again
             return 0
+        if msg == wv.WM_ACTIVATE:
+            self.active = (wp & 0xFFFF) != wv.WA_INACTIVE
+            if self.active:
+                self.attention = self.flashing = False      # the player came: nothing more to flash for
+            self.update_view()
+            return None                           # DefWindowProc gives the window the keyboard focus
         if msg in (wv.WM_MOVE, wv.WM_MOVING):
             if self.controller and not self.recreating:
                 self.controller.do("NotifyParentWindowPositionChanged")
@@ -319,6 +346,9 @@ class AppWindow:
             mmi = wv.MINMAXINFO.from_address(lp)
             dpi = wv.GetDpiForWindow(hwnd) or 96
             mmi.ptMinTrackSize.x, mmi.ptMinTrackSize.y = (v * dpi // 96 for v in MIN_DIP)
+            return 0
+        if msg == wv.WM_PAINT and self.view_hidden:
+            self.paint_hidden(hwnd)
             return 0
         if msg == wv.WM_CLOSE:
             self.begin_close()
@@ -460,6 +490,8 @@ class AppWindow:
                          bridge.APP_HOST, str(self.assets), wv.ACCESS_DENY)
         ctl.do("put_Bounds", (wintypes.RECT,), self.client_rect())
         ctl.put_bool("put_IsVisible", True)
+        self.view_hidden = False
+        self.call_soon(self.update_view)          # a view made again during a recording is hidden again
         self.browser_pid = self.webview.get_u32("get_BrowserProcessId")
 
     # ---------------------------------------------------------------- WebView2 events
@@ -503,6 +535,8 @@ class AppWindow:
         ok = a.get_bool("get_IsSuccess")
         if not ok:
             self.log(f"navigation did not complete: web error {a.get_int('get_WebErrorStatus')}")
+        if self.view_hidden:                      # a navigation resumes a suspended view: suspend it again
+            self.call_soon(self.try_suspend)
 
     def on_new_window(self, sender, args) -> None:
         a = Com(args, "ICoreWebView2NewWindowRequestedEventArgs", owned=False)
@@ -580,6 +614,138 @@ class AppWindow:
             self.create_environment()
         except (ComError, OSError) as exc:
             self.fail(f"WebView2 could not start again ({exc})")
+
+    # ---------------------------------------------------------------- while a game records
+
+    def shown(self) -> bool:
+        """The player can see this window: it is the active one and not minimized."""
+        return self.active and bool(self.hwnd) and not wv.IsIconic(self.hwnd)
+
+    def set_recording(self, on: bool) -> None:
+        """A game records (on) or not: while it does, the view is hidden unless the window is shown, and the title
+        says so."""
+        on = bool(on)
+        if on != self.recording and self.hwnd:
+            wv.SetWindowTextW(self.hwnd, RECORDING_TITLE if on else WINDOW_TITLE)
+        self.recording = on
+        self.update_view()
+
+    def update_view(self) -> None:
+        """Hide and suspend the view while a game records and the window is not shown, and bring it back otherwise.
+        A window in front of the game changes what is measured, and the view's GPU process counts among the other
+        programs' GPU use (docs/LAUNCHER-PLAN.md, "What counts as lag-doctor's own"); the running screen's clock
+        moves only while the view shows. A WebView2 call that fails here is logged: whoever asked carries on."""
+        if not self.controller or self.recreating or self.closing:
+            return
+        hide = self.recording and not self.shown()
+        try:
+            if hide and not self.view_hidden:
+                self.view_hidden = True
+                self.controller.put_bool("put_IsVisible", False)     # hidden first: a visible view cannot be suspended
+                self.try_suspend()
+                self.repaint()
+            elif hide and self.suspended and self.webview3 and not self.webview3.get_bool("get_IsSuspended"):
+                self.try_suspend()                     # something woke the hidden view: suspend it again
+            elif not hide and self.view_hidden:
+                self.view_hidden = False
+                self.suspended = None
+                self.controller.put_bool("put_IsVisible", True)      # a view made visible resumes by itself
+                if self.webview3 and self.webview3.get_bool("get_IsSuspended"):
+                    self.webview3.do("Resume")
+                self.repaint()
+                if self.on_shown is not None and self.recording:
+                    self.call_soon(self.on_shown)
+        except ComError as exc:
+            self.log(f"showing or hiding the view: {exc}")
+
+    def try_suspend(self) -> None:
+        if not self.view_hidden or not self.webview3 or self.recreating or self.closing:
+            return
+        if self.suspend_done is None:             # one handler for every suspension, kept for the window's life
+            self.suspend_done = self.handler("ICoreWebView2TrySuspendCompletedHandler", wv.DONE_BOOL,
+                                             self.on_suspended)
+        hr = self.webview3.call("TrySuspend", (ctypes.c_void_p,), self.suspend_done.ptr)
+        if hr < 0:
+            self.suspended = False
+            self.log(f"TrySuspend: 0x{hr & 0xFFFFFFFF:08X}")
+
+    def on_suspended(self, hr, ok) -> None:
+        self.suspended = hr >= 0 and bool(ok) and self.view_hidden
+        if not self.suspended and self.view_hidden:
+            self.log(f"the hidden view was not suspended (0x{hr & 0xFFFFFFFF:08X}, {bool(ok)})")
+
+    def repaint(self) -> None:
+        if self.hwnd:
+            wv.InvalidateRect(self.hwnd, None, True)
+
+    def paint_hidden(self, hwnd) -> None:
+        """While the view is hidden, the window draws one still line of its own, so a window the player can still see
+        (on a second monitor, beside a windowed game) never reads as blank or hung. Nothing on it moves."""
+        ps = wv.PAINTSTRUCT()
+        hdc = wv.BeginPaint(hwnd, ctypes.byref(ps))
+        try:
+            if not hdc:
+                return
+            dpi = wv.GetDpiForWindow(hwnd) or 96
+            font = wv.CreateFontW(-(HIDDEN_TEXT_PT * dpi // 72), 0, 0, 0, wv.FW_NORMAL, 0, 0, 0, wv.DEFAULT_CHARSET, 0,
+                                  0, wv.CLEARTYPE_QUALITY, wv.FF_SWISS, "Segoe UI")
+            old = wv.SelectObject(hdc, font) if font else None
+            try:
+                wv.SetBkMode(hdc, wv.TRANSPARENT)
+                r, g, b = HIDDEN_INK
+                wv.SetTextColor(hdc, r | (g << 8) | (b << 16))
+                rc = self.client_rect()
+                wv.DrawTextW(hdc, HIDDEN_TEXT, -1, ctypes.byref(rc), wv.DT_CENTER | wv.DT_VCENTER | wv.DT_SINGLELINE
+                             | wv.DT_NOPREFIX | wv.DT_END_ELLIPSIS)
+            finally:
+                if old:
+                    wv.SelectObject(hdc, old)
+                if font:
+                    wv.DeleteObject(font)
+        finally:
+            wv.EndPaint(hwnd, ctypes.byref(ps))
+
+    def in_front(self) -> bool:
+        """This window is the one in the foreground (Windows' own answer, not the last WM_ACTIVATE)."""
+        return bool(self.hwnd) and wv.GetForegroundWindow() == self.hwnd
+
+    def want_attention(self) -> None:
+        """Flash the taskbar button while Windows says it is a moment for that (no full-screen game or presentation
+        in front: SHQueryUserNotificationState answers QUNS_ACCEPTS_NOTIFICATIONS), and stop it while it says not:
+        the heartbeat asks again until the window comes to the front, which ends the wish. The window is never
+        brought forward itself."""
+        self.attention = True
+        self.try_attention()
+
+    def drop_attention(self) -> None:
+        """Nothing to flash for any more (the prompt it pointed at was answered)."""
+        self.attention = False
+        self.set_flash(False)
+
+    def try_attention(self) -> None:
+        if not self.attention or self.closing:
+            return
+        if self.in_front():
+            self.attention = self.flashing = False      # in front: Windows has stopped the flash itself
+            return
+        self.set_flash(self.notify_state() == wv.QUNS_ACCEPTS_NOTIFICATIONS)
+
+    def set_flash(self, on: bool) -> None:
+        if on == self.flashing:
+            return
+        self.flashing = on
+        try:
+            self.flasher(on)
+        except OSError as exc:
+            self.log(f"flashing the taskbar button: {exc}")
+
+    def flash(self, on: bool = True) -> None:
+        """Flash the taskbar button until the window comes to the front, or stop it (on False)."""
+        if not self.hwnd:
+            return
+        flags = wv.FLASHW_TRAY | wv.FLASHW_TIMERNOFG if on else wv.FLASHW_STOP
+        info = wv.FLASHWINFO(ctypes.sizeof(wv.FLASHWINFO), self.hwnd, flags, 0, 0)
+        wv.FlashWindowEx(ctypes.byref(info))
 
     # ---------------------------------------------------------------- talking to the page
 

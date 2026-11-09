@@ -25,8 +25,9 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 - [x] M3: the relay (`lagdoctor/relay/`, PR #23, merged 2026-11-08; the owner's own run passed 2026-11-09).
   `watch --elevate` records in the player's own window; only
   PresentMon and the network trace run elevated, in a windowless relay (DESIGN.md, "The relay").
-- [ ] M4: recording from the app. Its first half, the recorder's control mode (`watch --control stdio`,
-  `lagdoctor/control.py`), is built (see M4); the app's half is not.
+- [ ] M4: recording from the app. Both halves are built (see M4): the recorder's control mode (`watch --control
+  stdio`, `lagdoctor/control.py`) and the app's "Record the game that's running" (`lagdoctor/app/recording.py`). The
+  owner tries the app's half before it merges.
 - [ ] M5: measuring the right part.
 - [ ] M6: Play.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
@@ -489,7 +490,47 @@ The recorder's half was built on 2026-11-09 (DESIGN.md, The control channel):
   (`ElevatedChild.hand_over` and `adopt`, DECISIONS 2026-11-09), so the recorder checks the relay as it always
   has and reads its exit codes itself.
 - A Cancel ends watch with nothing recorded until the recording begins, and is a Stop after that. A closed window
-  never ends a recording.
+  never ends a recording that has begun; before that, it is a Cancel (M4b's review, DECISIONS 2026-11-09).
+
+The app's half was built on 2026-11-09 (DESIGN.md, The app), with these choices and limits:
+- **Record the game that's running**, in the Library's toolbar and its empty state, records what `watch` picks with
+  neither `--game` nor `--pid` (the busiest program with a window), for 10 minutes or until Stop or the game's exit.
+  The length is fixed until M5 brings a choice (DECISIONS 2026-11-09, M4's end); recording a chosen game comes with
+  Play (M6).
+- The app starts the recorder as its own child: `pythonw.exe` beside the base interpreter, `-B -E -s -m lagdoctor
+  watch --control stdio --elevate --duration 600`, from the tree the app runs, with lag-doctor's home named in
+  `LAGDOCTOR_HOME` and the recorder's stderr in `recorder.log` there. A recorder whose `hello` names another pid, or
+  that says it twice, is cancelled and never handed a relay; one recording raises one prompt.
+- The prompt is raised only for the relay's own command for this recorder (its pid, and its create time from the
+  app's own snapshot) and this account, run by the same Python from the same folder, as the relay itself would accept
+  it (`recording.relay_problem`). Anything else is refused (`elevate_refused`), and the recording goes on without
+  frame timing. The prompt runs on a thread of its own, with STA COM and the window as its owner. A Stop or Cancel
+  sent before it is raised means no prompt, and one sent while Windows asks lets the relay go.
+- Screen 3 shows the phases (starting, looking for the game, the prompt, getting ready once it is answered, recording
+  with its clock, stopping, saving, analysing), Cancel until the recording begins and Stop while it runs, and what is
+  off (frame timing, the game-server check, the lag key). At the end it says how it ended in plain words (each of
+  `done`'s reasons has its own; a failure after the save is "Saved, not analysed", and still opens), offers Open its
+  results, and when it failed shows what the recorder said, less its console-only advice, and names its log. The app
+  pushes each change to the page, numbered, so the newest wins; a recording that ends while the page shows another
+  screen leaves a "Recording ended" button in the bar until its end has been seen.
+- The view is hidden, then suspended, only while the game records and the window is not the active one or is
+  minimized; the window then draws one still line of its own and its title says it is recording, so a window still in
+  sight (on a second monitor) never reads as blank. Nothing is posted to the hidden page. It comes back, resumed, when
+  the window is activated, and at once when the recording stops; a page or browser process that crashes meanwhile
+  comes back hidden and suspended.
+- The sounds (ask, start, mark, problem and done) are lag-doctor's own tones, written once as WAV files in the
+  home's `sounds` folder, because winsound plays a sound held in memory only while its caller waits. "Ask" is a double
+  knock for a prompt raised while the game is in front, where it may only blink on the taskbar. Settings' sound test
+  plays the start sound.
+- When the prompt is raised, and at the end, while another window is in front, the taskbar button flashes, but only
+  while Windows says it is a moment for that (no full-screen game or presentation in front): it stops when the player
+  goes back into the game, and the prompt's stops once the prompt is answered. The window is never brought forward,
+  since the game may still be running (DECISIONS 2026-11-09, M4's end).
+- Closing the window during a recording leaves the recorder recording; the session shows in the library once it is
+  analysed. Closing it before the recording begins cancels it (DECISIONS 2026-11-09, M4's relay prompt).
+- Before the PR, an adversarial review from four angles (privilege boundary, threads and lifecycle, Windows and
+  WebView2, the page and its tests) raised 23 findings: 15 confirmed, 6 plausible, 2 refuted. Every confirmed one was
+  fixed, with the plausible ones whose fix was clear and the 2 refuted as cheap hardening.
 
 ### M5: measuring the right part
 
