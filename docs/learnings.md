@@ -904,3 +904,27 @@ the prompt thread in its snapshot (Cancel before the prompt: no prompt) and in i
 the relay is let go), each order made certain rather than likely (`tests/test_app_recording.py`, `Gate`).
 **Takeaway**: to test "X happens between A and B", stop the code at A with a gated seam, do X, then let it reach B;
 never sleep and hope.
+
+### On a fixed-refresh screen, any frame rate that does not divide the refresh rate judders
+With V-sync on and no variable refresh (VRR), each frame stays on screen for a whole number of refreshes. A game at
+58 FPS on a 144 Hz screen (6.9 ms a refresh) cannot hold every frame for the same time, so its frames alternate
+between 2 and 3 refreshes (13.9 and 20.8 ms) and motion judders. That is not only the 1-and-2 alternation of a game a
+little under the refresh rate: at 144 Hz everything between 48 and 72 FPS alternates 2 and 3. Display times that sit
+on whole refresh periods also show that VRR was not in use.
+**Why it came up**: a GPU-bound recording at 58 FPS on a 144 Hz monitor kept 92% of its frames on screen for 2 or 3
+refreshes, yet the report called it the game's own uneven pacing: `vsync_judder` only looked for frames that mostly
+took one refresh, and the 7.0 ms median swing that `uneven_pacing` printed was one refresh period.
+**Takeaway**: judge pacing in refreshes: count how many each frame stayed on screen, and read a mix of two neighbouring
+counts as judder at any multiple; the steady fixes are VRR or a cap that divides the refresh rate (48 or 72 FPS at
+144 Hz).
+
+### A higher power limit does not speed up a GPU that heat holds back
+A GPU's clock stops at whichever limit it meets first, power or temperature. When temperature binds, raising the power
+limit changes nothing: the GPU cannot use the extra watts without getting hotter. On this laptop the heat limit was a
+cliff, not a slope: the RTX 3070 Laptop ran about 1,700 MHz at 80-83 °C, then dropped to a fixed 780 MHz (of 2,100)
+once it reached about 86 °C, with NVML naming `sw_thermal_slowdown`.
+**Why it came up**: Armoury Crate's Turbo mode raised the GPU's power limit from Silent's 55 W to 103 W, but under a
+game the GPU drew about 61 W and sat at 780 MHz and 87-89 °C; only the first seconds of a recording, before it got
+hot, showed the 1,700 MHz it can run. No analysis code read the clock, so the report never said so.
+**Takeaway**: before tuning power modes, read the GPU's clock against its temperature and its throttle reason; when
+heat binds, the fixes are cooling or less work per frame (a lower render resolution, a frame cap), not more watts.
