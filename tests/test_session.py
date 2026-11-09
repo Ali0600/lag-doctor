@@ -829,6 +829,157 @@ def test_handed_over_processes_count_only_while_they_are_the_same_processes():
     assert cap.target["tool_pids"] == sorted({me, 100, 105}), cap.target["tool_pids"]
 
 
+# lag-doctor's window (M4) as the recorder's snapshot shows it: the window, its WebView2 browser process and that
+# process's renderer, and a store client the window opened, which is not lag-doctor's.
+WINDOW = {**TABLE, 200: P(200, 10, 500, "pythonw.exe"), 210: P(210, 200, 510, "msedgewebview2.exe"),
+          211: P(211, 210, 520, "msedgewebview2.exe"), 220: P(220, 200, 530, "steam.exe")}
+
+
+def test_the_window_counts_alone_and_its_webview2_browser_with_what_that_started():
+    image = IMAGES.get
+    assert sess.tool_pids(WINDOW, GAME_AT_80, [(210, 510)], alone=[(200, 500)], me=40, image_path=image,
+                          launcher=LAUNCHER) == [40, 30, 210, 200, 50, 60, 70, 211]
+    # Counted alone only while it is that process: a number Windows gave to a newer one is not lag-doctor's.
+    assert 200 not in sess.tool_pids(WINDOW, GAME_AT_80, alone=[(200, 501)], me=40, image_path=image,
+                                     launcher=LAUNCHER)
+    # Never the game, whatever it is called.
+    assert 80 not in sess.tool_pids(WINDOW, GAME_AT_80, alone=[(80, 430)], me=40, image_path=image,
+                                    launcher=LAUNCHER)
+
+
+def test_roots_found_in_each_snapshot_join_with_what_they_started():
+    me = os.getpid()
+    table = {me: P(me, 1, 1), **{pid: WINDOW[pid] for pid in (200, 210, 211, 220)}}
+    looked_in = []
+
+    def webview(procs):
+        looked_in.append(procs)
+        return [(p.pid, p.create_time) for p in procs.values() if p.ppid == 200 and p.name == "msedgewebview2.exe"]
+    opts = SessionOptions(duration_s=0.05, hotkey=None, tool_alone=((200, 500),), tool_roots=webview)
+    s = Session(TARGET, opts, collectors=full_set(), inventory=INVENTORY, alive=lambda: True,
+                printer=lambda line: None, processes=lambda: table)
+    assert sorted(s.run().target["tool_pids"]) == sorted([me, 200, 210, 211])
+    assert looked_in and all(p is table for p in looked_in)       # it is handed the snapshot being sighted
+
+
+def test_a_process_of_lagdoctors_seen_only_mid_recording_is_listed(monkeypatch):
+    monkeypatch.setattr(sess, "STATUS_PERIOD_S", 0.05)
+    me = os.getpid()
+    calls = []
+
+    def processes():
+        calls.append(1)
+        table = {me: P(me, 1, 1)}
+        if 3 <= len(calls) <= 4:                  # a child of ours that runs for two ticks in the middle
+            table[777] = P(777, me, 2)
+        return table
+    s = Session(TARGET, SessionOptions(duration_s=0.9, hotkey=None), collectors=full_set(), inventory=INVENTORY,
+                alive=lambda: True, printer=lambda line: None, processes=processes)
+    pids = s.run().target["tool_pids"]
+    assert len(calls) >= 6, calls                 # sighted at every tick from TOOL_SIGHT_S on, and at the end
+    assert 777 in pids, pids
+
+
+def test_the_liveness_check_and_the_sighting_share_one_snapshot_a_tick(monkeypatch):
+    monkeypatch.setattr(sess, "STATUS_PERIOD_S", 0.05)
+    me = os.getpid()
+    table = {me: P(me, 1, 1), 4242: P(4242, 10, 1, "Game.exe")}     # this process and the game (TARGET)
+    taken, ticks = [], []
+
+    def processes():
+        taken.append(1)
+        return table
+    s = Session(TARGET, SessionOptions(duration_s=0.9, hotkey=None), collectors=full_set(), inventory=INVENTORY,
+                printer=lambda line: None, processes=processes,
+                observers=sess.Observers(on_tick=lambda elapsed, live: ticks.append(elapsed)))
+    cap = s.run()
+    # The default liveness check read the game from that snapshot: had it taken one of its own, this made-up game
+    # would have "exited" at the first tick.
+    assert s.stop_reason == "duration" and len(ticks) >= 10, (s.stop_reason, ticks)
+    assert sum(1 for e in ticks if e >= sess.TOOL_SIGHT_S) >= 4             # ticks that also sighted the tools
+    assert len(taken) == len(ticks) + 1, (len(taken), len(ticks))           # one a tick, and one for the last look
+    assert me in cap.target["tool_pids"] and 4242 not in cap.target["tool_pids"]
+
+
+def test_a_full_tool_list_is_said_and_one_that_just_fits_is_not(monkeypatch):
+    monkeypatch.setattr(sess, "STATUS_PERIOD_S", 0.05)
+    me = os.getpid()
+    for children, noted in ((sess.MAX_TOOL_PIDS - 1, False), (sess.MAX_TOOL_PIDS, True)):
+        table = {me: P(me, 1, 1)}
+        table.update({p: P(p, me, 2) for p in range(1_000_000, 1_000_000 + 4 * children, 4)})
+        s = Session(TARGET, SessionOptions(duration_s=0.7, hotkey=None), collectors=full_set(), inventory=INVENTORY,
+                    alive=lambda: True, printer=lambda line: None, processes=lambda: table)
+        cap = s.run()                             # sighted several times: the same full list is no new drop
+        assert len(cap.target["tool_pids"]) == min(children + 1, sess.MAX_TOOL_PIDS)
+        said = [n for n in cap.notes if f"listed only the first {sess.MAX_TOOL_PIDS} of its own processes" in n]
+        assert len(said) == (1 if noted else 0), (children, cap.notes)
+
+
+# ------------------------------------------------ who follows a recording besides its console (Observers) ---
+
+def test_observers_hear_each_tick_and_every_event_in_order(monkeypatch):
+    monkeypatch.setattr(sess, "STATUS_PERIOD_S", 0.05)
+    ticks, events = [], []
+    obs = sess.Observers(on_tick=lambda elapsed, live: ticks.append((elapsed, sorted(live))),
+                         on_event=lambda kind, data: events.append((kind, data)))
+    s = Session(TARGET, SessionOptions(duration_s=0.6, hotkey=None), collectors=full_set(), inventory=INVENTORY,
+                alive=lambda: True, printer=lambda line: None, observers=obs)
+    marked = []
+    presser = threading.Timer(0.3, lambda: marked.append(s.mark()))       # a mark from another thread
+    presser.start()
+    try:
+        cap = s.run()
+    finally:
+        presser.cancel()
+    assert [k for k, _ in events] == ["recording", "mark", "stopping"], events
+    assert events[0][1] == {"duration_s": 0.6, "hotkey": False, "frames": True, "network": True}
+    assert events[1][1] == {"t": marked[0]} and cap.marks == marked and 0.2 < marked[0] < 0.6
+    assert events[2][1] == {"reason": "duration"}
+    assert len(ticks) >= 8 and [e for e, _ in ticks] == sorted(e for e, _ in ticks)
+    assert all(names == ["frames", "gpu", "net_flows", "network", "system"] for _, names in ticks)
+
+
+def test_an_observer_that_raises_is_not_called_again_and_the_recording_goes_on(monkeypatch):
+    monkeypatch.setattr(sess, "STATUS_PERIOD_S", 0.05)
+    calls = {"tick": 0, "event": 0}
+
+    def bad_tick(elapsed, live):
+        calls["tick"] += 1
+        raise RuntimeError("the window went away")
+
+    def bad_event(kind, data):
+        calls["event"] += 1
+        raise BrokenPipeError(32, "The pipe is being closed")
+    cols = full_set()
+    s = Session(TARGET, SessionOptions(duration_s=0.4, hotkey=None), collectors=cols, inventory=INVENTORY,
+                alive=lambda: True, printer=lambda line: None,
+                observers=sess.Observers(on_tick=bad_tick, on_event=bad_event))
+    cap = s.run()
+    assert calls == {"tick": 1, "event": 1}
+    assert s.stop_reason == "duration" and cap.frames and all(c._thread is None for c in cols)
+    assert [n for n in cap.notes if "window following this recording" in n] == [
+        "The window following this recording stopped being told what happened during it (BrokenPipeError); the "
+        "recording itself went on.",
+        "The window following this recording stopped being told its progress (RuntimeError); the recording itself "
+        "went on."]
+
+
+def test_a_mark_before_the_recording_starts_is_refused():
+    s = _session(full_set())
+    assert s.mark() is None and s.marks == []
+    assert s.run().marks == []
+
+
+def test_frame_timing_that_stops_working_is_an_event_too():
+    events = []
+    s, lines, live = _frames_check({"frames": 0, "fps": None}, focused=1)
+    s.observers = sess.Observers(on_event=lambda kind, data: events.append((kind, data)))
+    for t in (0.0, 5.0, 10.1, 30.0):
+        s._check_frames(live, t)
+    assert len(lines) == 1 and events == [
+        ("frames_lost", {"why": "the game was in front for 10 s and PresentMon saw no frame from it"})]
+
+
 # --------------------------------------------------------------------- scripts/e2e.py and the lock ---
 
 def _e2e():

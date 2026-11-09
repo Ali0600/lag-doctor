@@ -781,3 +781,26 @@ trains with no link at a nominal 5 %, and planted stutters of +1.6 to +2.5 a min
 **Takeaway**: for an event-locked effect in a time series, use a shift null for the bias, rank against every phase for
 the p-value, run decoys to measure the false-positive rate that remains, and report the planted effects of known size
 the test missed.
+
+### A default bound when the function is defined hides a test's monkeypatch
+A parameter written `say=say` captures the function object once, when the `def` runs. A test that later replaces the
+module's `say` (monkeypatch) changes the attribute, not the captured default, so the code keeps the old function and the
+test checks nothing. A default of `None`, resolved inside the call (`say = say if say is not None else <module>.say`),
+reads the attribute as it is at that moment.
+**Why it came up**: M2 gave every function on `watch`'s path a `say` parameter, so the app's control channel can take
+every line. Tests already replace `cli.say` and `builtins.print` (`tests/test_app_views.py`, `test_private_copy.py`);
+`cli._teller(say)` resolves the default at call time. Naming the parameter `say`, the same as the module function, also
+kept the body's anchored `say(...)` lines byte for byte, so the red-first sabotages on them still applied.
+**Takeaway**: inject a dependency as `param=None` and resolve the default inside the call; never `param=module_func`,
+which a test's monkeypatch cannot reach.
+
+### A per-tick cache: clear it at the top of the tick, once, and nowhere else
+Two readers that each take an expensive reading every tick (here a whole-system process snapshot, 6-9 ms) can share
+one: a field cleared at the top of each tick, filled by whichever reader asks first. The tick's other exits all come
+after that clear, so a second clear before a later reader is redundant.
+**Why it came up**: M2 sights lag-doctor's own processes every tick, and to add no snapshot it shares the liveness
+check's (`Session._snapshot_once`). A second reset, before the last sighting at the stop, looked like a safety net, but
+red-first showed that its sabotage survived: `_watch` returns only from inside a tick, after the top-of-tick clear, so
+the last look always had this tick's snapshot or a fresh one. The reset was removed.
+**Takeaway**: give a cache one invalidation point that every path passes through; a sabotage of a second one that no
+test can catch marks it as redundant defence, so remove it rather than test around it.

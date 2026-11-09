@@ -335,14 +335,14 @@ def fake_world(monkeypatch):
     monkeypatch.setattr(sess, "_collect_inventory", lambda target: {"adapters": [], "who": "the user"})
 
     class QuickSession(sess.Session):
-        def __init__(self, target, opts, inventory=None, **kw):
-            seen["sessions"].append({"target": target, "opts": opts, "inventory": inventory})
+        def __init__(self, target, opts, inventory=None, printer=None, observers=None, **kw):
+            seen["sessions"].append({"target": target, "opts": opts, "inventory": inventory, "printer": printer})
             cols = [Quick("system", {"columns": {"t": [0.0, 0.25], "cpu_total_pct": [10.0, 11.0]}}),
                     Quick("frames", {"columns": {"t": [0.1, 0.12, 0.14], "frame_ms": [16.7, 16.6, 16.8]}})]
             # The fake game ends by itself: a recording a test did not expect (no --duration) ends, never hangs.
             ends = time.monotonic() + FAKE_GAME_S
             super().__init__(target, opts, collectors=cols, inventory=inventory or {"adapters": []},
-                             alive=lambda: time.monotonic() < ends, printer=lambda line: None)
+                             alive=lambda: time.monotonic() < ends, printer=lambda line: None, observers=observers)
     monkeypatch.setattr(sess, "Session", QuickSession)
     return seen
 
@@ -615,9 +615,9 @@ def test_with_a_relay_closing_the_window_leaves_the_network_trace_to_the_relay(f
     seen = []
     real = cli._ConsoleControl.__init__
 
-    def init(self, stop, saved, network):
+    def init(self, stop, saved, network, **kw):
         seen.append(network)
-        real(self, stop, saved, network)
+        real(self, stop, saved, network, **kw)
     monkeypatch.setattr(cli._ConsoleControl, "__init__", init)
     assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.2", "--hotkey", "none",
                      "--out", str(tmp_path / "out")]) == 0
@@ -832,6 +832,101 @@ def test_an_elevated_watch_starts_the_real_relay_through_the_real_launch(fake_wo
     (session,) = fake_world["sessions"]
     assert session["opts"].relay is not None and session["opts"].relay.pid == os.getpid()
     assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
+
+
+# ------------------------------------------- watch for a caller other than this console (M2's seams) ---
+
+def _watch_args(*extra):
+    return cli.build_parser().parse_args(["watch", "--pid", "4242", "--hotkey", "none", *extra])
+
+
+def test_a_watch_says_every_line_through_the_say_it_was_given(fake_world, tmp_path, capsys):
+    lines = []
+    args = _watch_args("--no-elevate", "--duration", "0.1", "--out", str(tmp_path / "out"))
+    assert cli.cmd_watch(args, say=lines.append) == 0
+    assert capsys.readouterr().out == ""                  # nothing reached this console
+    said = "\n".join(lines)
+    for text in ("Watching Game.exe (pid 4242", "Frame timing is off for this recording", "Recording. Play normally",
+                 "Saving", "Analysing...", cli.REPORT_NAME):     # the summary names the report
+        assert text in said, (text, lines)
+
+
+def test_a_busy_recording_is_said_through_the_given_say(fake_world, tmp_path, capsys):
+    other = sess.CaptureLock()
+    assert other.acquire()
+    lines = []
+    try:
+        assert cli.cmd_watch(_watch_args("--no-elevate", "--out", str(tmp_path / "out")),
+                             say=lines.append) == cli.EXIT_BUSY
+    finally:
+        other.release()
+    assert capsys.readouterr().out == "" and any("already running" in line for line in lines), lines
+
+
+def test_an_external_stop_ends_the_recording_and_is_its_reason(fake_world, tmp_path):
+    stop, events = threading.Event(), []
+    observers = sess.Observers(on_event=lambda kind, data: events.append((kind, data)))
+    timer = threading.Timer(0.5, sess.request_stop, (stop, "stopped from the window"))
+    started = time.monotonic()
+    timer.start()
+    try:                                   # no --duration: only the stop, or the fake game's own end, ends it
+        assert cli.cmd_watch(_watch_args("--no-elevate", "--out", str(tmp_path / "out")), stop=stop,
+                             say=lambda line: None, observers=observers) == 0
+    finally:
+        timer.cancel()
+    assert time.monotonic() - started < FAKE_GAME_S / 2
+    assert [kind for kind, _ in events] == ["target", "recording", "stopping", "saving", "saved"], events
+    told = dict(events)
+    assert told["target"] == {"name": "Game.exe", "pid": 4242, "how": "pid"}
+    assert told["stopping"] == {"reason": "stopped from the window"}
+    assert (tmp_path / "out" / told["saved"]["session"] / cli.CAPTURE_NAME).is_file()
+
+
+class _Terminal:
+    def isatty(self):
+        return True
+
+
+def test_a_watch_nobody_attends_never_asks_and_draws_no_status_line(fake_relay, fake_world, monkeypatch, tmp_path):
+    asked, consoles = [], []
+    monkeypatch.setattr(cli, "_ask", lambda prompt, default=False: asked.append(prompt) or True)
+    monkeypatch.setattr(sys, "stdin", _Terminal())          # a person would be asked here
+    real = cli._ConsoleControl
+    monkeypatch.setattr(cli, "_ConsoleControl", lambda *a, **kw: consoles.append(1) or real(*a, **kw))
+    out = str(tmp_path / "out")
+    assert cli.cmd_watch(_watch_args("--duration", "0.1", "--out", out), interactive=False,
+                         say=lambda line: None) == 0
+    assert asked == [] and consoles == [] and fake_relay["launches"] == []
+    assert fake_world["sessions"][-1]["printer"] is cli._silent
+    assert fake_world["sessions"][-1]["opts"].frames is False   # not asked, so recorded without frame timing
+    # The same watch with someone at this terminal: asked, and the console's own handling and status line.
+    assert cli.cmd_watch(_watch_args("--duration", "0.1", "--out", out), say=lambda line: None) == 0
+    assert len(asked) == 1 and consoles == [1] and len(fake_relay["launches"]) == 1
+    assert fake_world["sessions"][-1]["printer"] is None
+
+
+def test_without_any_stdin_nobody_is_asked(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", None)               # pythonw: no console, no stdin at all
+    assert cli._interactive(None) is False
+    monkeypatch.setattr(sys, "stdin", _Terminal())
+    assert cli._interactive(None) is True and cli._interactive(False) is False and cli._interactive(True) is True
+
+
+def test_a_console_handler_that_cannot_be_set_is_said_through_the_given_say(monkeypatch, capsys):
+    monkeypatch.setattr(cli._kernel32, "SetConsoleCtrlHandler", lambda routine, add: False)
+    lines = []
+    with cli._ConsoleControl(threading.Event(), threading.Event(), network=False, say=lines.append) as control:
+        assert not control.registered
+    assert capsys.readouterr().out == "" and len(lines) == 1 and "could not be set" in lines[0], lines
+
+
+def test_the_launcher_given_to_watch_is_the_one_that_starts_the_relay(fake_relay, fake_world, tmp_path):
+    def launcher(argv, cwd):
+        raise AssertionError("the faked relay/client.launch never calls it")
+    args = _watch_args("--elevate", "--duration", "0.1", "--out", str(tmp_path / "out"))
+    assert cli.cmd_watch(args, launcher=launcher, say=lambda line: None) == 0
+    assert cli.cmd_watch(args, say=lambda line: None) == 0
+    assert [launch["launcher"] for launch in fake_relay["launches"]] == [launcher, None]
 
 
 def test_a_change_in_place_but_not_confirmed_is_not_called_unchanged(fake_fix, monkeypatch, capsys):

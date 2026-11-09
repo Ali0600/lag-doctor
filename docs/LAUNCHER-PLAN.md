@@ -19,8 +19,8 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 - [x] M1: the app with your results: `lagdoctor app` and the MSI's Start-menu shortcut, merged 2026-11-08 (PR #21).
   Its window tests drive the real window on a demo library, here and on CI's runner; the owner tried `lagdoctor app`
   in their own terminal before the merge ("It works, merge it").
-- [ ] M2: the recording seams. The locked pipe is done (`lagdoctor/winapi/pipe.py`, PR #19, 2026-11-08), and so are
-  tool roots whose whole tree joins `tool_pids` (M3 needed them for the relay); the other seams are not.
+- [x] M2: the recording seams. The locked pipe (`lagdoctor/winapi/pipe.py`, PR #19, 2026-11-08) and tool roots whose
+  whole tree joins `tool_pids` came first (M3 needed them for the relay); the rest landed on 2026-11-09 (see M2).
 - [x] M3: the relay (`lagdoctor/relay/`, PR #23, merged 2026-11-08; the owner's own run passed 2026-11-09).
   `watch --elevate` records in the player's own window; only
   PresentMon and the network trace run elevated, in a windowless relay (DESIGN.md, "The relay").
@@ -399,6 +399,19 @@ Tests:
   The relay builds its descriptor with `client_dacl([recorder SID])`, makes the pipe under a random name, compares
   `client_pid()` and `client_session()` with what the prompt approved, and the recorder compares `server_pid()` with
   the relay it launched and checks `owner_sid()`.
+
+The rest was done 2026-11-09, with no change for a recording started in a console (DESIGN.md, CLI and Who follows a
+recording):
+- `cli.cmd_watch(args, *, stop, say, interactive, observers, launcher)`, and `_record` likewise. `say` reaches every
+  line on the path, the summary included, and `interactive=False` never asks, draws no status line and installs no
+  console handling.
+- `session.Observers(on_tick, on_event)`, each contained as the status line is, told of `target`, `recording`,
+  `mark`, `frames_lost`, `stopping`, `saving` and `saved`; a public `Session.mark()`.
+- Tool sighting at every status tick, sharing the liveness check's snapshot, so a recording takes no more
+  whole-system snapshots than before. Also `SessionOptions.tool_alone` (the window, by pid and create time, without
+  its children), `tool_roots` (a callable given each snapshot: the window's WebView2 browser processes), and a note
+  once `MAX_TOOL_PIDS` leaves one out. How the recorder learns the window's processes is M4's.
+- `launch_elevated(..., hwnd=)`, refusing a bad handle before any prompt.
 
 ### M3: the relay
 

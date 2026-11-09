@@ -440,6 +440,26 @@ def test_an_ambiguous_launch_is_refused_before_any_prompt(monkeypatch, argv, cwd
     assert fake.seen == {}
 
 
+def test_the_prompt_belongs_to_the_window_it_is_given_and_to_none_by_default(monkeypatch, tmp_path):
+    for kw, want in (({}, None), ({"hwnd": None}, None), ({"hwnd": 0x10A2C}, 0x10A2C)):
+        fake = FakeShellExecute()
+        monkeypatch.setattr(elevation, "_ShellExecuteExW", fake)
+        try:
+            elevation.launch_elevated([sys.executable, "-V"], str(tmp_path), **kw).close()
+        finally:
+            fake.reap()
+        assert fake.seen["hwnd"] == want, (kw, fake.seen["hwnd"])
+
+
+@pytest.mark.parametrize("hwnd", [0, -1, True, 1.5, "0x10a2c", 1 << 64])
+def test_a_bad_window_handle_is_refused_before_any_prompt(monkeypatch, tmp_path, hwnd):
+    fake = FakeShellExecute()
+    monkeypatch.setattr(elevation, "_ShellExecuteExW", fake)
+    with pytest.raises(ValueError):
+        elevation.launch_elevated([sys.executable, "-V"], str(tmp_path), hwnd=hwnd)
+    assert fake.seen == {}
+
+
 def test_launch_returns_at_once_and_wait_gives_the_exit_code(monkeypatch, tmp_path):
     fake = FakeShellExecute(code=3)
     monkeypatch.setattr(elevation, "_ShellExecuteExW", fake)

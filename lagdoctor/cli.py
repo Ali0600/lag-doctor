@@ -15,6 +15,7 @@ a few seconds for the save.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import json
 import os
@@ -195,14 +196,27 @@ def main(argv: list[str] | None = None) -> int:
 
 # ------------------------------------------------------------------- watch --
 
-def cmd_watch(args: argparse.Namespace) -> int:
+def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
+              say: Callable[[str], None] | None = None, interactive: bool | None = None,
+              observers: Any = None, launcher: Callable[..., Any] | None = None) -> int:
+    """Record the game, save the capture and analyse it. What a caller other than this console gives it (M4: the
+    app's control channel), each defaulting to the console's own behaviour:
+    - `stop`: set it (session.request_stop) to stop the recording, as Ctrl+C does;
+    - `say`: every line watch says, the summary included (default: printed here);
+    - `interactive`: is a person at this console? None: asked only when stdin is a terminal, and shown the status
+      line, with Ctrl+Break and closing the window handled; True: asked even without a terminal; False: never asked,
+      and no status line or console handling (nobody is there);
+    - `observers`: a session.Observers told of the recording's progress and events;
+    - `launcher`: what starts the relay elevated (default: elevation.launch_elevated)."""
     from lagdoctor.capture import session as sess
     from lagdoctor.capture import target as tgt
+    say = _teller(say)
+    observers = observers if observers is not None else sess.Observers()
     # One recording at a time, checked before PresentMon or any ETW session can start (they share fixed
     # session names, so a second one would silently end the first one's tracing). This window holds the lock
     # for the whole recording, the relay's part included.
     lock = sess.CaptureLock()
-    if not _take_lock(lock):
+    if not _take_lock(lock, say):
         return EXIT_BUSY
     relay = None
     try:
@@ -224,6 +238,7 @@ def cmd_watch(args: argparse.Namespace) -> int:
                 say("Start the game first, or name it with --game NAME.exe or --pid PID.")
                 return EXIT_BAD_ARGS
             say(f"Watching {target.get('name')} (pid {target['pid']}, chosen by {target.get('how', '?')}).")
+            observers.event("target", name=target.get("name"), pid=target["pid"], how=target.get("how"))
             frames = exe is not None
             if frames:
                 from lagdoctor.winapi import elevation
@@ -231,28 +246,33 @@ def cmd_watch(args: argparse.Namespace) -> int:
                 # An explicit --elevate also elevates an account that may trace only through Performance Log
                 # Users: Windows lets that group start frame timing but not the game-server tracker (E1, 2026-11-06).
                 if not may_trace or (args.elevate and not _elevated()):
-                    choice = elevation_choice(args.elevate, args.no_elevate, sys.stdin.isatty(), _ask)
+                    choice = elevation_choice(args.elevate, args.no_elevate, _interactive(interactive), _ask, say=say)
                     if choice == "elevate":
-                        relay, code = _start_relay(args, target, exe, may_trace)
+                        relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher)
                         if code is not None:
                             return code
                     if relay is None and not may_trace:   # declined: a group member still records frames here
                         frames = False
                         frames_why = ("it needs admin rights or membership of Performance Log Users (see "
                                       "`lagdoctor setup`)")
-            return _record(args, target, exe, frames, frames_why, relay)
+            return _record(args, target, exe, frames, frames_why, relay, stop=stop, say=say,
+                           interactive=interactive is not False, observers=observers)
     finally:
         if relay is not None:
             relay.close()
 
 
 def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, frames: bool, frames_why: str,
-            relay: Any = None) -> int:
+            relay: Any = None, *, stop: threading.Event | None = None, say: Callable[[str], None] | None = None,
+            interactive: bool = True, observers: Any = None) -> int:
     """Record, save and analyse. Ctrl+C, Ctrl+Break and closing the window all stop the recording; none of them can
     lose it once it is being stopped and saved. With a relay (relay/client.RelayLink), frame timing and the
-    game-server tracker come through it, and it is let go as soon as the recording stops."""
+    game-server tracker come through it, and it is let go as soon as the recording stops. `stop`, `say` and
+    `observers` as in cmd_watch; `interactive` False: no status line and no console handling (nobody is there)."""
     from lagdoctor.capture import session as sess
     from lagdoctor.model import SourceStatus
+    say = _teller(say)
+    observers = observers if observers is not None else sess.Observers()
     hotkey = None if (args.hotkey or "").lower() in ("", "none", "off") else args.hotkey
     opts = sess.SessionOptions(duration_s=args.duration, network=not args.no_network, server_ip=args.server,
                                hotkey=hotkey, presentmon_exe=exe, frames=frames, relay=relay,
@@ -263,36 +283,44 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
         say(f"Frame timing is off for this recording: {frames_why}")
     say("Recording. Play normally" + (f"; press {hotkey.title()} the moment it lags" if hotkey else "")
         + "; Ctrl+C stops." + (f" Stops by itself after {args.duration:.0f} s." if args.duration else ""))
-    stop, saved = threading.Event(), threading.Event()
+    stop = stop if stop is not None else threading.Event()
+    saved = threading.Event()
     # With a relay the network trace is the relay's, and the relay stops it when this window goes away.
-    with sess.CtrlC(stop, say) as guard, _ConsoleControl(stop, saved, network=opts.network and relay is None):
+    console = (_ConsoleControl(stop, saved, network=opts.network and relay is None, say=say) if interactive
+               else contextlib.nullcontext())
+    printer = None if interactive else _silent        # None: the session draws its status line here
+    with sess.CtrlC(stop, say) as guard, console:
         try:
             try:
-                cap = sess.Session(target, opts).run(stop, ctrl_c=guard)
+                cap = sess.Session(target, opts, printer=printer, observers=observers).run(stop, ctrl_c=guard)
             finally:
                 if relay is not None:
                     relay.close()
             if not frames:
                 cap.sources["frames"] = SourceStatus("off", frames_why)
             n = len(cap.frames.get("t") or [])
+            observers.event("saving", frames=n)
             say(f"Saving {n:,} frames..." if n else "Saving the capture...")
             cap.save(cap_path)
+            observers.event("saved", session=out_dir.name)
         finally:
             saved.set()
-    return _analyze_saved(cap, cap_path, out_dir)
+    return _analyze_saved(cap, cap_path, out_dir, say=say)
 
 
-def _analyze_saved(cap, cap_path: Path, out_dir: Path) -> int:
+def _analyze_saved(cap, cap_path: Path, out_dir: Path, *, say: Callable[[str], None] | None = None) -> int:
     """A watch's analysis. The capture is already on disk, so a Ctrl+C here says where it is."""
+    say = _teller(say)
     try:
-        return analyze_and_report(cap, cap_path, out_dir, remember=True)
+        return analyze_and_report(cap, cap_path, out_dir, remember=True, say=say)
     except KeyboardInterrupt:
         say(f"Stopped before the analysis finished. The capture is saved at {cap_path}; analyse it with: "
             f"lagdoctor analyze \"{cap_path}\"")
         return 130
 
 
-def _take_lock(lock) -> bool:
+def _take_lock(lock, say: Callable[[str], None] | None = None) -> bool:
+    say = _teller(say)
     try:
         if lock.acquire():
             return True
@@ -310,9 +338,11 @@ class _ConsoleControl:
     Sign-out is not covered: CTRL_LOGOFF and CTRL_SHUTDOWN never reach a process that loaded user32.
     """
 
-    def __init__(self, stop: threading.Event, saved: threading.Event, network: bool) -> None:
+    def __init__(self, stop: threading.Event, saved: threading.Event, network: bool,
+                 say: Callable[[str], None] | None = None) -> None:
         from lagdoctor.capture.session import request_stop
         self.stop, self.saved = stop, saved
+        self.say = _teller(say)
         self._request_stop = request_stop
         self.net_session: str | None = None
         self._etw = None
@@ -329,8 +359,8 @@ class _ConsoleControl:
         if _kernel32.SetConsoleCtrlHandler(self._routine, True):
             self.registered = True
         else:
-            say(f"(Closing this window would lose the recording: the console handler could not be set, error "
-                f"{ctypes.get_last_error()}.)")
+            self.say(f"(Closing this window would lose the recording: the console handler could not be set, error "
+                     f"{ctypes.get_last_error()}.)")
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -356,8 +386,10 @@ class _ConsoleControl:
         return False
 
 
-def elevation_choice(elevate: bool, no_elevate: bool, interactive: bool, ask: Callable[[str], bool]) -> str:
+def elevation_choice(elevate: bool, no_elevate: bool, interactive: bool, ask: Callable[[str], bool], *,
+                     say: Callable[[str], None] | None = None) -> str:
     """'elevate' or 'skip': what to do when frame timing needs rights we do not have."""
+    say = _teller(say)
     if elevate:
         return "elevate"
     if no_elevate or not interactive:
@@ -367,17 +399,20 @@ def elevation_choice(elevate: bool, no_elevate: bool, interactive: bool, ask: Ca
     return "elevate" if ask("Record with frame timing (shows a UAC prompt)? [Y/n] ", default=True) else "skip"
 
 
-def _start_relay(args: argparse.Namespace, target: dict[str, Any], exe: Path,
-                 may_trace: bool = False) -> tuple[Any, int | None]:
+def _start_relay(args: argparse.Namespace, target: dict[str, Any], exe: Path, may_trace: bool = False, *,
+                 say: Callable[[str], None] | None = None,
+                 launcher: Callable[..., Any] | None = None) -> tuple[Any, int | None]:
     """Frame timing and the game-server tracker through the relay: one UAC prompt, then PresentMon and the network
     trace run with administrator rights while the recording stays in this window. (link, None) once the relay
     answers and checks out; (None, None) when the prompt was declined or could not be shown, so the recording goes on
     without them; (None, code) when the relay could not record, said here. `may_trace`: this account records frame
-    timing itself (Performance Log Users), so without the relay it loses only the tracker."""
+    timing itself (Performance Log Users), so without the relay it loses only the tracker. `launcher`: what starts
+    the relay elevated (client.launch's; default elevation.launch_elevated)."""
     from lagdoctor.capture import session as sess
     from lagdoctor.capture import target as tgt
     from lagdoctor.relay import client
     from lagdoctor.winapi import elevation
+    say = _teller(say)
     if not may_trace:
         goes_on = "lag-doctor records without frame timing"
     elif args.no_network:
@@ -401,7 +436,7 @@ def _start_relay(args: argparse.Namespace, target: dict[str, Any], exe: Path,
     say("Frame timing needs administrator rights: approve the UAC prompt. The recording stays in this window.")
     try:
         link = client.launch(target, presentmon_exe=Path(exe).resolve(), frames=True, network=not args.no_network,
-                             recorder=(me.pid, me.create_time), sid=sid)
+                             recorder=(me.pid, me.create_time), sid=sid, launcher=launcher)
     except PermissionError:
         say(f"The UAC prompt was declined, so {goes_on}.")
         return None, None
@@ -489,11 +524,14 @@ def _app_tell(text: str) -> None:
 
 # ---------------------------------------------------------------- analyze --
 
-def analyze_and_report(cap, cap_path: Path, out_dir: Path, *, remember: bool = False) -> int:
+def analyze_and_report(cap, cap_path: Path, out_dir: Path, *, remember: bool = False,
+                       say: Callable[[str], None] | None = None) -> int:
     """Diagnose, write diagnosis.json and report.html into out_dir, print the summary. remember=True (a watch)
-    makes this the report `fix` acts on."""
+    makes this the report `fix` acts on. `say`: where every line goes, the summary included (default: printed)."""
     from lagdoctor.analysis.diagnose import diagnose
     from lagdoctor.report import console, html
+    show = say if say is not None else print          # the summary, which is plain ASCII already
+    say = _teller(say)
     say("Analysing...")
     try:
         d = diagnose(cap)
@@ -503,17 +541,18 @@ def analyze_and_report(cap, cap_path: Path, out_dir: Path, *, remember: bool = F
         return 1
     _write_json(out_dir / DIAGNOSIS_NAME, d.to_json())
     report = html.write(d, cap, out_dir / REPORT_NAME, capture_path=cap_path)
-    _write_summary(d, cap, out_dir, "watch" if remember else "analyze")
-    print(console.render(d, cap, report_path=report, width=_width()))
+    _write_summary(d, cap, out_dir, "watch" if remember else "analyze", say=say)
+    show(console.render(d, cap, report_path=report, width=_width()))
     if remember:
         _remember(out_dir)
     return 0
 
 
-def _write_summary(d, cap, out_dir: Path, kind: str) -> None:
+def _write_summary(d, cap, out_dir: Path, kind: str, *, say: Callable[[str], None] | None = None) -> None:
     """The app's summary of this session (report/summary.py). Without it the app still lists the session, by its
     folder's name, so a failed write is said and the analysis goes on."""
     from lagdoctor.report import summary
+    say = _teller(say)
     try:
         _write_json(out_dir / summary.SUMMARY_NAME, summary.build(d, cap, kind))
     except (OSError, ValueError) as exc:
@@ -810,6 +849,24 @@ def say(text: str) -> None:
         print(clean, flush=True)
     except (OSError, ValueError):
         pass
+
+
+def _teller(given: Callable[[str], None] | None) -> Callable[[str], None]:
+    """What a function that says things uses: the `say` it was given, or this module's own say() as it is when the
+    function runs (tests replace it)."""
+    return given if given is not None else say
+
+
+def _interactive(given: bool | None) -> bool:
+    """May watch ask the person at this console? `given`, or, by default, whether stdin is a terminal (pythonw has
+    no stdin at all)."""
+    if given is not None:
+        return bool(given)
+    return sys.stdin is not None and sys.stdin.isatty()
+
+
+def _silent(text: str) -> None:
+    """The session's status line where nobody reads this console."""
 
 
 def _ask(prompt: str, default: bool = False) -> bool:
