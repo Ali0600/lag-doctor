@@ -1,0 +1,119 @@
+[
+ {
+  "name": "the wheel check's budget outgrows its job's cap",
+  "file": "scripts/wheel_check.py",
+  "old": "BUDGET_S = 540",
+  "new": "BUDGET_S = 900",
+  "tests": [
+   "tests/test_ci_budgets.py::test_a_checks_budget_and_what_comes_before_it_fit_its_jobs_cap[wheel]"
+  ]
+ },
+ {
+  "name": "the MSI check's budget outgrows its job's cap",
+  "file": "scripts/msi_check.py",
+  "old": "BUDGET_S = 720",
+  "new": "BUDGET_S = 1500",
+  "tests": [
+   "tests/test_ci_budgets.py::test_a_checks_budget_and_what_comes_before_it_fit_its_jobs_cap[msi]"
+  ]
+ },
+ {
+  "name": "the wheel job's cap shrinks under its check",
+  "file": ".github/workflows/ci.yml",
+  "old": "    runs-on: windows-2025\n    timeout-minutes: 15",
+  "new": "    runs-on: windows-2025\n    timeout-minutes: 10",
+  "tests": [
+   "tests/test_ci_budgets.py::test_a_checks_budget_and_what_comes_before_it_fit_its_jobs_cap[wheel]"
+  ]
+ },
+ {
+  "name": "the wheel check's budget shrinks to nothing",
+  "file": "scripts/wheel_check.py",
+  "old": "BUDGET_S = 540",
+  "new": "BUDGET_S = 20",
+  "tests": [
+   "tests/test_ci_budgets.py::test_a_budget_leaves_a_slow_runner_room[wheel]"
+  ]
+ },
+ {
+  "name": "a wheel check command keeps its whole timeout",
+  "file": "scripts/wheel_check.py",
+  "old": "    return per_call if _deadline is None else min(per_call, _deadline - time.monotonic())",
+  "new": "    return per_call",
+  "tests": [
+   "tests/test_ci_budgets.py::test_a_wheel_check_command_gets_only_what_is_left_of_the_budget"
+  ]
+ },
+ {
+  "name": "a spent wheel check budget still starts the command",
+  "file": "scripts/wheel_check.py",
+  "old": "    if timeout <= 0:\n        return None, \"\", f\"{argv[0]} not run",
+  "new": "    if False:\n        return None, \"\", f\"{argv[0]} not run",
+  "tests": [
+   "tests/test_ci_budgets.py::test_a_spent_wheel_check_budget_starts_nothing_and_says_so"
+  ]
+ },
+ {
+  "name": "the wheel check never starts its budget",
+  "file": "scripts/wheel_check.py",
+  "old": "    start_budget()\n    wheel = find_wheel(dist)",
+  "new": "    wheel = find_wheel(dist)",
+  "tests": [
+   "tests/test_ci_budgets.py::test_both_checks_start_their_budget_before_anything_else"
+  ]
+ },
+ {
+  "name": "an MSI check command ignores the budget",
+  "file": "scripts/msi_check.py",
+  "old": "    if budgeted and _deadline is not None:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_ci_budgets.py::test_an_msi_check_command_gets_only_what_is_left_and_a_spent_budget_starts_nothing"
+  ]
+ },
+ {
+  "name": "the uninstall waits on the spent budget",
+  "file": "scripts/msi_check.py",
+  "old": "budgeted=action != \"/x\")",
+  "new": "budgeted=True)",
+  "tests": [
+   "tests/test_ci_budgets.py::test_the_uninstall_runs_on_its_own_timeout_when_the_budget_is_spent"
+  ]
+ },
+ {
+  "name": "the MSI check never starts its budget",
+  "file": "scripts/msi_check.py",
+  "old": "    start_budget()\n    from stage2 import guard",
+  "new": "    from stage2 import guard",
+  "tests": [
+   "tests/test_ci_budgets.py::test_both_checks_start_their_budget_before_anything_else"
+  ]
+ },
+ {
+  "name": "the Tests step has no timeout of its own",
+  "file": ".github/workflows/ci.yml",
+  "old": "        timeout-minutes: 15\n        run: uv run --no-sync pytest",
+  "new": "        run: uv run --no-sync pytest",
+  "tests": [
+   "tests/test_ci_budgets.py::test_the_test_step_stops_a_hung_test_before_its_jobs_cap"
+  ]
+ },
+ {
+  "name": "pytest prints no stacks for a hung test",
+  "file": ".github/workflows/ci.yml",
+  "old": "--durations=25 -o faulthandler_timeout=300",
+  "new": "--durations=25",
+  "tests": [
+   "tests/test_ci_budgets.py::test_the_test_step_stops_a_hung_test_before_its_jobs_cap"
+  ]
+ },
+ {
+  "name": "the msiexec logs are dropped when the job is cancelled",
+  "file": ".github/workflows/ci.yml",
+  "old": "        if: ${{ always() }}",
+  "new": "        if: ${{ !cancelled() }}",
+  "tests": [
+   "tests/test_ci_budgets.py::test_the_msi_logs_are_kept_whatever_ended_the_job"
+  ]
+ }
+]

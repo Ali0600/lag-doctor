@@ -41,14 +41,20 @@ changes go through a pull request and merge on green. Before the tests it gets
 PresentMon through `lagdoctor setup --download` and the gold captures through `tests.downloads fetch-gold`, checks
 both against the tests' pins and caches them; each job's summary counts the tests that use them. Its wheel job runs
 `uv build --offline` (with the copy of uv_build inside the pinned uv: `pyproject.toml`'s bound stays on that uv's
-minor version, and `tests/test_wheel_check.py` fails when the two part) and then `scripts/wheel_check.py`. Its msi job
+minor version, and `tests/test_wheel_check.py` fails when the two part, or when any workflow pins another uv than
+ci.yml) and then `scripts/wheel_check.py`. Its msi job
 first asks the pinned runtime what it imports (`scripts/runtime_modules.py`) and fails unless
 `scripts/runtime_modules.json` is that answer, then installs WiX 7.0.1 from its SHA-512-pinned package
 (`scripts/wix_tool.py`), builds the MSI (`scripts/msi_build.py`), keeps it as the `lag-doctor-msi` artifact, then
 installs, runs and uninstalls it there (`scripts/msi_check.py`, whose verdicts are the job summary; msiexec's logs are
-the `msi-logs` artifact). `.github/workflows/webview-spike.yml` (the Window spike, about 1.5 min) runs the window
-spike's automated checks and a rehearsal on pull requests that change the spike, `lagdoctor/setup.py` or
-`lagdoctor/winapi/ntquery.py`: GitHub's runner has the WebView2 Runtime (156.0.4314.58 on 2026-11-08), and its "no
+the `msi-logs` artifact, kept whatever ended the job). Both check scripts run their commands under one time budget
+(`BUDGET_S`) that `tests/test_ci_budgets.py` holds under the job's `timeout-minutes`, so a hang still prints every
+verdict ("not run" for what the budget left out) instead of the job being cancelled with nothing printed; when a check
+grows, it shares the budget rather than outgrowing the cap. The Tests step stops a hung test after 15 minutes, with
+every thread's stack printed once a test has run 5. `.github/workflows/webview-spike.yml` (the Window spike, about 1.5
+min) runs the window spike's automated checks and a rehearsal on pull requests that change the spike or a module it
+imports (its `paths:`, which `tests/test_side_workflows.py` keeps equal to what the spike's code imports, lazy imports
+included): GitHub's runner has the WebView2 Runtime (156.0.4314.58 on 2026-11-08), and its "no
 runtime" answer passes only when the runtime's registry version and exe agree. The rehearsal types step 2's keys, a
 wheel turn and a right-click itself there, and its `keys-typed` check fails the job unless each arrived and nothing
 acted. It does not run for the app's own code: M1's window tests (`tests/test_app_page.py`) are in ci.yml's test
@@ -137,8 +143,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   user's Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`).
 - **`scripts/stage2` creates throwaway Windows services** (the capture-service experiments, `docs/INSTALLER-PLAN.md`
   Stage 2). It runs only on GitHub's hosted runners, from `.github/workflows/experiments.yml` (started by hand, or by
-  a pull request that changes it or `scripts/stage2`, and then on every push to that pull request, about 4 minutes a
-  run); `scripts/stage2/guard.py` refuses anywhere else (exit 2). Never run it on this PC. Its instruments are
+  a pull request that changes it, `scripts/stage2` or a module the experiments import, which its `paths:` lists and
+  `tests/test_side_workflows.py` keeps whole, and then on every push to that pull request, about 4 minutes a run);
+  `scripts/stage2/guard.py` refuses anywhere else (exit 2). Never run it on this PC. Its instruments are
   checked by `tests/test_stage2.py` without any service; its results are read from the run's `stage2-results`
   artifact and the job summary (`docs/research/install-and-rights.md`, section 8, has the measured ones).
 - **The MSI installs only on CI's runner.** `scripts/msi_check.py` installs and uninstalls a per-machine product

@@ -64,7 +64,8 @@ not help.
 
 GitHub's Windows runners are disposable virtual machines with administrator rights, so the experiments that need a
 throwaway service never touch the owner's PC. `.github/workflows/experiments.yml` runs them by hand and on pull
-requests that change it or `scripts/stage2`; `scripts/stage2/drive.py` builds the folder the MSI would install
+requests that change it, `scripts/stage2` or a module the experiments import (`tests/test_side_workflows.py` keeps
+that list whole); `scripts/stage2/drive.py` builds the folder the MSI would install
 under Program Files (the embeddable runtime, lag-doctor's code, the pinned PresentMon) and refuses to run anywhere
 but a GitHub-hosted runner. Measured (research note section 8):
 - **E3**: a throwaway `NT AUTHORITY\LocalService` service, privileges trimmed to SeChangeNotifyPrivilege, read back

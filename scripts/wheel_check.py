@@ -43,7 +43,13 @@ CAPTURE_MODE = "hitch-io"            # LagLab's disk-hitch scenario, as in the R
 REPORT_NAME = "report.html"          # what `analyze` writes into its session folder
 ANALYZED_FROM = "analyzed-capture.txt"
 MIN_REPORT_BYTES = 10_000            # the disk-hitch report is about 42 KB; an error page would be far smaller
-TIMEOUT_S = 300
+TIMEOUT_S = 120                      # one command; the whole check took 3-7 s on CI (2026-11-08)
+# Every command together, from the start of the checks: each gets its own timeout cut to what is left, and once it is
+# spent the rest report "not run", so a hang still prints every verdict before the job's cap stops the step
+# (tests/test_ci_budgets.py holds it under ci.yml's timeout-minutes).
+BUDGET_S = 540
+GIT_TIMEOUT_S = 60
+_deadline: float | None = None
 LATER = ("help", "version", "imports", "analyze")     # the checks that need the installed wheel
 
 # Run by the fresh venv's python with -I: argv[1] names the modules to import (JSON), argv[2] gets the result.
@@ -210,7 +216,7 @@ def tracked_files(root: Path = ROOT) -> list[str]:
     """What git tracks under lagdoctor/, named as the wheel names files (forward slashes)."""
     try:
         out = subprocess.run(["git", "-C", str(root), "ls-files", "-z", "--", PACKAGE], capture_output=True,
-                             check=True, timeout=60).stdout
+                             check=True, timeout=GIT_TIMEOUT_S).stdout
     except (OSError, subprocess.SubprocessError) as exc:
         raise CannotStart(f"git cannot list the files tracked under {PACKAGE}/: {exc}") from None
     files = [f for f in out.decode("utf-8").split("\0") if f]
@@ -231,14 +237,27 @@ def clean_env(home: Path, environ: dict[str, str] | None = None, root: Path = RO
     return env
 
 
+def start_budget() -> None:
+    global _deadline
+    _deadline = time.monotonic() + BUDGET_S
+
+
+def time_left(per_call: float) -> float:
+    """A command's timeout: its own, cut to what is left of the budget once the checks have started it."""
+    return per_call if _deadline is None else min(per_call, _deadline - time.monotonic())
+
+
 def run(argv: list[str], cwd: Path, env: dict[str, str]) -> tuple[int | None, str, str]:
     """(exit code or None, stdout, stderr)."""
+    timeout = time_left(TIMEOUT_S)
+    if timeout <= 0:
+        return None, "", f"{argv[0]} not run: the check's {BUDGET_S} s were used up"
     try:
-        p = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=TIMEOUT_S)
+        p = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
     except OSError as exc:
         return None, "", f"could not start {argv[0]}: {exc}"
     except subprocess.TimeoutExpired:
-        return None, "", f"{argv[0]} ran past {TIMEOUT_S} s and was stopped"
+        return None, "", f"{argv[0]} ran past {timeout:.0f} s and was stopped"
     return p.returncode, p.stdout.decode("utf-8", "replace"), p.stderr.decode("utf-8", "replace")
 
 
@@ -267,6 +286,7 @@ def make_capture(path: Path) -> Path:
 
 
 def run_checks(dist: Path) -> tuple[Path, list[str], list[Check]]:
+    start_budget()
     wheel = find_wheel(dist)
     info = dist_info(wheel.name)
     with zipfile.ZipFile(wheel) as z:
