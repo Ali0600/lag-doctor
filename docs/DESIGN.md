@@ -1022,7 +1022,11 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   "Lag you marked ...", never "Stutters".
 - `background_hogs`: processes named with their rise; `background_priority` is offered only for a (pid, name)
   pair whose create time is unambiguous, never for a process with the game's image name, with the game's PIDs in
-  `exclude`.
+  `exclude`, and only for a program the title names (its first three). Windows' own processes
+  (`rules.WINDOWS_ITSELF`: System, the idle count, Registry, Memory Compression, Secure System, matched by exact name
+  without case) stay in the evidence, but here and in `gpu_contention` they never get a priority fix or "pause or
+  close" advice: titles name them "Windows itself (System)", a lag only they explain is titled "Windows itself got
+  busy", and the advice says what their work means (System: a driver's work; Memory Compression: RAM running short).
 - `packet_loss`: loss events, and a steady overall loss ≥ 1 % from at least 2 lost probes; never "no ping was
   lost" when some were. `server_lag`: argued only when a server flow covers most of the capture; no server flow
   is unchecked (a TCP-only or offline game); an "open" gap is a lost connection; "local" gaps are the game

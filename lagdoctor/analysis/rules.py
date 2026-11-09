@@ -874,11 +874,14 @@ def _gpu_contention(cap: Capture, ctx: dict) -> Any:
                       pct, "%", OTHER_GPU_PCT)
     else:
         c.neutral("background", "which program it was is not in the process table (it lists the 8 busiest by CPU)")
-    fixes = [_advice(f"Pause or close {name} while you play" if name else "Find and pause the GPU-heavy program",
-                     "Training, rendering, mining or video encoding on the same GPU takes time the game needs; "
-                     "lag-doctor never closes programs itself."),
-             _advice("Or let that work run on another GPU, if this PC has one")]
-    return c.conclude(f"Another program kept the game's GPU {m:.0f}% busy" + (f": {name}" if name else ""),
+    if name and _windows_itself(name):
+        first = _windows_advice(name, f" (process {pid})")
+    else:
+        first = _advice(f"Pause or close {name} while you play" if name else "Find and pause the GPU-heavy program",
+                        "Training, rendering, mining or video encoding on the same GPU takes time the game needs; "
+                        "lag-doctor never closes programs itself.")
+    fixes = [first, _advice("Or let that work run on another GPU, if this PC has one")]
+    return c.conclude(f"Another program kept the game's GPU {m:.0f}% busy" + (f": {_shown_as(name)}" if name else ""),
                       "Other programs used the same GPU as the game, so the game's frames had to wait for it.", fixes)
 
 
@@ -1990,12 +1993,18 @@ def _background_hogs(cap: Capture, ctx: dict) -> Any:
     if _dict(e.causes.get("background_cpu")).get("label") == "supports":
         _cpu_side_item(c, [ev.id for ev in blamed if ev.causes[0] == "background_cpu"])
     fixes = _hog_fixes(e, named)
-    others = [_text(n.name, 80) for n in named if n.role == "background"][:3]
+    background = [n for n in named if n.role == "background"][:3]
+    others = [_shown_as(_text(n.name, 80)) for n in background]
     helpers = [_text(n.name, 80) for n in named if n.role == "game_helper"][:3]
     if helpers and not others:     # A10: the game's own child processes are no background programs
         return c.conclude(f"The game's own helper processes got busy when it lagged: {', '.join(helpers)}",
                           "Processes the game itself started worked hard exactly when it stuttered or dropped frames, "
                           "taking CPU time its main thread needed.", fixes, [ev.id for ev in blamed])
+    if background and not helpers and all(_windows_itself(n.name) for n in background):
+        return c.conclude("Windows itself got busy when the game lagged: "
+                          + ", ".join(_text(n.name, 80) for n in background),
+                          "Windows' own work rose exactly when the game stuttered or dropped frames, taking time the "
+                          "game needed.", fixes, [ev.id for ev in blamed])
     who = ", ".join(others) or "other programs"
     if helpers:
         who += f"; and the game's own {', '.join(helpers)}"
@@ -2007,13 +2016,42 @@ def _background_hogs(cap: Capture, ctx: dict) -> Any:
 RISE_TEXT = {"cpu": lambda r: f"{r:.0f}% of a CPU", "io": lambda r: f"{r / 1e6:.1f} MB/s",
              "gpu": lambda r: f"{r:.0f}% of a GPU engine"}
 
+# Windows' own processes, listed without ".exe": the kernel (System, PID 4), the idle count, and the minimal
+# processes of the registry, memory compression and the secure kernel. Their CPU use is Windows' or a driver's work,
+# so there is nothing to close or lower (fixes/priority.py refuses them too): the report says what it means instead.
+WINDOWS_ITSELF = frozenset({"system", "idle", "system idle process", "registry", "memory compression",
+                            "secure system"})
+
+
+def _windows_itself(name: str) -> bool:
+    return name.casefold() in WINDOWS_ITSELF
+
+
+def _shown_as(name: str) -> str:
+    """A process as a finding's title names it: one of Windows' own as Windows itself, never as a program."""
+    return f"Windows itself ({name})" if _windows_itself(name) else name
+
+
+def _windows_advice(name: str, procs: str) -> FixSuggestion:
+    """What one of Windows' own processes means, in place of advice to pause, close or lower it."""
+    key = name.casefold()
+    if key == "system":
+        why = ("Its CPU use is work Windows' kernel does, often for a driver: update the graphics, Wi-Fi, storage "
+               "and chipset drivers.")
+    elif key == "memory compression":
+        why = ("Windows compresses memory there when RAM runs short: close memory-heavy programs, such as a browser "
+               "with many tabs, while you play.")
+    else:
+        why = "Its work is part of Windows, so there is nothing to close or lower."
+    return _advice(f"{name}{procs} is Windows itself, not a program to close", why)
+
 
 def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
     game = attribute.game_pids(e.cap)
     game_name = _image_name(e.target.get("name"))
     offer = _offerable(e)
     fixes: list[FixSuggestion] = []
-    for n in named[:2]:
+    for n in [n for n in named[:3] if not _windows_itself(n.name)][:2]:     # programs the title names, never Windows
         # SEC-2, A10: never the game or its children (the PID check below), nor a process with the game's own
         # image name (a sibling of a multi-process game is no child of the chosen process); the fix needs the PIDs
         if not game or _same_image(n.name, game_name):
@@ -2044,6 +2082,8 @@ def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
                                  "The game started it, so lag-doctor does not suggest closing it. Its work (often "
                                  "compiling shaders or loading) usually settles; if it keeps happening, check the "
                                  "game's own settings and forums."))
+        elif _windows_itself(n.name):
+            fixes.append(_windows_advice(name, procs))
         elif _same_image(n.name, game_name):
             fixes.append(_advice(f"Check what {name}{procs} is before closing anything",
                                  "It has the game's own name, so it may be part of the game (a renderer or a launcher "

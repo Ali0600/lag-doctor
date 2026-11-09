@@ -1508,5 +1508,113 @@
   "tests": [
    "tests/test_analysis_rules.py::test_a_shared_gpu_holds_the_gated_verdict_open_too"
   ]
+ },
+ {
+  "name": "Windows' own processes take a priority-fix slot again",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    for n in [n for n in named[:3] if not _windows_itself(n.name)][:2]:",
+  "new": "    for n in named[:2]:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_processes_are_never_offered_a_priority_fix_nor_told_to_close"
+  ]
+ },
+ {
+  "name": "a priority fix reaches past the programs the title names",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    for n in [n for n in named[:3] if not _windows_itself(n.name)][:2]:",
+  "new": "    for n in [n for n in named if not _windows_itself(n.name)][:2]:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_priority_fix_goes_only_to_a_program_the_title_names"
+  ]
+ },
+ {
+  "name": "Windows' own processes are told to close again",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif _windows_itself(n.name):\n            fixes.append(_windows_advice(name, procs))",
+  "new": "        elif False:\n            fixes.append(_windows_advice(name, procs))",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_processes_are_never_offered_a_priority_fix_nor_told_to_close"
+  ]
+ },
+ {
+  "name": "Windows' own process names matched with their case",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return name.casefold() in WINDOWS_ITSELF",
+  "new": "    return name in WINDOWS_ITSELF",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_processes_are_never_offered_a_priority_fix_nor_told_to_close"
+  ]
+ },
+ {
+  "name": "a program named System.exe taken for Windows itself",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return name.casefold() in WINDOWS_ITSELF",
+  "new": "    return name.casefold().removesuffix(\".exe\") in WINDOWS_ITSELF",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_program_merely_named_like_windows_own_processes_is_still_a_program"
+  ]
+ },
+ {
+  "name": "the registry's minimal process missing from Windows' own",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "WINDOWS_ITSELF = frozenset({\"system\", \"idle\", \"system idle process\", \"registry\", ",
+  "new": "WINDOWS_ITSELF = frozenset({\"system\", \"idle\", \"system idle process\", ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_processes_are_never_offered_a_priority_fix_nor_told_to_close"
+  ]
+ },
+ {
+  "name": "the hogs title names Windows itself as a program",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    others = [_shown_as(_text(n.name, 80)) for n in background]",
+  "new": "    others = [_text(n.name, 80) for n in background]",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_processes_are_never_offered_a_priority_fix_nor_told_to_close"
+  ]
+ },
+ {
+  "name": "a lag only Windows itself explains is put on background programs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if background and not helpers and all(_windows_itself(n.name) for n in background):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_lag_only_windows_itself_explains_is_not_put_on_background_programs"
+  ]
+ },
+ {
+  "name": "System's advice loses its driver pointer",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if key == \"system\":",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_processes_are_never_offered_a_priority_fix_nor_told_to_close"
+  ]
+ },
+ {
+  "name": "Memory Compression's advice loses its memory pointer",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif key == \"memory compression\":",
+  "new": "    elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_processes_are_never_offered_a_priority_fix_nor_told_to_close"
+  ]
+ },
+ {
+  "name": "gpu_contention tells the player to close Windows itself",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if name and _windows_itself(name):\n        first = _windows_advice",
+  "new": "    if False:\n        first = _windows_advice",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_never_tells_the_player_to_close_windows_itself"
+  ]
+ },
+ {
+  "name": "gpu_contention's title names Windows itself as a program",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "(f\": {_shown_as(name)}\" if name else \"\")",
+  "new": "(f\": {name}\" if name else \"\")",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_never_tells_the_player_to_close_windows_itself"
+  ]
  }
 ]
