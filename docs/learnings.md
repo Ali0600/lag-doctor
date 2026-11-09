@@ -728,3 +728,15 @@ be judged without opening it. A user's Documents folder can sit inside OneDrive,
 folder check hashes those files when a recording starts, while the game is running.
 **Takeaway**: before reading a user's files, check the recall bits from the listing; find the user's folders through
 the known-folder API, never by joining names onto the profile folder.
+
+### Interleave A/B runs, or the drift becomes the difference
+When what you measure drifts during a session (a laptop heating up, a cache warming, a CPU's boost budget running
+down), running every repeat of A and then every repeat of B puts a steady drift into A minus B. Interleaving the
+variants in blocks, shuffled within each block with the baseline in every one, spreads the drift over all of them.
+Identical runs first (A/A) measure the noise floor that a difference has to clear. In cloud benchmarks, single or
+back-to-back trials reported a 38 % difference between identical systems at 95 % confidence (Abedi and Brecht, ICPE
+2017).
+**Why it came up**: designing a settings sweep for a laptop whose GPU heat-throttles; on a similar laptop one fan and
+power mode ran the GPU 5 to 10 % slower than the next (`docs/research/settings-sweeps.md`, section 4).
+**Takeaway**: never measure all of one variant before the next; block and shuffle, keep the baseline in every block,
+and run A/A first.
