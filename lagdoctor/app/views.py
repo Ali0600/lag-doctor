@@ -17,7 +17,7 @@ from typing import Any
 
 from lagdoctor.analysis.window import window as cut_window
 from lagdoctor.app.library import Entry, read_diagnosis
-from lagdoctor.model import Capture, Diagnosis, G, N, S
+from lagdoctor.model import Capture, Diagnosis, G, N, S, clean_note
 from lagdoctor.report import labels
 from lagdoctor.report.charts import fmt_elapsed, number
 from lagdoctor.report.summary import CHECKED, NOT_UNREAL
@@ -113,7 +113,7 @@ def _session_row(entry: Entry, last_id: str | None) -> dict[str, Any]:
             "avg_fps": fmt(n["avg_fps"]), "low1_fps": fmt(n["low1_fps"]),
             "stutters_per_min": fmt(n["stutters_per_min"], "{:.1f}"),
             "top_cause": labels.cause_text(n["top_cause"]) if n["top_cause"] else "nothing stood out",
-            "is_last": entry.id == last_id}
+            "note": (entry.summary or {}).get("note") or "", "is_last": entry.id == last_id}
 
 
 # ------------------------------------------------------------------------------------------------ library --
@@ -261,6 +261,7 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
         "exe_name": labels.game_name({"name": target.get("name")}),
         "when": when_text(started),
         "length": fmt_elapsed(cap.duration_s),
+        "note": clean_note(cap.note) or "",
         "frames_text": f"{fmt(stats.get('frames'))} frames" if frames_ok else "frame timing not recorded",
         "verdict": {"key": d.lag_type if isinstance(d.lag_type, str) else "unknown", "title": lag_text(d.lag_type),
                     "headline": d.headline},
@@ -445,7 +446,9 @@ def compare_view(a: Entry, b: Entry) -> dict[str, Any]:
         "numbers": [row("Average FPS", "avg_fps", better="high"), row("1% low FPS", "low1_fps", better="high"),
                     row("Stutters / min", "stutters_per_min", "{:.1f}", better="low"),
                     row("Worst frame", "worst_frame_ms", suffix=" ms", better="low")],
-        "conditions": [text_row("Power plan and mode", power(na), power(nb)),
+        # The player's own words come first: what they say they changed, beside what lag-doctor saw change.
+        "conditions": [text_row("Your note", sa.get("note"), sb.get("note")),
+                       text_row("Power plan and mode", power(na), power(nb)),
                        text_row("Refresh rate", fmt(na.get("refresh_hz"), suffix=" Hz") if na.get("refresh_hz")
                                 else None, fmt(nb.get("refresh_hz"), suffix=" Hz") if nb.get("refresh_hz") else None),
                        text_row("Frames timed", source(na), source(nb)),

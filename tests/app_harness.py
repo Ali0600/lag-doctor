@@ -120,6 +120,9 @@ def script(facts: dict, app: App):
     yield js(CLICK_GAME.format(name=json.dumps("Demo Racer")))
     yield until("document.querySelectorAll('tr[data-session] input').length >= 2")
     facts["racer_results_commands"] = yield js("document.querySelectorAll('.last-tag').length")
+    facts["racer_game"] = yield js(f"""(() => ({{
+        notes: [...document.querySelectorAll('tr[data-session] .note')].map((n) => n.textContent),
+        made: {MADE}, pwned: window.__pwned === 1}}))()""")
     yield js("""const boxes = document.querySelectorAll('tr[data-session] input');
         boxes[0].click(); boxes[1].click(); document.getElementById('compare').click(); true""")
     yield until("!!document.getElementById('compare-table')")
@@ -127,10 +130,18 @@ def script(facts: dict, app: App):
         (tr) => [...tr.children].map((td) => td.textContent))""")
     facts["compare_differs"] = yield js("""[...new Set([...document.querySelectorAll('#view td.differs')].map(
         (td) => td.parentElement.children[0].textContent))]""")
+    facts["compare_made"] = yield js(f"({{made: {MADE}, pwned: window.__pwned === 1}})")
     yield shot("compare")
     yield js("document.getElementById('back').click(); true")
     yield until("!!document.getElementById('game-name')")
     facts["back"] = yield js("document.getElementById('game-name').textContent")
+    # The newest Demo Racer recording, the one with a note, on Results.
+    yield js("document.querySelector('tr[data-session]').click(); true")
+    yield until("!!document.querySelector('.verdict')")
+    facts["racer_results"] = yield js(f"""(() => ({{
+        game: document.querySelector('#view h1').textContent,
+        note: document.getElementById('note') ? document.getElementById('note').textContent : null,
+        made: {MADE}, pwned: window.__pwned === 1}}))()""")
 
     yield js("document.querySelector('[data-go=settings]').click(); true")
     yield until("[...document.querySelectorAll('#view h1')].some((h) => h.textContent === 'Settings')")

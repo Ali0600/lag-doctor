@@ -100,6 +100,8 @@ tr.pick:hover td { background: var(--soft); }
 tr.chosen td { background: var(--soft); }
 td.num { font-variant-numeric: tabular-nums; }
 .last-tag { font-size: 11px; color: var(--accent); font-weight: 600; margin-left: 6px; }
+.note { overflow-wrap: anywhere; }
+td .note { font-size: 12px; color: var(--muted); max-width: 320px; }
 
 /* results */
 .verdict { display: flex; gap: 14px; align-items: center; }

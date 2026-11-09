@@ -11,8 +11,8 @@ from dataclasses import asdict
 
 import pytest
 
-from lagdoctor.model import (CAPTURE_SCHEMA, F, G, N, S, Capture, CaptureError, Diagnosis, Evidence, Finding,
-                             SeriesBuilder, SourceStatus)
+from lagdoctor.model import (CAPTURE_SCHEMA, NOTE_CUT, NOTE_MAX, F, G, N, S, Capture, CaptureError, Diagnosis,
+                             Evidence, Finding, SeriesBuilder, SourceStatus, clean_note)
 
 
 def test_column_sets_have_unique_names_and_a_time_column():
@@ -92,6 +92,49 @@ def test_a_capture_from_a_newer_build_with_extra_fields_still_loads(tmp_path):
     assert "future_field" in note and "sources.confidence" in note and "(0.2.0??2J)" in note and "\x1b" not in note
 
 
+@pytest.mark.parametrize("raw, kept", [
+    ("installed FFVIIHook", "installed FFVIIHook"),
+    ("  shadows\tto\r\nlow \x1b[2J ", "shadows to low [2J"),       # control characters are spaces, runs of space one
+    ("DLSS" + chr(0x202E) + "on" + chr(0xD800), "DLSS on"),           # a mark that reorders text, a lone surrogate
+    ("caf" + chr(0xE9) + " " + chr(0x5149), "caf" + chr(0xE9) + " " + chr(0x5149)),   # letters of any script stay
+    ("", None), (" \x07\x1b\t\n ", None), (None, None), (5, None), (True, None), (["x"], None),
+])
+def test_a_note_is_kept_as_one_line_of_printable_text_and_an_empty_one_is_none(raw, kept):
+    assert clean_note(raw) == kept and clean_note(raw, limit=None) == kept
+
+
+def test_a_note_past_its_limit_is_cut_where_one_is_given_and_kept_whole_where_none_is():
+    assert NOTE_MAX == 200
+    assert clean_note("x" * NOTE_MAX) == "x" * NOTE_MAX                 # exactly the limit: whole
+    cut = clean_note("word " * 60)                                      # 299 characters as kept
+    assert len(cut) <= NOTE_MAX and cut.endswith(NOTE_CUT) and cut.startswith("word word")
+    assert clean_note("y" * 201) == "y" * 197 + NOTE_CUT
+    # A cut right after a space: never a space before the cut mark.
+    assert clean_note("x" * 196 + " " + "y" * 50) == "x" * 196 + NOTE_CUT
+    assert clean_note("z" * 500, limit=None) == "z" * 500
+
+
+def test_a_capture_keeps_its_note_and_one_from_before_notes_has_none(tmp_path):
+    cap = _capture()
+    cap.note = "installed FFVIIHook"
+    back = Capture.load(cap.save(tmp_path / "c.ldcap.json.gz"))
+    assert back.note == "installed FFVIIHook" and not back.notes
+    raw = _capture().to_json()
+    del raw["note"]                                                     # a capture saved before notes existed
+    _gz(tmp_path / "old.gz", raw)
+    old = Capture.load(tmp_path / "old.gz")
+    assert old.note is None and not old.notes
+
+
+def test_a_note_read_from_a_file_is_cleaned_and_a_longer_one_cut_never_refused(tmp_path):
+    # A newer build may keep a longer note; text a file holds is shown only as safe characters.
+    _gz(tmp_path / "c.gz", dict(_capture().to_json(), note="a\x1b]0;x\x07b " + "c" * 300))
+    note = Capture.load(tmp_path / "c.gz").note
+    assert note.startswith("a ]0;x b ccc") and len(note) == NOTE_MAX and note.endswith(NOTE_CUT)
+    _gz(tmp_path / "c.gz", dict(_capture().to_json(), note="   "))
+    assert Capture.load(tmp_path / "c.gz").note is None
+
+
 def test_a_newer_capture_format_is_refused_as_newer(tmp_path):
     _gz(tmp_path / "c.gz", dict(_capture().to_json(), schema="lagdoctor.capture/2"))
     with pytest.raises(CaptureError, match="newer version") as info:
@@ -119,6 +162,7 @@ def test_files_that_are_not_captures_say_so(tmp_path, make):
     (lambda p: _gz(p, {k: v for k, v in _capture().to_json().items() if k != "started_at"}), "no started_at"),
     (lambda p: _gz(p, dict(_capture().to_json(), target=["a"])), "target is a list"),
     (lambda p: _gz(p, dict(_capture().to_json(), duration_s=True)), "duration_s is a bool"),
+    (lambda p: _gz(p, dict(_capture().to_json(), note=["shadows to low"])), "note is a list"),
     (lambda p: _gz(p, dict(_capture().to_json(), sources={"frames": {"detail": "x"}})), "has no state"),
 ])
 def test_a_damaged_capture_says_damaged(tmp_path, make, why):

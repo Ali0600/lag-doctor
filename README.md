@@ -71,6 +71,7 @@ uv sync                                                 # create .venv, with the
 uv run lagdoctor setup                                  # download + verify PresentMon 2.6.0 (asks first)
 uv run lagdoctor check                                  # settings check-up, no game needed
 uv run lagdoctor watch --game eldenring.exe             # or --pid PID; with neither, the busiest game
+uv run lagdoctor watch --note "shadows to low"          # what you changed, kept with the recording
 uv run lagdoctor fix --list                             # the automatic fixes the last report suggested
 uv run lagdoctor fix power_plan                         # shows before -> after and asks
 uv run lagdoctor undo                                   # what lag-doctor changed; undo an ID, or --all
@@ -89,8 +90,10 @@ uv run lagdoctor app                                    # your recorded games an
   otherwise load from System32 (`dxgi.dll`, `dinput8.dll` ...), ASI plugins and their settings, an Unreal game's
   `~mods` paks; and for an Unreal game, its user settings files (`Engine.ini`, `GameUserSettings.ini`). Compare lists
   them side by side, marks a file that changed between the two, and shows the exe's size and date, so a game update
-  shows too. A setting kept anywhere else is not seen. It needs Microsoft's WebView2 Runtime, which Windows 11 has. It
-  is a window, not a web page: nothing is served and it opens no network connection.
+  shows too. A setting kept anywhere else is not seen, so say it yourself: `--note "installed FFVIIHook"` (up to 200
+  characters) keeps your words with the recording, in its report and as the first row of Compare. It needs
+  Microsoft's WebView2 Runtime, which Windows 11 has. It is a window, not a web page: nothing is served and it opens
+  no network connection.
 
 ![lag-doctor's window: the library of recorded games](docs/images/app-library.png)
 

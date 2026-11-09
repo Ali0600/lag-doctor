@@ -143,6 +143,19 @@ def test_the_out_folder_is_made_absolute_where_it_comes_in(monkeypatch, tmp_path
     assert cli.build_parser().parse_args(["watch", "--out", "rel"]).out == (tmp_path / "rel").resolve()
 
 
+def test_a_note_is_kept_as_one_clean_line_and_one_too_long_is_refused_before_anything_starts(capsys):
+    p = cli.build_parser()
+    assert p.parse_args(["watch"]).note is None
+    assert p.parse_args(["watch", "--note", "  shadows\tto  low "]).note == "shadows to low"
+    assert p.parse_args(["watch", "--note", " \x07 "]).note is None             # nothing printable: no note
+    assert p.parse_args(["watch", "--note", "x" * 200]).note == "x" * 200      # exactly the limit
+    # The limit counts what is kept: the spaces and control characters around a note do not count.
+    assert p.parse_args(["watch", "--note", "\x07  " + "y" * 200 + "  \n"]).note == "y" * 200
+    with pytest.raises(SystemExit):
+        p.parse_args(["watch", "--note", "z" * 201])                         # refused, never cut
+    assert "a note can be at most 200 characters, and this one has 201" in capsys.readouterr().err
+
+
 def test_fix_then_undo_round_trip(fake_fix):
     write_last_diagnosis([{"title": "Turn it up", "fix_id": "test_cli_fake", "params": {"name": "a"}}])
     assert cli.main(["fix", "test_cli_fake", "--yes"]) == 0
@@ -609,6 +622,34 @@ def test_an_elevated_watch_records_here_with_frame_timing_through_the_relay(fake
 def test_without_the_network_the_relay_runs_frame_timing_only(fake_relay, tmp_path):
     assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == 0
     assert fake_relay["launches"][0]["network"] is False
+
+
+def test_the_note_stays_with_the_recorder_and_never_goes_to_the_relay(fake_relay, tmp_path):
+    note = "shadows to low"
+    assert cli.main([*WATCH, "--elevate", "--note", note, "--out", str(tmp_path / "out")]) == 0
+    (launch,) = fake_relay["launches"]
+    assert note not in repr(launch)                         # nothing the relay is started with holds it
+    (path,) = (tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}")
+    assert Capture.load(path).note == note                  # the recorder kept it
+
+
+def test_a_watch_keeps_its_note_in_the_capture_the_summary_and_the_report_and_analyze_keeps_it(fake_world,
+                                                                                            tmp_path):
+    from lagdoctor.report import summary
+    note = "installed FFVIIHook"
+    assert cli.main([*WATCH, "--no-elevate", "--note", note, "--out", str(tmp_path / "out")]) == 0
+    (path,) = (tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}")
+    assert Capture.load(path).note == note and summary.read(path.parent)["note"] == note
+    shown = f"<strong>Your note:</strong> {note}</p>"
+    assert shown in (path.parent / cli.REPORT_NAME).read_text(encoding="utf-8")
+    # The note is the capture's: analysing the capture again keeps it.
+    assert cli.main(["analyze", str(path)]) == 0
+    (again,) = [d for d in paths.sessions_dir().iterdir() if (d / cli.ANALYZED_FROM).is_file()]
+    assert summary.read(again)["kind"] == "analyze" and summary.read(again)["note"] == note
+    assert shown in (again / cli.REPORT_NAME).read_text(encoding="utf-8")
+    assert cli.main([*WATCH, "--no-elevate", "--out", str(tmp_path / "plain")]) == 0          # without --note
+    (plain,) = (tmp_path / "plain").glob(f"*/{cli.CAPTURE_NAME}")
+    assert Capture.load(plain).note is None and summary.read(plain.parent)["note"] is None
 
 
 def test_with_a_relay_closing_the_window_leaves_the_network_trace_to_the_relay(fake_relay, monkeypatch, tmp_path):
