@@ -222,7 +222,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   the merged `worktree-*` branches, and `.git/hooks/pre-push` (local, not in the repo) refuses any commit that holds
   those details. Pull request bodies, review comments and issue text are public too, and no hook reads them: a
   command for the owner names the folder as `<repo>\.claude\worktrees\<name>` there, never the full user path (a PR
-  body that held it was refused before posting, 2026-11-08).
+  body that held it was refused before posting, 2026-11-08). Name another project's issue in plain words ("PresentMon's
+  issue 570"): `owner/repo#N` or its URL puts a backlink on that issue's public timeline that editing the body does not
+  remove (PR #27, 2026-11-09). Run a PR body's scan in the same `&&` chain as `gh pr create`: on a line of its own, a
+  failing scan still let that body go out.
 - **The README's Experience Gained carries totals** (tests, red-first sabotages and their specs, the tests on the real
   PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
   for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
