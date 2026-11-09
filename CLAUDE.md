@@ -102,6 +102,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   is added there.
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
   a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
+- **The game folder check reads folders, never the game** (`capture/gamefiles.py`, what Compare's drop-in and Unreal
+  rows show). Find the user's own folders through `winapi/folders.py`: OneDrive can hold Documents, so
+  `%USERPROFILE%\Documents` may be the wrong place. Never open a file whose listing marks it online only (reading it
+  makes OneDrive download it). A file size is `labels.byte_count`, never `charts.number`, which refuses anything past
+  1e7 as corrupt: an 81 MB exe read as "not read" until a demo used a real size. A DLL name joins `PROXY_DLLS` only
+  from a primary source, and never one on KnownDLLs (`tests/test_gamefiles.py` reads both lists).
 - **Text a player reads is plain words.** Research citations (`WT 8`, `LC 4.9`, `NE 7 row 9`) and review ids
   (`CC-5`) go in comments, never in a string the report, console or a fix shows; `tests/test_user_text.py`
   scans every module but `winapi/`. Name sources with `labels.source_text`, never by their ids.
