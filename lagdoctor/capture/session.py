@@ -100,7 +100,8 @@ class Observers:
     """Who follows a recording besides its console (M4: lag-doctor's window, through `watch --control`).
 
     on_tick(elapsed, live) once a status period, with each collector's live() values; on_event(kind, data) when
-    something happens: "target" (the game was chosen), "recording" (everything has started), "mark" (the lag key),
+    something happens: "waiting" (the game is being looked for), "target" (the game was chosen), "recording"
+    (everything has started), "mark" (the lag key),
     "frames_lost" (frame timing stopped working), "stopping", "saving" and "saved" (the capture is on disk). Each is
     contained the way the status line is: one that raises is not called again, and the capture says so (unless it
     first fails at "saved", when the capture is on disk already); neither can stop the recording or lose it. They run

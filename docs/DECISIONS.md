@@ -86,8 +86,43 @@
 - **The note through `SessionOptions`**, for M4's recording from the app, so the session's observers could show it
   while it records. Revisit hook: `_record` in `lagdoctor/cli.py` (where the note is set today) and `SessionOptions`
   in `lagdoctor/capture/session.py`.
+- **The recorder raises the relay's UAC prompt with the window's HWND**, instead of the window raising it and
+  handing the relay's handle over: simpler, if Windows treats another process's window as the prompt's foreground
+  owner, which Microsoft's pages never say. An owner run would show it. Revisit hook: the `launcher` that
+  `relay/client.launch` takes, and `launch_elevated(..., hwnd=)` (DECISIONS 2026-11-09, M4's prompt).
+- **Stop and save at once when lag-doctor's window goes away** during a recording, instead of recording on to the
+  game's exit: worth it if recordings left running by a closed window turn out to be a nuisance. Revisit hook: the end
+  of `Channel._read_loop` in `lagdoctor/control.py`.
 
 ---
+
+## 2026-11-09: M4's relay prompt is raised by the window, which hands the relay's handle to the recorder
+
+The plan has the app raise the UAC prompt with its own window ("asks for UAC with its own window") and the recorder
+check the relay against the pipe's server. In M3 the recorder raised the prompt itself and kept the relay's process
+handle, which pins the relay's pid and gives its exit codes (3: the game changed during the prompt; 6: PresentMon
+failed its check). The implementing session chose; the owner has not weighed in.
+- **The window hands the relay's handle to the recorder (chosen)**: after the prompt it copies its handle into the
+  recorder with DuplicateHandle (it holds the recorder's own process handle from starting it), closes its own and
+  sends `elevated {handle, pid}`; the recorder adopts it (`ElevatedChild.adopt`). Every check M3 has stays as it is,
+  the recorder holds the handle as DESIGN says, and a window that dies after the hand-over takes nothing with it.
+  - **The window keeps the handle and forwards `relay_exit {code}`**: rejected. The pid's pin and the exit codes
+    would live in another process, kept in step by messages, and a window that dies would drop both.
+  - **The recorder raises the prompt with the window's HWND**: deferred, worth trying (Backlog). Microsoft's archived
+    Vista UAC guidance says the HWND given to ShellExecuteEx decides whether a prompt is foreground or only blinks on
+    the taskbar, and never says a window of another process counts; an agent cannot raise a prompt to find out.
+- **A Cancel ends watch with nothing recorded only until the recording begins (chosen)**; after that it is a Stop,
+  and the capture is kept, as the CLI promises that nothing the user does loses a started recording.
+  - **Discard a started recording on Cancel**: rejected. It breaks that promise, and the player has spent the time.
+- **A closed window never ends a recording (chosen)**: stdin's end is no stop; the recorder records on to the game's
+  exit or the duration, saves, and the app lists the session when it opens again.
+  - **Stop and save at once when the window goes**: deferred, worth trying (Backlog).
+- **The recorder takes its parent for the window (chosen)**: a Python that started before it counts alone
+  (`tool_alone`), and its `msedgewebview2.exe` children are roots found in each snapshot (`tool_roots`).
+  - **A `--window PID:CT` argument**: rejected. The parent is what started the recorder; an argument would restate it.
+
+Revisit hooks: `control.Channel.relay_launcher`, `cli._check_cancel` and its four places in `cmd_watch`,
+`control.window_of`.
 
 ## 2026-11-09: A recording's note, `watch --note TEXT` (B of "Compare shows what changed in the game itself")
 

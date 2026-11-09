@@ -318,6 +318,17 @@ def test_a_recording_the_window_drives_runs_from_hello_to_done(fake_world, tmp_p
     assert (tmp_path / "out" / done["session"] / cli.CAPTURE_NAME).is_file()
     for text in ("Watching Game.exe", "Recording. Play normally", "Analysing...", cli.REPORT_NAME):
         assert text in window.said()
+    assert fake_world["sessions"][-1]["printer"] is cli._silent        # no status line: nobody reads a console
+
+
+def test_a_refusal_before_anything_starts_reaches_the_window(fake_world, monkeypatch, tmp_path):
+    from lagdoctor import paths
+    copy = paths.PrivateCopy(app="Some.App_123", folder=r"C:\Packages\Some.App_123\LocalCache\Local\lag-doctor")
+    monkeypatch.setattr(paths, "private_copy", lambda folder=None: copy)
+    window = Window()
+    assert _serve(window, _args(tmp_path)) == cli.EXIT_PRIVATE_COPY
+    assert window.kinds() == ["hello", "done"] and window.messages[-1]["reason"] == "private_copy"
+    assert "Not started:" in window.said()
 
 
 def test_the_windows_stop_ends_the_recording(fake_world, tmp_path):
@@ -383,6 +394,7 @@ def test_a_recording_that_cannot_start_is_done_with_its_reason(fake_world, monke
 
 def test_an_error_inside_watch_is_said_and_done_as_failed(fake_world, monkeypatch, tmp_path):
     def broken(args, **kw):
+        kw["observers"].event("target", name="Game.exe", pid=4242, how="pid")   # it failed after the game was found
         raise RuntimeError("an unexpected state")
     monkeypatch.setattr(cli, "cmd_watch", broken)
     window = Window()
