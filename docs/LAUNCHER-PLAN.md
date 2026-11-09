@@ -7,7 +7,7 @@ first and said go on 2026-11-08: M0's spike passed the owner's own run the same 
 sources are in [research/desktop-app.md](research/desktop-app.md). The recording side builds the capture service's
 protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 
-## Status (2026-11-08)
+## Status (2026-11-09)
 
 - [x] Decided by the owner: a desktop app, not a page in a browser, and it launches the games (DECISIONS 2026-11-08).
 - [x] Researched: the window technology, launching and finding a game without touching it, the screens, and the
@@ -25,9 +25,10 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 - [x] M3: the relay (`lagdoctor/relay/`, PR #23, merged 2026-11-08; the owner's own run passed 2026-11-09).
   `watch --elevate` records in the player's own window; only
   PresentMon and the network trace run elevated, in a windowless relay (DESIGN.md, "The relay").
-- [ ] M4: recording from the app. Both halves are built (see M4): the recorder's control mode (`watch --control
-  stdio`, `lagdoctor/control.py`) and the app's "Record the game that's running" (`lagdoctor/app/recording.py`). The
-  owner tries the app's half before it merges.
+- [x] M4: recording from the app, merged 2026-11-09 in two halves: the recorder's control mode (`watch --control
+  stdio`, `lagdoctor/control.py`, PR #31) and the app's "Record the game that's running"
+  (`lagdoctor/app/recording.py`, PR #33). The owner recorded a game from the app in their own terminal before the
+  second merged ("It works, merge it").
 - [ ] M5: measuring the right part.
 - [ ] M6: Play.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
@@ -530,7 +531,10 @@ The app's half was built on 2026-11-09 (DESIGN.md, The app), with these choices 
   analysed. Closing it before the recording begins cancels it (DECISIONS 2026-11-09, M4's relay prompt).
 - Before the PR, an adversarial review from four angles (privilege boundary, threads and lifecycle, Windows and
   WebView2, the page and its tests) raised 23 findings: 15 confirmed, 6 plausible, 2 refuted. Every confirmed one was
-  fixed, with the plausible ones whose fix was clear and the 2 refuted as cheap hardening.
+  fixed, with the plausible ones whose fix was clear and the 2 refuted as cheap hardening. A re-check of the fixes
+  found 7 more, all fixed.
+- Merged 2026-11-09 (PR #33), after the owner recorded a game from the app in their own terminal ("It works, merge
+  it").
 
 ### M5: measuring the right part
 
