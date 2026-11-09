@@ -99,6 +99,17 @@ load to about ±6 % of a core.
 **Why it came up**: every thread time in a 4 Hz snapshot was an exact multiple of 156,250 × 100 ns.
 **Takeaway**: decide "this thread is saturated" over windows of 1 s or more.
 
+### PresentMon's CPU Busy is wall time, so it cannot show CPU headroom
+`MsCPUBusy` runs from the moment the previous `Present()` returned to the next `Present()` call, so time the game
+spends waiting outside `Present()` (for the GPU, a frame-latency object or a frame limiter's sleep) counts as busy.
+In a GPU-bound game it stretches to fill the frame, and `1000 / MsCPUBusy` only restates the frame rate.
+**Why it came up**: asked whether lag-doctor could say which part of a PC to upgrade, the obvious CPU-headroom figure
+on a GPU-bound recording matched the frame rate: `MsCPUBusy` 16.55 ms beside `MsGPUBusy` 16.6 ms and a 16.9 ms frame
+(`MsCPUWait` 0.34 ms), while the game's busiest thread ran only 75% of one core, so the presenting thread spent
+roughly a quarter or more of that "busy" time not running at all.
+**Takeaway**: judge the CPU side from thread CPU time, never from PresentMon's CPU Busy; how fast the CPU could go in
+a GPU-bound game takes a second recording with lighter graphics.
+
 ### Max-per-pixel downsampling must not treat empty buckets as gaps
 The report's charts keep the maximum of each pixel column so one stutter among 100,000 frames still reaches
 the top. Marking every empty bucket as a gap turned a 1 Hz ping line into dots.
