@@ -20,11 +20,13 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   Its window tests drive the real window on a demo library, here and on CI's runner; the owner tried `lagdoctor app`
   in their own terminal before the merge ("It works, merge it").
 - [x] M2: the recording seams. The locked pipe (`lagdoctor/winapi/pipe.py`, PR #19, 2026-11-08) and tool roots whose
-  whole tree joins `tool_pids` came first (M3 needed them for the relay); the rest landed on 2026-11-09 (see M2).
+  whole tree joins `tool_pids` came first (M3 needed them for the relay); the rest landed on 2026-11-09 (PR #30, see
+  M2).
 - [x] M3: the relay (`lagdoctor/relay/`, PR #23, merged 2026-11-08; the owner's own run passed 2026-11-09).
   `watch --elevate` records in the player's own window; only
   PresentMon and the network trace run elevated, in a windowless relay (DESIGN.md, "The relay").
-- [ ] M4: recording from the app.
+- [ ] M4: recording from the app. Its first half, the recorder's control mode (`watch --control stdio`,
+  `lagdoctor/control.py`), is built (see M4); the app's half is not.
 - [ ] M5: measuring the right part.
 - [ ] M6: Play.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
@@ -465,6 +467,20 @@ section 11). The owner still checks where the UAC prompt appears when the app's 
 
 The app gets "Record the game that's running": screen 3, static and with the view suspended while the game records,
 the sounds and Stop.
+
+It comes in two pull requests: the recorder's control mode first, then the app's half, which the owner tries before
+it merges, as with M1.
+
+The recorder's half was built on 2026-11-09 (DESIGN.md, The control channel):
+- The messages are those above, and also `hello` first, `say` for every line watch says, `mark`, `frames_lost`,
+  `stopping`, `saving` and `saved`. The app's side adds `elevate_refused` and `elevate_failed`.
+- `elevate` comes after `target`, not before `waiting` as the list above has it: the relay's approved command line
+  names the running game (M3), so the game must be found first. Play's folder rule (M6) can move it before.
+- The app raises the prompt with its own window and hands the relay's process handle to the recorder
+  (`ElevatedChild.hand_over` and `adopt`, DECISIONS 2026-11-09), so the recorder checks the relay as it always
+  has and reads its exit codes itself.
+- A Cancel ends watch with nothing recorded until the recording begins, and is a Stop after that. A closed window
+  never ends a recording.
 
 ### M5: measuring the right part
 

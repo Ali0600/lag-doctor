@@ -451,6 +451,54 @@ def test_the_prompt_belongs_to_the_window_it_is_given_and_to_none_by_default(mon
         assert fake.seen["hwnd"] == want, (kw, fake.seen["hwnd"])
 
 
+def test_a_handle_handed_to_another_process_is_one_it_can_wait_on(monkeypatch, tmp_path):
+    fake = FakeShellExecute(code=9)
+    monkeypatch.setattr(elevation, "_ShellExecuteExW", fake)
+    # The recorder the window started: a process of its own, whose handle (from starting it) may take a copy.
+    recorder = subprocess.Popen([BASE_PY, "-I", "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+    try:
+        child = elevation.launch_elevated([sys.executable, "-V"], str(tmp_path))
+        pid = child.pid
+        value = child.hand_over(int(recorder._handle))
+        with pytest.raises(ValueError):                     # its own copy is closed
+            child.wait(0)
+        with pytest.raises(ValueError):
+            child.hand_over(int(recorder._handle))
+        here = _winapi.GetCurrentProcess()                  # the copy is the recorder's: take it back from there
+        back = _winapi.DuplicateHandle(int(recorder._handle), value, here, 0, False,
+                                       _winapi.DUPLICATE_SAME_ACCESS | _winapi.DUPLICATE_CLOSE_SOURCE)
+        adopted = elevation.ElevatedChild.adopt(back)
+        try:
+            assert adopted.pid == pid and adopted.wait(10) == 9
+        finally:
+            adopted.close()
+    finally:
+        recorder.stdin.close()
+        recorder.wait(10)
+        fake.reap()
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 1 << 64, "0x1a4", None])
+def test_adopt_refuses_what_is_no_handle_value(value):
+    with pytest.raises(ValueError):
+        elevation.ElevatedChild.adopt(value)
+
+
+def test_adopt_refuses_a_handle_that_is_not_a_process_and_leaves_it_open():
+    import ctypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateEventW.restype = ctypes.c_void_p
+    k32.SetEvent.argtypes = [ctypes.c_void_p]
+    k32.CloseHandle.argtypes = [ctypes.c_void_p]
+    event = k32.CreateEventW(None, True, False, None)
+    try:
+        with pytest.raises(ValueError, match="not a process"):
+            elevation.ElevatedChild.adopt(event)
+        assert k32.SetEvent(event)                          # still open: it may be one of this process's own
+    finally:
+        k32.CloseHandle(event)
+
+
 @pytest.mark.parametrize("hwnd", [0, -1, True, 1.5, "0x10a2c", 1 << 64])
 def test_a_bad_window_handle_is_refused_before_any_prompt(monkeypatch, tmp_path, hwnd):
     fake = FakeShellExecute()
