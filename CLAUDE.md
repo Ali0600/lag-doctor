@@ -173,6 +173,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   each fail an ICE that `wix msi validate` runs (WiX v7.0.1's darice.cub, measured 2026-11-08), and
   `SUPPRESSED_ICES` stays ICE61 alone. `msi_check` reads back only `#<digits>` and plain-string Registry rows under
   HKCU or HKLM; a new row of another form fails its `registry` verdict until the check learns it.
+- **`watch --control stdio` is lag-doctor's window's** (`lagdoctor/control.py`, DESIGN.md "The control channel"). Its
+  stdout is the channel, so nothing but `Channel` may write there: `serve` points stdout at stderr before anything
+  else runs, and a new message or field goes through `control.from_app` or `from_recorder` with its checks. An agent
+  starts one only as `tests/test_control.py` does (a pid that does not exist, a home under `%TEMP%`), never against a
+  running game: from M4's app half on, the app raises the UAC prompt for it.
 - **An agent never starts the app.** `lagdoctor app` (and the MSI's Start-menu shortcut) is the owner's: the
   agent's shell has another app's private copy of AppData, where `app` refuses (exit 5, `cli.PRIVATE_COPY_POLICY`),
   and from M4 on the app raises a UAC prompt. What an agent may run is the app's tests: `tests/test_app_page.py`

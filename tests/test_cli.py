@@ -916,7 +916,7 @@ def test_an_external_stop_ends_the_recording_and_is_its_reason(fake_world, tmp_p
     finally:
         timer.cancel()
     assert time.monotonic() - started < FAKE_GAME_S / 2
-    assert [kind for kind, _ in events] == ["target", "recording", "stopping", "saving", "saved"], events
+    assert [kind for kind, _ in events] == ["waiting", "target", "recording", "stopping", "saving", "saved"], events
     told = dict(events)
     assert told["target"] == {"name": "Game.exe", "pid": 4242, "how": "pid"}
     assert told["stopping"] == {"reason": "stopped from the window"}
@@ -989,6 +989,55 @@ def test_a_follower_that_fails_at_the_save_is_in_the_saved_capture(fake_world, t
     (path,) = out.glob(f"*/{cli.CAPTURE_NAME}")
     notes = Capture.load(path).notes
     assert any("window following this recording" in n and "BrokenPipeError" in n for n in notes), notes
+
+
+def test_a_cancel_before_the_game_is_looked_for_records_nothing(fake_world, tmp_path):
+    cancel, lines = threading.Event(), []
+    cancel.set()
+    assert cli.cmd_watch(_watch_args("--no-elevate", "--duration", "0.1", "--out", str(tmp_path / "out")),
+                         say=lines.append, cancel=cancel) == cli.EXIT_CANCELLED
+    assert fake_world["find"] == [] and fake_world["sessions"] == []
+    assert lines[-1] == "Cancelled: nothing was recorded."
+
+
+def test_a_cancel_once_the_game_is_found_records_nothing_and_raises_no_prompt(fake_relay, fake_world, tmp_path):
+    cancel = threading.Event()
+    observers = sess.Observers(on_event=lambda kind, data: kind == "target" and cancel.set())
+    args = _watch_args("--elevate", "--duration", "0.1", "--out", str(tmp_path / "out"))
+    assert cli.cmd_watch(args, say=lambda line: None, cancel=cancel, observers=observers) == cli.EXIT_CANCELLED
+    assert fake_relay["launches"] == [] and fake_world["sessions"] == []
+    assert not any((tmp_path / "out").glob("*"))           # not even an empty session folder
+
+
+def test_a_cancel_during_the_prompt_or_after_it_records_nothing_and_lets_the_relay_go(fake_relay, fake_world,
+                                                                                      monkeypatch, tmp_path):
+    from lagdoctor.relay import client
+    args = _watch_args("--elevate", "--duration", "0.1", "--out", str(tmp_path / "out"))
+    fake_relay["raise"] = cli.Cancelled()                   # the window's Cancel while its prompt is up
+    assert cli.cmd_watch(args, say=lambda line: None) == cli.EXIT_CANCELLED
+    fake_relay["raise"] = None
+    cancel, faked = threading.Event(), client.launch
+
+    def launch(target, **kw):                               # the relay was approved, and then the Cancel came
+        link = faked(target, **kw)
+        cancel.set()
+        return link
+    monkeypatch.setattr(client, "launch", launch)
+    assert cli.cmd_watch(args, say=lambda line: None, cancel=cancel) == cli.EXIT_CANCELLED
+    assert fake_relay["link"].closed >= 1 and fake_world["sessions"] == []
+
+
+def test_watch_says_it_is_looking_before_it_names_the_game_and_counts_the_windows_processes(fake_world, tmp_path):
+    kinds = []
+    observers = sess.Observers(on_event=lambda kind, data: kinds.append(kind))
+
+    def roots(procs):
+        return []
+    assert cli.cmd_watch(_watch_args("--no-elevate", "--duration", "0.1", "--out", str(tmp_path / "out")),
+                         say=lambda line: None, observers=observers, tool_alone=((800, 100),), tool_roots=roots) == 0
+    assert kinds[:2] == ["waiting", "target"]
+    opts = fake_world["sessions"][-1]["opts"]
+    assert opts.tool_alone == ((800, 100),) and opts.tool_roots is roots
 
 
 def test_without_any_stdin_nobody_is_asked(monkeypatch):

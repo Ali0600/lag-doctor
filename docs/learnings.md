@@ -815,3 +815,32 @@ red-first showed that its sabotage survived: `_watch` returns only from inside a
 the last look always had this tick's snapshot or a fresh one. The reset was removed.
 **Takeaway**: give a cache one invalidation point that every path passes through; a sabotage of a second one that no
 test can catch marks it as redundant defence, so remove it rather than test around it.
+
+### A thread still blocked reading sys.stdin can crash Python as it exits
+At shutdown CPython flushes and closes `sys.stdin`'s buffered reader, which needs the reader's lock. A daemon thread
+blocked in `sys.stdin.buffer.readline()` holds that lock, so the interpreter aborts: "Fatal Python error:
+_enter_buffered_busy", exit code 0xC0000005 on Windows, after the program's own work had finished.
+**Why it came up**: M4a's recorder reads the window's messages on a thread while `watch` runs, and the window keeps its
+stdin open the whole time; a recorder that had saved its recording then crashed on its way out. Its reader now reads a
+private `os.dup(0)` and points file 0 itself at NUL. The red-first sabotage that only swapped the reader back to
+`sys.stdin.buffer` survived, because file 0 then read NUL: a different fault (the window's messages never arrive),
+which a real-recorder test told the Stop now catches. Recreating the crash took undoing both halves of the fix.
+**Takeaway**: a thread that may still be blocked on stdin at exit reads its own duplicate of the handle; and when a
+fix has two halves, the sabotage that recreates the bug undoes both.
+
+### One "gone" flag cannot mean both "the peer stopped sending" and "my writes fail"
+A two-way pipe has two ends that fail apart: the peer can close what it sends while still reading what it is sent,
+and a write can fail while reads still arrive. A single flag for both makes one direction's end stop the other.
+**Why it came up**: M4a's channel set one `gone` flag when the window's stdin ended, and its writer dropped everything
+after it, so a window that closed its end early never saw `done`. The channel now has `gone` (nothing more will be
+read) and `broken` (nothing more can be written), and the writer looks only at `broken`.
+**Takeaway**: track each direction of a channel with a flag of its own, and let each loop stop only on its own.
+
+### Closing a buffered reader that another thread is reading from can hang forever
+On Windows, `close()` on a `BufferedReader` waits for its lock, which a thread blocked in `readline()` on it holds,
+and that thread waits for data that never comes.
+**Why it came up**: an M4a test closed the channel's reading end to end it while the reader thread was blocked on
+it, and the test hung. The channel's tests now end a reader by closing the pipe's writing end
+(`tests/test_control.py`, `_pipe`), so the reader sees end of file.
+**Takeaway**: end a reader blocked on a pipe from the other side (close the writer), never by closing the reader's own
+buffered object from another thread.

@@ -52,6 +52,7 @@ SW_SHOWNORMAL = 1
 ERROR_CANCELLED = 1223                   # the user answered No at the UAC prompt (winerror.h)
 WAIT_OBJECT_0, WAIT_TIMEOUT = 0x0, 0x102
 INFINITE_POLL_MS = 250                   # wait in slices so Ctrl+C still reaches Python
+DUPLICATE_SAME_ACCESS = 0x00000002       # winnt.h: the copy has the same rights as the handle it copies
 _CONTROL = re.compile(r"[\x00-\x1f]")   # NUL, tab, newline ...: never in an argument of an elevated launch
 
 
@@ -117,6 +118,11 @@ _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 _kernel32.CloseHandle.restype = wintypes.BOOL
 _kernel32.GetProcessId.argtypes = [wintypes.HANDLE]
 _kernel32.GetProcessId.restype = wintypes.DWORD
+_kernel32.GetCurrentProcess.argtypes = []
+_kernel32.GetCurrentProcess.restype = wintypes.HANDLE
+_kernel32.DuplicateHandle.argtypes = [wintypes.HANDLE, wintypes.HANDLE, wintypes.HANDLE,
+                                      ctypes.POINTER(wintypes.HANDLE), wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+_kernel32.DuplicateHandle.restype = wintypes.BOOL
 _shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
 _shell32.ShellExecuteExW.restype = wintypes.BOOL
 _advapi32.LookupAccountSidW.argtypes = [wintypes.LPCWSTR, ctypes.c_void_p, wintypes.LPWSTR,
@@ -345,6 +351,37 @@ class ElevatedChild:
     def __init__(self, info: SHELLEXECUTEINFOW) -> None:
         self._info: SHELLEXECUTEINFOW | None = info
         self.pid = int(_kernel32.GetProcessId(info.hProcess)) if info.hProcess else 0
+
+    @classmethod
+    def adopt(cls, handle: int) -> "ElevatedChild":
+        """The child whose process handle another process put into this one (hand_over): M4's window raises the UAC
+        prompt with its own window, then gives the relay's handle to the recorder, which then holds it as if it had
+        launched the relay itself. ValueError unless `handle` is a process handle here; a value that is not is left
+        open, since it may be one of this process's own handles."""
+        if isinstance(handle, bool) or not isinstance(handle, int) or not 0 < handle < 1 << 64:
+            raise ValueError(f"not a handle value: {handle!r}")
+        info = SHELLEXECUTEINFOW()
+        info.hProcess = handle
+        pid = int(_kernel32.GetProcessId(info.hProcess))
+        if not pid:
+            raise ValueError(f"handle {handle} is not a process in this process (error {ctypes.get_last_error()})")
+        child = cls.__new__(cls)
+        child._info, child.pid = info, pid
+        return child
+
+    def hand_over(self, to_process: int) -> int:
+        """Put a copy of this handle, with the same rights, into the process `to_process` names (a handle to it with
+        PROCESS_DUP_HANDLE: the one the window holds for the recorder it started), close this one, and return the
+        copy's value there. The copy keeps the child's number from being given to another process."""
+        info = self._info
+        if info is None or not info.hProcess:
+            raise ValueError("the process handle was already closed")
+        copy = wintypes.HANDLE()
+        if not _kernel32.DuplicateHandle(_kernel32.GetCurrentProcess(), info.hProcess, to_process, ctypes.byref(copy),
+                                         0, False, DUPLICATE_SAME_ACCESS):
+            raise ctypes.WinError(ctypes.get_last_error())
+        self.close()
+        return int(copy.value)
 
     def wait(self, timeout_s: float | None = None) -> int | None:
         """The exit code once the child has ended, or None if it still runs after timeout_s.

@@ -180,6 +180,54 @@ is the recorder's side, `server.py` the relay process, `protocol.py` the message
   messages that come before the tracker has made its session (the frames may start the relay first) are kept for
   it, up to 50,000 events, and the rest counted (`health.early_dropped`).
 
+### The control channel (lagdoctor/control.py)
+
+`lagdoctor watch --control stdio` is a recording that lag-doctor's window drives (M4). The window starts it with no
+console and two pipes, which carry JSON lines both ways: one object a line, ASCII, at most 64 KiB, each naming
+itself in `t`. `control.from_app` and `from_recorder` check every message and field, and `control.py`'s docstring
+lists them. The recorder runs `cli.cmd_watch` as a console does, through its seams: every line it says goes to the
+window as `say`, the session's events (Who follows a recording) as messages of their own (a mark as `mark {at}`,
+since `t` names the message), and nobody is asked anything. Whatever ends it, the last line is `done {reason, code,
+session}`; `control.done_reason` maps watch's exit code, the events that went out and the stop's reason to one of
+`control.REASONS`.
+- **Nothing else reaches the channel.** Before anything can print, `serve` keeps a private copy of stdout's file
+  for the channel and points stdout itself at stderr, the window's log file.
+- **Nothing waits on the window.** One writer thread drains a bounded queue (`MAX_QUEUED` lines; past that they are
+  dropped and counted). A write that fails ends the writing quietly (`broken`). stdin ending (`gone`) means the
+  window has closed or died, and the recording goes on to its end and is saved: a closed window cannot lose a
+  recording.
+- **Stop and Cancel.** `stop` and `cancel` from the window both ask the session to stop
+  (`session.request_stop`, reason `control.STOPPED_REASON`). Until `recording` has gone out, both also set watch's
+  `cancel`. `cmd_watch` checks it before the game is looked for, once it is found, while the relay's prompt is up and
+  before the recording starts, and the session checks it once everything has started, before it says `recording`
+  (`SessionOptions.cancel`; the inventory and the relay's trace can take seconds). Any of these ends watch with
+  nothing recorded and no session folder (`cli.EXIT_CANCELLED`, 130). After `recording`, it is a stop, and the
+  capture is kept.
+- **The command line comes first.** `main` parses it before the channel exists, so a value the parser refuses ends
+  the recorder with exit 2 and the usage on stderr, and no `hello` or `done`. The window builds only command lines
+  the parser takes (a note no longer than `model.NOTE_MAX`, say).
+- **The window starts the recorder itself, with its base interpreter** (`Path(sys.base_exec_prefix) /
+  "pythonw.exe"`, cwd at the tree, as `relay/client.relay_python` does for the relay), never a venv's
+  `python.exe`, which is a launcher. The recorder is then the window's own child: its parent is the window, and the
+  process handle the window holds is the recorder's, which the relay's handle is handed over into. The window
+  checks `hello.pid` against that handle's pid before it hands anything over.
+- **The relay's prompt is the window's.** Microsoft's guidance says the elevation mechanism uses the HWND passed to
+  ShellExecuteEx to decide whether a prompt is foreground or background, and that without one it only blinks on
+  the taskbar. It never says a window of another process counts, so the window raises the prompt itself. The
+  recorder's launcher (`Channel.relay_launcher`, given to `relay/client.launch`) sends `elevate {argv, cwd}`: the
+  command line `client.relay_argv` built, which the window checks before it raises the prompt with its own window
+  (`launch_elevated(..., hwnd=)`). Then the window copies the relay's process handle into the recorder
+  (`ElevatedChild.hand_over`, with the recorder's own process handle, which it holds from starting it) and sends
+  `elevated {handle, pid}`. The recorder adopts the handle (`ElevatedChild.adopt`: a process handle here, for that
+  pid), so from there everything is as in a console's recording: the handle pins the relay's pid, its exit codes
+  reach `_relay_failure`, and `server_pid`, the pipe's owner and the hello are checked as before. `declined`,
+  `elevate_refused` and `elevate_failed` raise what launch_elevated would raise (PermissionError, ValueError,
+  OSError), and a Cancel or a window that went away ends the wait.
+- **The window's processes are lag-doctor's own.** The recorder's parent, when it is a Python that started first,
+  counts alone (`tool_alone`), and its children named `msedgewebview2.exe`, its WebView2 browser processes, are
+  roots found again in each snapshot (`tool_roots`), only while the window is still that process: once it has
+  closed, its number may name another program, whose WebView2 processes are not lag-doctor's.
+
 ### Where files go: another app's private copy
 
 A program started by a packaged (MSIX) app can have what it writes under `%LOCALAPPDATA%` and `%APPDATA%` kept in
@@ -231,6 +279,7 @@ lagdoctor/
   report/   charts.py labels.py console.py html.py (done) summary.py (summary.json, for the app's library)
   app/      main.py window.py bridge.py library.py views.py assets/ lag-doctor.ico     the desktop app (M1)
   setup.py  fetch + verify PresentMon
+  control.py                                            `watch --control stdio`: a recording the app drives (M4)
   cli.py __main__.py
 laglab/     the fake laggy game used by tests (done)
 scripts/    redfirst.py e2e_truth.py (done) e2e.py etw_access.py (E1: who may enable the trace providers)
@@ -415,6 +464,12 @@ def launch_elevated(argv: list[str], cwd: str, *, hwnd: int | None = None) -> El
                                                   # until the prompt is answered: a window calls it off its UI thread
 class ElevatedChild:
     pid: int                                      # the child's; the open handle keeps Windows from reusing it
+    def hand_over(self, to_process) -> int        # a copy of the handle, same rights, put into the process that
+                                                  # to_process names (DuplicateHandle); this one is closed. M4: the
+                                                  # window gives the relay's handle to the recorder it started
+    @classmethod
+    def adopt(cls, handle: int) -> ElevatedChild  # the child whose handle was handed over to this process;
+                                                  # ValueError unless it is a process handle here (left open then)
     def wait(self, timeout_s: float | None = None) -> int | None  # exit code; a Ctrl+C leaves the child running;
                                                                   # wait(0) only polls
     def close(self) -> None
@@ -516,7 +571,8 @@ Rules every collector follows:
 console's status line (`printer`), a caller follows the recording through `session.Observers(on_tick=None,
 on_event=None)` (M4: the app's window, through `watch`):
 - `on_tick(elapsed, live)` once a status period (1 s), after the status line, with `{collector name: live()}`.
-- `on_event(kind, data)`: `target` `{name, pid, how}` (from `cli.cmd_watch`: the game was chosen); `recording`
+- `on_event(kind, data)`: `waiting` `{}` (from `cli.cmd_watch`: the game is being looked for); `target` `{name,
+  pid, how}` (from `cli.cmd_watch`: the game was chosen); `recording`
   `{duration_s, hotkey, frames, network}` (everything has started; the origin was set just before the collectors
   started); `mark` `{t}`; `frames_lost` `{why}` (the "Frame timing is not working" line); `stopping` `{reason}`
   (the stop began: "duration", "game exited", "Ctrl+C" or the reason given to `request_stop`); `saving` `{frames}`
@@ -1115,7 +1171,7 @@ lagdoctor app                        lag-doctor's window: recorded games and the
   session), 3 the game exited during the UAC prompt, 4 another recording is running, 5 its files would land in
   another app's private copy (any command that saves; see Where files go), 6 frame timing was wanted but
   PresentMon is missing or failed its check (here or in the relay), 1 the relay could not record for another
-  reason (said in plain words), 130 stopped.
+  reason (said in plain words), 130 stopped, or cancelled before the recording began (the app's Cancel).
 - The live status line shows `-` for a value not in yet and `off` for a source this recording does not run
   (frame timing off, `--no-network`). It fits the console's width now (`session.console_width`): readouts drop
   from its end and it is padded, so `\r` rewrites one row (a 95-character line in a 71-column window scrolled a
@@ -1138,7 +1194,10 @@ lagdoctor app                        lag-doctor's window: recorded games and the
   away, it drops a line it cannot deliver; `interactive` None asks the [Y/n] question only when
   stdin is a terminal (never without a stdin, as under pythonw), True asks anyway, and False never asks, draws no
   status line and installs no console handling; `observers` is a `session.Observers` (see Who follows a recording);
-  `launcher` starts the relay elevated (default `elevation.launch_elevated`, through `relay/client.launch`).
+  `launcher` starts the relay elevated (default `elevation.launch_elevated`, through `relay/client.launch`);
+  `cancel`, set before the recording begins, ends watch with nothing recorded (exit 130, `EXIT_CANCELLED`; see The
+  control channel); `tool_alone` and `tool_roots` go to `SessionOptions` (the app's window and its WebView2
+  processes). `watch --control stdio` is all of these, driven by the app (The control channel).
 - `fix` applies only offered fixes, with the offered params, after showing the plan and its notes; it refuses
   to run elevated. A plan-time refusal is reported, never a traceback. Every command except `setup` first
   settles journal entries a crash left `pending`, and marks session-only changes whose process has ended as
