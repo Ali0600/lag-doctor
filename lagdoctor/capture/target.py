@@ -7,15 +7,20 @@ whose instance names carry the PID and the adapter LUID (docs/research/windows-t
 `auto` mode picks the process with the most 3D-engine use among those that own a visible, uncloaked
 top-level window. The window matters: CUDA compute is booked to the 3D engine too (WT verify log 1, 2.2),
 so a busy 3D engine alone does not make a process a game; this machine's ML training job is exactly that.
+
+Play (docs/LAUNCHER-PLAN.md, M6) has a store start the game, so it waits for it instead: `wait_for_target` watches
+for a new process whose program is under the game's install folder and that draws, and `accept_target`'s folder
+rule is what the relay checks that choice against.
 """
 from __future__ import annotations
 
 import math
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Iterable
 
 from lagdoctor.winapi import ntquery, windows
 from lagdoctor.winapi.ntquery import ProcInfo, Snapshotter
@@ -244,24 +249,121 @@ def game_pids(pid: int, create_time: int) -> set[int]:
     return descendants(_snapshot(), pid, create_time)
 
 
+# ---------------------------------------------------------------- the game's folder (Play, M6) ---
+
+MAX_FOLDER_CHARS = 260
+# A plain local drive path: a letter, a colon and one separator. Never a share, a device path or "C:relative".
+_LOCAL_DRIVE = re.compile(r"[A-Za-z]:[\\/](?![\\/])")
+_SEPARATORS = re.compile(r"[\\/]+")
+_BAD_NAME_CHARS = frozenset('<>:"|?*')
+
+
+def fold_path(path: str) -> str:
+    """The form two Windows paths are compared in: each run of slashes one backslash, none at the end, case-folded.
+
+    Steam stores its folder as c:/program files (x86)/steam, while Windows gives a game's image path as
+    C:\\Program Files (x86)\\Steam\\... (research note, section 14). Windows compares names through its own
+    upper-case table; casefold agrees with it on the names game folders use, and where the two differ (ß against
+    ss) it can only take a look-alike name for the folder's own.
+    """
+    out = _SEPARATORS.sub(lambda m: "\\", path).casefold()
+    return out[:-1] if out.endswith("\\") else out
+
+
+def check_folder(folder: object) -> str:
+    """A game's install folder as the folder rule takes it, in Windows' own form (backslashes, none at the end, the
+    drive letter in upper case); ValueError says why not.
+
+    The library files that name it are untrusted (every local account can write them, research note section 5) and
+    the rule takes in every program under it, so it must be a plain local drive path below the drive's root and
+    outside the Windows folder, with no . or .. part (a test of the text would otherwise reach past it), and no name
+    that Windows would change (a trailing dot or space) or refuse (<>:"|?* and control characters).
+    """
+    if not isinstance(folder, str):
+        raise ValueError(f"not a folder path: {folder!r}")
+    if not 3 <= len(folder) <= MAX_FOLDER_CHARS or any(ord(c) < 32 for c in folder):
+        raise ValueError(f"not a folder path of 3 to {MAX_FOLDER_CHARS} printable characters: {folder!r}")
+    if not _LOCAL_DRIVE.match(folder):
+        raise ValueError(f"{folder} is not a folder on a local drive (like C:\\Games\\Name)")
+    parts = [p for p in _SEPARATORS.split(folder[3:]) if p]
+    if not parts:
+        raise ValueError(f"{folder} is a whole drive, not a game's folder")
+    for part in parts:
+        if part in (".", ".."):
+            raise ValueError(f"{folder} has a {part} part, so it may name another folder than it seems to")
+        if part[-1] in ". " or any(c in _BAD_NAME_CHARS for c in part):
+            raise ValueError(f"{folder} has a name Windows would not keep as written ({part!r})")
+    clean = folder[0].upper() + ":\\" + "\\".join(parts)
+    system = fold_path(os.environ.get("SystemRoot") or "C:\\Windows")
+    if fold_path(clean) == system or fold_path(clean).startswith(system + "\\"):
+        raise ValueError(f"{clean} is in the Windows folder, where no game is installed")
+    return clean
+
+
+def folder_reason(image: str | None, folder: str) -> str | None:
+    """Why the program at `image` (a process's image path, as ntquery.image_path gives it) is not from under
+    `folder` (as check_folder returns it), in plain words; None when it is.
+
+    Windows gives an image path in NT form when no drive letter names its volume (one mounted on a folder, say).
+    Such a path cannot match a folder named by its drive letter, and the reason says so.
+    """
+    if not image:
+        return "Windows did not give the path of its program"
+    if not _LOCAL_DRIVE.match(image):
+        if image.startswith("\\\\"):
+            return f"its program runs from a network share ({image})"
+        return f"Windows gave its program's path as {image}, with no drive letter, so it cannot be matched to a folder"
+    parts = _SEPARATORS.split(image)
+    if "." in parts or ".." in parts:
+        return f"its program's path ({image}) has a . or .. part"
+    if not fold_path(image).startswith(fold_path(folder) + "\\"):
+        return f"its program ({image}) is not in the game's folder ({folder})"
+    return None
+
+
+def in_folder(image: str | None, folder: str) -> bool:
+    """True when the program at `image` is under `folder` (folder_reason gives the why when it is not)."""
+    return folder_reason(image, folder) is None
+
+
 def accept_target(procs: dict[int, ProcInfo], pid: int, create_time: int, *, session: int,
-                  approved: tuple[int, int]) -> str | None:
+                  approved: tuple[int, int] | None = None, folder: str | None = None, since: int | None = None,
+                  image: str | None = None) -> str | None:
     """Why the relay must not record this process, in plain words; None when it may.
 
-    Called with the same arguments by both sides, so they cannot drift: the recorder before it asks for the UAC
-    prompt, the relay on its own snapshot once the prompt has approved `approved` (the running game's pid and create
-    time). The process must be running as exactly that one process, in `session`: the Windows session of the
-    recorder and of the relay. (Play, later, adds a rule for a game started after the relay from an approved folder.)
+    Called with the same arguments by both sides, so they cannot drift: the recorder before it proposes the game,
+    the relay on its own snapshot. The process must be running as exactly that one process, in `session`: the
+    Windows session of the recorder and of the relay. Then, in one of two modes:
+    - `approved`: the running game's pid and create time, which the UAC prompt approved (M3);
+    - `folder` and `since` (Play, M6): the prompt came before the game existed and approved its install folder, so
+      the game must have started after `since` (the relay's own create time) and run a program under `folder`.
+      `image` is that program's path, which each side reads for itself, without a handle (ntquery.image_path).
     """
     _check_identity(pid, create_time)
+    if (approved is None) == (folder is None):
+        raise ValueError("pass exactly one of approved= or folder=")
+    if folder is not None:
+        folder = check_folder(folder)
+        if isinstance(since, bool) or not isinstance(since, int) or since < 0:
+            raise ValueError(f"not a process create time: {since!r}")
+    elif since is not None or image is not None:
+        raise ValueError("since= and image= go with folder=")
     p = procs.get(pid)
     if p is None or p.create_time != create_time:
         return f"process {pid} is no longer running (its game exited, or Windows gave its number to another program)"
     if p.session_id != session:
         return (f"process {pid} ({p.name or 'unnamed'}) runs in another Windows session ({p.session_id}, not "
                 f"{session}): only a game in the player's own session is recorded")
-    if (pid, create_time) != tuple(approved):
-        return f"process {pid} ({p.name or 'unnamed'}) is not the game the UAC prompt approved"
+    if approved is not None:
+        if (pid, create_time) != tuple(approved):
+            return f"process {pid} ({p.name or 'unnamed'}) is not the game the UAC prompt approved"
+        return None
+    if create_time <= since:
+        return (f"process {pid} ({p.name or 'unnamed'}) started before the UAC prompt was approved, so it is not "
+                "the game started after it")
+    why = folder_reason(image, folder)
+    if why is not None:
+        return f"process {pid} ({p.name or 'unnamed'}) is not the game: {why}"
     return None
 
 
@@ -433,3 +535,224 @@ def find_target(name: str | None = None, pid: int | None = None, auto: bool = Fa
         "how": how,
         "candidates": listed,
     }
+
+
+# ---------------------------------------------------------------- the folder wait (Play, M6) ---
+
+WAIT_DEADLINE_S = 300.0         # how long the wait gives a store to start the game (a feel number: Steam may first
+                                # download an update, or wait for an answer in its own window)
+MAX_WAIT_S = 3600.0
+WAIT_POLL_S = 0.5               # how often it looks for new processes and their windows
+DRAW_SAMPLE_S = 1.0             # one GPU sample, taken only while a process from the folder owns a window
+DRAW_SAMPLES = 2                # samples in a row of at least AUTO_MIN_3D_PCT before that process is the game
+GPU_FAILS_TO_WINDOWS = 3        # failed samples in a row before a window from the folder is enough, which is said
+MAX_READS_PER_ROUND = 512       # new processes whose image path one round reads; any more wait for the next round
+SINCE_MARGIN = 20_000_000       # 2 s in create-time units: by default a process started just before the wait counts
+MAX_NAMES = 3                   # programs from the folder that a message names
+_FILETIME_1970 = 116_444_736_000_000_000   # 1970-01-01 as a create time (100 ns since 1601)
+
+
+class WaitCancelled(Exception):
+    """The folder wait ended because its `cancel` was set, or `pick` chose nothing."""
+
+
+def filetime_now() -> int:
+    """The system time in the units of a process's create time (100 ns since 1601, UTC)."""
+    return time.time_ns() // 100 + _FILETIME_1970
+
+
+def _real_folder(folder: str) -> str | None:
+    """The folder with its junctions and subst drives resolved, when that names another plain local folder: Windows
+    names a game's program by the resolved path. None when it resolves to itself or to no such folder."""
+    try:
+        real = check_folder(os.path.realpath(folder))
+    except (OSError, ValueError):
+        return None
+    return real if fold_path(real) != fold_path(folder) else None
+
+
+def _duration_words(seconds: float) -> str:
+    if seconds >= 120:
+        return f"{seconds / 60:g} minutes"
+    return f"{seconds:g} second" + ("" if seconds == 1 else "s")
+
+
+def _deadline_reason(folder: str, seconds: float, furthest: int, names: list[str]) -> str:
+    took = _duration_words(seconds)
+    which = ", ".join(names[:MAX_NAMES]) + (" and others" if len(names) > MAX_NAMES else "")
+    if furthest == 0:
+        return (f"no program from the game's folder ({folder}) started within {took}. The store may still be "
+                "downloading an update or waiting for an answer in its own window, or the game started from "
+                "another folder")
+    if furthest == 1:
+        return f"{which} started from the game's folder but showed no window within {took}"
+    if furthest == 2:
+        return (f"a window from the game's folder ({which}) never drew within {took}: it may be showing a message "
+                "instead, such as a missing runtime")
+    return (f"a window from the game's folder ({which}) drew only in short bursts within {took}, never for "
+            f"{DRAW_SAMPLES} samples in a row")
+
+
+def _busiest(cands: list[Candidate]) -> Candidate:
+    if all(c.gpu_pct is not None for c in cands):
+        return choose_auto(cands, min_pct=0.0) or cands[0]
+    return max(cands, key=lambda c: (c.foreground, c.area, -c.pid))
+
+
+def wait_for_target(folder: str, *, since: int | None = None, deadline_s: float = WAIT_DEADLINE_S,
+                    cancel: threading.Event | None = None,
+                    on_status: Callable[[str, dict], None] | None = None,
+                    exclude: Iterable[tuple[int, int]] = (),
+                    pick: Callable[[list[Candidate]], Candidate | None] | None = None,
+                    clock: Callable[[], float] = time.monotonic,
+                    sleep: Callable[[float], object] | None = None) -> dict:
+    """Wait, opening no process, for the game a store starts from its install folder. Returns find_target's dict
+    with how "folder", plus `folder` and `judged_by` ("3d", or "window" once the GPU counters failed); raises
+    TargetNotFound saying how far the wait got by `deadline_s`, or WaitCancelled.
+
+    A process counts once it started after `since` (a create time; by default SINCE_MARGIN before the call, so take
+    it before the store's link is opened), runs in this Windows session from a program under `folder` (its image
+    path, read once per process, without a handle), and is neither lag-doctor's own nor in `exclude` (processes the
+    caller already tried, such as a launcher that drew and then left). It is the game once it owns a visible window
+    and draws at least AUTO_MIN_3D_PCT of a 3D engine on DRAW_SAMPLES samples in a row; the GPU is sampled only
+    while such a window exists. Stubs, anti-cheat bootstrappers and store relaunches never draw, or exit, so they are
+    passed over for as long as they run (Unreal's stub runs beside its game all session). When several draw, `pick`
+    chooses one of them (None cancels); by default the busiest does.
+
+    `on_status(state, info)` hears each stage once: "waiting"; "started" and "window", with the pid and name of the
+    first process to get there; and "windows-only", with why, when the GPU counters fail GPU_FAILS_TO_WINDOWS times
+    in a row. From then on a window from the folder that stays for DRAW_SAMPLES rounds is enough.
+    """
+    folder = check_folder(folder)
+    forms = [folder] + [f for f in (_real_folder(folder),) if f]
+    if isinstance(deadline_s, bool) or not isinstance(deadline_s, (int, float)) or not math.isfinite(deadline_s) \
+            or not 0 < deadline_s <= MAX_WAIT_S:
+        raise ValueError(f"deadline_s must be more than 0 and at most {MAX_WAIT_S:.0f} seconds")
+    if since is None:
+        since = filetime_now() - SINCE_MARGIN
+    elif isinstance(since, bool) or not isinstance(since, int) or since < 0:
+        raise ValueError(f"not a process create time: {since!r}")
+    skip = set()
+    for pid, create_time in exclude:
+        _check_identity(pid, create_time)
+        skip.add((pid, create_time))
+    pause = sleep if sleep is not None else (cancel.wait if cancel is not None else time.sleep)
+
+    told: set[str] = set()
+
+    def tell(state: str, **info) -> None:
+        if state not in told:
+            told.add(state)
+            if on_status is not None:
+                on_status(state, info)
+
+    end = clock() + deadline_s
+    images: dict[tuple[int, int], tuple[str | None, bool]] = {}   # (pid, create time) -> (image path, from folder)
+    streak: dict[tuple[int, int], int] = {}                       # samples in a row that a process drew
+    names: list[str] = []
+    furthest = 0                    # 0 nothing from the folder, 1 it started, 2 it had a window, 3 it drew
+    gpu_fails = 0
+    by_windows = False
+    listed: list[dict] = []
+    tell("waiting")
+    while True:
+        if cancel is not None and cancel.is_set():
+            raise WaitCancelled("the wait for the game was cancelled")
+        if clock() >= end:
+            raise TargetNotFound(_deadline_reason(folder, deadline_s, furthest, names), listed)
+        procs = _snapshot()
+        me = procs.get(os.getpid())
+        if me is None:
+            raise OSError("lag-doctor's own process is not in Windows' process list")
+        mine = self_and_ancestors(procs)
+        reads = 0
+        for p in procs.values():
+            key = (p.pid, p.create_time)
+            if key in images or p.create_time <= since or p.pid in mine or p.pid in (0, 4):
+                continue
+            if reads >= MAX_READS_PER_ROUND:
+                break
+            reads += 1
+            try:
+                image = ntquery.image_path(p.pid)
+            except OSError:
+                image = None
+            images[key] = (image, any(in_folder(image, f) for f in forms))
+        for key in [k for k in images if k[0] not in procs or procs[k[0]].create_time != k[1]]:
+            del images[key]                 # gone: Windows may give its number to another program
+        # lag-doctor's own processes were never read, so they are never from the folder.
+        ours = [p for p in procs.values() if p.name.lower() not in IGNORE_NAMES
+                and images.get((p.pid, p.create_time), (None, False))[1]
+                and p.session_id == me.session_id and (p.pid, p.create_time) not in skip]
+        for p in ours:
+            if p.name not in names:
+                names.append(p.name)
+        if ours:
+            furthest = max(furthest, 1)
+            tell("started", pid=ours[0].pid, name=ours[0].name)
+        wins = windows_by_pid(windows.top_windows())
+        fg = windows.foreground_pid()
+        windowed = [p for p in ours if p.pid in wins]
+        if not windowed:
+            streak.clear()
+            listed = [_public(_candidate(p, None, wins, fg)) for p in ours][:MAX_CANDIDATES]
+            pause(WAIT_POLL_S)
+            continue
+        furthest = max(furthest, 2)
+        tell("window", pid=windowed[0].pid, name=windowed[0].name)
+        gpu = None
+        if by_windows:
+            pause(DRAW_SAMPLE_S)
+        else:
+            try:
+                gpu = _gpu_by_pid(sample_3d(DRAW_SAMPLE_S))
+                gpu_fails = 0
+            except OSError as exc:
+                gpu_fails += 1
+                if gpu_fails >= GPU_FAILS_TO_WINDOWS:
+                    by_windows = True
+                    tell("windows-only", why=str(exc))
+        after = _snapshot()                 # the sample took a while: only what still runs as the same process
+        cands = []
+        for p in windowed:
+            key = (p.pid, p.create_time)
+            q = after.get(p.pid)
+            if q is None or q.create_time != p.create_time:
+                streak.pop(key, None)
+                continue
+            if by_windows:
+                draws = True
+            else:
+                draws = gpu is not None and gpu.get(p.pid, (0.0, None))[0] >= AUTO_MIN_3D_PCT
+            streak[key] = streak.get(key, 0) + 1 if draws else 0
+            cands.append(_candidate(p, gpu, wins, fg))
+        kept = {(c.pid, c.create_time) for c in cands}
+        for key in [k for k in streak if k not in kept]:
+            del streak[key]                 # it exited or lost its window: drawing starts over
+        if any(streak.values()):
+            furthest = max(furthest, 3)
+        cands.sort(key=lambda c: (-streak.get((c.pid, c.create_time), 0), -(c.gpu_pct or 0.0), c.pid))
+        listed = [_public(c) for c in cands][:MAX_CANDIDATES]
+        ready = [c for c in cands if streak.get((c.pid, c.create_time), 0) >= DRAW_SAMPLES]
+        if not ready:
+            continue
+        chosen = ready[0] if len(ready) == 1 else (pick(list(ready)) if pick is not None else _busiest(ready))
+        if chosen is None:
+            raise WaitCancelled("no game was chosen among the programs from its folder that draw")
+        if chosen not in ready:
+            raise ValueError("pick must return one of the candidates it was given")
+        window = _main_window(wins.get(chosen.pid, []))
+        listed = [_public(chosen)] + [c for c in listed if c["pid"] != chosen.pid]
+        return {
+            "pid": chosen.pid,
+            "create_time": chosen.create_time,
+            "name": chosen.name,
+            "exe": images[(chosen.pid, chosen.create_time)][0],
+            "window_title": window["title"] if window else None,
+            "monitor_device": window["monitor_device"] if window else None,
+            "adapter_luid": chosen.adapter if chosen.gpu_pct else None,
+            "how": "folder",
+            "candidates": listed[:MAX_CANDIDATES],
+            "folder": folder,
+            "judged_by": "window" if by_windows else "3d",
+        }

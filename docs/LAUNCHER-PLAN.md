@@ -30,7 +30,9 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   (`lagdoctor/app/recording.py`, PR #33). The owner recorded a game from the app in their own terminal before the
   second merged ("It works, merge it").
 - [ ] M5: measuring the right part.
-- [ ] M6: Play.
+- [ ] M6: Play. Its folder wait is built: `wait_for_target`, `in_folder` and `accept_target`'s folder mode in
+  `capture/target.py` (M6, below). The store launch, the library readers, the relay's folder policy, `watch
+  --wait-folder` and screen 6 are not built yet.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -548,8 +550,12 @@ The app's half was built on 2026-11-09 (DESIGN.md, The app), with these choices 
 - The store launch: a policy module that builds each URI from its fixed template and refuses when elevated, over a
   thin `winapi/launch.py` that only hands the link to Explorer's `IShellDispatch2::ShellExecute` (DESIGN.md keeps
   policy out of `winapi/`). The `test_no_handles` extension ships with it.
-- The folder wait: `in_folder` and `wait_for_target` in `target.py`, and the folder rule in `accept_target`, with
-  `find_target` untouched.
+- [x] The folder wait: `in_folder` and `wait_for_target` in `target.py`, and the folder rule in `accept_target`, with
+  `find_target` untouched (DESIGN.md, "Play's folder wait"). It also passes over processes in another Windows
+  session, programs on the ignore list and an `exclude` list (for the re-arm), resolves a folder reached through a
+  junction or a subst drive, and judges by windows alone, saying so, when the GPU counters fail three samples in a
+  row. The re-arm itself (a chosen process that exits within about 20 s) is the recorder's, with `watch
+  --wait-folder`.
 - The relay's folder policy, so the prompt comes at Play, before the game starts.
 - Screen 6, and the folder wait for games without Play. The CLI gets it too: `watch --wait-folder`.
 
@@ -593,7 +599,8 @@ above:
 ## Open questions for the owner
 
 - **Feel numbers**, to judge on screen: the 10-minute default window, the start key (Ctrl+Alt+S), the 20-minute cap
-  before a press, and the 1-hour cap for "until I quit".
+  before a press, and the 1-hour cap for "until I quit". Play adds the folder wait's 5-minute deadline
+  (`target.WAIT_DEADLINE_S`) and the 20 s within which a chosen process that exits re-arms the wait.
 - **Fixes from a trimmed span.** Should a trimmed span feed `lagdoctor fix`? Today `analyze` never does.
 - **A fork the planning session settled** (DECISIONS 2026-11-08), open to the owner: measuring from a start key,
   rather than the whole recording or a fixed startup skipped per game.

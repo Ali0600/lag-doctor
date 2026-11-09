@@ -806,6 +806,39 @@ def game_pids(pid: int, create_time: int) -> set[int]   # the target and its des
   2 % mean 3D use, and candidates within 1 point are tied (both inferred). A busy 3D engine alone is not a
   game: CUDA compute shows as `engtype_3D` (WT verify log). Ties go to the foreground window's process.
 
+**Play's folder wait** (LAUNCHER-PLAN M6): a store starts the game, so lag-doctor waits for it by its install folder.
+
+```python
+def check_folder(folder) -> str                  # the folder in Windows' form; ValueError says why not
+def folder_reason(image: str | None, folder: str) -> str | None   # why a program is not under it; None if it is
+def in_folder(image: str | None, folder: str) -> bool
+def wait_for_target(folder, *, since=None, deadline_s=300.0, cancel=None, on_status=None, exclude=(), pick=None,
+                    clock=time.monotonic, sleep=None) -> dict
+# find_target's dict with how "folder", plus folder and judged_by ("3d" | "window"); raises TargetNotFound (how far
+# it got by the deadline), WaitCancelled (cancel set, or pick chose nothing), ValueError (an argument)
+def filetime_now() -> int                        # the system time in create-time units (100 ns since 1601)
+```
+- **The folder** comes from library files any local account can write, and the rule takes in every program under it,
+  so `check_folder` takes only a plain local drive path below the root, outside the Windows folder, with no `.` or
+  `..` part and no name Windows would change or refuse. A program is under it when its image path, slashes and case
+  folded, starts with the folder and a separator (`Game 2` is not under `Game`). An image path that Windows leaves
+  in NT form (a volume with no drive letter) or names a share never matches, and says so.
+- **The wait** opens no process. Each process created after `since` (default: 2 s before the call; Play passes the
+  relay's create time) has its image path read once, through `ntquery.image_path`. A process counts when its
+  program is under the folder (or under the folder's real path, through a junction or a subst drive), it runs in
+  lag-doctor's Windows session, its name is not on the ignore list, and it is not in `exclude` (a launcher the caller
+  already tried). The GPU is sampled (1 s) only while such a process owns a window that counts for auto mode; the
+  game is the first to draw at least 2 % of a 3D engine on two samples in a row, so stubs, bootstrappers and store
+  relaunches, which never draw or exit, are passed over for as long as they run. Several at once go to `pick`
+  (default: the busiest, ties to the foreground). Three failed samples in a row make a window that stays for two
+  rounds enough, and `on_status("windows-only", {why})` says so; the other stages are heard once each: `waiting`,
+  `started` and `window`, with the first process's pid and name.
+- **`accept_target`'s folder mode**: `accept_target(procs, pid, create_time, session=, folder=, since=, image=)`
+  takes a process that runs as that exact process in `session`, started after `since` (the relay's own create
+  time) and runs a program under `folder`; `image` is its path, which each side reads for itself. Exactly one of
+  `approved=` (M3's running game) and `folder=` is given. The relay does not use it yet: that comes with Play's
+  relay step, which needs `start` to carry the game.
+
 ## Analysis
 
 All pure functions over a `Capture`; thresholds from LC 2–5, NE 2 and 4.6 (they are starting points
