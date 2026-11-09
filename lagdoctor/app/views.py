@@ -21,7 +21,7 @@ from lagdoctor.app.library import Entry, read_diagnosis
 from lagdoctor.model import Capture, Diagnosis, G, N, S, clean_note
 from lagdoctor.report import labels
 from lagdoctor.report.charts import fmt_elapsed, number
-from lagdoctor.report.summary import CHECKED, NOT_UNREAL
+from lagdoctor.report.summary import CHECKED, NOT_UNREAL, headroom_fields
 
 MAX_EVENTS = 1000                     # lag moments listed on Results (worst first are never cut: see results_view)
 MAX_FRAMES = 4_000_000                # frames handed to the page's chart (64 MB of doubles)
@@ -86,12 +86,15 @@ def tile(name: str) -> dict[str, Any]:
 
 
 def numbers(entry: Entry) -> dict[str, Any]:
-    """A session's headline numbers: from its summary, else (an older session) from its diagnosis.json."""
+    """A session's headline numbers: from its summary, else (an older session) from its diagnosis.json. The bound and
+    headroom keys (summary.headroom_fields) are None in a summary from before them."""
     s = entry.summary
     if s is not None:
-        return {k: s.get(k) for k in ("lag_type", "headline", "avg_fps", "low1_fps", "stutters_per_min",
-                                      "worst_frame_ms", "top_cause", "duration_s", "frames_source", "refresh_hz",
-                                      "power_plan", "power_mode", "frames_measured")}
+        out = {k: s.get(k) for k in ("lag_type", "headline", "avg_fps", "low1_fps", "stutters_per_min",
+                                     "worst_frame_ms", "top_cause", "duration_s", "frames_source", "refresh_hz",
+                                     "power_plan", "power_mode", "frames_measured")}
+        out.update(headroom_fields(s))
+        return out
     d = read_diagnosis(entry) or {}
     stats = _dict(d.get("stats"))
     findings = _list(d.get("findings"))
@@ -104,7 +107,7 @@ def numbers(entry: Entry) -> dict[str, Any]:
             "duration_s": number(stats.get("duration_s")),
             "frames_source": stats.get("frames_source") if isinstance(stats.get("frames_source"), str) else None,
             "refresh_hz": number(stats.get("refresh_hz")), "power_plan": None, "power_mode": None,
-            "frames_measured": None}
+            "frames_measured": None, **headroom_fields(stats)}
 
 
 def _session_row(entry: Entry, last_id: str | None) -> dict[str, Any]:
@@ -421,6 +424,18 @@ def compare_view(a: Entry, b: Entry) -> dict[str, Any]:
         return {"name": name, "a": va or "-", "b": vb or "-", "better": None,
                 "differs": bool(va and vb and va != vb)}
 
+    def said(name, va, vb):          # a measured row in words: no side is "better"
+        return {"name": name, "a": va or "-", "b": vb or "-", "better": None}
+
+    def limited(n):
+        return labels.BOUND_SHORT.get(n.get("bound")) if n.get("bound") not in (None, "unknown") else None
+
+    def of(n, part, whole, pattern, unit):
+        x, y = number(n.get(part)), number(n.get(whole))
+        if x is None:
+            return None
+        return pattern.format(x) + (f" of {pattern.format(y)}" if y is not None else "") + unit
+
     def power(n):
         mode = n.get("power_mode")
         plan = n.get("power_plan")
@@ -447,7 +462,16 @@ def compare_view(a: Entry, b: Entry) -> dict[str, Any]:
         "game": a.game,
         "numbers": [row("Average FPS", "avg_fps", better="high"), row("1% low FPS", "low1_fps", better="high"),
                     row("Stutters / min", "stutters_per_min", "{:.1f}", better="low"),
-                    row("Worst frame", "worst_frame_ms", suffix=" ms", better="low")],
+                    row("Worst frame", "worst_frame_ms", suffix=" ms", better="low"),
+                    # What held the frame rate, and how close the other parts were (DESIGN, Headroom).
+                    row("FPS outside lag moments", "steady_fps", better="high"),
+                    said("Limited by", limited(na), limited(nb)),
+                    said("GPU busy per frame", of(na, "bound_gpu_ms", "bound_frame_ms", "{:.1f}", " ms"),
+                         of(nb, "bound_gpu_ms", "bound_frame_ms", "{:.1f}", " ms")),
+                    row("Busiest game thread", "busiest_thread_pct", suffix="% of a CPU"),
+                    said("NVIDIA GPU clock", of(na, "gpu_clock_mhz", "gpu_clock_max_mhz", "{:,.0f}", " MHz"),
+                         of(nb, "gpu_clock_mhz", "gpu_clock_max_mhz", "{:,.0f}", " MHz")),
+                    said("Headroom", na.get("headroom"), nb.get("headroom"))],
         # The player's own words come first: what they say they changed, beside what lag-doctor saw change.
         "conditions": [text_row("Your note", sa.get("note"), sb.get("note")),
                        text_row("Power plan and mode", power(na), power(nb)),
@@ -459,7 +483,9 @@ def compare_view(a: Entry, b: Entry) -> dict[str, Any]:
                                 fmt_elapsed(nb.get("duration_s")) if nb.get("duration_s") is not None else None)]
         + files,
         "note": " ".join(x for x in ("An older recording has no summary, so its conditions show as -." if older else "",
-                                     OLDER_FILES_NOTE if before_files else "") if x),
+                                     OLDER_FILES_NOTE if before_files else "",
+                                     labels.HEADROOM_NOTE if na.get("headroom") or nb.get("headroom") else "")
+                         if x),
     }
 
 

@@ -143,6 +143,11 @@ BOUND = {
     "mixed": "both the CPU and the GPU",
     "unknown": "not measured",
 }
+# What the headroom sentence (rules.headroom_text) rests on, said wherever it is shown. The busiest-thread figure is
+# the busiest of the game's threads at each sample, so several busy threads read as one busier one, and work a game
+# does per second does not grow with the frame rate: both make the CPU's figure lean low (DESIGN, Headroom).
+HEADROOM_NOTE = ("A rough estimate for this game at these settings, from its busiest thread and the GPU's time per "
+                 "frame, not a benchmark: record again with lighter graphics and compare the two to check it.")
 
 # A capture's sources (Capture.sources keys) in words, for the reports and the rules' "needs X" reasons.
 SOURCES = {

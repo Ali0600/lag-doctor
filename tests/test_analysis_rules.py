@@ -11,8 +11,9 @@ import re
 
 import pytest
 
-from lagdoctor.analysis import rules
+from lagdoctor.analysis import attribute, rules
 from lagdoctor.model import F, G, S, Finding, LagEvent, SourceStatus
+from lagdoctor.report import labels
 from tests import synth
 
 NV, INTEL = synth.NVIDIA_LUID, synth.INTEL_LUID
@@ -526,6 +527,174 @@ def test_the_grey_zone_holds_neither_a_gpu_bound_verdict_nor_a_frame_rate_at_the
     res = run("cpu_limit", grey, stats={"avg_fps": 140.0},
               bound={"verdict": "cpu_main", "r": 0.3, "busiest_thread": 0.75})
     assert isinstance(res, rules.Cleared) and "already reaches" in res.text
+
+
+# ------------------------------------------------------------------------------- headroom ---
+
+def room(limit="gpu", nxt="cpu", speedup=(1.07, 1.33), cpu=(66.3, 78.0), gpu=62.1, steady=58.5, hz=144.0, steps=None):
+    """A bound's headroom (frames.headroom) as the rules read it."""
+    return {"steady_fps": steady, "gpu_fps": gpu, "cpu_fps": list(cpu) if cpu else None, "cpu_from": "thread",
+            "display_fps": hz, "steps_fps": steps, "limit": limit, "next": nxt,
+            "speedup": list(speedup) if speedup else None}
+
+
+GPU_BOUND = {"verdict": "gpu", "r": 0.95, "gpu_ms": 16.1, "ft_ms": 16.9, "busiest_thread": 0.75}
+CPU_BOUND = {"verdict": "cpu_main", "r": 0.25, "gpu_ms": 10.5, "ft_ms": 25.0, "busiest_thread": 0.95}
+
+
+def limit_texts(cause, h, bound=GPU_BOUND, cap=None, fps=58.0):
+    res = run(cause, cap or make(system=engine(98.0) if cause == "gpu_limit" else threads(95.0)),
+              stats={"avg_fps": fps}, bound={**bound, "headroom": h})
+    assert is_finding(res), res
+    return [e.text for e in res.evidence]
+
+
+def test_a_gpu_limit_says_how_far_off_the_cpus_limit_is():
+    # The audit's FF7 reading, the example sentence of the task: second, after the frame-timing line, with what it
+    # rests on said last
+    texts = limit_texts("gpu_limit", room())
+    assert texts[1] == ("At these settings the CPU could feed about 66-78 FPS, so a GPU about 1.1-1.3x faster would "
+                        "make the CPU the limit.")
+    assert texts[-1] == labels.HEADROOM_NOTE and texts[0].startswith("The GPU was busy 16.1 ms of each 16.9 ms frame")
+
+
+@pytest.mark.parametrize("nxt, speedup, cpu, text", [
+    ("display", (1.4, 1.44), (283.0, 333.0), "At these settings the CPU could feed about 283-333 FPS, more than the "
+                                             "144 Hz screen shows, so a GPU about 1.4x faster would reach the screen's "
+                                             "limit."),
+    ("cpu_or_display", (1.6, 1.7), (131.0, 154.0), "At these settings the CPU could feed about 131-154 FPS, so a GPU "
+                                                   "about 1.6-1.7x faster would make the CPU or the 144 Hz screen the "
+                                                   "limit."),
+    ("cpu", (0.99, 1.24), (59.0, 72.0), "At these settings the CPU could feed about 59-72 FPS, so a GPU at most about "
+                                        "1.2x faster would make the CPU the limit."),
+    ("cpu", (1.0, 1.04), (58.5, 61.0), "At these settings the CPU could feed about 58-61 FPS, so it is at its limit "
+                                       "too: a faster GPU alone would gain little."),
+])
+def test_a_gpu_limit_names_the_next_limit_in_plain_words(nxt, speedup, cpu, text):
+    assert limit_texts("gpu_limit", room(nxt=nxt, speedup=speedup, cpu=cpu))[1] == text
+
+
+def test_a_cpu_limit_says_how_far_off_the_gpus_limit_is():
+    one = limit_texts("cpu_limit", room("cpu", "gpu", (2.2, 2.4), (40.0, 42.0), 95.0, 40.0), CPU_BOUND, fps=40.0)
+    assert one[1] == ("At these settings the GPU could draw about 95 FPS, so a CPU about 2.2-2.4x faster per core would "
+                      "make the GPU the limit.") and one[-1] == labels.HEADROOM_NOTE
+    every = limit_texts("cpu_limit", room("cpu", "display", (2.9, 3.0), (48.0, 50.0), 400.0, 48.0),
+                        {**CPU_BOUND, "verdict": "cpu_all"}, fps=48.0)
+    assert every[1] == ("At these settings the GPU could draw about 400 FPS, more than the 144 Hz screen shows, so a CPU "
+                        "about 2.9-3.0x faster would reach the screen's limit.")     # every core: no "per core"
+
+
+def test_without_the_other_side_the_headroom_says_it_is_unknown_and_claims_no_figures():
+    texts = limit_texts("gpu_limit", room(nxt=None, speedup=None, cpu=None))
+    assert texts[1] == "How much a faster GPU would help is unknown: the game's thread CPU use was not measured."
+    assert labels.HEADROOM_NOTE not in texts
+    texts = limit_texts("cpu_limit", room("cpu", None, None, (40.0, 42.0), None, 40.0), CPU_BOUND, fps=40.0)
+    assert texts[1] == "How much a faster CPU would help is unknown: the GPU's own time per frame was not measured."
+    shared = make(system=synth.system_table(30, game_top_thread_pct=95.0, gpu_other_pct=40.0))
+    texts = limit_texts("cpu_limit", room("cpu", None, None, (40.0, 42.0), None, 40.0), CPU_BOUND, cap=shared, fps=40.0)
+    assert texts[1] == ("How much a faster CPU would help is unknown: other programs shared the game's GPU, so its own "
+                        "time per frame says too little.")
+
+
+def test_a_borderline_verdict_gives_both_ceilings():
+    texts = limit_texts("gpu_limit", room(None, None, None, (62.0, 73.0), 70.0, 60.0),
+                        {**GPU_BOUND, "verdict": "mixed", "r": 0.82}, cap=make(system=engine(70.0)), fps=60.0)
+    assert texts[1] == ("At these settings the GPU could draw about 70 FPS and the CPU could feed about 62-73 FPS, both "
+                        "close to the 60 FPS it ran at.")
+
+
+def test_a_screen_with_frames_on_whole_refreshes_names_its_even_steps_after_the_headroom():
+    steps = [144.0 / k for k in range(1, 8)]                 # 144, 72, 48, 36, 28.8, 24, 20.6
+    assert limit_texts("gpu_limit", room(steps=steps))[2] == (
+        "On this 144 Hz screen each frame shows for whole refreshes, so the pace is even at 144, 72 or 48 FPS and "
+        "uneven in between.")
+    on_a_step = limit_texts("gpu_limit", room(steady=71.5, cpu=(80.0, 96.0), steps=steps))[2]   # within 1 % of 72
+    assert "even at 144 or 72 FPS and" in on_a_step
+    assert not any("whole refreshes" in t for t in limit_texts("gpu_limit", room(steps=None)))
+
+
+def test_the_headroom_lines_are_context_and_never_move_the_score():
+    cap = make(system=engine(98.0))
+    plain = run("gpu_limit", cap, stats={"avg_fps": 58.0}, bound=GPU_BOUND)
+    with_room = run("gpu_limit", cap, stats={"avg_fps": 58.0}, bound={**GPU_BOUND, "headroom": room(steps=[144.0, 72.0])})
+    assert (plain.confidence, plain.score) == (with_room.confidence, with_room.score)
+    assert len(with_room.evidence) == len(plain.evidence) + 3                    # the sentence, the steps, the note
+    # a cleared cause carries no headroom: the game already reaches the screen
+    res = run("gpu_limit", cap, stats={"avg_fps": 140.0}, bound={**GPU_BOUND, "headroom": room()})
+    assert isinstance(res, rules.Cleared) and "could feed" not in res.text
+
+
+def heat(clock=780, top=2100, watts=61.0, limit=102.8, reasons="sw_thermal_slowdown", share=97.0, idle=0):
+    """NVIDIA readings of a GPU held down by heat (the FF7 recording's), the first `idle` of them idle at 210 MHz."""
+    return synth.gpu_table(30, nv_util_pct=99.0, nv_throttle_pct=share, nv_power_cap_pct=0.0, nv_temp_c=88.0,
+                           nv_clock_mhz=lambda t: 210 if t <= idle else clock, nv_clock_max_mhz=top,
+                           nv_power_w=watts, nv_power_limit_w=limit,
+                           nv_reasons=lambda t: "gpu_idle" if t <= idle else reasons)
+
+
+def nv_cap(gpu, **inventory):
+    return make(adapter=NV, ok=("frames", "system", "gpu"), system=engine(98.0), gpu=gpu,
+                inventory={"nvidia": {"clock_max_mhz": 2100, "temp_target_c": 87, "power_default_w": 80.0},
+                           **inventory})
+
+
+def test_a_gpu_held_down_by_heat_says_how_deep_and_that_cooling_may_be_enough():
+    texts = limit_texts("gpu_limit", room(), cap=nv_cap(heat()))
+    assert texts[1] == ("At these settings the CPU could feed about 66-78 FPS, so a GPU about 1.1-1.3x faster would make "
+                        "the CPU the limit; heat held this one at 37% of its top clock, so keeping it cooler may be "
+                        "enough.")
+    assert ("The GPU was also held down by heat 97% of the time, at a median 780 of its 2,100 MHz top clock (see GPU "
+            "throttling).") in texts
+
+
+@pytest.mark.parametrize("clock, reasons, named", [
+    (1800, "sw_thermal_slowdown", False),                   # 2,100 / 1,800 = 1.17 of clock, short of the 1.33 needed
+    (780, "sw_thermal_slowdown,hw_power_brake_slowdown", False),   # the power brake: cooling may not lift it
+    (780, "sw_thermal_slowdown", True),
+])
+def test_cooling_is_named_only_where_the_clock_held_back_covers_the_speedup_and_heat_alone_held_it(clock, reasons, named):
+    texts = limit_texts("gpu_limit", room(), cap=nv_cap(heat(clock=clock, reasons=reasons)))
+    assert ("keeping it cooler may be enough" in texts[1]) is named
+
+
+def test_gpu_throttling_says_how_deep_the_clock_and_the_power_went():
+    res = run("gpu_throttle", nv_cap(heat()), stats={"avg_fps": 58.0}, bound=GPU_BOUND)
+    assert is_finding(res, "high")
+    assert res.evidence[1].text == ("While heat held it down, it ran at a median 780 MHz, 37% of its 2,100 MHz top "
+                                    "clock, drawing 61 W of its 103 W power limit, so heat held it back, not its power "
+                                    "limit.")
+    # drawing its whole limit as well: then power is not ruled out
+    res = run("gpu_throttle", nv_cap(heat(watts=101.5)), stats={"avg_fps": 58.0}, bound=GPU_BOUND)
+    assert res.evidence[1].text.endswith("drawing 102 W, at its 103 W power limit.")
+
+
+def test_a_gpu_at_a_lowered_power_cap_says_how_deep_it_ran_there():
+    # LC 4.2's power-limit variant (Armoury Crate's quiet mode): the cap at 55 W of an 80 W default, named by the reasons
+    gpu = synth.gpu_table(30, nv_util_pct=99.0, nv_throttle_pct=0.0, nv_power_cap_pct=98.0, nv_temp_c=70.0,
+                          nv_clock_mhz=1200, nv_clock_max_mhz=2100, nv_power_w=54.8, nv_power_limit_w=55.0,
+                          nv_reasons="sw_power_cap")
+    res = run("gpu_throttle", nv_cap(gpu), stats={"avg_fps": 58.0}, bound=GPU_BOUND)
+    assert is_finding(res)
+    assert res.evidence[1].text == ("At its power cap, it ran at a median 1,200 MHz, 57% of its 2,100 MHz top clock, "
+                                    "drawing 55 W, at its 55 W power limit.")
+
+
+def test_the_clock_depth_leaves_idle_readings_out():
+    # 16 of 30 readings idle at 210 MHz (gpu_idle): an idle GPU clocks down by design, so they say nothing of the depth
+    cap = nv_cap(heat(idle=16))
+    assert attribute.nvidia_depth(cap)["clock_mhz"] == 780.0 and attribute.nvidia_depth(cap)["readings"] == 14
+    assert attribute.nvidia_stats(cap) == {"gpu_clock_mhz": 780.0, "gpu_clock_max_mhz": 2100.0, "gpu_power_w": 61.0,
+                                           "gpu_power_limit_w": 102.8}
+
+
+def test_the_clock_depth_takes_the_inventorys_top_clock_and_drops_absurd_readings():
+    gpu = heat()
+    gpu[G.CLOCK_MAX_MHZ] = [None] * len(gpu[G.T])            # an older capture: the top clock only in the inventory
+    gpu[G.POWER_W] = [1e9 if i < 20 else 61.0 for i in range(len(gpu[G.T]))]    # 20 of 30 corrupt: missing, not 1 GW
+    gpu[G.CLOCK_MHZ][24] = 5e6
+    d = attribute.nvidia_depth(nv_cap(gpu))
+    assert d["clock_max_mhz"] == 2100 and d["readings"] == 29 and d["power_w"] == 61.0
+    assert attribute.nvidia_depth(make()) is None                                   # no NVIDIA readings at all
 
 
 # ------------------------------------------------------------------------ GPU contention ---

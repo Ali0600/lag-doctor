@@ -21,7 +21,7 @@ def bound_of(frame_ms=20.0, gpu_ms=None, thread=50.0, n=1200, cpu_pct=None, **kw
     events = kw.pop("events", [])
     fr = make_frames([frame_ms] * n if not isinstance(frame_ms, list) else frame_ms, gpu_ms=gpu_ms,
                      display_ms=kw.pop("display_ms", None), displayed=kw.pop("displayed", None),
-                     frame_type=kw.pop("frame_type", None))
+                     frame_type=kw.pop("frame_type", None), cpu_busy=kw.pop("cpu_busy", None))
     secs = 2.0 + sum(fr[F.FRAME_MS]) / 1000.0
     cols = {}
     if thread is not None:
@@ -520,6 +520,127 @@ def test_refresh_comes_from_the_games_display():
     assert fa.refresh_hz(cap) == pytest.approx(144.003)
     cap.inventory = {"displays": [{"device": "a", "hz": 60.0}, {"device": "b", "hz": 75.0}]}
     assert fa.refresh_hz(cap) is None                      # two displays, none primary, no target: unknown
+
+
+# ------------------------------------------------------------------------------------- headroom ---
+
+def test_headroom_scales_the_steady_rate_by_the_busiest_threads_load():
+    # The audit's FF7 case: GPU-bound at 16.9 ms frames, the GPU busy 16.1 ms, the busiest game thread at 75 % of a
+    # CPU. From 0.85 a thread counts as saturated, at 1 it is: the CPU could feed 59.2 x [0.85 / 0.75, 1 / 0.75]
+    b = bound_of(16.9, 16.1, thread=75.0, hz=144.003)
+    h = b["headroom"]
+    assert b["verdict"] == "gpu" and h["steady_fps"] == pytest.approx(1000.0 / 16.9)
+    assert h["cpu_fps"] == pytest.approx([67.061, 78.895], abs=1e-3) and h["cpu_from"] == "thread"
+    assert h["gpu_fps"] == pytest.approx(62.112, abs=1e-3)                    # 1000 / 16.1
+    assert h["display_fps"] == pytest.approx(144.003) and h["steps_fps"] is None    # presents only: no display series
+    # a GPU 67.06 / 62.11 to 78.90 / 59.17 times faster makes the CPU the limit
+    assert (h["limit"], h["next"]) == ("gpu", "cpu") and h["speedup"] == pytest.approx([1.0797, 1.3333], abs=1e-4)
+
+
+def test_headroom_never_reads_ms_cpu_busy():
+    # PresentMon's CPU Busy is wall time from one Present() to the next: 16.55 ms of a 16.9 ms GPU-bound frame in FF7,
+    # so 1000 / CPU Busy restates the frame rate. The CPU's side comes from thread time alone, whatever CPU Busy says
+    wall = bound_of(16.9, 16.1, thread=75.0, hz=144.003, cpu_busy=16.55)["headroom"]
+    short = bound_of(16.9, 16.1, thread=75.0, hz=144.003, cpu_busy=4.0)["headroom"]
+    assert wall["cpu_fps"] == short["cpu_fps"] == pytest.approx([67.061, 78.895], abs=1e-3)
+
+
+def test_headroom_takes_every_core_when_the_game_uses_them_more_than_one_thread():
+    # LC 3.2's all-core figure: 1,280 % of 16 logical CPUs is 0.80 of all of them, busier than the 0.50 thread
+    jitter = [20.0 * (1.1 if i % 2 else 0.9) for i in range(1200)]
+    h = bound_of(jitter, 18.5, thread=50.0, cpu_pct=1280.0)["headroom"]
+    assert h["cpu_from"] == "all_cores" and h["cpu_fps"] == pytest.approx([50.0 * 0.85 / 0.80, 50.0 / 0.80])
+    h = bound_of(jitter, 18.5, thread=50.0, cpu_pct=640.0)["headroom"]      # 0.40 of them: the thread binds
+    assert h["cpu_from"] == "thread" and h["cpu_fps"] == pytest.approx([50.0 * 0.85 / 0.50, 50.0 / 0.50])
+
+
+def test_headroom_of_a_cpu_bound_game_starts_at_the_rate_it_reached():
+    # The busiest thread at 95 %: the CPU feeds the 40 FPS it ran at, and at most 40 / 0.95. The GPU (10 ms) could draw
+    # 100: a CPU 100 / 42.1 to 100 / 40 times faster makes the GPU the limit
+    jitter = [25.0 * (1.1 if i % 2 else 0.9) for i in range(1200)]
+    b = bound_of(jitter, 10.0, thread=95.0, hz=144.003)
+    h = b["headroom"]
+    assert b["verdict"] == "cpu_main" and h["cpu_fps"] == pytest.approx([40.0, 40.0 / 0.95])
+    assert (h["limit"], h["next"]) == ("cpu", "gpu") and h["gpu_fps"] == pytest.approx(100.0)
+    assert h["speedup"] == pytest.approx([100.0 * 0.95 / 40.0, 100.0 / 40.0])
+
+
+@pytest.mark.parametrize("thread, nxt, want", [
+    (75.0, "cpu", (100 * 0.85 / 0.75, 100 / 0.75)),         # 113-133 FPS, under the 144 Hz screen
+    (65.0, "cpu_or_display", (100 * 0.85 / 0.65, 144.003)),  # 131-154 FPS: either may come first
+    (55.0, "display", (144.003, 144.003)),                   # 155-182 FPS: the screen comes first
+])
+def test_headroom_names_the_screen_when_the_cpu_could_outrun_it(thread, nxt, want):
+    b = bound_of(10.0, 9.8, thread=thread, hz=144.003)
+    h = b["headroom"]
+    assert b["verdict"] == "gpu" and h["next"] == nxt
+    gpu = 1000.0 / 9.8                                       # the limit's own range: from the 100 FPS it ran at to this
+    assert h["speedup"] == pytest.approx([want[0] / gpu, want[1] / 100.0])
+
+
+def test_headroom_never_asks_a_part_to_get_slower():
+    # the thread at 99 %: the CPU could feed 100-101 FPS, under the GPU's own 102: the speedup bottoms out at 1
+    h = bound_of(10.0, 9.8, thread=99.0, hz=144.003)["headroom"]
+    assert h["next"] == "cpu" and h["speedup"][0] == 1.0 and h["speedup"][1] == pytest.approx(1 / 0.99)
+
+
+def test_headroom_under_a_vsync_lock_measures_the_gpu_by_its_own_time():
+    # 60 Hz, locked at 30 FPS because the GPU needs 17 ms: its own ceiling (58.8 FPS) is the base, never the 30 FPS the
+    # lock rounded it down to. The CPU could feed 63.75-75 FPS, past 60: the screen is next, 60 / 58.8 away
+    b = vsync_halved(gpu_ms=17.0)
+    h = b["headroom"]
+    assert b["verdict"] == "gpu" and h["steady_fps"] == pytest.approx(30.0) and h["next"] == "display"
+    assert h["speedup"] == pytest.approx([17.0 * 60.0 / 1000.0] * 2)
+    assert h["steps_fps"] == pytest.approx([60.0, 30.0, 20.0])          # 60 / k down to 20 FPS
+
+
+def test_headroom_steps_need_ninety_percent_of_frames_on_whole_refreshes():
+    p = 1000.0 / 60.0
+    n = 1200
+
+    def disp(share_off):
+        k = round(share_off * n)
+        return [p + 3.0 if i < k else p for i in range(n)]          # 3 ms off the grid
+
+    on = bound_of([p] * n, 5.0, thread=30.0, hz=60.0, display_ms=disp(0.10), displayed=1)["headroom"]
+    assert on["steps_fps"] == pytest.approx([60.0, 30.0, 20.0])
+    off = bound_of([p] * n, 5.0, thread=30.0, hz=60.0, display_ms=disp(0.11), displayed=1)["headroom"]
+    assert off["steps_fps"] is None and off["display_fps"] == pytest.approx(60.0)
+
+
+@pytest.mark.parametrize("shared", [10.0, 9.9])
+def test_headroom_leaves_the_gpu_out_while_other_programs_share_it(shared):
+    # A7 (PM 3.2): the game's own GPU busy leaves other programs' work out, so it says too little about the GPU then
+    h = bound_of(20.0, 19.5, thread=50.0, hz=144.003, gpu_other_pct=shared)["headroom"]
+    assert (h["gpu_fps"] is None) == (shared >= fa.SHARED_GPU_PCT)
+    assert h["cpu_fps"] is not None and h["next"] == "cpu"         # the GPU's verdict still names the CPU next
+
+
+def test_headroom_needs_the_steady_stretch_a_verdict_needs():
+    assert bound_of(34.0, 33.0, n=299)["headroom"] is None         # 10.2 s but 299 frames
+    b = bound_of(34.0, 33.0, n=300)
+    assert b["headroom"] is not None
+    cap = make_cap({}, make_system(20.0, game_gpu_pct=99.0, game_top_thread_pct=30.0))
+    assert fa.bound(cap, fa.main_chain(cap), [])["headroom"] is None  # the no-frames "gpu" verdict has no steady rate
+    # headroom() itself, as any other caller would use it: the same two floors
+    assert fa.headroom(dict(b, steady_frames=fa.BOUND_MIN_FRAMES - 1)) is None
+    assert fa.headroom(dict(b, steady_s=fa.BOUND_MIN_S - 0.01)) is None
+    assert fa.headroom(dict(b, steady_frames=fa.BOUND_MIN_FRAMES, steady_s=fa.BOUND_MIN_S)) is not None
+
+
+def test_headroom_says_nothing_of_a_next_limit_it_cannot_see():
+    # the GPU limits, but the game's threads were not measured: the CPU's ceiling, and so the next limit, is unknown
+    h = bound_of(20.0, 19.5, thread=None, hz=144.003)["headroom"]
+    assert h["limit"] == "gpu" and h["cpu_fps"] is None and h["next"] is None and h["speedup"] is None
+    # a capped game has ceilings but no limiting part to speed up
+    h = bound_of(_wobble(1500, 8.333, 0.0290 / 1.4826), 0.5, thread=30.0, hz=144.003)["headroom"]
+    assert h["limit"] is None and h["gpu_fps"] == pytest.approx(2000.0) and h["speedup"] is None
+    # VSync at 30 on 60 Hz named the CPU from MsCPUBusy (20 ms of its own work, DXGI), but its busiest thread ran 40 %:
+    # thread time cannot say how much faster it must get, so it says nothing
+    p2 = 2 * 1000.0 / 60.0
+    b = vsync_halved(gpu_ms=5.0, cpu_busy=20.0, cpu_wait=p2 - 20.0, runtime="DXGI")
+    assert b["verdict"] == "cpu_main" and b["headroom"]["limit"] == "cpu"
+    assert b["headroom"]["next"] is None and b["headroom"]["speedup"] is None
 
 
 # ------------------------------------------------------------------------------ live, read-only ---
