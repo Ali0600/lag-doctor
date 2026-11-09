@@ -490,11 +490,17 @@ the rest, and prove the string by running PowerShell on it.
 `ShellExecuteEx` of `steam://rungameid/<id>` starts the scheme's handler with the URI, and without
 `SEE_MASK_NOCLOSEPROCESS` the caller gets no handle at all: the running store client starts the game. `ShellExecuteEx`
 of an `.exe` calls CreateProcess inside the caller, which becomes the game's parent, and CreateProcess makes
-full-access handles whether or not they are passed back.
+full-access handles whether or not they are passed back. The handler itself is still the caller's child: Steam's is
+`steam.exe -- "%1"`, which passes the link on and exits when Steam runs, and becomes the Steam client when it does
+not. A child inherits its parent's environment and, by default, its job object, and Task Manager's End process tree
+on the parent ends it too. The desktop's `IShellDispatch2::ShellExecute` makes Explorer the parent instead, as when
+the user clicks an icon.
 **Why it came up**: the desktop-app plan (`docs/LAUNCHER-PLAN.md`) needs a Play button that keeps "never touch the
 game", and `tests/test_no_handles.py` scans only psutil and OpenProcess, so it would have noticed neither launch.
-**Takeaway**: start a game through its launcher's URI, never from your own process; a "no handles" guard must cover
-the launch APIs too.
+Then Steam's own log showed the link starting Steam itself, so the owner chose to have Explorer open Play's links
+(DECISIONS 2026-11-09).
+**Takeaway**: start a game through its launcher's URI, never from your own process, and have Explorer open the URI
+when the launcher may not be running yet; a "no handles" guard must cover the launch APIs too.
 
 ### A local web UI is a server: Windows lets another account share its port, and cookies ignore ports
 CPython's `HTTPServer` sets `allow_reuse_address`, so it binds with SO_REUSEADDR, and on Windows another account's

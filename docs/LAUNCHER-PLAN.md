@@ -66,12 +66,12 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
 
 ## Play with lag-doctor, step by step
 
-1. Click Play. A pre-flight check takes about a second: frame timing is ready, no other recording runs, the game is
-   not already running (Steam would then start nothing), and the store client is running ("Start Steam, then press
-   Play" otherwise).
+1. Click Play. A pre-flight check takes about a second: frame timing is ready, no other recording runs, and the game
+   is not already running (Steam would then start nothing). A closed Steam is fine: the link starts it (step 3).
 2. Windows asks for permission once, now, on the desktop, before the game exists. A member of Performance Log Users
    skips this for frame timing only: the game-server tracker still needs it. Once Stage 4 ships, nobody sees it.
-3. lag-doctor asks the store to start the game and minimizes itself.
+3. lag-doctor has Explorer open the game's store link and minimizes itself. A Steam that has to start first does so
+   as Explorer's child, as from its own icon.
 4. It waits, without opening any process, for a process from the game's install folder that has a window and draws.
    Then it plays a "ready" chime.
 5. The player gets through shader preparation, menus and loading, then presses **Ctrl+Alt+S** once in gameplay. A
@@ -196,7 +196,7 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
   - its WebView2 group, about six processes per window (measured for other apps);
   - the relay and its PresentMon.
 
-  A store client the app happened to start does not count. The GPU share of other programs (`gpu_other_pct`) still
+  A store client does not count (Play has Explorer start it). The GPU share of other programs (`gpu_other_pct`) still
   counts every process but the game, the app's WebView2 GPU process included. So while a game records, the app hides
   its view and suspends it (`put_IsVisible` off, then `TrySuspend`, from M4 on), and the running state's clock moves
   only while the window is shown.
@@ -209,8 +209,9 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
 
 ### Launching and finding the game
 
-- **Only through the store**, opened with ShellExecuteEx without `SEE_MASK_NOCLOSEPROCESS`, so the store creates the
-  game and lag-doctor never holds a handle to it:
+- **Only through the store**, by its link, which Explorer opens (`IShellDispatch2::ShellExecute` through the desktop's
+  folder view; the owner's choice, DECISIONS 2026-11-09). The store creates the game, lag-doctor never holds a handle
+  to it, and the handler's process is Explorer's child, as when the player clicks an icon:
   - Steam: `steam://rungameid/<appid>`, with no arguments;
   - Epic: `com.epicgames.launcher://apps/<namespace>%3A<item>%3A<app>?action=launch&silent=true`.
 - **Never the game's exe.** ShellExecute of an exe runs CreateProcess inside lag-doctor, which would make lag-doctor
@@ -221,8 +222,15 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
   - Library paths must be plain local-drive paths, the rule netmon already applies to the Steam log.
   - File sizes and nesting depth are capped.
   - The parsed library stays in the app; the page names entries only by id.
-- **The store client must already be running**, checked handle-free in the user's own session. Otherwise opening the
-  URI would make the client lag-doctor's child. Starting it through Explorer is a later option.
+- **A closed store client starts from the link**, as Explorer's child. Opened by lag-doctor itself, the link would
+  make that client lag-doctor's child: End process tree on lag-doctor would close it, and it would inherit
+  lag-doctor's environment.
+  - When the pre-flight finds the client closed (Steam: the `ActiveProcess` pid in its registry key, a hint only), the
+    waiting state says it is starting first.
+  - When Explorer's desktop cannot be reached (Explorer restarting, another shell), Play refuses and says so, and the
+    folder wait is still offered. It never opens the link itself.
+  - The window in front is lag-doctor's, not Explorer's, so M6 checks that the game's window and the store's own
+    prompts still come to the front.
 - **The wait.**
   - For each new process created after the click: its image path, read once without a handle.
   - A PDH sample runs only once a process from the folder owns a visible window.
@@ -231,8 +239,8 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
   - A launcher in the folder that draws can still win. The recorder therefore re-arms when the chosen process exits
     within about 20 s, and shows a picker when two qualify.
   - A deadline of a few minutes ("Steam may be updating it") and Cancel.
-- **The handle check grows.** `tests/test_no_handles.py` learns to refuse Popen, CreateProcess*, ShellExecuteEx with
-  NOCLOSEPROCESS, and `os.startfile` outside an allow-list, red-first.
+- **The handle check grows.** `tests/test_no_handles.py` learns to refuse Popen, CreateProcess*, ShellExecuteEx (with
+  or without NOCLOSEPROCESS) and `os.startfile` outside an allow-list, red-first: Play starts nothing itself.
 
 ### Measuring the right part
 
@@ -392,7 +400,7 @@ Tests:
   contained the way the printer is. A public `Session.mark()`.
 - Tool roots: processes whose whole tree joins `target["tool_pids"]` (lag-doctor's own, kept out of blame), sighted
   again on every status tick: each WebView2 browser process of the app, the relay, and its PresentMon. The app itself
-  joins by its exact pid and create time, never as a root, so a store client or a browser it starts stays countable.
+  joins by its exact pid and create time, never as a root, so a program it starts stays countable.
   A note when the PID cap is reached.
 - `launch_elevated(..., hwnd=)`, so the UAC prompt belongs to the app's window.
 - `lagdoctor/winapi/pipe.py`: thin wrappers for the locked pipe (created with its DACL and label; connect; read and
@@ -492,9 +500,9 @@ The recorder's half was built on 2026-11-09 (DESIGN.md, The control channel):
 ### M6: Play
 
 - The library readers and the art.
-- The store launch: a policy module that builds each URI from its fixed template, requires the store client to be
-  running and refuses when elevated, over a thin `winapi/launch.py` that only calls ShellExecuteExW without
-  `SEE_MASK_NOCLOSEPROCESS` (DESIGN.md keeps policy out of `winapi/`). The `test_no_handles` extension ships with it.
+- The store launch: a policy module that builds each URI from its fixed template and refuses when elevated, over a
+  thin `winapi/launch.py` that only hands the link to Explorer's `IShellDispatch2::ShellExecute` (DESIGN.md keeps
+  policy out of `winapi/`). The `test_no_handles` extension ships with it.
 - The folder wait: `in_folder` and `wait_for_target` in `target.py`, and the folder rule in `accept_target`, with
   `find_target` untouched.
 - The relay's folder policy, so the prompt comes at Play, before the game starts.
@@ -502,8 +510,9 @@ The recorder's half was built on 2026-11-09 (DESIGN.md, The control channel):
 
 What a check against FINAL FANTASY VII REBIRTH found on 2026-11-09 (research note, section 14), as parts of the items
 above:
-- The app opens the link, never the recorder: the recorder's own tree counts as lag-doctor's, so a store process it
-  started would never be blamed (`tests/test_session.py` pins the window's case).
+- The app hands the link to Explorer, and the recorder never opens it: the recorder's own tree counts as
+  lag-doctor's, so a store process started there would never be blamed (`tests/test_session.py` pins the window's
+  case).
 - The relay learns the game after the prompt. The prompt approves the folder; the game's pid and create time then come
   in `start`, and the folder rule checks them on the relay's own snapshot, the seam Stage 4 needs too. That changes the
   rule that the relay takes only `start` and `stop` from the pipe and never a PresentMon argument (the table above,
@@ -533,7 +542,6 @@ above:
   - GOG, Xbox and other stores;
   - Apply and Undo in the app, once the fix flow has moved out of `cli.py`;
   - a plain Play without recording;
-  - starting the store client through Explorer;
   - a live view on a second monitor;
   - the backlog's host exe for the app's window, so Task Manager says lag-doctor.
 
@@ -542,11 +550,8 @@ above:
 - **Feel numbers**, to judge on screen: the 10-minute default window, the start key (Ctrl+Alt+S), the 20-minute cap
   before a press, and the 1-hour cap for "until I quit".
 - **Fixes from a trimmed span.** Should a trimmed span feed `lagdoctor fix`? Today `analyze` never does.
-- **Two forks the planning session settled** (DECISIONS 2026-11-08), open to the owner:
-  - measuring from a start key, rather than the whole recording or a fixed startup skipped per game;
-  - refusing Play while the store client is closed, rather than starting it through Explorer. Steam's own log on the
-    owner's PC shows launches in which the link itself started Steam, so the refusal would come up often (research
-    note, section 14); put to the owner again on 2026-11-09.
+- **A fork the planning session settled** (DECISIONS 2026-11-08), open to the owner: measuring from a start key,
+  rather than the whole recording or a fixed startup skipped per game.
 - **The privacy statement.** It gains a sentence about WebView2's diagnostic data, and SignPath requires the
   statement. Its terms add that software which "collects user data and transfers it to systems not specified by the
   user" must show that policy during installation, with an option there to turn it off. The MSI has no dialogs, and

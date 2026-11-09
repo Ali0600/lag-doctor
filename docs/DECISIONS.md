@@ -60,9 +60,6 @@
   would name lag-doctor, and DPI, focus and accessibility would come with the control. The cost is a second toolchain
   and a signed exe, and it would reverse 2026-11-04's "Python with ctypes, no compiled code". Revisit hook: the M0
   gate in `docs/LAUNCHER-PLAN.md`.
-- **Starting the store client through Explorer** (`IShellDispatch2::ShellExecute`) when Play finds it closed, so it
-  never becomes lag-doctor's child. Revisit hook: the store-client check in the launch policy module
-  (`docs/LAUNCHER-PLAN.md`, M6).
 - **Profile folders shown by their variable in the terminal too** (the console summary and the CLI's own lines), so
   a pasted terminal is as safe to share as the report. Its report path would then need a form a browser opens.
   Revisit hook: `console.ascii_text` and `cli.say`, calling `html.user_neutral`.
@@ -194,6 +191,27 @@ answered "Yes, drop it".
 - **C: keep it**: rejected. A reported stutter in the owner's own game, for data lag-doctor does not keep.
 
 Revisit hook: `FLAGS` in `lagdoctor/capture/presentmon.py`, guarded by `test_pc_latency_tracking_stays_off`.
+
+## 2026-11-09: Play has Explorer open the store's link, so a store client that has to start is Explorer's child
+
+The planning session chose that Play refuses while the store client is closed (2026-11-08, below), because the link,
+opened by lag-doctor, would start the client as lag-doctor's child. Steam's own log on the owner's PC then showed
+launches in which the link itself started Steam, so the refusal would come up often (`docs/research/desktop-app.md`,
+section 14). Put to the owner with Explorer recommended; the owner chose it ("do B) have Windows Explorer open the
+link, so a Steam that has to start is Explorer's child, as if you'd clicked its icon (the plan's deferred option)").
+- **Explorer opens every link Play opens (chosen by the owner)**: lag-doctor asks the desktop's folder view for
+  `IShellDispatch2::ShellExecute` (research note, section 5). The handler's process, and a client that has to start,
+  are then Explorer's children, as when the player clicks the store's icon, and lag-doctor creates no store process
+  at all. It is one path whether or not the client runs, so nothing has to tell a closed client from a closing one.
+  It costs COM calls through ctypes and a running Explorer: when the desktop cannot be reached, Play refuses and says
+  so, and never opens the link itself. The window in front is lag-doctor's, not Explorer's, so M6 checks that the
+  game's window and the store's own prompts still come to the front.
+  - **Refuse while the store client is closed** ("Start Steam, then press Play"): rejected by the owner. The
+    simplest, but the player would often have to start Steam by hand first.
+  - **Open the link from lag-doctor anyway** (ShellExecuteEx without `SEE_MASK_NOCLOSEPROCESS`): rejected by the
+    owner. A client that has to start would be lag-doctor's child: Task Manager's End process tree on lag-doctor
+    would close it, and it would inherit lag-doctor's environment.
+Revisit hooks: `winapi/launch.py` and the launch policy module (`docs/LAUNCHER-PLAN.md`, M6).
 
 ## 2026-11-08: Compare shows what changed in the game itself, read from the game's folder at record time
 
@@ -417,7 +435,8 @@ Revisit hook: `user_neutral` and `powershell_path` in `lagdoctor/report/html.py`
 
 The owner asked for a light app that launches games with lag-doctor attached and shows results to explore. The plan
 is `docs/LAUNCHER-PLAN.md`; the facts and sources are in `docs/research/desktop-app.md`. The first three forks are the
-owner's, answered on 2026-11-08. The planning session chose the rest, and the owner has not weighed in.
+owner's, answered on 2026-11-08. The planning session chose the rest; the owner has since chosen otherwise on two
+of them (marked below).
 - **A desktop app you start like Steam (chosen by the owner)**: its own icon, window and taskbar button.
   - **A local web page in an Edge `--app` window, served by `http.server`** (the session's first proposal): rejected by
     the owner ("Why a web app?"). It would also be Edge's window, with an "Open browser window" item that cannot be
@@ -465,14 +484,15 @@ owner's, answered on 2026-11-08. The planning session chose the rest, and the ow
   - **Detecting gameplay automatically**: rejected as a default, since menus draw too (the render gate passes them),
     so a detected start is a guess; it is only proposed, labelled as one.
 - **The relay forwards only the game's network events, plus the recorder's own for the tracker's DNS self-test
-  (chosen provisionally; open to the owner before M3)**: the elevated side hands over nothing about other programs.
-  `watch --elevate` then stops naming a program that filled the connection, and `bandwidth_hog` falls back to the
-  adapter's total.
-  - **Per-program byte totals from the user's own session**: open, the owner's call (`docs/LAUNCHER-PLAN.md`, Open
-    questions).
-- **Play requires the store client to be running (chosen)**: opening the URI would otherwise make the client
-  lag-doctor's child.
-  - **Starting it through Explorer**: deferred (Backlog).
+  (chosen provisionally; the owner chose otherwise the same day, above)**: the elevated side hands over nothing about
+  other programs. `watch --elevate` then stops naming a program that filled the connection, and `bandwidth_hog`
+  falls back to the adapter's total.
+  - **Per-program byte totals from the user's own session**: chosen by the owner (2026-11-08, "The relay passes back
+    per-program byte totals from the user's own Windows session", above).
+- **Play requires the store client to be running (chosen; the owner chose otherwise on 2026-11-09, above)**: opening
+  the URI would otherwise make the client lag-doctor's child.
+  - **Starting it through Explorer**: chosen by the owner (2026-11-09, "Play has Explorer open the store's link",
+    above).
 Revisit hooks: the M0 gate and the create-environment function in `docs/LAUNCHER-PLAN.md`; the relay's policy (`uac`
 or `service`) and its network filter; `crop` and the start key.
 

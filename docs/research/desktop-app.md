@@ -277,6 +277,9 @@ Each item is an owner run or a measurement, and the plan names it where it is ne
 - **Who parents a store-launched game.** For FINAL FANTASY VII REBIRTH, Steam's logs settle the rest (section 14): the
   stub waits for the game, and the handler passes the link on. A handle-free snapshot during one launch would show the
   parent link.
+- **Whether a game started through Explorer comes to the front**: Play has Explorer open the link while lag-doctor's
+  window is in front (DECISIONS 2026-11-09), so whether the game's window and the store's own prompts take the
+  foreground is untested. M6's first run shows it.
 - **What `rungameid` does for a game with several launch options**: no chooser, by user reports, and the saved option
   since Valve's change of 2026-10-13. A game with one option gets no dialog (section 14).
 - **A static, hidden app window's effect on `gpu_other_pct` and `missed_ticks`.**

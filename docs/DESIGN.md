@@ -609,7 +609,7 @@ stop, sharing each tick's snapshot with the liveness check (a whole-system snaps
 docs/research/overhead.md, section 5.3): this process and its venv launcher with what they started (PresentMon,
 nvidia-smi), each `SessionOptions.tool_procs` root (the relay) and each root `tool_roots(snapshot)` finds (the
 window's WebView2 browser processes, which a recovery replaces) with what those started, and each `tool_alone`
-process by itself (lag-doctor's window, whose other children, such as a store client it opened, stay countable);
+process by itself (lag-doctor's window, whose other children stay countable);
 never the game's own tree. Roots and lone processes count only while they are the process named (pid and create
 time). It holds at most `MAX_TOOL_PIDS` (64); when one more is seen, the capture's notes say so. A `tool_roots` that
 raises leaves the rest listed, and the notes say lag-doctor could not find some of its own processes.
