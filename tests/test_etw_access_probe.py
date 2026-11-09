@@ -28,6 +28,7 @@ YOU, LS, SY = etw_access.YOU, etw_access.LOCAL_SERVICE, etw_access.SYSTEM
 ENABLE, REALTIME = etw_access.TRACELOG_GUID_ENABLE, etw_access.REALTIME_SESSION
 KP, KN, PCL, DXGI = ("Microsoft-Windows-Kernel-Process", "Microsoft-Windows-Kernel-Network", "Nvidia_PCL",
                      "Microsoft-Windows-DXGI")
+NVDD = "NvidiaDisplayDriver"            # a provider frame timing needs that other PCs may not register
 # The default descriptor as Microsoft's own blog dumped it (docs/research/install-and-rights.md, section 1).
 DEFAULT = ("O:BAG:BAD:(A;;0x800;;;WD)(A;;0x120fff;;;SY)(A;;0x120fff;;;LS)(A;;0x120fff;;;NS)(A;;0x120fff;;;BA)"
            "(A;;0xee5;;;LU)(A;;LC;;;MU)(A;;0x800;;;AC)")
@@ -387,16 +388,24 @@ def test_the_summary_says_what_each_row_is_needed_for_and_who_gets_it():
 
 def test_a_row_that_could_not_be_read_leaves_its_verdicts_open():
     unreadable = {"own_descriptor": None, "error": "[WinError 87] The parameter is incorrect"}
-    text = etw_access.summary(etw_access.add_verdicts(saved({PCL: unreadable})))
-    cells = table_row(text, PCL)
-    assert cells == [PCL, "?", "frame timing", "could not read: [WinError 87] The parameter is incorrect"]
+    text = etw_access.summary(etw_access.add_verdicts(saved({NVDD: unreadable})))
+    cells = table_row(text, NVDD)
+    assert cells == [NVDD, "?", "frame timing", "could not read: [WinError 87] The parameter is incorrect"]
     assert verdict_lines(text) == [
         "In Performance Log Users, you would get: frame timing ?; the game-server tracker yes",
         "A LocalService service would get: frame timing ?; the game-server tracker yes"]
+    # A row lag-doctor does not use (Nvidia_PCL, since --track_pc_latency was dropped) leaves them as they are, even
+    # when it could not be read.
+    text = etw_access.summary(etw_access.add_verdicts(saved({PCL: unreadable})))
+    assert table_row(text, PCL)[2] == "unused"
+    assert verdict_lines(text) == [
+        "In Performance Log Users, you would get: frame timing yes; the game-server tracker yes",
+        "A LocalService service would get: frame timing yes; the game-server tracker yes"]
 
 
 def test_one_refusal_settles_a_verdict_an_unreadable_row_leaves_open():
-    text = etw_access.summary(etw_access.add_verdicts(saved({PCL: {"error": "unreadable"}, DXGI: SERVICES_ONLY})))
+    text = etw_access.summary(etw_access.add_verdicts(saved({NVDD: {"error": "unreadable"}, DXGI: SERVICES_ONLY})))
+    assert table_row(text, NVDD)[2:] == ["frame timing", "could not read: unreadable"]   # the open row is in play
     assert verdict_lines(text)[0] == ("In Performance Log Users, you would get: frame timing no; "
                                       "the game-server tracker yes")
 
@@ -435,7 +444,7 @@ def test_without_admin_rights_it_reads_in_one_elevated_copy_and_judges_here(unel
     out = tmp_path / "result.json"
     launched = []
     result = saved({KP: {"sddl": SERVICES_ONLY, "own_descriptor": True},
-                    PCL: {"own_descriptor": None, "error": "[WinError 87] The parameter is incorrect"}})
+                    NVDD: {"own_descriptor": None, "error": "[WinError 87] The parameter is incorrect"}})
     monkeypatch.setattr(elevation, "relaunch_elevated", fake_child(result, launched=launched))
     assert etw_access.main(["--out", str(out)]) == 0
     assert len(launched) == 1
@@ -444,7 +453,7 @@ def test_without_admin_rights_it_reads_in_one_elevated_copy_and_judges_here(unel
     assert Path(argv[argv.index("--out") + 1]) == out.resolve()
     text = capsys.readouterr().out
     assert table_row(text, KP) == [KP, "yes", "frame timing (may be refused)", "-", "Y", "Y"]
-    assert table_row(text, PCL)[3].startswith("could not read")
+    assert table_row(text, NVDD)[3].startswith("could not read")
     assert "In Performance Log Users, you would get: frame timing ?; the game-server tracker yes" in text
     assert f"Full result (paste it back to the agent): {out.resolve()}" in text
 

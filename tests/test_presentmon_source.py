@@ -101,12 +101,36 @@ QUICK = dict(ctrl_break_wait=1.0, session_cmd_timeout=5.0, session_stop_wait=1.0
 def test_the_live_command_is_exactly_the_designed_one():
     assert pm.live_args(1234) == [
         "--process_id", "1234", "--output_stdout", "--no_console_stats", "--qpc_time", "--track_frame_type",
-        "--track_pc_latency", "--track_hybrid_present", "--session_name", "lagdoctor", "--stop_existing_session",
+        "--track_hybrid_present", "--session_name", "lagdoctor", "--stop_existing_session",
         "--terminate_on_proc_exit"]
     assert pm.terminate_args() == ["--terminate_existing_session", "--session_name", "lagdoctor"]
     replay = pm.replay_args(Path("C:/x/test_case_5.etl"))
     assert replay[:2] == ["--etl_file", str(Path("C:/x/test_case_5.etl"))]
     assert not {"--process_id", "--session_name", "--stop_existing_session", "--terminate_on_proc_exit"} & set(replay)
+
+
+def test_pc_latency_tracking_stays_off():
+    # --track_pc_latency enables NVIDIA's PC Latency provider, and a game built with its markers then pings itself
+    # every 100-299 ms and writes every marker as an ETW event, for data lag-doctor does not keep. PresentMon issue
+    # #570 ties stutter in one such game to it (docs/research/overhead.md, section 5.1; DECISIONS 2026-11-09).
+    # PresentMon reads an option as --opt, -opt or /opt, in any case (docs/research/presentmon.md, section 5).
+    def pcl(args):
+        return [a for a in args if a.lstrip("-/").lower() == "track_pc_latency"]
+    assert pcl(pm.FLAGS) == []
+    assert pcl(pm.live_args(1234)) == []
+    assert pcl(pm.replay_args(Path("C:/x/test_case_5.etl"))) == []
+
+
+def test_the_fixtures_have_the_header_lag_doctors_flags_produce(presentmon_exe, gold_etl_dir):
+    # tests/fixtures/presentmon/regenerate.py makes the fixtures with presentmon.FLAGS; a change to FLAGS without a
+    # fresh regenerate would leave every parser test reading a header lag-doctor no longer gets.
+    proc = subprocess.run([str(presentmon_exe), *pm.replay_args(gold_etl_dir / "test_case_5.etl")],
+                          stdin=subprocess.DEVNULL, capture_output=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    header = proc.stdout.split(b"\r\n", 1)[0]
+    assert header.startswith(b"Application,ProcessID,") and b"MsBetweenPresents" in header
+    for name in ("tc5_pid24892.csv", "tc0_head.csv"):
+        assert (FIX / name).read_bytes().split(b"\r\n", 1)[0] == header, name
 
 
 @pytest.mark.parametrize("bad", [0, -1, 0x1_0000_0000, True, "1234", 12.0, None])

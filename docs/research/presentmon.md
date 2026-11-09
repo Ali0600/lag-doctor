@@ -804,25 +804,29 @@ already include the composition delay because `screen` is the real flip time [in
 ### (a) Live capture of one game, by PID, streamed to Python
 Run in a context that can trace (6.4 A or B). Pass an argv list (no shell):
 ```
-%LOCALAPPDATA%\lag-doctor\presentmon\2.6.0\PresentMon-2.6.0-x64.exe --process_id <PID> --output_stdout --no_console_stats --qpc_time --track_frame_type --track_pc_latency --track_hybrid_present --session_name lagdoctor --stop_existing_session --terminate_on_proc_exit
+%LOCALAPPDATA%\lag-doctor\presentmon\2.6.0\PresentMon-2.6.0-x64.exe --process_id <PID> --output_stdout --no_console_stats --qpc_time --track_frame_type --track_hybrid_present --session_name lagdoctor --stop_existing_session --terminate_on_proc_exit
 ```
-Header these flags produce (31 columns) [verified: ETL replay of test_case_5 with the same flags minus the
-live-only `--process_id`/session/terminate options; re-run: test_case_0 gives exactly these 31 names (V2),
-test_case_5 31 columns (V7)]:
+Header these flags produce (30 columns) [verified 2026-11-09: ETL replays of test_case_5 and test_case_0 with the
+same flags minus the live-only `--process_id`/session/terminate options, `tests/fixtures/presentmon/regenerate.py`;
+until that day lag-doctor also passed `--track_pc_latency`, which adds `MsPCLatency` after `MsUntilDisplayed` (31
+columns, V2 and V7)]:
 ```
-Application,ProcessID,SwapChainAddress,PresentRuntime,SyncInterval,PresentFlags,AllowsTearing,PresentMode,FrameType,HybridPresent,TimeInQPC,MsBetweenSimulationStart,MsBetweenPresents,MsBetweenDisplayChange,MsInPresentAPI,MsRenderPresentLatency,MsUntilDisplayed,MsPCLatency,CPUStartQPC,MsBetweenAppStart,MsCPUBusy,MsCPUWait,MsGPULatency,MsGPUTime,MsGPUBusy,MsGPUWait,MsAnimationError,AnimationTime,MsFlipDelay,MsAllInputToPhotonLatency,MsClickToPhotonLatency
+Application,ProcessID,SwapChainAddress,PresentRuntime,SyncInterval,PresentFlags,AllowsTearing,PresentMode,FrameType,HybridPresent,TimeInQPC,MsBetweenSimulationStart,MsBetweenPresents,MsBetweenDisplayChange,MsInPresentAPI,MsRenderPresentLatency,MsUntilDisplayed,CPUStartQPC,MsBetweenAppStart,MsCPUBusy,MsCPUWait,MsGPULatency,MsGPUTime,MsGPUBusy,MsGPUWait,MsAnimationError,AnimationTime,MsFlipDelay,MsAllInputToPhotonLatency,MsClickToPhotonLatency
 ```
 Why each flag: PID filter (validated positive integer first, 5); `--qpc_time` makes `TimeInQPC`/`CPUStartQPC` raw
 QPC ticks of the same clock as `QueryPerformanceCounter` (the session's `ClientContext` is QPC; frequency here
 10,000,000/s; the trace is opened with `PROCESS_TRACE_MODE_RAW_TIMESTAMP`) so frames align with the other collectors
 [verified: SRC/PresentData/PresentMonTraceSession.hpp#L39, PresentMonTraceSession.cpp#L494, #L522; E12, V6];
-`--track_frame_type` and `--track_pc_latency` are cheap and only add data when the driver/game provides it
-[inferred; they enable the Intel-PresentMon and NVIDIA PCL providers, PresentMonTraceSession.cpp#L950-L990];
+`--track_frame_type` only adds data when the driver or game provides it [inferred; it enables the Intel-PresentMon
+provider, PresentMonTraceSession.cpp#L950-L977];
 `--track_hybrid_present` for this hybrid laptop (9); fixed session name + `--stop_existing_session` (7.2);
 `--terminate_on_proc_exit` is a convenience only — lag-doctor should still watch the game PID itself (5).
-Do **not** use: `--exclude_dropped` (drops are a stutter signal), `--v1_metrics`/`--v2_metrics`, `--hotkey`,
-`--scroll_indicator`, `--restart_as_admin`, `--no_track_display --no_track_gpu --track_pc_latency` together, the
-hidden `--track_etw_status` (1.4), or more than one of `--qpc_time`/`--qpc_time_ms`/`--date_time` (exit 1).
+Do **not** use: `--track_pc_latency` (it enables NVIDIA's PC Latency provider, which switches on the latency-ping
+code inside games built with its markers, for data lag-doctor does not keep: `docs/research/overhead.md`, section
+5.1; dropped 2026-11-09, DECISIONS), `--exclude_dropped` (drops are a stutter signal), `--v1_metrics`/`--v2_metrics`,
+`--hotkey`, `--scroll_indicator`, `--restart_as_admin`, `--no_track_display --no_track_gpu --track_pc_latency`
+together, the hidden `--track_etw_status` (1.4), or more than one of `--qpc_time`/`--qpc_time_ms`/`--date_time`
+(exit 1).
 
 ### (b) Finding the game automatically
 Primary: DESIGN.md's PDH method (highest 3D-engine use + visible window). PresentMon cross-check / fallback, a
@@ -922,7 +926,7 @@ if not (isinstance(pid, int) and 0 < pid <= 0xFFFFFFFF):   # "0"/"abc" would mea
 has_console = ctypes.WinDLL("kernel32").GetConsoleCP() != 0   # 0 = no console (V8)
 flags = subprocess.CREATE_NEW_PROCESS_GROUP | (0 if has_console else subprocess.CREATE_NO_WINDOW)
 args = [PM, "--process_id", str(pid), "--output_stdout", "--no_console_stats", "--qpc_time",
-        "--track_frame_type", "--track_pc_latency", "--track_hybrid_present",
+        "--track_frame_type", "--track_hybrid_present",
         "--session_name", "lagdoctor", "--stop_existing_session", "--terminate_on_proc_exit"]
 proc = subprocess.Popen(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                         creationflags=flags)
@@ -1085,7 +1089,7 @@ Python ran as `cd <repo>; uv run --no-sync python -I <V>\scripts\<script> <args>
 | `ALLOW_TEARING` is a VRR requirement and windowed-only; independent flip = fullscreen-exclusive efficiency; waitable object latency; hybrid blt cost (8.5, 8.6) | fetched DXGI_PRESENT and flip-model docs |
 | CASO two-copy vs one-copy, copies limit low-latency apps, Windows 11 / WDDM 2.9 (9) | fetched supporting-caso doc |
 | `HybridPresent` position and `%d`; events 10/45 added by the flag; values 0/1/2; `pIDXGISwapchain` spelling on event 45 here vs case-sensitive `wcscmp` (9) | source; V2; V11 |
-| Recommended 31-column header; QPC 10,000,000/s; session `ClientContext` = QPC (10) | V2; V6; PresentMonTraceSession.hpp#L39 |
+| Recommended header: 30 columns since 2026-11-09, without `--track_pc_latency`; 31 with it, as lag-doctor passed until then (V2); QPC 10,000,000/s; session `ClientContext` = QPC (10) | 2026-11-09 replays of test_case_0 and test_case_5 by `tests/fixtures/presentmon/regenerate.py` (30 columns); V2 (31); V6; PresentMonTraceSession.hpp#L39 |
 | Reference-reader numbers for test_case_5 (258 rows, 84 dropped, medians 11.051 / 0.936; dwm 174 + 174; steamwebhelper 24) and `--exclude dwm.exe` result (10) | V7 (the reader's printout simply omitted the small `Other` keys, C4) |
 | `docs/learnings.md` line 28 says UTF-16LE with BOM; DESIGN.md has a "no handles to the game" rule (lines 10–11, 94–97) | read both files |
 

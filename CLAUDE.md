@@ -116,7 +116,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   timed by `TimeInQPC`, never by when they arrive (they arrive 0.1–2 s late, in bursts).
 - **PresentMon**: parse its CSV by header name; on a pipe it is Latin-1 text, not UTF-16. Stop it with
   CTRL_BREAK (shared console) or `--terminate_existing_session --session_name lagdoctor`; never
-  `Popen.terminate()` first, which leaks its ETW session until reboot. Exit code 6 is ambiguous: read stderr.
+  `Popen.terminate()` first, which leaks its ETW session until reboot. Exit code 6 is ambiguous: read stderr. Leave
+  `--track_pc_latency` out: it switches on the latency-ping code inside games built with NVIDIA's Reflex markers
+  (DECISIONS 2026-11-09; `test_pc_latency_tracking_stays_off` guards it).
 - **Fixes go through `lagdoctor/fixes/base.py`** (journal first, readback, undo). Never offered: disabling
   security features, killing or suspending processes, HKLM or policy tweaks, anything on the game process.
 - **ETW needs rights.** PresentMon (session `lagdoctor`) and the network tracker (session `lag-doctor-net`)
@@ -225,8 +227,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
   for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
   to land recounts on main: a total its PR did not touch goes stale without a merge conflict (after #4 and #5, and
-  again after #7). The PresentMon figure (42 since #23) is the tests that run on CI with a download, not CI's "tests
-  that use a download" count (43, one of which skips there): read a counter at the commit that set a figure before
+  again after #7). The PresentMon figure (43 since `--track_pc_latency` was dropped) is the tests that run on CI with a
+  download, not CI's "tests that use a download" count (44, one of which skips there): read a counter at the commit
+  that set a figure before
   correcting the figure against it.
 - **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies. (Its High
   performance plan has no power-mode slider; `slider_mode()` reads the plan's personality, so the power tests hold

@@ -16,15 +16,17 @@ import sys
 import tempfile
 from pathlib import Path
 
+from lagdoctor.capture.presentmon import FLAGS
+
 HERE = Path(__file__).resolve().parent
 LOCAL = Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local")
 EXE = Path(sys.argv[1]) if len(sys.argv) > 1 else LOCAL / "lag-doctor/presentmon/2.6.0/PresentMon-2.6.0-x64.exe"
 GOLD = Path(sys.argv[2]) if len(sys.argv) > 2 else LOCAL / "lag-doctor/testdata/presentmon-gold"
 
 # lag-doctor's live flags minus the live-only ones (PID, session name, --stop_existing_session,
-# --terminate_on_proc_exit): docs/research/presentmon.md section 10.
-REPLAY = ["--output_stdout", "--no_console_stats", "--qpc_time", "--track_frame_type",
-          "--track_pc_latency", "--track_hybrid_present"]
+# --terminate_on_proc_exit): docs/research/presentmon.md section 10. Read from the code, so the fixtures are made
+# with the flags lag-doctor really passes.
+REPLAY = list(FLAGS)
 CRLF = b"\r\n"
 
 
@@ -98,7 +100,7 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         # --output_file: UTF-8 with a BOM.
         out = Path(tmp) / "out.csv"
-        replay(1, "--output_file", str(out), "--no_console_stats", *REPLAY[2:])
+        replay(1, "--output_file", str(out), *[f for f in REPLAY if f != "--output_stdout"])
         data = out.read_bytes()
         assert data.startswith(b"\xef\xbb\xbf"), data[:8]
         write("tc1_output_file_utf8.csv", keep_first_lines(data, 5, CRLF),

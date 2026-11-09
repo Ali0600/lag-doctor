@@ -533,8 +533,10 @@ never "another program using the CPU".
 
 **frames (PresentMon, PM 10).** Command (argv list, never a shell; PID validated `0 < pid <= 0xFFFFFFFF`,
 because `0` or junk means *every process*):
-`--process_id <PID> --output_stdout --no_console_stats --qpc_time --track_frame_type --track_pc_latency
---track_hybrid_present --session_name lagdoctor --stop_existing_session --terminate_on_proc_exit`.
+`--process_id <PID> --output_stdout --no_console_stats --qpc_time --track_frame_type --track_hybrid_present
+--session_name lagdoctor --stop_existing_session --terminate_on_proc_exit`. Never `--track_pc_latency`: it switches on
+the latency-ping code inside games built with NVIDIA's PC Latency markers, for data lag-doctor does not keep
+(`docs/research/overhead.md`, section 5.1; DECISIONS 2026-11-09).
 - Parse by header name, never position; decode per PM 10 *Parser rules* (latin-1 on a pipe; BOM-sniff
   otherwise); rebuild the column map on every header line; count malformed and rejoined rows.
 - Map: `TimeInQPC`→`t`, `MsBetweenPresents`→`frame_ms`, `MsCPUBusy`→`cpu_busy_ms`, `MsCPUWait`→`cpu_wait_ms`,

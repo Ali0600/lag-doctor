@@ -51,12 +51,13 @@ EVERY_SESSION = "every session"          # the default row: starting and reading
 
 # Name -> (GUID, needed for). The GUIDs are read from PresentMon v2.6.0's PresentData/ETW headers and, for the
 # registered ones, from `logman query providers <name>` on this PC (both agree, 2026-11-06). lag-doctor starts
-# PresentMon with --track_frame_type and --track_pc_latency (lagdoctor/capture/presentmon.py FLAGS), so PresentMon
-# 2.6.0 enables every provider here but Direct3D12, which it enables only for D3D12 shader-compilation tracking, a
-# setting its console app never turns on (EnableProvidersListing in PresentData/PresentMonTraceSession.cpp). A
-# refused enable aborts PresentMon's session, except on Kernel-Process: its ERROR_ACCESS_DENIED PresentMon
-# tolerates, losing only process start and stop events. Kernel-Network is the game-server tracker's
-# (lagdoctor/capture/netflows.py KERNEL_NETWORK). Direct3D12 is read anyway, in case the flags change.
+# PresentMon with --track_frame_type and without --track_pc_latency (lagdoctor/capture/presentmon.py FLAGS;
+# DECISIONS 2026-11-09), so PresentMon 2.6.0 enables every provider here but Direct3D12, which it enables only for
+# D3D12 shader-compilation tracking, a setting its console app never turns on, and Nvidia_PCL, which it enables only
+# with --track_pc_latency (EnableProvidersListing in PresentData/PresentMonTraceSession.cpp). A refused enable aborts
+# PresentMon's session, except on Kernel-Process: its ERROR_ACCESS_DENIED PresentMon tolerates, losing only process
+# start and stop events. Kernel-Network is the game-server tracker's (lagdoctor/capture/netflows.py KERNEL_NETWORK).
+# Direct3D12 and Nvidia_PCL are read anyway, in case the flags change.
 PROVIDERS = {
     "Microsoft-Windows-Kernel-Network": ("7dd42a49-5329-4832-8dfd-43d979153a88", TRACKER),
     "Microsoft-Windows-Kernel-Process": ("22fb2cd6-0e7b-422b-a0c7-2fad1fd0e716", MAY_BE_REFUSED),
@@ -70,7 +71,7 @@ PROVIDERS = {
     "Microsoft-Windows-Direct3D12": ("5d8087dd-3a9b-4f56-90df-49196cdc4f11", UNUSED),
     "Intel-PresentMon": ("ecaa4712-4644-442f-b94c-a32f6cf8a499", FRAME_TIMING),
     "NvidiaDisplayDriver": ("ae4f8626-8265-40d1-a70b-11b64240e8e9", FRAME_TIMING),
-    "Nvidia_PCL": ("0d216f06-82a6-4d49-bc4f-8f38ae56efab", FRAME_TIMING),
+    "Nvidia_PCL": ("0d216f06-82a6-4d49-bc4f-8f38ae56efab", UNUSED),
 }
 
 YOU, LOCAL_SERVICE, SYSTEM = "You+group", "LocalService (model)", "SYSTEM (model)"

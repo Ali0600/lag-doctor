@@ -834,5 +834,25 @@
   "tests": [
    "tests/test_presentmon_source.py::test_spawn_runs_exactly_the_program_it_is_given_where_a_command_line_would_not"
   ]
+ },
+ {
+  "name": "PC-latency tracking switched back on",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "FLAGS = (\"--output_stdout\", \"--no_console_stats\", \"--qpc_time\", \"--track_frame_type\", \"--track_hybrid_present\")",
+  "new": "FLAGS = (\"--output_stdout\", \"--no_console_stats\", \"--qpc_time\", \"--track_frame_type\", \"--track_pc_latency\", \"--track_hybrid_present\")",
+  "tests": [
+   "tests/test_presentmon_source.py::test_pc_latency_tracking_stays_off",
+   "tests/test_presentmon_source.py::test_the_live_command_is_exactly_the_designed_one",
+   "tests/test_presentmon_source.py::test_the_fixtures_have_the_header_lag_doctors_flags_produce"
+  ]
+ },
+ {
+  "name": "PC-latency tracking added to the live-only flags, spelled another way",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "LIVE_ONLY = (\"--session_name\", SESSION_NAME, \"--stop_existing_session\", \"--terminate_on_proc_exit\")",
+  "new": "LIVE_ONLY = (\"--session_name\", SESSION_NAME, \"--stop_existing_session\", \"--terminate_on_proc_exit\", \"-Track_PC_Latency\")",
+  "tests": [
+   "tests/test_presentmon_source.py::test_pc_latency_tracking_stays_off"
+  ]
  }
 ]
