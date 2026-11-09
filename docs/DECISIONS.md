@@ -79,8 +79,55 @@
   anim-only pacing findings in a Reflex game turn out to come from Reflex's own sleep.
   Revisit hook: `FLAGS` and `live_args` in `lagdoctor/capture/presentmon.py`, and `test_pc_latency_tracking_stays_off`
   (DECISIONS 2026-11-09).
+- **A note for a past recording** (`lagdoctor note <session> TEXT`, or an edit field on the app's Results or Compare):
+  today the note is given only as the recording starts (`watch --note`), so a forgotten one stays forgotten. It would
+  rewrite a finished session's capture and summary.json, which nothing does today; the app (M4 on) is the likelier
+  place. Revisit hook: `Capture.note` and `clean_note` in `lagdoctor/model.py`, `summary.NOTE_KEY`, `library.Entry`.
+- **The note through `SessionOptions`**, for M4's recording from the app, so the session's observers could show it
+  while it records. Revisit hook: `_record` in `lagdoctor/cli.py` (where the note is set today) and `SessionOptions`
+  in `lagdoctor/capture/session.py`.
 
 ---
+
+## 2026-11-09: A recording's note, `watch --note TEXT` (B of "Compare shows what changed in the game itself")
+
+The owner chose B to follow A (2026-11-08, below): the player's own words, for what the game-folder check cannot see
+(an in-game setting kept in the registry or a save file). The implementing session's choices:
+- **A capture field of its own, `note`, copied into summary.json as an optional key within `lagdoctor.summary/1`
+  (chosen)**, as A's keys are. The note is the capture's, so `analyze` keeps it, and an older build reads a capture
+  holding one with its usual note about fields it does not know.
+  - **An inventory key**: rejected. The inventory is what the PC reported, and the rules read it; a note is the
+    player's word.
+  - **A file beside the capture** (`note.txt`): rejected. `analyze`, and a capture shared on its own, would lose it.
+- **Refused past 200 characters as kept, before anything starts (chosen, as the brief asked)**: the parser says so
+  before the lock, the game search or the UAC prompt. A note read from a file (a newer build's, which may allow more)
+  is cut to 200 ending in "...", never refused: a line of text is no reason to lose a recording.
+  - **Cut silently at the prompt**: rejected. The player would find a shorter note than they typed only in the report.
+- **One cleaner for every writer and reader, `model.clean_note` (chosen)**: the parser, `_record`, the capture's load,
+  the summary's build and read, the report and Results all go through it, so no path shows an uncleaned note. A
+  character that is not printable (`str.isprintable`, the summary's own rule for text) becomes a space: control
+  characters, a lone surrogate from a broken command line, private-use characters, spaces other than the plain one,
+  and the marks that reorder text (U+202E), which could make a shared report's note read backwards. Then each run of
+  spaces becomes one, and an empty note is none. Left as it is: an emoji built with a zero-width joiner shows as its
+  parts with spaces between.
+- **Set by `_record` once the session returns (chosen)**: `capture/session.py` stays as it is while M2's seams are
+  built there. The relay is never given the note: `relay_argv` is built field by field, and a test runs an elevated
+  watch with a note and checks that nothing the relay is started with holds it.
+  - **Through `SessionOptions`**: deferred until M4 records from the app (backlog).
+- **A capture holding a note of another type is "damaged" (chosen)**, as one holding any field of the wrong type is;
+  a change of type would be a change of format (`lagdoctor.capture/2`).
+  - **Read it as no note, with a line in the capture's notes**: rejected. The note would be the one field the format's
+    check lets through.
+- **Where it shows (chosen)**: under the HTML report's header, through `e()` (a folder under the profile shows by its
+  variable) and never as prose (a backtick stays a backtick); first among Compare's conditions as "Your note", "-" for
+  none, differing only when both recordings have one and they differ; under the date on a game's recordings (the
+  session's own call: it tells two recordings apart before they are picked for Compare); and on Results. The console
+  summary does not repeat it: the player typed it a minute before.
+- **Adding a note to a past recording** (`lagdoctor note <session> TEXT`): deferred, worth trying (backlog). Not built
+  unasked: it is the first thing that would change a finished session.
+
+Revisit hooks: `NOTE_MAX` and `clean_note` in `lagdoctor/model.py`; `_note` and `_record` in `lagdoctor/cli.py`;
+`summary.NOTE_KEY`; the "Your note" row of `compare_view` in `lagdoctor/app/views.py`.
 
 ## 2026-11-09: PresentMon runs without PC-latency tracking
 
@@ -116,7 +163,7 @@ to the owner with A recommended; the owner chose "Both, A first".
 - **B: a note per recording, `lagdoctor watch --note TEXT` (chosen, its own PR next)**: the player's own words,
   kept in the capture and the summary, shown in the report and Compare. It catches anything the player names, an
   in-game setting included, but only when they remember to type it. It changes `cli.py` and
-  `capture/session.py`, which the open M3 relay PR (#23) rewrites, so it follows that PR.
+  `capture/session.py`, which the open M3 relay PR (#23) rewrites, so it follows that PR. Built 2026-11-09 (above).
 - **Only A, or only B**: not chosen. Each misses what the other sees.
 
 What A lists (`lagdoctor/capture/gamefiles.py`; the implementing session's choices, from sources read on

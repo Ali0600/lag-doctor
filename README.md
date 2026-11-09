@@ -71,6 +71,7 @@ uv sync                                                 # create .venv, with the
 uv run lagdoctor setup                                  # download + verify PresentMon 2.6.0 (asks first)
 uv run lagdoctor check                                  # settings check-up, no game needed
 uv run lagdoctor watch --game eldenring.exe             # or --pid PID; with neither, the busiest game
+uv run lagdoctor watch --note "shadows to low"          # what you changed, kept with the recording
 uv run lagdoctor fix --list                             # the automatic fixes the last report suggested
 uv run lagdoctor fix power_plan                         # shows before -> after and asks
 uv run lagdoctor undo                                   # what lag-doctor changed; undo an ID, or --all
@@ -89,8 +90,10 @@ uv run lagdoctor app                                    # your recorded games an
   otherwise load from System32 (`dxgi.dll`, `dinput8.dll` ...), ASI plugins and their settings, an Unreal game's
   `~mods` paks; and for an Unreal game, its user settings files (`Engine.ini`, `GameUserSettings.ini`). Compare lists
   them side by side, marks a file that changed between the two, and shows the exe's size and date, so a game update
-  shows too. A setting kept anywhere else is not seen. It needs Microsoft's WebView2 Runtime, which Windows 11 has. It
-  is a window, not a web page: nothing is served and it opens no network connection.
+  shows too. A setting kept anywhere else is not seen, so say it yourself: `--note "installed FrameFix"` (up to 200
+  characters) keeps your words with the recording, in its report and as the first row of Compare. It needs
+  Microsoft's WebView2 Runtime, which Windows 11 has. It is a window, not a web page: nothing is served and it opens
+  no network connection.
 
 ![lag-doctor's window: the library of recorded games](docs/images/app-library.png)
 
@@ -285,14 +288,14 @@ connection to Microsoft, as the runtime does on its own.
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 3,360 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 3,388 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 43 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 2,127 deliberate sabotages in
-  45 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 2,157 deliberate sabotages in
+  46 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
 - **Supply chain and least privilege**: a per-machine WiX MSI of 179 files built in CI from pinned inputs (Python

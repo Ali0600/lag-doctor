@@ -100,8 +100,22 @@ def test_compare_puts_two_recordings_side_by_side_and_back_returns_to_the_game(r
     # What changed in the game itself: the fan fix's files, and its settings file in another copy.
     assert rows["Drop-in files"] == ["dxgi.dll, scripts\\FrameFix.asi", "none found"]
     assert rows["Unreal settings files"] == ["Engine.ini, GameUserSettings.ini (different copy)"] * 2
+    # A note on one side only is no difference claimed: the other recording has none to differ from.
     assert sorted(run["compare_differs"]) == ["Drop-in files", "Unreal settings files"]
     assert run["back"] == "Demo Racer"
+
+
+@pytest.mark.needs("webview2")
+def test_a_note_shows_as_text_on_the_games_recordings_on_results_and_in_compare(run):
+    # The note on the Demo Racer recording made after its fan fix would be markup ('<img ... onerror=...>', '<b>'):
+    # each screen shows its characters and makes no element of it.
+    _ok(run)
+    assert run["racer_game"]["notes"] == [app_demo.MARKUP_NOTE]           # the recording before the fix has none
+    assert run["racer_results"]["game"] == "Demo Racer"
+    assert run["racer_results"]["note"] == "Your note: " + app_demo.MARKUP_NOTE
+    assert {r[0]: r[1:] for r in run["compare"]}["Your note"] == [app_demo.MARKUP_NOTE, "-"]
+    for screen in ("racer_game", "compare_made", "racer_results"):
+        assert run[screen]["made"] == 0 and run[screen]["pwned"] is False, screen
 
 
 @pytest.mark.needs("webview2")

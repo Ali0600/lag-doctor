@@ -87,6 +87,9 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--out", metavar="DIR", type=_abs_path, help="where to save the capture and report")
     w.add_argument("--hotkey", default=DEFAULT_HOTKEY, type=_hotkey,
                    help=f"the 'it lagged now' key (default {DEFAULT_HOTKEY}); 'none' to turn it off")
+    w.add_argument("--note", metavar="TEXT", type=_note,
+                   help="what you changed for this recording, in your own words (e.g. \"shadows to low\"); shown in "
+                        "the report and in the app's Compare")
     w.set_defaults(func=cmd_watch)
 
     a = sub.add_parser("analyze", help="re-run the analysis on a saved capture")
@@ -162,6 +165,17 @@ def _hotkey(text: str) -> str:
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from None
     return key
+
+
+def _note(text: str) -> str | None:
+    """The player's note, as the capture keeps it (model.clean_note); None for an empty one. One longer than the
+    capture keeps is refused here, before anything starts, rather than cut."""
+    from lagdoctor.model import NOTE_MAX, clean_note
+    note = clean_note(text, limit=None)
+    if note is not None and len(note) > NOTE_MAX:
+        raise argparse.ArgumentTypeError(f"a note can be at most {NOTE_MAX} characters, and this one has "
+                                         f"{len(note)}: make it shorter")
+    return note
 
 
 def _abs_path(text: str) -> Path:
@@ -252,7 +266,7 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     lose it once it is being stopped and saved. With a relay (relay/client.RelayLink), frame timing and the
     game-server tracker come through it, and it is let go as soon as the recording stops."""
     from lagdoctor.capture import session as sess
-    from lagdoctor.model import SourceStatus
+    from lagdoctor.model import SourceStatus, clean_note
     hotkey = None if (args.hotkey or "").lower() in ("", "none", "off") else args.hotkey
     opts = sess.SessionOptions(duration_s=args.duration, network=not args.no_network, server_ip=args.server,
                                hotkey=hotkey, presentmon_exe=exe, frames=frames, relay=relay,
@@ -274,6 +288,8 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
                     relay.close()
             if not frames:
                 cap.sources["frames"] = SourceStatus("off", frames_why)
+            # The note is the recorder's alone: it never goes to the relay, and it is kept only in the capture.
+            cap.note = clean_note(getattr(args, "note", None))
             n = len(cap.frames.get("t") or [])
             say(f"Saving {n:,} frames..." if n else "Saving the capture...")
             cap.save(cap_path)

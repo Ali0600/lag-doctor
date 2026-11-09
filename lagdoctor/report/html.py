@@ -27,7 +27,7 @@ from typing import Any, Callable
 
 from lagdoctor import __version__
 from lagdoctor.analysis.stats import percentile
-from lagdoctor.model import Capture, Diagnosis, F, N, S
+from lagdoctor.model import Capture, Diagnosis, F, N, S, clean_note
 from lagdoctor.report import labels
 from lagdoctor.report.charts import Chart, fmt_elapsed, number
 
@@ -134,6 +134,7 @@ h1{font-size:1.6rem;margin:0;line-height:1.25;overflow-wrap:anywhere}
 h2{font-size:1.15rem;margin:34px 0 10px}
 .meta,.muted{color:var(--muted)}
 .meta{margin:4px 0 0}
+.note{margin:8px 0 0;overflow-wrap:anywhere}
 .verdict{background:var(--card);border:1px solid var(--border);border-left:6px solid var(--accent);
 border-radius:10px;padding:16px 18px;margin-top:18px}
 .verdict.none{border-left-color:var(--ok)}
@@ -565,8 +566,11 @@ def _head(d: Diagnosis, cap: Capture, game: str) -> str:
     lag = labels.LAG_TYPES.get(d.lag_type, d.lag_type) if isinstance(d.lag_type, str) else d.lag_type
     exe = labels.game_name({"name": _dict(cap.target).get("name")})
     exe = f"{e(exe)} &middot; " if exe not in (game, "your game") else ""   # the file, when the title is the name
+    # The player's own words (watch --note), through e() like every string: a note can name a folder of theirs.
+    note = clean_note(cap.note)
+    note = f'<p class="note"><strong>Your note:</strong> {e(note)}</p>' if note else ""
     return (f"<header><h1>Lag report: {e(game)}</h1><p class=\"meta\">{exe}{e(when)} &middot; "
-            f"{fmt_elapsed(cap.duration_s)} recorded &middot; {e(_frames_text(d))}</p></header>"
+            f"{fmt_elapsed(cap.duration_s)} recorded &middot; {e(_frames_text(d))}</p>{note}</header>"
             f'<section class="verdict {e(d.lag_type)}"><div class="badge">{e(lag)}</div>'
             f'<p class="headline">{prose(d.headline)}</p></section>')
 
