@@ -795,6 +795,23 @@ def test_the_pc_details_list_what_lay_beside_the_game_without_the_user_folder(mo
     assert "Drop-in files" not in pc and "Unreal settings" not in pc and "on D: (SSD drive)</td>" in pc
 
 
+def test_the_players_note_heads_the_report_as_text_without_the_user_folder(monkeypatch):
+    # watch --note keeps the player's own words, which can name a folder of theirs or look like markup: the shared
+    # page shows them in its header through e(), like every string.
+    _profile(monkeypatch)
+    cap = make_capture(with_frames=False)
+    cap.note = f"moved the game to {PROFILE}\\Games, `fps` {EVIL}"
+    page = html_report.render(make_diagnosis(), cap)
+    head = page[page.index("<header>"):page.index("</header>")]
+    assert ('<p class="note"><strong>Your note:</strong> moved the game to %USERPROFILE%\\Games, `fps` '
+            '&lt;script&gt;alert(1)&lt;/script&gt;</p>') in head            # backticks stay: a note is not prose
+    assert "tester" not in page.lower()
+    cap.note = " \x07\x1b\t\n "                                               # nothing printable: no note
+    assert 'class="note"' not in html_report.render(make_diagnosis(), cap)
+    cap.note = None
+    assert 'class="note"' not in html_report.render(make_diagnosis(), cap)
+
+
 @pytest.mark.parametrize("root, text, shown", [
     (PROFILE, "c:/users/jo tester/appdata/local/lag-doctor/x", "%LOCALAPPDATA%/lag-doctor/x"),   # any case, and /
     (PROFILE, "'C:\\\\Users\\\\Jo Tester\\\\AppData\\\\Roaming\\\\x'", "'%APPDATA%\\\\x'"),     # a repr's doubled \

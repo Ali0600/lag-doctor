@@ -322,7 +322,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   while_recording_still_saves_the_capture` (its child hit the 60 s timeout once under full-suite load, then 3/3
   alone), and `tests/test_sysmon_target.py::test_auto_picks_a_windowed_renderer_and_never_a_windowless_gpu_job`, which
   needs LagLab to render where Windows counts it: on 2026-11-07 at 00:30 (Silent mode, display asleep) it failed on
-  unchanged code too, in a worktree of the previous commit, and again on 2026-11-08 in a worktree of main. Rerun them
+  unchanged code too, in a worktree of the previous commit, and again on 2026-11-08 in a worktree of main. It also
+  fails while another LagLab window is open: on 2026-11-08 another worktree's measurement script was running `python
+  -m laglab` in a window of its own, the test's auto pick took that window, and it failed alone and on unchanged main
+  alike, with `test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild` failing beside it under that
+  script's CPU load. Before rerunning, list the `python.exe` command lines that hold `laglab` (`Get-CimInstance
+  Win32_Process`): one the test did not start means another session is measuring, so wait for it to end. Rerun them
   alone, with the display awake, and run that control before blaming a change. The self-test cases of
   `tests/test_etw_flows.py` and `tests/test_etw_tracker.py` failed on CI with "no free port for both UDP and TCP"
   until 2026-11-08 (4 at once on 2026-11-07, 2 on 2026-11-08):

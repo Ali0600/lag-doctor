@@ -34,6 +34,21 @@ MAX_CAPTURE_JSON_BYTES = 2 << 30          # uncompressed; a file that expands pa
 # 4 2.9 s and 10.4 MB, 6 5.0 s and 9.6 MB, 9 28.3 s and 9.5 MB (the old save: 36 s, 9.1 MB).
 SAVE_GZIP_LEVEL = 1
 SAVE_PIECES_AHEAD = 4                     # encoded columns waiting for the compressor (memory stays bounded)
+NOTE_MAX = 200                            # characters in a recording's note (watch --note), counted as it is kept
+NOTE_CUT = "..."                          # ends a note read from a file that held more than NOTE_MAX
+
+
+def clean_note(value: Any, limit: int | None = NOTE_MAX) -> str | None:
+    """A recording's note as it is kept and shown: the player's own words, one line. Each character that is not
+    printable (a control character, a lone surrogate, a mark that reorders text) becomes a space, each run of spaces
+    one space, and an empty note is none; anything but a string is none. Past `limit` characters it is cut and ends
+    in NOTE_CUT (a note from a file: `watch` refuses a longer one instead); limit None keeps it whole."""
+    if not isinstance(value, str):
+        return None
+    text = " ".join("".join(ch if ch.isprintable() else " " for ch in value).split())
+    if limit is not None and len(text) > limit:
+        text = text[:limit - len(NOTE_CUT)].rstrip() + NOTE_CUT
+    return text or None
 
 
 # ---------------------------------------------------------------- columns ---
@@ -231,6 +246,7 @@ class Capture:
     notes: list[str] = field(default_factory=list)           # anything a collector wants the report to say
     schema: str = CAPTURE_SCHEMA
     tool_version: str = ""
+    note: str | None = None                  # the player's own words about this recording (watch --note): clean_note
 
     def to_json(self) -> dict[str, Any]:
         return _clean_floats(self._fields())
@@ -266,6 +282,8 @@ class Capture:
             sources[src] = SourceStatus(**{k: v for k, v in st.items() if k in status_fields})
         kwargs["sources"] = sources
         cap = cls(**kwargs)
+        # A newer build may keep a longer note: shown cut, never refused (it is a line of text, not a measurement).
+        cap.note = clean_note(cap.note)
         if extra:
             cap.notes = list(cap.notes) + [_extra_fields_note(sorted(extra), cap.tool_version)]
         return cap
@@ -328,7 +346,7 @@ class Capture:
 _CAPTURE_TYPES: dict[str, type | tuple[type, ...]] = {
     "started_at": str, "clock_origin": (int, float), "duration_s": (int, float), "target": dict, "sources": dict,
     "inventory": dict, "frames": dict, "system": dict, "gpu": dict, "network": dict, "others": list,
-    "net_flows": dict, "marks": list, "notes": list, "schema": str, "tool_version": str}
+    "net_flows": dict, "marks": list, "notes": list, "schema": str, "tool_version": str, "note": (str, type(None))}
 
 
 def _shown(value: object, limit: int = 60) -> str:

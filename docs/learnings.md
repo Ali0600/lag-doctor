@@ -782,6 +782,17 @@ trains with no link at a nominal 5 %, and planted stutters of +1.6 to +2.5 a min
 the p-value, run decoys to measure the false-positive rate that remains, and report the planted effects of known size
 the test missed.
 
+### `str.isprintable()` cleans typed text for display in one pass, invisible characters included
+`ch.isprintable()` is False for more than control characters: also for Unicode's format characters (the marks that
+reorder text, such as U+202E, and zero-width ones), lone surrogates, private-use characters, and every space but the
+plain one (no-break, ideographic) and line and paragraph separators; letters of any script and emoji stay. Replacing
+each non-printable character with a space, then joining `str.split()`, turns any typed text into one clean line.
+**Why it came up**: `watch --note` keeps the player's own words, which go into a shared HTML report and the app's
+Compare. A note holding U+202E would read backwards there, and a broken command line can hand Python a lone surrogate,
+which cannot be written as UTF-8. Checked on Python 3.13 here, character by character, before relying on it.
+**Takeaway**: to show free text a person typed, map non-printable characters to spaces and collapse whitespace, at the
+one place every reader goes through; know that it also splits an emoji built with a zero-width joiner into its parts.
+
 ### A default bound when the function is defined hides a test's monkeypatch
 A parameter written `say=say` captures the function object once, when the `def` runs. A test that later replaces the
 module's `say` (monkeypatch) changes the attribute, not the captured default, so the code keeps the old function and the

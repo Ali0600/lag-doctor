@@ -404,10 +404,10 @@ def find_target(name: str | None = None, pid: int | None = None, auto: bool = Fa
             busiest = next((c for c in cands if not c.has_window and (c.gpu_pct or 0) >= AUTO_MIN_3D_PCT), None)
             hint = (f" The busiest 3D user, {busiest.name} (PID {busiest.pid}, {busiest.gpu_pct:.0f} %), has no "
                     f"visible window, so it is not taken for a game." if busiest else "")
+            # What to do next is the caller's to say (the console names --game and --pid once, for every refusal).
             raise TargetNotFound(
                 f"no process with a visible window used the 3D engine (at least {AUTO_MIN_3D_PCT:g} % over "
-                f"{sample_s:g} s). Start the game first, or name it with --game NAME or --pid PID.{hint}",
-                listed)
+                f"{sample_s:g} s).{hint}", listed)
     else:
         alive = [procs[p.pid] for p in pool if p.pid in procs and procs[p.pid].create_time == p.create_time]
         if not alive:

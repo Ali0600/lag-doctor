@@ -26,6 +26,10 @@ from tests import synth
 # the page must show it as text and make no element of it.
 MARKUP_TITLE = '<img src=x onerror="window.__pwned=1"><b>Bold</b> Quest'
 MARKUP_EXE = "<b>quest</b>.exe"
+# A note (watch --note) that would be markup too, on the Demo Racer recording made after its fan fix: the page shows
+# it as text on the game's recordings, on Results and in Compare.
+MARKUP_NOTE = 'installed FrameFix <img src=x onerror="window.__pwned=1"> & <b>shadows</b> to low'
+PLAIN_NOTE = "installed FrameFix, shadows to low"
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,7 @@ class Demo:
     summary: bool = True  # False: an older session, from before summaries existed
     last: bool = False    # the session `lagdoctor fix` acts on
     files: str = ""       # what its game's folder held (GAME_FILES); "": a capture from before lag-doctor looked
+    note: str = ""        # the player's note (watch --note); "": none
 
 
 # A made-up Unreal game's folder before and after a fan fix: a drop-in DLL and an ASI plugin added, and the settings
@@ -72,7 +77,7 @@ GAME_FILES = {
 
 DEMOS = (
     Demo("Demo Racer", "demoracer.exe", "hitch", datetime(2026, 11, 1, 20, 15, 0), files="before"),
-    Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0), files="after"),
+    Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0), files="after", note=MARKUP_NOTE),
     Demo("Star Planner", "starplanner.exe", "hog", datetime(2026, 11, 2, 18, 30, 0), summary=False),
     Demo(MARKUP_TITLE, MARKUP_EXE, "hitch", datetime(2026, 11, 4, 19, 45, 0), last=True),
 )
@@ -81,7 +86,7 @@ DEMOS = (
 # For the README's pictures: the same steps work on it (the harness opens the game whose name holds "Quest").
 PICTURES = (
     Demo("Demo Racer", "demoracer.exe", "hitch", datetime(2026, 11, 1, 20, 15, 0), files="before"),
-    Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0), files="after"),
+    Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0), files="after", note=PLAIN_NOTE),
     Demo("Star Planner", "starplanner.exe", "hog", datetime(2026, 11, 2, 18, 30, 0)),
     Demo("Night Harbour", "nightharbour.exe", "pace", datetime(2026, 10, 28, 22, 10, 0)),
     Demo("Ember Quest", "emberquest.exe", "hitch-io", datetime(2026, 11, 4, 19, 45, 0), last=True),
@@ -102,6 +107,7 @@ def build(home: Path, demos: tuple[Demo, ...] = DEMOS, seconds: float = 30.0) ->
         cap.tool_version = "0.1.0"
         if demo.files:
             cap.inventory = dict(cap.inventory, game=dict(cap.inventory["game"], **GAME_FILES[demo.files]))
+        cap.note = demo.note or None
         folder = session_dir(sessions, cap.target, when=demo.when)
         cap_path = folder / "capture.ldcap.json.gz"
         cap.save(cap_path)

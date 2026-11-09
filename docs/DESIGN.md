@@ -667,6 +667,11 @@ ValueError) with `.kind` = "foreign" (another schema family), "newer" (`lagdocto
 "damaged" or "too_large". Unknown keys from a newer build are dropped with a note in `capture.notes`, so an
 older lag-doctor can still read a newer capture of the same format.
 
+`note` (str or None, added after the format's first build) is the player's note from `watch --note`. A capture from
+before it loads with None; one holding another type is "damaged", as any field of the wrong type is. Read back it goes
+through `clean_note`, so text a file holds is shown only as printable characters, and a note longer than `NOTE_MAX`
+(a newer build's) is cut to it, ending in "...", never refused.
+
 ## Inventory keys (capture/inventory.py)
 
 `collect(target=None, process_names=None, *, registry=None) -> dict`. `None` means unknown. Rules and the
@@ -1058,7 +1063,8 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
   `command` in backticks as code, "frame timing not recorded" instead of "0 frames", and "No lag events were
   found" only where frame timing or the network ran to look for them.
 - **HTML** (`report/html.py`): one self-contained file (inline CSS + SVG, no script, no URL), light/dark via
-  `prefers-color-scheme`: verdict, stat tiles, frame-time chart (main swap chain only) with stutters and marks,
+  `prefers-color-scheme`: the player's note under the header when the capture has one ("Your note: ...", through
+  `e()`, never as prose), verdict, stat tiles, frame-time chart (main swap chain only) with stutters and marks,
   CPU/GPU chart, VRAM chart, ping chart (lost pings from the collector's own record), marks on every time chart,
   finding cards, marked moments, worst moments, checked-and-fine, system snapshot, not measured. Each section
   falls back to a note on odd values instead of failing the page.
@@ -1080,7 +1086,7 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 
 ```
 lagdoctor watch [--game NAME | --pid PID | --auto] [--duration S] [--server IP] [--no-network]
-                [--elevate | --no-elevate] [--out DIR] [--hotkey KEY | --hotkey none]
+                [--elevate | --no-elevate] [--out DIR] [--hotkey KEY | --hotkey none] [--note TEXT]
 lagdoctor analyze CAPTURE            re-run the analysis on a saved capture
 lagdoctor check                      settings check-up without a game running
 lagdoctor fix [ID ...] [--list]      apply fixes suggested by the last report (asks first)
@@ -1094,8 +1100,14 @@ lagdoctor app                        lag-doctor's window: recorded games and the
   `<stamp>-check-up` folder and remembers it in `last-checkup.txt`. `fix` offers what the last watch and the
   last check-up suggested, newest report per fix id, saying where each offer comes from; a remembered folder
   that is gone is reported, never replaced by another session's.
+- `--note TEXT` is the player's own words about this recording ("installed FrameFix", "shadows to low"), for what the
+  game-folder check cannot see (an in-game setting kept in the registry or a save file). It is cleaned as the capture
+  keeps it (`model.clean_note`: each character that is not printable becomes a space, each run of spaces one, an empty
+  note is none) and refused by the parser past `model.NOTE_MAX` (200) characters as kept, before anything starts,
+  never cut. `_record` sets it on the capture once the session returns; the relay is never given it.
 - `analyze` writes into a fresh session folder (with `analyzed-capture.txt` naming its source), never beside
-  the capture, and never changes what `fix` uses. A damaged, foreign or newer-format file gets one plain line.
+  the capture, and never changes what `fix` uses. A damaged, foreign or newer-format file gets one plain line. The
+  capture's note comes with it into the new report and summary.
 - The relay (see The relay) writes no file; the window that started the recording saves, analyses and reports it.
   `watch` exit codes: 2 bad arguments, the game not found, or a game the relay would refuse (in another Windows
   session), 3 the game exited during the UAC prompt, 4 another recording is running, 5 its files would land in
@@ -1170,17 +1182,21 @@ Recording from it comes with M4. The window code is ported from M0's spike, whic
   `launcher`, and what lay beside the game (`summary.game_files`, from the inventory's `game`): `game_exe`
   `{state, why, bytes, modified}`, `drop_ins` and `unreal_config` `{state, why, files: [[name, sha (16 hex digits or
   null), bytes, modified], ...] (at most 30), more}`, with `state` `checked`, `not_checked` (the reason in `why`) or,
-  for `unreal_config`, `not_unreal`; an Unreal game's `~mods` paks are among `drop_ins`. These three keys came after
-  the schema's first build and are optional in it: a summary without them, or a capture from before the folder check,
-  reads back with each None. Read back field by field: one of the wrong type reads as None. A failed write is said
+  for `unreal_config`, `not_unreal`; an Unreal game's `~mods` paks are among `drop_ins`; and `note`, the capture's
+  note through `model.clean_note`. These four keys came after the schema's first build and are optional in it: a
+  summary without them, or a capture from before the folder check or the note, reads back with each None. Read back
+  field by field: one of the wrong type reads as None, and the note through `clean_note` again. A failed write is said
   and the analysis goes on.
 - **The views** (`views.py`), plain dicts: `library_view`, `game_view`, `results_view` (the saved diagnosis through
   `Diagnosis.from_json`, analysed again only when it cannot be read), `moment_view` (`analysis.window` 5 s either side
   of an event, at most 120 s of it), `compare_view` (the numbers with the better side marked, beside the conditions:
+  first "Your note", each recording's note or "-", differing only when both have one and they differ; then
   power plan and mode, refresh rate, how frames were timed, measured length, and what changed in the game itself:
   the exe by size and date, the drop-in files and the Unreal settings files by name, a name both sides hold in
   another copy (another SHA-256, else another size or date) marked "(different copy)"; a row differs only when both
   sides were read, and a summary from before the folder check shows "-"), `settings_view`, `readiness_view`.
+  The note also shows on a game's recordings (`game_view`'s sessions, from the summary) and on Results (from the
+  capture), each through `el()` as text.
   Chart series are named through `labels.COLUMNS`.
 - **Frame times** reach the page in a read-only shared buffer (`ICoreWebView2Environment12::CreateSharedBuffer`,
   `ICoreWebView2_17::PostSharedBufferToScript`): little-endian doubles, the main chain's times then its frame times

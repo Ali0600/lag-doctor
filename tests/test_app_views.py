@@ -3,6 +3,7 @@ around a moment (analysis.window) and the chart labels."""
 from __future__ import annotations
 
 import array
+import dataclasses
 import json
 import math
 from datetime import datetime
@@ -42,6 +43,9 @@ def test_a_summary_holds_who_when_and_the_numbers_the_library_shows():
     assert out["tool_version"] and out["lag_type"] == d.lag_type and out["headline"] == d.headline
     assert out["avg_fps"] == pytest.approx(d.stats["avg_fps"]) and out["frames_measured"] is True
     assert out["top_cause"] == d.findings[0].cause and out["refresh_hz"] == pytest.approx(synth.REFRESH_HZ)
+    assert out["note"] is None                                   # watch without --note
+    s.cap.note = "installed FrameFix"
+    assert summary.build(d, s.cap, "watch")["note"] == "installed FrameFix"
     with pytest.raises(ValueError):
         summary.build(d, s.cap, "check-up")
 
@@ -54,6 +58,16 @@ def test_a_summary_reads_back_with_each_field_checked(tmp_path):
     assert s["game"] == "G ame"                       # a control character is no part of a name
     assert s["avg_fps"] is None and s["duration_s"] is None and s["frames_measured"] is None and s["exe_name"] is None
     assert len(s["headline"]) == summary.MAX_TEXT
+    assert s["note"] is None                                     # a summary from before notes: none
+
+
+@pytest.mark.parametrize("note, read", [
+    ("shadows to low", "shadows to low"), ("sha" + chr(7) + "dows  " + chr(27) + "to low", "sha dows to low"),
+    ("x" * 250, "x" * 197 + "..."), ("   ", None), (5, None), (["x"], None), ({"text": "x"}, None)])
+def test_a_summarys_note_reads_back_as_one_clean_line_and_one_of_another_type_as_none(tmp_path, note, read):
+    (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps({"schema": summary.SCHEMA, "kind": "watch", "note": note}),
+                                                 encoding="utf-8")
+    assert summary.read(tmp_path)["note"] == read
 
 
 @pytest.mark.parametrize("content", [b"", b"not json", b"[]", json.dumps({"schema": "other/1", "kind": "watch"}).encode(),
@@ -175,6 +189,7 @@ def test_the_game_view_puts_the_last_recording_on_top_and_marks_the_one_fix_acts
     assert v["name"] == "Demo Racer" and v["last"]["session"] == "20261103-210000-demoracer"
     assert [s["id"] for s in v["sessions"]] == ["20261103-210000-demoracer", "20261101-201500-demoracer"]
     assert [s["is_last"] for s in v["sessions"]] == [True, False]
+    assert [s["note"] for s in v["sessions"]] == [app_demo.MARKUP_NOTE, ""]
     assert views.game_view(entries, "g-0000000000000000", None) is None
 
 
@@ -195,6 +210,16 @@ def test_results_show_fix_commands_only_on_the_last_recording(demo):
     assert not [fx["command"] for f in other["findings"] for fx in f["fixes"] if fx["command"]]
     assert other["fix_note"] == views.NO_FIX_HERE
     assert last["game"] == app_demo.MARKUP_TITLE                # text, as it came: the page shows it as text
+    assert last["note"] == ""                                     # recorded without a note
+
+
+def test_results_show_the_recordings_note_as_its_capture_keeps_it(demo):
+    home, _ = demo
+    entry = next(e for e in entries_of(home) if e.game == "Demo Racer")    # the newest: the one with a note
+    cap, d, main = _load(entry)
+    assert views.results_view(entry, d, cap, main, is_last=False, has_report=True)["note"] == app_demo.MARKUP_NOTE
+    cap.note = "a" + chr(7) + "b"                               # a Capture made in code: cleaned all the same
+    assert views.results_view(entry, d, cap, main, is_last=False, has_report=True)["note"] == "a b"
 
 
 def test_results_name_every_chart_series_in_words_and_say_why_a_source_is_missing(demo):
@@ -241,8 +266,8 @@ def test_compare_puts_the_conditions_beside_the_numbers_and_says_which_is_better
     assert rows["Average FPS"]["better"] == ("a" if views.numbers(a)["avg_fps"] > views.numbers(b)["avg_fps"] else "b")
     assert rows["Stutters / min"]["better"] == "a"              # the smooth recording, newer, stuttered less
     names = [r["name"] for r in v["conditions"]]
-    assert names == ["Power plan and mode", "Refresh rate", "Frames timed", "Measured length", "Game's exe file",
-                     "Drop-in files", "Unreal settings files"]
+    assert names == ["Your note", "Power plan and mode", "Refresh rate", "Frames timed", "Measured length",
+                     "Game's exe file", "Drop-in files", "Unreal settings files"]
     assert v["note"] == ""
 
 
@@ -260,6 +285,20 @@ def test_compare_shows_what_changed_in_the_game_between_the_two_recordings(demo)
                                        "b": "77.5 MB, dated 30 Oct 2026, 09:12", "better": None, "differs": False}
     same = {r["name"]: r["differs"] for r in views.compare_view(b, b)["conditions"]}
     assert not any(same.values())
+
+
+def test_compare_shows_each_recordings_note_and_marks_two_notes_that_differ(demo):
+    home, _ = demo
+    a, b = (e for e in entries_of(home) if e.game == "Demo Racer")          # newest first: the one with a note
+    row = views.compare_view(a, b)["conditions"][0]
+    assert row == {"name": "Your note", "a": app_demo.MARKUP_NOTE, "b": "-", "better": None, "differs": False}
+    assert views.compare_view(b, a)["conditions"][0]["a"] == "-"
+    assert views.compare_view(a, a)["conditions"][0]["differs"] is False   # the same note on both sides
+    other = dataclasses.replace(b, summary=dict(b.summary, note="shadows to low"))
+    assert views.compare_view(a, other)["conditions"][0] == {
+        "name": "Your note", "a": app_demo.MARKUP_NOTE, "b": "shadows to low", "better": None, "differs": True}
+    old = next(e for e in entries_of(home) if e.summary is None)          # no summary at all: no note either
+    assert views.compare_view(a, old)["conditions"][0]["b"] == "-"
 
 
 def test_compare_shows_a_dash_for_a_recording_from_before_lag_doctor_looked_at_the_game(demo):

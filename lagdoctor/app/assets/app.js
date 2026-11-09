@@ -284,7 +284,8 @@ const SCREENS = {
         compareBtn.disabled = chosen.size !== 2;
       }}});
       const tr = el('tr', {class: 'pick', 'data-session': s.id, on: {click: () => go('results', {session: s.id})}},
-        el('td', null, box), el('td', null, s.when, s.is_last ? el('span', {class: 'last-tag'}, 'last') : null),
+        el('td', null, box), el('td', null, s.when, s.is_last ? el('span', {class: 'last-tag'}, 'last') : null,
+          s.note ? el('div', {class: 'note'}, s.note) : null),
         el('td', null, s.length), el('td', null, el('span', {class: 'badge ' + s.lag_key}, s.lag_type)),
         el('td', {class: 'num'}, s.avg_fps), el('td', {class: 'num'}, s.low1_fps),
         el('td', {class: 'num'}, s.stutters_per_min), el('td', null, s.top_cause));
@@ -317,7 +318,8 @@ const SCREENS = {
     if (!live()) return;
     const head = el('div', null, el('h1', null, r.game),
       el('p', {class: 'muted'}, [r.exe_name !== r.game ? r.exe_name : null, r.when, `${r.length} recorded`,
-        r.frames_text].filter(Boolean).join(' · ')));
+        r.frames_text].filter(Boolean).join(' · ')),
+      r.note ? el('p', {class: 'note', id: 'note'}, el('strong', null, 'Your note: '), r.note) : null);
     const verdict = el('div', {class: 'card'}, el('div', {class: 'verdict'},
       el('span', {class: 'badge ' + r.verdict.key}, r.verdict.title), el('p', {class: 'headline'}, ...prose(r.verdict.headline))));
     const tiles = el('div', {class: 'tiles'}, ...r.tiles.map(tileOf));

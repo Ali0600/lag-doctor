@@ -2,7 +2,8 @@
 
 The app's library lists every recorded game from these, so it never loads a capture to draw a tile
 (docs/LAUNCHER-PLAN.md, M1). It holds who and when (game, exe, start, tool version, kind) and the numbers the game page
-and Compare show (the verdict's figures and the conditions a recording ran under, the game's own files among them).
+and Compare show (the verdict's figures and the conditions a recording ran under, the game's own files among them),
+and the player's note on the recording (watch --note).
 A session saved before summaries existed has none; the library then reads its folder's name
 (lagdoctor/app/library.py). Keys added to the schema later are optional: an older summary reads back with them None.
 """
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from lagdoctor import __version__
-from lagdoctor.model import Capture, Diagnosis
+from lagdoctor.model import Capture, Diagnosis, clean_note
 from lagdoctor.report import labels
 from lagdoctor.report.charts import number
 
@@ -30,6 +31,7 @@ BOOLS = ("frames_measured",)
 # What the game's folders held (capture/gamefiles.py), added after the schema's first build: a summary written
 # before them has none of these keys, and reads back with each None.
 GAME_FILE_KEYS = ("game_exe", "drop_ins", "unreal_config")
+NOTE_KEY = "note"                     # the player's note (model.clean_note), added after the folder check: optional too
 CHECKED, NOT_CHECKED, NOT_UNREAL = "checked", "not_checked", "not_unreal"
 MAX_LISTED = 30                       # files a list keeps; the rest are counted
 SHA_CHARS = 16                        # of a file's SHA-256: enough to tell two copies apart
@@ -162,6 +164,7 @@ def build(d: Diagnosis, cap: Capture, kind: str) -> dict[str, Any]:
         "power_mode": _text(labels.power_mode(power)),
         "launcher": _text(game.get("launcher")),
         **game_files(inv),
+        NOTE_KEY: clean_note(cap.note),
     }
     return out
 
@@ -193,4 +196,5 @@ def read(folder: Path) -> dict[str, Any] | None:
     out["game_exe"] = _read_exe(data.get("game_exe"))
     out["drop_ins"] = _read_files(data.get("drop_ins"), (CHECKED, NOT_CHECKED))
     out["unreal_config"] = _read_files(data.get("unreal_config"), (CHECKED, NOT_CHECKED, NOT_UNREAL))
+    out[NOTE_KEY] = clean_note(data.get(NOTE_KEY))
     return out
