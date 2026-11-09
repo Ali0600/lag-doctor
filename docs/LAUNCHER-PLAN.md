@@ -66,8 +66,9 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
 
 ## Play with lag-doctor, step by step
 
-1. Click Play. A pre-flight check takes about a second: frame timing is ready, no other recording runs, and the store
-   client is running ("Start Steam, then press Play" otherwise).
+1. Click Play. A pre-flight check takes about a second: frame timing is ready, no other recording runs, the game is
+   not already running (Steam would then start nothing), and the store client is running ("Start Steam, then press
+   Play" otherwise).
 2. Windows asks for permission once, now, on the desktop, before the game exists. A member of Performance Log Users
    skips this for frame timing only: the game-server tracker still needs it. Once Stage 4 ships, nobody sees it.
 3. lag-doctor asks the store to start the game and minimizes itself.
@@ -499,6 +500,31 @@ The recorder's half was built on 2026-11-09 (DESIGN.md, The control channel):
 - The relay's folder policy, so the prompt comes at Play, before the game starts.
 - Screen 6, and the folder wait for games without Play. The CLI gets it too: `watch --wait-folder`.
 
+What a check against FINAL FANTASY VII REBIRTH found on 2026-11-09 (research note, section 14), as parts of the items
+above:
+- The app opens the link, never the recorder: the recorder's own tree counts as lag-doctor's, so a store process it
+  started would never be blamed (`tests/test_session.py` pins the window's case).
+- The relay learns the game after the prompt. The prompt approves the folder; the game's pid and create time then come
+  in `start`, and the folder rule checks them on the relay's own snapshot, the seam Stage 4 needs too. That changes the
+  rule that the relay takes only `start` and `stop` from the pipe and never a PresentMon argument (the table above,
+  DESIGN.md, CLAUDE.md, `relay/protocol.py`), so it goes through DECISIONS. The folder wait, Steam's own steps and the
+  inventory read then share the relay's `START_WAIT_S` (300 s), which an update download can outrun.
+- The control channel gets Play's order (elevate, launch, waiting, target, recording) with a test that pins it: today's
+  tests pin only that `waiting` comes before `target`.
+- The folder rule needs the process's image path and the relay's own start time, which `accept_target` lacks today.
+  Store paths fold case and slashes before the test, and an image path left in NT form says why it cannot match.
+- Unreal's bootstrap stub runs beside the game for the whole session and never draws, so the wait passes over it
+  throughout, not only at the start. When it shows a message box instead (a missing runtime), the deadline's message
+  says that a window from the folder never drew.
+- The waiting state says that the store may be asking something in its own window (a failed cloud sync, a notice), and
+  the deadline's message names updates for Epic as well as Steam.
+- The save and the analysis wait for the game to close (step 7 of Play), which no milestone listed.
+- A store entry joins its recordings through the install folder: recordings are keyed by the exe's stem, and older
+  ones have no summary.
+- Epic: the reader also reads the Preview launcher's `installations.jsonl`, since the Preview removes
+  `%ProgramData%\Epic\EpicGamesLauncher`. Nothing reads or records a game's command line, where an Epic launch carries
+  a sign-in code.
+
 ### After that
 
 - **Stage 4** (INSTALLER-PLAN): the relay core becomes the LocalService service. The recorder tries the service first,
@@ -518,7 +544,9 @@ The recorder's half was built on 2026-11-09 (DESIGN.md, The control channel):
 - **Fixes from a trimmed span.** Should a trimmed span feed `lagdoctor fix`? Today `analyze` never does.
 - **Two forks the planning session settled** (DECISIONS 2026-11-08), open to the owner:
   - measuring from a start key, rather than the whole recording or a fixed startup skipped per game;
-  - refusing Play while the store client is closed, rather than starting it through Explorer.
+  - refusing Play while the store client is closed, rather than starting it through Explorer. Steam's own log on the
+    owner's PC shows launches in which the link itself started Steam, so the refusal would come up often (research
+    note, section 14); put to the owner again on 2026-11-09.
 - **The privacy statement.** It gains a sentence about WebView2's diagnostic data, and SignPath requires the
   statement. Its terms add that software which "collects user data and transfers it to systems not specified by the
   user" must show that policy during installation, with an option there to turn it off. The MSI has no dialogs, and

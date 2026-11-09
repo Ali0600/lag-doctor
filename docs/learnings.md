@@ -805,6 +805,20 @@ kept the body's anchored `say(...)` lines byte for byte, so the red-first sabota
 **Takeaway**: inject a dependency as `param=None` and resolve the default inside the call; never `param=module_func`,
 which a test's monkeypatch cannot reach.
 
+### A program's own logs can say how it behaves, without running it
+Before staging a run to watch what a program does, look for the record it already keeps. Steam writes each launch to
+`logs\console_log.txt` (the command line that asked for it, then each step: cloud sync, a shader check, a notice that
+waits on the player) and each process it tracks for a game to `logs\gameprocess_log.txt` (its command line, and its
+exit code when tracking stops); `appcache\appinfo.vdf` holds every app's launch options.
+**Why it came up**: Play (M6) needed to know whether `steam://rungameid/<appid>` shows a launch-options dialog, what
+runs between Steam and the game, and how long Steam takes. The research note had listed these for an owner run.
+Steam's files answered them read-only, with nothing launched: FINAL FANTASY VII REBIRTH has one launch option and no
+logged launch had a launch-option step; Unreal's bootstrap `ff7rebirth.exe` starts `ff7rebirth_.exe` within a second
+and both exit together; most launches create the process within 5 s; and a launch while the game still runs starts
+nothing (research note, section 14).
+**Takeaway**: a third-party program's logs and caches are a handle-free record of what it did, many times over: read
+them before staging a run, and keep the run for what they do not record (here, which process is the game's parent).
+
 ### A per-tick cache: clear it at the top of the tick, once, and nowhere else
 Two readers that each take an expensive reading every tick (here a whole-system process snapshot, 6-9 ms) can share
 one: a field cleared at the top of each tick, filled by whichever reader asks first. The tick's other exits all come

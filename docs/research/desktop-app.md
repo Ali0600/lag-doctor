@@ -274,8 +274,11 @@ Each item is an owner run or a measurement, and the plan names it where it is ne
   Alt+Left did not start it on either machine. M0 itself passed on the owner's PC (section 11).
 - **The relay pipe's integrity label** with an unelevated client.
 - **Where the UAC prompt appears** when the app's window asks for it.
-- **Who parents a store-launched game, and how long the handler stub lives.**
-- **Whether `rungameid` shows a launch-options dialog.**
+- **Who parents a store-launched game.** For FINAL FANTASY VII REBIRTH, Steam's logs settle the rest (section 14): the
+  stub waits for the game, and the handler passes the link on. A handle-free snapshot during one launch would show the
+  parent link.
+- **What `rungameid` does for a game with several launch options**: no chooser, by user reports, and the saved option
+  since Valve's change of 2026-10-13. A game with one option gets no dialog (section 14).
 - **A static, hidden app window's effect on `gpu_other_pct` and `missed_ticks`.**
 - **Load and analysis time for long captures.**
 - **Audible cues during a fullscreen game.**
@@ -459,6 +462,78 @@ harness's facts file], unless it says otherwise.
 - **`CapturePreview`** (slot 30, PNG) wrote each screen to a file through an `SHCreateStreamOnFileEx` stream: the
   README's pictures.
 
+## 14. Launching through Steam, measured (2026-11-09)
+
+The plan's Play, checked against FINAL FANTASY VII REBIRTH, read-only on the owner's PC, with nothing launched:
+Steam's registry values, `appcache\appinfo.vdf`, the `steamapps\appmanifest_*.acf` files and Steam's own logs. Those
+logs are `logs\console_log.txt`, which records each launch (the command line that asked for it, then each step), and
+`logs\gameprocess_log.txt`, which records each process Steam tracks for a game (its command line, and its exit code
+when tracking stops). One workflow of 8 agents: 4 gathered, and for each a separate agent re-derived its claims with
+its own scripts or re-read its pages (verification log below). The owner's other games, play times and launch counts
+stay out of this note.
+
+- **One launch option, so no dialog**: the game's `config/launch` holds only `"0": {"executable":
+  "ff7rebirth.exe"}`, with no arguments and no OS, beta or DLC condition [verified: two separate parsers of the local
+  `appinfo.vdf`, format v29 (magic `0x07564429`, key names in a string table at the end), and steamcmd.net's mirror
+  of Steam's app info]. No logged `steam://rungameid/<appid>` launch of it had a launch-option step [verified:
+  `console_log.txt`]. For games with several options, users report that a link launch takes the first option without
+  asking [verified: Steam community thread 1744478429684418112], Valve's client update of 2026-10-13 makes desktop
+  shortcuts use the saved option [verified: Valve's notes, under General], and `steam://launch/<id>/dialog` asks
+  [verified: the Steam browser protocol page on Valve's developer wiki, read in a browser since it refuses WebFetch].
+- **Valve's prompt is for links with arguments**: a confirmation dialog for steam links that carry command-line
+  parameters (client update of 2013-07-08), and since 2025-10-02 a block on links carrying the parameters of Unity's
+  CVE-2025-59489 report [verified: store.steampowered.com/oldnews/11052; the Steamworks notice of 2025-10-03]. No page
+  states what an argument-free link from another program shows today; Steam's own desktop shortcuts are such links
+  [research: Playnite's FAQ].
+- **Steam starts a stub, and the stub waits for the game**: Steam runs `ff7rebirth.exe` (401,664 bytes), Unreal's
+  bootstrap. Its `RT_RCDATA` 201 is `End/Binaries/Win64/ff7rebirth_.exe` and 202 is `End`, and its code calls
+  `CreateProcessW`, then `WaitForSingleObject` with INFINITE, then `GetExitCodeProcess` [verified: a read-only parse of
+  the file, never run]. In Steam's log the game, `End\Binaries\Win64\ff7rebirth_.exe` with the argument `End`, appears
+  within a second of the stub, and both stay tracked until they stop in the same second, the game first, the stub
+  ending with the game's exit code [verified: `gameprocess_log.txt`]. Steam's own "game process" moves from the stub to
+  the game about 2 s after the start [verified: `console_log.txt`]. The install folder holds no other exe, and every
+  lag-doctor capture of the game targeted `ff7rebirth_.exe` [verified: a folder listing; the captures' targets]. Who
+  parents the stub is in neither log.
+- **Steam can hold a launch before the stub exists**: a shader-depot check, cloud sync, connecting, controller
+  configuration and the shared redistributables' install script. Most launches created the stub within 5 s, nearly
+  all within 15 s and the slowest in about 45 s, and a pending update downloads first [verified: `console_log.txt`].
+  Two steps wait on the player in Steam's own window: a notice (`ShowInterstitials`; what it showed is not logged) and
+  a failed cloud sync ("syncfailed"), after which the launch starts again.
+- **A launch while the game runs starts nothing**: with the game, or its previous copy still closing, running, Steam
+  logs `WaitingPrevProcess` and then `LaunchApp failed with AppError_16`, or nothing [verified: `console_log.txt`].
+- **The handler**: `HKCR\steam\Shell\Open\Command` is `"C:\Program Files (x86)\Steam\steam.exe" -- "%1"` under both
+  HKCU and HKLM, with no `DelegateExecute` and no UserChoice [verified: the registry]. ShellExecuteEx therefore creates
+  a `steam.exe` as the caller's child on every launch. When Steam runs, that process passes the link on and exits
+  within about a second [research: a 2019 log in pegasus-frontend's issue 442]. When Steam is closed, it becomes the
+  client: a fresh Steam log begins with that command line [verified: `console_log.txt`; that Steam had been closed is
+  inferred from the order], and a Steam that updates itself can replace that first process [research: Sunshine's
+  docs].
+- **Steam's state is in the registry, readable without a handle**: `HKCU\Software\Valve\Steam\ActiveProcess` holds
+  `pid`, which named the running `steam.exe` in a handle-free snapshot; `HKCU\Software\Valve\Steam` holds
+  `RunningAppID`; `Apps\<appid>` holds `Installed`, `Running` and `Updating` [verified: the registry; `Running` = 1
+  during play was not observed]. Any program of the user can write them, so they can hint, never prove.
+- **Paths come in two forms**: `SteamPath` is stored as `c:/program files (x86)/steam`, while the game's image path is
+  `C:\Program Files (x86)\Steam\steamapps\common\...`; a folder test folds case and slashes first [verified: the
+  registry; a recording's `summary.json`].
+- **The game itself**: Steam DRM only, with no Denuvo, no anti-cheat, no other launcher and no account; Steam asks once
+  for a third-party EULA [verified: the store page; PCGamingWiki's wikitext through its API]. A "Preparing shaders"
+  screen comes at the first launch and after game or driver updates, about 15 s on a high-end desktop, and the player
+  can skip it [verified: RPG Site, 2025-01-22; Seasoned Gaming, 2025-01-30]. What comes between it and gameplay
+  (logos, title screen, menus) no source describes.
+- **Epic**:
+  - The three-part link is Epic's documented form: the artifact-only form is deprecated, `silent=true` is only a hint,
+    and an id need not be 32 hex digits (Fortnite's namespace is `fn`) [verified: "Epic Games Protocol Activation", a
+    PDF posted on Epic's developer forum on 2023-05-23]. Playnite moved to it on 2026-08-14 and Lutris on 2026-02-26
+    [verified: their commits].
+  - Epic's rebuilt launcher, in Preview since 2026-10-14, uninstalls the legacy one [verified: Epic's Preview pages].
+    Its installs are listed in `%LOCALAPPDATA%\com.epicgames.eglv2\installations.jsonl`, and
+    `%ProgramData%\Epic\EpicGamesLauncher` is gone [verified: dlss-swapper's pull request 978; Arcadia's issue 174].
+    How it handles the link on Windows is unreported.
+  - An Epic launch puts a one-time exchange code and the account's name and id on the game's command line [verified:
+    legendary's `core.py`], so lag-doctor never reads or records a game's command line.
+
+What this means for Play is in the plan's M6 ([../LAUNCHER-PLAN.md](../LAUNCHER-PLAN.md)).
+
 ## Verification log (2026-11-08)
 
 | Claim | Result | Source read |
@@ -477,3 +552,15 @@ harness's facts file], unless it says otherwise.
 | The socket check's additions: `ICoreWebView2Environment8::GetProcessInfos` 18, `ICoreWebView2ProcessInfoCollection` get_Count 3 and GetValueAtIndex 4, `ICoreWebView2ProcessInfo` get_ProcessId 3 and get_Kind 4, their IIDs, and `COREWEBVIEW2_PROCESS_KIND` (browser 0, renderer 1, utility 2, sandbox helper 3, GPU 4) | confirmed: counted from `WebView2.h`'s C vtables and enum, and equal to `WebView2.idl`'s | the SDK's nupkg (SHA-256 equal to the pin), by script; `tests/test_webview2_idl.py` |
 | `MIB_UDPROW_OWNER_MODULE` and `MIB_UDP6ROW_OWNER_MODULE` (160 and 176 bytes), SpecificPortBind as bit 0 of `dwFlags`, and no UDP table with a peer (`UDP_TABLE_CLASS`: BASIC, OWNER_PID, OWNER_MODULE) | confirmed | Windows SDK 10.0.19041.0 `udpmib.h`, `iprtrmib.h`, `tcpmib.h`; the sizes and the flag also read back from own sockets |
 | Section 12's quotes (the key event, its order, GetKeyState, AltGr, `SC_KEYMENU`, AllowHostInputProcessing) | quoted, not re-read here | learn.microsoft.com references, WebView2Feedback issues 1703 and 5549 and Chromium's source, read by this session's research agent on 2026-11-08 |
+
+## Verification log (2026-11-09)
+
+| Claim | Result | Source read |
+|---|---|---|
+| The game's app has one launch entry, `ff7rebirth.exe`, with no arguments or conditions | confirmed: a second parser, a raw byte scan for the `executable` key and the steamcmd.net mirror agree | `appinfo.vdf`, read-only; api.steamcmd.net |
+| No logged rungameid launch had a launch-option step; most created the stub within 5 s; a launch while the game ran started nothing | confirmed by a second reading of both logs | Steam's `console_log.txt` and `gameprocess_log.txt` |
+| The stub starts `ff7rebirth_.exe End` and waits for it | confirmed from the file's resources and its import calls in code order; the file was never run | `ff7rebirth.exe`, parsed read-only |
+| The `steam:` handler is `steam.exe -- "%1"`, with no `DelegateExecute` | confirmed | the registry |
+| Valve's argument dialog (2013-07-08), the Unity block (2025-10-03) and the shortcut fix (2026-10-13) | confirmed, with one correction: the same update's Stop-button fix for games another tool started is listed under Linux only | Valve's pages and the Steam news API |
+| Epic's three-part link is its documented form; Playnite and Lutris moved to it; the Preview removes `%ProgramData%\Epic\EpicGamesLauncher` | confirmed | Epic's PDF; the two commits; Epic's Preview pages; dlss-swapper's pull request 978 |
+| The Steam copy has no Denuvo and no anti-cheat | confirmed | PCGamingWiki's API; the store page; press reports of 2025-01-25 and 2025-03-04 |
