@@ -44,8 +44,8 @@ def test_a_summary_holds_who_when_and_the_numbers_the_library_shows():
     assert out["avg_fps"] == pytest.approx(d.stats["avg_fps"]) and out["frames_measured"] is True
     assert out["top_cause"] == d.findings[0].cause and out["refresh_hz"] == pytest.approx(synth.REFRESH_HZ)
     assert out["note"] is None                                   # watch without --note
-    s.cap.note = "installed FFVIIHook"
-    assert summary.build(d, s.cap, "watch")["note"] == "installed FFVIIHook"
+    s.cap.note = "installed FrameFix"
+    assert summary.build(d, s.cap, "watch")["note"] == "installed FrameFix"
     with pytest.raises(ValueError):
         summary.build(d, s.cap, "check-up")
 

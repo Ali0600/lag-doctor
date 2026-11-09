@@ -1073,7 +1073,7 @@ lagdoctor app                        lag-doctor's window: recorded games and the
   `<stamp>-check-up` folder and remembers it in `last-checkup.txt`. `fix` offers what the last watch and the
   last check-up suggested, newest report per fix id, saying where each offer comes from; a remembered folder
   that is gone is reported, never replaced by another session's.
-- `--note TEXT` is the player's own words about this recording ("installed FFVIIHook", "shadows to low"), for what the
+- `--note TEXT` is the player's own words about this recording ("installed FrameFix", "shadows to low"), for what the
   game-folder check cannot see (an in-game setting kept in the registry or a save file). It is cleaned as the capture
   keeps it (`model.clean_note`: each character that is not printable becomes a space, each run of spaces one, an empty
   note is none) and refused by the parser past `model.NOTE_MAX` (200) characters as kept, before anything starts,

@@ -90,7 +90,7 @@ uv run lagdoctor app                                    # your recorded games an
   otherwise load from System32 (`dxgi.dll`, `dinput8.dll` ...), ASI plugins and their settings, an Unreal game's
   `~mods` paks; and for an Unreal game, its user settings files (`Engine.ini`, `GameUserSettings.ini`). Compare lists
   them side by side, marks a file that changed between the two, and shows the exe's size and date, so a game update
-  shows too. A setting kept anywhere else is not seen, so say it yourself: `--note "installed FFVIIHook"` (up to 200
+  shows too. A setting kept anywhere else is not seen, so say it yourself: `--note "installed FrameFix"` (up to 200
   characters) keeps your words with the recording, in its report and as the first row of Compare. It needs
   Microsoft's WebView2 Runtime, which Windows 11 has. It is a window, not a web page: nothing is served and it opens
   no network connection.

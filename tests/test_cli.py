@@ -636,7 +636,7 @@ def test_the_note_stays_with_the_recorder_and_never_goes_to_the_relay(fake_relay
 def test_a_watch_keeps_its_note_in_the_capture_the_summary_and_the_report_and_analyze_keeps_it(fake_world,
                                                                                             tmp_path):
     from lagdoctor.report import summary
-    note = "installed FFVIIHook"
+    note = "installed FrameFix"
     assert cli.main([*WATCH, "--no-elevate", "--note", note, "--out", str(tmp_path / "out")]) == 0
     (path,) = (tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}")
     assert Capture.load(path).note == note and summary.read(path.parent)["note"] == note

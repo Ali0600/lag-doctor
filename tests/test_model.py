@@ -93,7 +93,7 @@ def test_a_capture_from_a_newer_build_with_extra_fields_still_loads(tmp_path):
 
 
 @pytest.mark.parametrize("raw, kept", [
-    ("installed FFVIIHook", "installed FFVIIHook"),
+    ("installed FrameFix", "installed FrameFix"),
     ("  shadows\tto\r\nlow \x1b[2J ", "shadows to low [2J"),       # control characters are spaces, runs of space one
     ("DLSS" + chr(0x202E) + "on" + chr(0xD800), "DLSS on"),           # a mark that reorders text, a lone surrogate
     ("caf" + chr(0xE9) + " " + chr(0x5149), "caf" + chr(0xE9) + " " + chr(0x5149)),   # letters of any script stay
@@ -116,9 +116,9 @@ def test_a_note_past_its_limit_is_cut_where_one_is_given_and_kept_whole_where_no
 
 def test_a_capture_keeps_its_note_and_one_from_before_notes_has_none(tmp_path):
     cap = _capture()
-    cap.note = "installed FFVIIHook"
+    cap.note = "installed FrameFix"
     back = Capture.load(cap.save(tmp_path / "c.ldcap.json.gz"))
-    assert back.note == "installed FFVIIHook" and not back.notes
+    assert back.note == "installed FrameFix" and not back.notes
     raw = _capture().to_json()
     del raw["note"]                                                     # a capture saved before notes existed
     _gz(tmp_path / "old.gz", raw)
