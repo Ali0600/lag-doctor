@@ -45,6 +45,7 @@ EXIT_TARGET_CHANGED = 3        # the game exited during the UAC prompt (its PID 
 EXIT_BUSY = 4                  # another recording is running in this Windows session
 EXIT_PRIVATE_COPY = 5          # any command: what it saves would land in another app's private copy (main)
 EXIT_NOT_READY = 6             # frame timing was wanted, but PresentMon is missing or failed its check
+EXIT_CANCELLED = 130           # the caller cancelled before the recording began (M4: the window's Cancel)
 
 # What each command does when Windows keeps this process's files in another app's private copy
 # (paths.private_copy): "refuse" what saves files other windows must find, "note" what only reads.
@@ -88,6 +89,8 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--out", metavar="DIR", type=_abs_path, help="where to save the capture and report")
     w.add_argument("--hotkey", default=DEFAULT_HOTKEY, type=_hotkey,
                    help=f"the 'it lagged now' key (default {DEFAULT_HOTKEY}); 'none' to turn it off")
+    w.add_argument("--control", choices=["stdio"],
+                   help="for lag-doctor's window, which starts the recording this way: JSON lines on stdin and stdout")
     w.add_argument("--note", metavar="TEXT", type=_note,
                    help="what you changed for this recording, in your own words (e.g. \"shadows to low\"); shown in "
                         "the report and in the app's Compare")
@@ -191,6 +194,11 @@ def main(argv: list[str] | None = None) -> int:
     if not getattr(args, "cmd", None):
         parser.print_help()
         return 2
+    if getattr(args, "control", None):
+        # lag-doctor's window drives this recording: its channel takes stdout before anything can print there, then
+        # runs the same steps as below with every line going to the window.
+        from lagdoctor import control
+        return control.serve(args)
     # First, before anything is written (the journal healing below writes): a file saved where the user's
     # other windows cannot see it is worse than none.
     code, private = _private_copy_gate(PRIVATE_COPY_POLICY[args.cmd],
@@ -212,10 +220,16 @@ def main(argv: list[str] | None = None) -> int:
 
 def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
               say: Callable[[str], None] | None = None, interactive: bool | None = None,
-              observers: Any = None, launcher: Callable[..., Any] | None = None) -> int:
+              observers: Any = None, launcher: Callable[..., Any] | None = None,
+              cancel: threading.Event | None = None, tool_alone: tuple[tuple[int, int], ...] = (),
+              tool_roots: Callable[[dict[int, Any]], Any] | None = None) -> int:
     """Record the game, save the capture and analyse it. What a caller other than this console gives it (M4: the
     app's control channel), each defaulting to the console's own behaviour:
     - `stop`: set it (session.request_stop) to stop the recording, as Ctrl+C does;
+    - `cancel`: set it to end watch before the recording begins, with nothing recorded (EXIT_CANCELLED). It is looked
+      at between the steps (before the game is looked for, once it is found, while the relay's prompt is up, and
+      before the recording starts); once the recording has begun, only `stop` ends it;
+    - `tool_alone`, `tool_roots`: more of lag-doctor's own processes (session.SessionOptions): its window;
     - `say`: every line watch says, the summary included (default: printed here). It must not raise: a line it cannot
       deliver is dropped, as say() drops one for a console that went away;
     - `interactive`: is a person at this console? None: asked only when stdin is a terminal, and shown the status
@@ -245,6 +259,8 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
                 say(f"Nothing was recorded. Start the recording again once that is done, or {other} to record "
                     "everything else without frame timing.")
                 return EXIT_NOT_READY
+            _check_cancel(cancel)
+            observers.event("waiting")
             auto = args.auto or (args.game is None and args.pid is None)
             try:
                 target = tgt.find_target(name=args.game, pid=args.pid, auto=auto)
@@ -254,6 +270,7 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
                 return EXIT_BAD_ARGS
             say(f"Watching {target.get('name')} (pid {target['pid']}, chosen by {target.get('how', '?')}).")
             observers.event("target", name=target.get("name"), pid=target["pid"], how=target.get("how"))
+            _check_cancel(cancel)
             frames = exe is not None
             if frames:
                 from lagdoctor.winapi import elevation
@@ -270,8 +287,13 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
                         frames = False
                         frames_why = ("it needs admin rights or membership of Performance Log Users (see "
                                       "`lagdoctor setup`)")
+            _check_cancel(cancel)
             return _record(args, target, exe, frames, frames_why, relay, stop=stop, say=say,
-                           interactive=interactive is not False, observers=observers)
+                           interactive=interactive is not False, observers=observers,
+                           tool_alone=tool_alone, tool_roots=tool_roots)
+    except Cancelled:
+        say("Cancelled: nothing was recorded.")
+        return EXIT_CANCELLED
     finally:
         if relay is not None:
             relay.close()
@@ -279,11 +301,13 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
 
 def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, frames: bool, frames_why: str,
             relay: Any = None, *, stop: threading.Event | None = None, say: Callable[[str], None] | None = None,
-            interactive: bool = True, observers: Any = None) -> int:
+            interactive: bool = True, observers: Any = None, tool_alone: tuple[tuple[int, int], ...] = (),
+            tool_roots: Callable[[dict[int, Any]], Any] | None = None) -> int:
     """Record, save and analyse. Ctrl+C, Ctrl+Break and closing the window all stop the recording; none of them can
     lose it once it is being stopped and saved. With a relay (relay/client.RelayLink), frame timing and the
-    game-server tracker come through it, and it is let go as soon as the recording stops. `stop`, `say` and
-    `observers` as in cmd_watch; `interactive` False: no status line and no console handling (nobody is there)."""
+    game-server tracker come through it, and it is let go as soon as the recording stops. `stop`, `say`, `observers`
+    and the tool processes as in cmd_watch; `interactive` False: no status line and no console handling (nobody is
+    there)."""
     from lagdoctor.capture import session as sess
     from lagdoctor.model import SourceStatus, clean_note
     say = _teller(say)
@@ -292,6 +316,7 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     opts = sess.SessionOptions(duration_s=args.duration, network=not args.no_network, server_ip=args.server,
                                hotkey=hotkey, presentmon_exe=exe, frames=frames, relay=relay,
                                tool_procs=relay.tool_procs() if relay is not None else ())
+    opts.tool_alone, opts.tool_roots = tuple(tool_alone), tool_roots
     out_dir = sess.session_dir(args.out or paths.sessions_dir(), target)
     cap_path = out_dir / CAPTURE_NAME
     if not frames:
@@ -868,6 +893,15 @@ def say(text: str) -> None:
         print(clean, flush=True)
     except (OSError, ValueError):
         pass
+
+
+class Cancelled(Exception):
+    """The caller cancelled the recording before it began (M4: the window's Cancel): nothing is recorded."""
+
+
+def _check_cancel(cancel: threading.Event | None) -> None:
+    if cancel is not None and cancel.is_set():
+        raise Cancelled()
 
 
 def _teller(given: Callable[[str], None] | None) -> Callable[[str], None]:
