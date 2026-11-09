@@ -216,7 +216,8 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
     """Record the game, save the capture and analyse it. What a caller other than this console gives it (M4: the
     app's control channel), each defaulting to the console's own behaviour:
     - `stop`: set it (session.request_stop) to stop the recording, as Ctrl+C does;
-    - `say`: every line watch says, the summary included (default: printed here);
+    - `say`: every line watch says, the summary included (default: printed here). It must not raise: a line it cannot
+      deliver is dropped, as say() drops one for a console that went away;
     - `interactive`: is a person at this console? None: asked only when stdin is a terminal, and shown the status
       line, with Ctrl+Break and closing the window handled; True: asked even without a terminal; False: never asked,
       and no status line or console handling (nobody is there);
@@ -299,11 +300,12 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
         + "; Ctrl+C stops." + (f" Stops by itself after {args.duration:.0f} s." if args.duration else ""))
     stop = stop if stop is not None else threading.Event()
     saved = threading.Event()
-    # With a relay the network trace is the relay's, and the relay stops it when this window goes away.
-    console = (_ConsoleControl(stop, saved, network=opts.network and relay is None, say=say) if interactive
-               else contextlib.nullcontext())
     printer = None if interactive else _silent        # None: the session draws its status line here
-    with sess.CtrlC(stop, say) as guard, console:
+    # With a relay the network trace is the relay's, and the relay stops it when this window goes away. The console's
+    # handling is made once Ctrl+C is guarded: making it imports the network trace's modules, which takes a while.
+    with sess.CtrlC(stop, say) as guard, (
+            _ConsoleControl(stop, saved, network=opts.network and relay is None, say=say) if interactive
+            else contextlib.nullcontext()):
         try:
             try:
                 cap = sess.Session(target, opts, printer=printer, observers=observers).run(stop, ctrl_c=guard)
@@ -316,6 +318,7 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
             cap.note = clean_note(getattr(args, "note", None))
             n = len(cap.frames.get("t") or [])
             observers.event("saving", frames=n)
+            cap.notes.extend(note for note in observers.notes() if note not in cap.notes)   # failed since it was made
             say(f"Saving {n:,} frames..." if n else "Saving the capture...")
             cap.save(cap_path)
             observers.event("saved", session=out_dir.name)

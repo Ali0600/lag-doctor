@@ -102,9 +102,10 @@ class Observers:
     on_tick(elapsed, live) once a status period, with each collector's live() values; on_event(kind, data) when
     something happens: "target" (the game was chosen), "recording" (everything has started), "mark" (the lag key),
     "frames_lost" (frame timing stopped working), "stopping", "saving" and "saved" (the capture is on disk). Each is
-    contained the way the status line is: one that raises is not called again, and the capture says so; neither can
-    stop the recording or lose it. They run on the thread where the thing happened (the lag key's own thread for a
-    mark), so they must return at once: the checks that end a recording wait behind them.
+    contained the way the status line is: one that raises is not called again, and the capture says so (unless it
+    first fails at "saved", when the capture is on disk already); neither can stop the recording or lose it. They run
+    on the thread where the thing happened (the lag key's own thread for a mark), so they must return at once: the
+    checks that end a recording, and the save, wait behind them.
     """
 
     def __init__(self, on_tick: Callable[[float, dict[str, dict[str, Any]]], None] | None = None,
@@ -240,6 +241,7 @@ class Session:
         self._tools: dict[int, None] = {}          # lag-doctor's own PIDs seen so far (an ordered set)
         self._tools_listed = False
         self._tools_error = ""
+        self._roots_error = ""                     # opts.tool_roots failed, at least once
         self._tools_capped = False                 # one was left out because the list was full
         self._frames_warned = False                # the "frame timing is not working" line is said once
         self._front_without_frames = 0.0           # seconds the game was in front with no frame yet
@@ -333,7 +335,10 @@ class Session:
             procs = self._snapshot_once()
             roots = list(self.opts.tool_procs)
             if self.opts.tool_roots is not None:
-                roots += [(int(pid), int(created)) for pid, created in self.opts.tool_roots(procs)]
+                try:
+                    roots += [(int(pid), int(created)) for pid, created in self.opts.tool_roots(procs)]
+                except Exception as exc:  # noqa: BLE001 - the rest of lag-doctor's own are still listed
+                    self._roots_error = self._roots_error or f"{type(exc).__name__}: {exc}"
             for pid in tool_pids(procs, self.target, roots, alone=self.opts.tool_alone):
                 if len(self._tools) < MAX_TOOL_PIDS:
                     self._tools.setdefault(pid)
@@ -518,6 +523,9 @@ class Session:
         elif self._tools_error:
             self.notes.append(f"lag-doctor could not list its own processes ({self._tools_error}), so the analysis "
                               "may name them among the other programs.")
+        if self._roots_error:
+            self.notes.append(f"lag-doctor could not find some of its own processes ({self._roots_error}), so the "
+                              "analysis may name them among the other programs.")
         if self._tools_capped:
             self.notes.append(f"lag-doctor listed only the first {MAX_TOOL_PIDS} of its own processes, so the "
                               "analysis may name the others among the other programs.")
@@ -693,13 +701,14 @@ def tool_pids(procs: dict[int, Any], target: dict[str, Any], extra: Iterable[tup
         return []
     out = dict.fromkeys(pid for pid, _ in own)
     roots = [own[0]]
+    game, game_created = target.get("pid"), target.get("create_time")
+    theirs = (descendants(procs, game, game_created) if isinstance(game, int) and isinstance(game_created, int)
+              else set())
     for pid, created in extra:
         p = procs.get(pid)
-        if p is not None and p.create_time == created:
+        if p is not None and p.create_time == created and pid not in theirs:
             out.setdefault(pid)
             roots.append((pid, created))
-    game, created = target.get("pid"), target.get("create_time")
-    theirs = descendants(procs, game, created) if isinstance(game, int) and isinstance(created, int) else set()
     for pid, alone_created in alone:
         p = procs.get(pid)
         if p is not None and p.create_time == alone_created and pid not in theirs:

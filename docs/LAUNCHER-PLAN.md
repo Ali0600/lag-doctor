@@ -400,8 +400,9 @@ Tests:
   `client_pid()` and `client_session()` with what the prompt approved, and the recorder compares `server_pid()` with
   the relay it launched and checks `owner_sid()`.
 
-The rest was done 2026-11-09, with no change for a recording started in a console (DESIGN.md, CLI and Who follows a
-recording):
+The rest was done 2026-11-09 (DESIGN.md, CLI and Who follows a recording). A recording started in a console behaves as
+before, but for one thing: lag-doctor's own processes are now sighted every tick, so a short-lived child of its own
+(the PresentMon that ends the trace session after a crash) can join `tool_pids` too.
 - `cli.cmd_watch(args, *, stop, say, interactive, observers, launcher)`, and `_record` likewise. `say` reaches every
   line on the path, the summary included, and `interactive=False` never asks, draws no status line and installs no
   console handling.

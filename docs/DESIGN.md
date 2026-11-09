@@ -522,9 +522,10 @@ on_event=None)` (M4: the app's window, through `watch`):
   (the stop began: "duration", "game exited", "Ctrl+C" or the reason given to `request_stop`); `saving` `{frames}`
   and `saved` `{session}` (from `cli._record`; `session` is the folder's name, which is the app's id for it).
 - Each is contained as the status line is: one that raises is not called again, and the capture's notes say so in
-  plain words; neither can stop the recording or lose it. They run on the thread where the thing happened (the lag
-  key's own for a mark), so they must return at once: stop, duration and the game's exit are checked on the thread
-  that calls `on_tick`.
+  plain words (unless it first fails at `saved`, when the capture is on disk already); neither can stop the
+  recording or lose it. They run on the thread where the thing happened (the lag key's own for a mark), so they
+  must return at once: stop, duration and the game's exit are checked on the thread that calls `on_tick`, and
+  `stopping` and `saving` come before the collectors stop and before the save.
 - `Session.mark(when=None) -> float | None`: a mark at `when` (`clock` time, default now) in seconds from the
   start, also told as `mark`; None before the recording started, and nothing is kept. The lag key calls it.
 
@@ -554,7 +555,8 @@ nvidia-smi), each `SessionOptions.tool_procs` root (the relay) and each root `to
 window's WebView2 browser processes, which a recovery replaces) with what those started, and each `tool_alone`
 process by itself (lag-doctor's window, whose other children, such as a store client it opened, stay countable);
 never the game's own tree. Roots and lone processes count only while they are the process named (pid and create
-time). It holds at most `MAX_TOOL_PIDS` (64); when one more is seen, the capture's notes say so.
+time). It holds at most `MAX_TOOL_PIDS` (64); when one more is seen, the capture's notes say so. A `tool_roots` that
+raises leaves the rest listed, and the notes say lag-doctor could not find some of its own processes.
 
 ### Collector specifics
 
@@ -1132,7 +1134,8 @@ lagdoctor app                        lag-doctor's window: recorded games and the
   say=None, interactive=None, observers=None, launcher=None)`, each defaulting to the console's own behaviour:
   `stop` stops the recording when set through `session.request_stop` (its reason becomes `target["stop_reason"]`);
   `say` takes every line watch says, the summary too (each function on the path takes it, and defaults to `cli.say`
-  as it is when that function runs, which tests replace); `interactive` None asks the [Y/n] question only when
+  as it is when that function runs, which tests replace), and must not raise: like `cli.say` for a console that went
+  away, it drops a line it cannot deliver; `interactive` None asks the [Y/n] question only when
   stdin is a terminal (never without a stdin, as under pythonw), True asks anyway, and False never asks, draws no
   status line and installs no console handling; `observers` is a `session.Observers` (see Who follows a recording);
   `launcher` starts the relay elevated (default `elevation.launch_elevated`, through `relay/client.launch`).

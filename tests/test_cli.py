@@ -946,6 +946,51 @@ def test_a_watch_nobody_attends_never_asks_and_draws_no_status_line(fake_relay, 
     assert fake_world["sessions"][-1]["printer"] is None
 
 
+def test_the_prompts_lines_go_through_the_given_say_too(fake_relay, fake_world, monkeypatch, tmp_path, capsys):
+    from lagdoctor.report import summary
+    monkeypatch.setattr(cli, "_ask", lambda prompt, default=False: True)
+    out, lines = str(tmp_path / "out"), []
+    assert cli.cmd_watch(_watch_args("--duration", "0.1", "--out", out), say=lines.append, interactive=True) == 0
+    fake_relay["raise"] = PermissionError(13, "the administrator prompt was declined", None, 1223)
+    real_write = cli._write_json
+
+    def write(path, data):                        # the app's summary cannot be saved
+        if path.name == summary.SUMMARY_NAME:
+            raise OSError(28, "There is not enough space on the disk")
+        return real_write(path, data)
+    monkeypatch.setattr(cli, "_write_json", write)
+    monkeypatch.setattr(cli._kernel32, "SetConsoleCtrlHandler", lambda routine, add: False)
+    assert cli.cmd_watch(_watch_args("--duration", "0.1", "--out", out), say=lines.append, interactive=True) == 0
+    assert capsys.readouterr().out == ""
+    said = "\n".join(lines)
+    for text in ("needs admin rights", "approve the UAC prompt", "The UAC prompt was declined",
+                 "summary of this session could not be saved", "the console handler could not be set"):
+        assert text in said, (text, lines)
+
+
+def test_ctrl_c_while_the_console_handling_is_made_stops_the_recording_and_keeps_it(fake_world, monkeypatch, tmp_path):
+    real = cli._ConsoleControl.__init__
+
+    def init(self, *a, **kw):
+        signal.raise_signal(signal.SIGINT)        # pressed while the network trace's modules are imported
+        real(self, *a, **kw)
+    monkeypatch.setattr(cli._ConsoleControl, "__init__", init)
+    assert cli.main([*WATCH, "--no-elevate", "--out", str(tmp_path / "out")]) == 0
+    assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
+
+
+def test_a_follower_that_fails_at_the_save_is_in_the_saved_capture(fake_world, tmp_path):
+    def on_event(kind, data):
+        if kind == "saving":
+            raise BrokenPipeError(32, "The pipe is being closed")
+    out = tmp_path / "out"
+    assert cli.cmd_watch(_watch_args("--no-elevate", "--duration", "0.1", "--out", str(out)), say=lambda line: None,
+                         observers=sess.Observers(on_event=on_event)) == 0
+    (path,) = out.glob(f"*/{cli.CAPTURE_NAME}")
+    notes = Capture.load(path).notes
+    assert any("window following this recording" in n and "BrokenPipeError" in n for n in notes), notes
+
+
 def test_without_any_stdin_nobody_is_asked(monkeypatch):
     monkeypatch.setattr(sys, "stdin", None)               # pythonw: no console, no stdin at all
     assert cli._interactive(None) is False
