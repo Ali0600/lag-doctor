@@ -303,8 +303,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   on `diag/dns-ports-before`). Count a flake in CI's history over every attempt: `gh run list` shows each run's last
   attempt only, so a failure a rerun turned green is invisible there (both port-flake sightings were). Take
   `run_attempt` from `gh api repos/Ali0600/lag-doctor/actions/workflows/ci.yml/runs --paginate` and each attempt's
-  jobs from `.../actions/runs/<run id>/attempts/<n>/jobs`. The four `diag/*` branches of PRs #14 and #15 stay on
-  GitHub while those PRs cite their runs.
+  jobs from `.../actions/runs/<run id>/attempts/<n>/jobs`. The four `diag/*` branches of PRs #14 and #15, and PR
+  #22's `diag/spike-udp-before` (a spike that watched every WebView2 socket for a whole run, dispatched with `gh
+  workflow run webview-spike.yml --ref` and needing no workflow of its own), stay on GitHub while those PRs cite their
+  runs.
 - `tests/test_etw_tracker.py::test_the_tracker_over_a_real_private_etw_session_finds_the_server_and_a_delay_gap` failed
   at random until 2026-11-08 (`AssertionError: []`; in CI's step that ran it alone, 4 of 57 runs on Python 3.11 and
   none of 56 on 3.13). Its private ETW session hands every event over inside `stop()`, so with the tracker's 2 s
