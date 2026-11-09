@@ -34,7 +34,8 @@ def test_every_message_the_window_may_send_is_read_back_as_sent(msg):
 
 
 @pytest.mark.parametrize("line", [
-    b"not json\n", b"[1, 2]\n", b'{"stop": 1}\n', b'{"t": 5}\n', '{"t": "stop", "x": "\u00e9"}\n'.encode(),
+    b"not json\n", b"[1, 2]\n", b'{"stop": 1}\n', b'{"t": 5}\n',
+    '{"t": "elevate_failed", "why": "caf\u00e9"}\n'.encode(),       # only its one byte is wrong
     b'{"t": "start"}\n',                                          # not one the window may send
     b'{"t": "stop", "now": true}\n',                              # a field it may not have
     b'{"t": "elevated", "handle": 420}\n',                        # one it must have
