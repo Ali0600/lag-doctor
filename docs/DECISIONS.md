@@ -160,10 +160,10 @@ to the owner with A recommended; the owner chose "Both, A first".
 - **A: automatic, at record time (chosen, built first)**: the inventory reads the game's folder (never the game's
   process) and lists the files a fan fix adds, with a fingerprint of each, and for an Unreal Engine game the user
   config files. Nothing to type or forget; it cannot see an in-game setting a game keeps elsewhere.
-- **B: a note per recording, `lagdoctor watch --note TEXT` (chosen, its own PR next)**: the player's own words,
-  kept in the capture and the summary, shown in the report and Compare. It catches anything the player names, an
-  in-game setting included, but only when they remember to type it. It changes `cli.py` and
-  `capture/session.py`, which the open M3 relay PR (#23) rewrites, so it follows that PR. Built 2026-11-09 (above).
+- **B: a note per recording, `lagdoctor watch --note TEXT` (chosen, built second as #29)**: the player's own
+  words, kept in the capture and the summary, shown in the report and Compare. It catches anything the player names,
+  an in-game setting included, but only when they remember to type it. It changes `cli.py` and
+  `capture/session.py`, which the M3 relay PR (#23) was rewriting, so it followed that PR. Built 2026-11-09 (above).
 - **Only A, or only B**: not chosen. Each misses what the other sees.
 
 What A lists (`lagdoctor/capture/gamefiles.py`; the implementing session's choices, from sources read on

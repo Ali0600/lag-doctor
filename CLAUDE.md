@@ -102,6 +102,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   is added there.
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
   a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
+- **The game folder check reads folders, never the game** (`capture/gamefiles.py`, what Compare's drop-in and Unreal
+  rows show). Find the user's own folders through `winapi/folders.py`: OneDrive can hold Documents, so
+  `%USERPROFILE%\Documents` may be the wrong place. Never open a file whose listing marks it online only (reading it
+  makes OneDrive download it). A file size is `labels.byte_count`, never `charts.number`, which refuses anything past
+  1e7 as corrupt: an 81 MB exe read as "not read" until a demo used a real size. A DLL name joins `PROXY_DLLS` only
+  from a primary source, and never one on KnownDLLs (`tests/test_gamefiles.py` reads both lists).
 - **Text a player reads is plain words.** Research citations (`WT 8`, `LC 4.9`, `NE 7 row 9`) and review ids
   (`CC-5`) go in comments, never in a string the report, console or a fix shows; `tests/test_user_text.py`
   scans every module but `winapi/`. Name sources with `labels.source_text`, never by their ids.
@@ -174,8 +180,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   (`tests/app_demo.py`) under the test's own `LAGDOCTOR_HOME` in `%TEMP%`, crashes its page and ends its WebView2
   browser process on purpose (both recover), and closes it; run it when the owner is not mid-game. The library the
   repo shows is only ever the demo one: never put the owner's games or sessions in a test, a fixture or a picture.
-- **The app's page puts outside text on screen as text only.** Game, process and window names, evidence and
-  reasons reach the page as JSON and go into the DOM through `el()` in `lagdoctor/app/assets/app.js`, which makes
+- **The app's page puts outside text on screen as text only.** Game, process and window names, evidence,
+  reasons and the player's note (`watch --note`, cleaned by `model.clean_note` in every writer and reader) reach the
+  page as JSON and go into the DOM through `el()` in `lagdoctor/app/assets/app.js`, which makes
   text nodes; nothing there parses markup (`tests/test_app_page.py` refuses `innerHTML`, `outerHTML`,
   `insertAdjacentHTML`, `document.write`, `DOMParser` and `eval` in it, and drives a game named like markup through
   the real page). The page names a session or a game only by the id the app gave it; `bridge.parse` checks every
@@ -200,7 +207,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   4 work starts from that plan too.
 - **The relay** (`lagdoctor/relay/`, DESIGN.md "The relay") runs PresentMon and the Kernel-Network session with
   administrator rights for a recording in the user's own window. Everything it does comes from its command line
-  (`client.relay_argv`, parsed by `server.parse_args` on both sides of the prompt); from the pipe it takes only `start`
+  (`client.relay_argv`, parsed by `server.parse_args` on both sides of the prompt; the player's note is never on it,
+  which `test_the_note_stays_with_the_recorder_and_never_goes_to_the_relay` holds); from the pipe it takes only `start`
   and `stop`, and it passes back only what `protocol.py` lists: the game's frame rows and events, the recorder's own
   events, and per-program byte totals for the recorder's Windows session (DECISIONS 2026-11-08). A new message or field
   goes through `protocol.from_relay` or `from_recorder` with its checks. `tests/test_relay_live.py` starts the real
@@ -348,7 +356,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   Never run two pytest processes here at once (a review agent's tests beside the suite): they share
   `%TEMP%\pytest-of-<user>` and its keep-three cleanup, and on 2026-11-08
   `tests/test_downloads.py::test_fetch_gold_takes_the_pinned_commits_gold_folder_byte_for_byte` failed twice that way
-  (WinError 5 renaming a folder under its `tmp_path`), then passed 3 of 3 alone. The Window spike workflow's
+  (WinError 5 renaming a folder under its `tmp_path`), then passed 3 of 3 alone. Another worktree's session counts
+  too: before a run, list the `python.exe` command lines (`Get-CimInstance Win32_Process`) and wait while one holds
+  `pytest`, `redfirst.py` or `laglab` (2026-11-09: a rerun met the M2 session's red-first). The Window spike workflow's
   socket check (`sockets-1` or `sockets-2`) failed 3 of 20 attempts on 2026-11-08 (main 1 of 13, the M1 branch 2 of
   5), each on one UDP4 socket "bound" on an ephemeral port in a WebView2 process: the runtime's own lookups (in 20
   runs watched every 20 ms, all 70 of its UDP sockets were a utility process's, on 0.0.0.0, on a port Windows chose).
