@@ -12,9 +12,11 @@ Real PresentMon 2.6.0 output, used by `tests/test_presentmon_*.py`.
   expected CSVs keep their LF line endings; a Windows `git clone` would turn them into CRLF).
 - **Tool**: the PresentMon 2.6.0 release exe (`PresentMon-2.6.0-x64.exe`, 980,320 bytes,
   SHA-256 `b2a706bc6ad475749e3b7e3409263aa1e6906d45bdcf993f6dbc0f660188f1af`, signed by Intel Corporation).
-- **Replay flags**: lag-doctor's live flags minus the live-only ones (`docs/research/presentmon.md` section 10):
-  `--etl_file <capture> --output_stdout --no_console_stats --qpc_time --track_frame_type --track_pc_latency --track_hybrid_present`.
-  An ETL replay needs no admin rights.
+- **Replay flags**: lag-doctor's live flags minus the live-only ones (`docs/research/presentmon.md` section 10),
+  which `regenerate.py` reads from `lagdoctor/capture/presentmon.py` (`FLAGS`):
+  `--etl_file <capture> --output_stdout --no_console_stats --qpc_time --track_frame_type --track_hybrid_present`.
+  An ETL replay needs no admin rights. The files were made again without `--track_pc_latency` when lag-doctor
+  stopped passing it (DECISIONS 2026-11-09): the only change was the `MsPCLatency` column, `NA` in every row.
 
 Rebuild every file with `uv run python tests/fixtures/presentmon/regenerate.py`; two runs give identical bytes.
 

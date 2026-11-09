@@ -36,10 +36,11 @@ frames or stutters reached significance: the 1 Hz NVIDIA reads came closest (1.5
 minute if real), the test could not have seen up to 2-3 extra stutters a minute at the 4 Hz sampler, and it cannot see
 a cost that is not locked to those moments (section 4.2).
 
-The cost that may matter most was not measured, and it is not lag-doctor's CPU at all. lag-doctor starts PresentMon
-with `--track_pc_latency`, which switches on the latency-ping code inside games built with NVIDIA's PC Latency
-(Reflex) markers, and one report, by a CapFrameX developer, ties stutter in FINAL FANTASY VII REBIRTH to that switch;
-he blamed the game's own latency code, and no maintainer confirmed it (section 5.1).
+The cost that may have mattered most was not measured, and it was not lag-doctor's CPU at all. Until 2026-11-09
+lag-doctor started PresentMon with `--track_pc_latency`, which switches on the latency-ping code inside games built
+with NVIDIA's PC Latency (Reflex) markers, and one report, by a CapFrameX developer, ties stutter in FINAL FANTASY VII
+REBIRTH to that switch; he blamed the game's own latency code, and no maintainer confirmed it (section 5.1). The flag
+was dropped on 2026-11-09 (DECISIONS).
 
 | Cost | Who pays | How much | Evidence |
 |---|---|---|---|
@@ -59,7 +60,7 @@ he blamed the game's own latency code, and no maintainer confirmed it (section 5
 |---|---|---|
 | `lagdoctor-system` (system sampler) | 4 Hz | one PDH collect of about 750 counter instances (about 500 of them GPU Engine), one whole-system process snapshot (NtQuerySystemInformation with the game's threads), the S row and the top-8 `others` row |
 | `MainThread` (session) | 1 Hz | the liveness check (a whole-system snapshot), the live status line |
-| `lagdoctor-frames` (PresentMon reader) | once per frame | parse one CSV row (31 columns) and store 19 values |
+| `lagdoctor-frames` (PresentMon reader) | once per frame | parse one CSV row (30 columns; 31 until 2026-11-09, when `--track_pc_latency` was dropped) and store 19 values |
 | `lagdoctor-frames-watch` | 1 Hz | another whole-system snapshot, to see the game exit |
 | PresentMon-2.6.0-x64.exe | per ETW buffer, and 10 Hz output | consumes the trace session `lagdoctor`, writes one CSV row per frame |
 | `lagdoctor-gpu` (NVML) | 1 row a second, polling 2-49 times a second before each row (about 25 on average, depending on where NVML's refresh falls; 34.6 in the one measured run) | waits for NVML's ~500 ms refresh, then makes 9 NVML calls (12 values); only when the game renders on the NVIDIA GPU or its GPU is unknown |
@@ -282,8 +283,8 @@ sensitivity.
 
 ### 5.1 PC-latency tracking switches on code inside some games
 
-- lag-doctor passes `--track_pc_latency` on every PresentMon capture [documented: `presentmon.FLAGS`]. PresentMon 2.6.0
-  then enables NVIDIA's PC Latency provider at verbose level with keyword masks of 0, which ETW treats as every
+- Until 2026-11-09 lag-doctor passed `--track_pc_latency` on every PresentMon capture [documented: `presentmon.FLAGS`
+  at 1e0ff72]. PresentMon 2.6.0 then enables NVIDIA's PC Latency provider at verbose level with keyword masks of 0, which ETW treats as every
   keyword, and with no event-ID filter and no process filter, so every PCL event from every process on the PC reaches
   the session [research: `PresentMonTraceSession.cpp` lines 986-990].
 - A game built with NVIDIA's PCL Stats markers (Reflex or Streamline titles, on any GPU) starts a ping thread at launch
@@ -299,16 +300,23 @@ sensitivity.
   no problem. He put the cause in the game's own PCL implementation or its interaction with NVIDIA's driver, not in
   PresentMon's code or ETW overhead in general, and closed the issue on 2026-04-21 with no maintainer reply.
   [research: issue #570 and its timeline]
-- What lag-doctor gets from the flag: no stored column (it keeps no `MsPCLatency`). For PCL-instrumented games only,
+- What lag-doctor got from the flag (until 2026-11-09): no stored column (it keeps no `MsPCLatency`). For PCL-instrumented games only,
   PresentMon computes `MsAnimationError` from the game's own simulation-start markers instead of the CPU start, and
   `anim_error_ms` feeds the pacing test in `analysis/events.py`, which can add or remove pacing events and the findings
   built on them. Every other game records the same data without the flag. [documented: `presentmon.frame_row`,
   `model.F`, `analysis/events.py`; the switch to PCL markers: docs/research/presentmon.md section 2 and PresentMon
   2.6.0's source, verification log]
-- So recording a PCL game with frame timing changes what that game executes, and for FINAL FANTASY VII REBIRTH that
-  change is reported to cause the very stutter lag-doctor is there to measure. docs/research/presentmon.md calls the
-  flag cheap [inferred there]; for PCL games it is not free. Not measured here: the only recording with frame timing
-  ran with the flag, and none was made without it.
+- So, until 2026-11-09, recording a PCL game with frame timing changed what that game executed, and for FINAL
+  FANTASY VII REBIRTH that change is reported to cause the very stutter lag-doctor is there to measure.
+  docs/research/presentmon.md called the flag cheap [inferred there]; for PCL games it was not free. Not measured here:
+  the only recording with frame timing ran with the flag, and none was made without it.
+- lag-doctor stopped passing the flag on 2026-11-09 (DECISIONS), and `test_pc_latency_tracking_stays_off` keeps it
+  out. A PCL game's `anim_error_ms` now comes from PresentMon's CPU-start estimate, as every other game's does. In a
+  Reflex game that estimate is weaker: it takes the frame's simulation start to be the moment the previous Present()
+  returned, and NVIDIA places Reflex's sleep between the two, so the animation error also carries how much that sleep
+  changes from frame to frame [inferred from PresentMon 2.6.0's source and NVIDIA's Reflex guide, not measured]. The
+  pacing events built on it (and the findings that use them) are less trustworthy there, and a recording of such a game
+  made before 2026-11-09 (its `target["presentmon"]["args"]` hold the flag) is not like-for-like with a later one.
 
 ### 5.2 NVML power readings
 
@@ -372,8 +380,8 @@ Microsoft's D3DDDI_ESCAPEFLAGS page; whether NVML's escapes are flagged so is un
   flag that requests those events, so it probably does not hit this [inferred]. The same issue saw output stall for
   about 60 s after frame generation was switched off: a data cost, not a game cost.
 - The fix, PR #702 (merged 2026-10-16, in no release yet), also removes stale PC-latency data from other processes.
-  lag-doctor's pinned 2.6.0 lacks it while always enabling PC latency; whether that data grows during a recording was
-  not measured. In the one real 13-minute recording PresentMon stayed at 0.4-7.2 % of one CPU.
+  lag-doctor's pinned 2.6.0 lacks it, but since 2026-11-09 lag-doctor no longer enables PC latency, so that data does
+  not arise. In the one real 13-minute recording, made with the flag, PresentMon stayed at 0.4-7.2 % of one CPU.
 - Issue #417: PresentMon's CPU rose from about 0.04 % to 4.5-10 % when an app's present mode changed from independent
   flip to composed (windowed, or forced by an overlay), work its priority-15 consumer thread does.
 - lag-doctor leaves PresentMon's input tracking on (CapFrameX passes `--no_track_input`), so a 1,000 Hz mouse may add
@@ -408,8 +416,8 @@ Microsoft's D3DDDI_ESCAPEFLAGS page; whether NVML's escapes are flagged so is un
 - **Power**: package watts and C-state residency need a driver or an administrator.
 - **Other games and frame rates**: the real-recording figures are one game at about 56 FPS with VSync on 91 % of
   frames.
-- **Section 5.1's risk**: it needs a game built with PC Latency markers, recorded over the same scene with and without
-  `--track_pc_latency`. The report it rests on used PresentMon 2.4.1, and its title blames gamepad input [research:
+- **Section 5.1's risk**, no longer lag-doctor's since the flag was dropped: measuring it needs a game built with PC
+  Latency markers, recorded over the same scene with and without `--track_pc_latency`. The report it rests on used PresentMon 2.4.1, and its title blames gamepad input [research:
   one agent's reading of issue #570].
 
 ## 8. How the benchmark was kept honest

@@ -36,9 +36,10 @@ VERSION = setup.VERSION
 TOOL = f"PresentMon {VERSION}"
 SESSION_NAME = "lagdoctor"
 MAX_PID = 0xFFFFFFFF
-# lag-doctor's flags (PM 10a); the live-only ones are added for a live capture.
-FLAGS = ("--output_stdout", "--no_console_stats", "--qpc_time", "--track_frame_type",
-         "--track_pc_latency", "--track_hybrid_present")
+# lag-doctor's flags (PM 10a); the live-only ones are added for a live capture. Never --track_pc_latency: it enables
+# NVIDIA's PC Latency provider, which switches on the latency-ping code inside games built with its markers, for data
+# lag-doctor does not keep (docs/research/overhead.md, section 5.1; DECISIONS 2026-11-09).
+FLAGS = ("--output_stdout", "--no_console_stats", "--qpc_time", "--track_frame_type", "--track_hybrid_present")
 LIVE_ONLY = ("--session_name", SESSION_NAME, "--stop_existing_session", "--terminate_on_proc_exit")
 KNOWN_EXIT_CODES = frozenset(range(8))   # 0-7, PM 5 "Exit codes"; anything else is a crash
 

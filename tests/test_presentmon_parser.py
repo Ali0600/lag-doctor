@@ -18,17 +18,17 @@ FIX = Path(__file__).parent / "fixtures" / "presentmon"
 
 HEADER = ("Application,ProcessID,SwapChainAddress,PresentRuntime,SyncInterval,PresentFlags,AllowsTearing,"
           "PresentMode,FrameType,HybridPresent,TimeInQPC,MsBetweenSimulationStart,MsBetweenPresents,"
-          "MsBetweenDisplayChange,MsInPresentAPI,MsRenderPresentLatency,MsUntilDisplayed,MsPCLatency,CPUStartQPC,"
+          "MsBetweenDisplayChange,MsInPresentAPI,MsRenderPresentLatency,MsUntilDisplayed,CPUStartQPC,"
           "MsBetweenAppStart,MsCPUBusy,MsCPUWait,MsGPULatency,MsGPUTime,MsGPUBusy,MsGPUWait,MsAnimationError,"
           "AnimationTime,MsFlipDelay,MsAllInputToPhotonLatency,MsClickToPhotonLatency")
 SHOWN = ("PresentBench.exe,24892,0x2A70D2CAC00,DXGI,0,0,0,Composed: Flip,Application,0,2466961846796,NA,"
-         "10.99180000000000,16.62670000000000,0.54730000000000,0.86620000000000,23.3253,NA,2466961742501,10.9768,"
+         "10.99180000000000,16.62670000000000,0.54730000000000,0.86620000000000,23.3253,2466961742501,10.9768,"
          "10.4295,0.5473,0.1897,11.1060,0.8736,10.2324,-5.5830,1970.5829,NA,NA,NA")
 DROPPED = ("PresentBench.exe,24892,0x2A70D2CAC00,DXGI,0,0,0,Composed: Flip,Application,0,2466961626795,NA,"
-           "11.06220000000000,NA,0.52690000000000,0.78810000000000,NA,NA,2466961521260,11.0804,10.5535,0.5269,"
+           "11.06220000000000,NA,0.52690000000000,0.78810000000000,NA,2466961521260,11.0804,10.5535,0.5269,"
            "1.1731,10.1685,1.5667,8.6018,NA,NA,NA,NA,NA")
 OTHER_RUNTIME = ("Presenter.exe,3976,0x0,Other,-1,0,0,Composed: Copy with GPU GDI,Application,0,2096121153,NA,"
-                 "15.08910000000000,16.67170000000000,0.00000000000000,0.14000000000000,23.2474,NA,2095970262,"
+                 "15.08910000000000,16.67170000000000,0.00000000000000,0.14000000000000,23.2474,2095970262,"
                  "15.0891,15.0891,0.0000,0.5439,14.6852,0.2073,14.4779,-1.9828,2278.6016,NA,NA,NA")
 COLS = HEADER.split(",")
 
@@ -134,7 +134,7 @@ def test_a_row_before_any_header_is_malformed():
 
 
 def test_every_header_line_rebuilds_the_column_map():
-    second = (FIX / "tc1_qpc_frametype.csv").read_bytes()       # 29 columns: no HybridPresent, no MsPCLatency
+    second = (FIX / "tc1_qpc_frametype.csv").read_bytes()       # 29 columns: no HybridPresent
     p = pm.CsvParser()
     rows = rows_of(csv(HEADER, SHOWN) + second, p)
     assert p.headers == 2 and p.malformed == 0 and len(rows) == 4

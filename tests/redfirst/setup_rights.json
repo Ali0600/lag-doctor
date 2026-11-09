@@ -453,12 +453,21 @@
   ]
  },
  {
-  "name": "Nvidia_PCL is marked unused although lag-doctor passes --track_pc_latency",
+  "name": "Nvidia_PCL is marked frame timing although lag-doctor no longer passes --track_pc_latency",
   "file": "scripts/etw_access.py",
-  "old": "    \"Nvidia_PCL\": (\"0d216f06-82a6-4d49-bc4f-8f38ae56efab\", FRAME_TIMING),",
-  "new": "    \"Nvidia_PCL\": (\"0d216f06-82a6-4d49-bc4f-8f38ae56efab\", UNUSED),",
+  "old": "    \"Nvidia_PCL\": (\"0d216f06-82a6-4d49-bc4f-8f38ae56efab\", UNUSED),",
+  "new": "    \"Nvidia_PCL\": (\"0d216f06-82a6-4d49-bc4f-8f38ae56efab\", FRAME_TIMING),",
   "tests": [
    "tests/test_etw_access_probe.py::test_the_needed_for_column_rests_on_the_flags_lag_doctor_starts_presentmon_with"
+  ]
+ },
+ {
+  "name": "an unused provider's row counts toward the verdicts",
+  "file": "scripts/etw_access.py",
+  "old": "if need == purpose]",
+  "new": "if need in (purpose, UNUSED)]",
+  "tests": [
+   "tests/test_etw_access_probe.py::test_a_row_that_could_not_be_read_leaves_its_verdicts_open"
   ]
  },
  {

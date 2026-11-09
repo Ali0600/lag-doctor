@@ -758,11 +758,11 @@ apart from your change.
 An ETW provider gets an enable callback, so a program can act when a trace session starts listening to it. NVIDIA's PC
 Latency (Reflex) stats code in a game starts a ping thread at launch that idles until a session enables its provider;
 from then on the game gets a ping every 100-299 ms, and every latency marker becomes a real ETW write.
-**Why it came up**: lag-doctor passes `--track_pc_latency` to PresentMon on every capture, and in PresentMon issue
+**Why it came up**: lag-doctor passed `--track_pc_latency` to PresentMon on every capture, and in PresentMon issue
 #570 a CapFrameX developer tied stutter in FINAL FANTASY VII REBIRTH to that switch, blaming the game's own latency
-code rather than PresentMon (one report, closed with no maintainer reply). lag-doctor stores no PC-latency column; for
-such games the flag only changes how PresentMon computes the animation error (`docs/research/overhead.md`, section
-5.1).
+code rather than PresentMon (one report, closed with no maintainer reply). lag-doctor stored no PC-latency column; for
+such games the flag only changed how PresentMon computes the animation error (`docs/research/overhead.md`, section
+5.1), so the flag was dropped (DECISIONS 2026-11-09).
 **Takeaway**: enabling a provider is an action, not just an observation: a system provider adds work on the target's
 own threads (DXGI writes its present events there), and a provider the target owns can change what it does; enable
 only the providers and keywords whose data you use, and read what each does when enabled.

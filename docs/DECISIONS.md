@@ -73,8 +73,35 @@
   with a `ReShade.ini`) and Special K's own file names. No page that could be read on 2026-11-08 named them, so the
   folder check leaves them out; ReShade or Special K installed under a name the check knows (`dxgi.dll`, `d3d11.dll`)
   is listed already. Revisit hook: `PROXY_DLLS` and `LOADER_CONFIGS` in `lagdoctor/capture/gamefiles.py`.
+- **PC-latency tracking as an opt-in** (a `watch` option that adds `--track_pc_latency`): gives back the exact
+  animation error, and PC latency if it were stored, for games built with NVIDIA's latency markers, at the cost of
+  switching on their ping code for that recording. Worth it if someone asks for those numbers in a Reflex game, or if
+  anim-only pacing findings in a Reflex game turn out to come from Reflex's own sleep.
+  Revisit hook: `FLAGS` and `live_args` in `lagdoctor/capture/presentmon.py`, and `test_pc_latency_tracking_stays_off`
+  (DECISIONS 2026-11-09).
 
 ---
+
+## 2026-11-09: PresentMon runs without PC-latency tracking
+
+lag-doctor started PresentMon with `--track_pc_latency` on every capture. Measuring lag-doctor's own cost
+(`docs/research/overhead.md`, section 5.1) found that the flag enables NVIDIA's PC Latency provider, which switches on
+the latency-ping code inside every game built with its markers (Reflex or Streamline titles): a ping every 100-299 ms
+and a real ETW write for every marker. A CapFrameX developer tied stutter in FINAL FANTASY VII REBIRTH to that switch
+(PresentMon issue #570, blaming the game's own latency code). lag-doctor stores no PC-latency column; for those games
+the flag only changes how PresentMon computes `MsAnimationError`. Put to the owner with A recommended; the owner
+answered "Yes, drop it".
+- **A: drop the flag (chosen)**: a PCL game records without its pings, and its `anim_error_ms` falls back to
+  PresentMon's CPU-start estimate, as every other game's does. In a Reflex game that estimate is weaker, since NVIDIA
+  places Reflex's sleep between the previous Present() and the simulation start, so its anim-only pacing events (and
+  the dropped_frames, frame_cap, uneven_pacing and vsync_judder findings built on pacing events) are less trustworthy
+  there, and a recording of such a game made before this change is not like-for-like with a later one on them
+  [inferred, `docs/research/overhead.md` section 5.1]. The PresentMon fixtures were made again without the flag (only
+  the `MsPCLatency` column changed, `NA` in every row), and `scripts/etw_access.py` marks Nvidia_PCL unused.
+- **B: an opt-in `watch` option**: deferred, worth trying if someone asks for those numbers (backlog).
+- **C: keep it**: rejected. A reported stutter in the owner's own game, for data lag-doctor does not keep.
+
+Revisit hook: `FLAGS` in `lagdoctor/capture/presentmon.py`, guarded by `test_pc_latency_tracking_stays_off`.
 
 ## 2026-11-08: Compare shows what changed in the game itself, read from the game's folder at record time
 
