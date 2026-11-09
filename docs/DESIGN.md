@@ -407,9 +407,12 @@ def trace_rights() -> str                         # "now" this token may trace; 
                                                   # account, or a group enabled in its token, joined after this
                                                   # sign-in began; "no"; "unknown" Windows could not say (the
                                                   # token, its groups or the group's members unreadable)
-def launch_elevated(argv: list[str], cwd: str) -> ElevatedChild   # ShellExecuteExW "runas", new console;
-                                                                  # PermissionError when declined (1223);
-                                                                  # ValueError for a relative program or folder
+def launch_elevated(argv: list[str], cwd: str, *, hwnd: int | None = None) -> ElevatedChild
+                                                  # ShellExecuteExW "runas", new console; PermissionError when
+                                                  # declined (1223); ValueError, before any prompt, for a relative
+                                                  # program or folder or a bad hwnd. hwnd: the window the prompt
+                                                  # belongs to (M4: lag-doctor's window), None for none. It blocks
+                                                  # until the prompt is answered: a window calls it off its UI thread
 class ElevatedChild:
     pid: int                                      # the child's; the open handle keeps Windows from reusing it
     def wait(self, timeout_s: float | None = None) -> int | None  # exit code; a Ctrl+C leaves the child running;
@@ -507,6 +510,25 @@ Rules every collector follows:
   (`others`: top 8 only).
 - **No handles to the game** (Principle 1).
 
+### Who follows a recording (capture/session.py)
+
+`Session(target, opts, ..., printer=None, observers=None).run(stop=None, ctrl_c=None) -> Capture`. Besides the
+console's status line (`printer`), a caller follows the recording through `session.Observers(on_tick=None,
+on_event=None)` (M4: the app's window, through `watch`):
+- `on_tick(elapsed, live)` once a status period (1 s), after the status line, with `{collector name: live()}`.
+- `on_event(kind, data)`: `target` `{name, pid, how}` (from `cli.cmd_watch`: the game was chosen); `recording`
+  `{duration_s, hotkey, frames, network}` (everything has started; the origin was set just before the collectors
+  started); `mark` `{t}`; `frames_lost` `{why}` (the "Frame timing is not working" line); `stopping` `{reason}`
+  (the stop began: "duration", "game exited", "Ctrl+C" or the reason given to `request_stop`); `saving` `{frames}`
+  and `saved` `{session}` (from `cli._record`; `session` is the folder's name, which is the app's id for it).
+- Each is contained as the status line is: one that raises is not called again, and the capture's notes say so in
+  plain words (unless it first fails at `saved`, when the capture is on disk already); neither can stop the
+  recording or lose it. They run on the thread where the thing happened (the lag key's own for a mark), so they
+  must return at once: stop, duration and the game's exit are checked on the thread that calls `on_tick`, and
+  `stopping` and `saving` come before the collectors stop and before the save.
+- `Session.mark(when=None) -> float | None`: a mark at `when` (`clock` time, default now) in seconds from the
+  start, also told as `mark`; None before the recording started, and nothing is kept. The lag key calls it.
+
 ### What each collector's `result()` returns
 
 The session copies these into the `Capture`. Keys not listed here go nowhere, so add them here first.
@@ -523,11 +545,18 @@ The session copies these into the `Capture`. Keys not listed here go nowhere, so
 non-game processes that did something that tick, ranked by CPU, `cpu_pct` with 100 = one logical CPU, `io_bps`
 read + write bytes, `gpu_pct` their busiest engine on any adapter, `create_time` raw FILETIME ticks (so a fix can
 prove a PID was not reused), `gpu_game_pct` their busiest engine on the game's adapter (None while that adapter
-is unknown). lag-doctor's own process is included: its load is real, and `target["tool_pids"]` (written by the
-session from handle-free snapshots: this process, its venv launcher, its PresentMon and nvidia-smi children, and
-the relay with its PresentMon) lets the analysis keep it out of the blame and out of the background-CPU
-signals (the listed totals, and the machine-wide reading minus the game): its sampling is the measurement's cost,
-never "another program using the CPU".
+is unknown). lag-doctor's own process is included: its load is real, and `target["tool_pids"]` lets the analysis
+keep it out of the blame and out of the background-CPU signals (the listed totals, and the machine-wide reading
+minus the game): its sampling is the measurement's cost, never "another program using the CPU". The session writes
+it from handle-free snapshots, at every status tick from `TOOL_SIGHT_S` (0.5 s) on and once more just before the
+stop, sharing each tick's snapshot with the liveness check (a whole-system snapshot costs several milliseconds:
+docs/research/overhead.md, section 5.3): this process and its venv launcher with what they started (PresentMon,
+nvidia-smi), each `SessionOptions.tool_procs` root (the relay) and each root `tool_roots(snapshot)` finds (the
+window's WebView2 browser processes, which a recovery replaces) with what those started, and each `tool_alone`
+process by itself (lag-doctor's window, whose other children, such as a store client it opened, stay countable);
+never the game's own tree. Roots and lone processes count only while they are the process named (pid and create
+time). It holds at most `MAX_TOOL_PIDS` (64); when one more is seen, the capture's notes say so. A `tool_roots` that
+raises leaves the rest listed, and the notes say lag-doctor could not find some of its own processes.
 
 ### Collector specifics
 
@@ -1100,9 +1129,16 @@ lagdoctor app                        lag-doctor's window: recorded games and the
 - Stopping: the first Ctrl+C stops the recording and saves it ("Stopping and saving the capture..."); later
   presses during the stop and the save are only counted. Ctrl+Break stops and saves too. Closing the window
   stops, ends the `lag-doctor-net` session at once, and waits up to 4.5 s for the save (Windows gives a closing
-  console 5 s). Signing out is not covered (a process that loads user32 never gets CTRL_LOGOFF). In the
-  parent window, the first Ctrl+C says the elevated recording goes on in its window and where it will be saved;
-  a second one stops waiting and prints the `analyze` command.
+  console 5 s). Signing out is not covered (a process that loads user32 never gets CTRL_LOGOFF).
+- For a caller other than the console (M4: the app's control channel), `cli.cmd_watch(args, *, stop=None,
+  say=None, interactive=None, observers=None, launcher=None)`, each defaulting to the console's own behaviour:
+  `stop` stops the recording when set through `session.request_stop` (its reason becomes `target["stop_reason"]`);
+  `say` takes every line watch says, the summary too (each function on the path takes it, and defaults to `cli.say`
+  as it is when that function runs, which tests replace), and must not raise: like `cli.say` for a console that went
+  away, it drops a line it cannot deliver; `interactive` None asks the [Y/n] question only when
+  stdin is a terminal (never without a stdin, as under pythonw), True asks anyway, and False never asks, draws no
+  status line and installs no console handling; `observers` is a `session.Observers` (see Who follows a recording);
+  `launcher` starts the relay elevated (default `elevation.launch_elevated`, through `relay/client.launch`).
 - `fix` applies only offered fixes, with the offered params, after showing the plan and its notes; it refuses
   to run elevated. A plan-time refusal is reported, never a traceback. Every command except `setup` first
   settles journal entries a crash left `pending`, and marks session-only changes whose process has ended as

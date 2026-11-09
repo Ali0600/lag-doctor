@@ -841,8 +841,8 @@
  {
   "name": "closing the window stops the relay's ETW session by name",
   "file": "lagdoctor/cli.py",
-  "old": "_ConsoleControl(stop, saved, network=opts.network and relay is None)",
-  "new": "_ConsoleControl(stop, saved, network=opts.network)",
+  "old": "_ConsoleControl(stop, saved, network=opts.network and relay is None, say=say)",
+  "new": "_ConsoleControl(stop, saved, network=opts.network, say=say)",
   "tests": [
    "tests/test_cli.py::test_with_a_relay_closing_the_window_leaves_the_network_trace_to_the_relay"
   ]
@@ -877,8 +877,8 @@
  {
   "name": "the lock is let go for the prompt",
   "file": "lagdoctor/cli.py",
-  "old": "                        relay, code = _start_relay(args, target, exe, may_trace)",
-  "new": "                        lock.release()\n                        relay, code = _start_relay(args, target, exe, may_trace)",
+  "old": "                        relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher)",
+  "new": "                        lock.release()\n                        relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher)",
   "tests": [
    "tests/test_cli.py::test_an_elevated_watch_records_here_with_frame_timing_through_the_relay"
   ]
@@ -940,8 +940,8 @@
  {
   "name": "a member who declines is told frame timing is gone",
   "file": "lagdoctor/cli.py",
-  "old": "                        relay, code = _start_relay(args, target, exe, may_trace)",
-  "new": "                        relay, code = _start_relay(args, target, exe)",
+  "old": "                        relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher)",
+  "new": "                        relay, code = _start_relay(args, target, exe, say=say, launcher=launcher)",
   "tests": [
    "tests/test_cli.py::test_a_group_member_who_declines_still_records_frames_here"
   ]

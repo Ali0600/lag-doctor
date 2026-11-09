@@ -389,14 +389,18 @@ def relaunch_elevated(argv: list[str], cwd: str) -> int:
         child.close()
 
 
-def launch_elevated(argv: list[str], cwd: str) -> ElevatedChild:
+def launch_elevated(argv: list[str], cwd: str, *, hwnd: int | None = None) -> ElevatedChild:
     """Start argv elevated in a new console (one UAC prompt) and return its handle without waiting.
 
     Raises PermissionError (winerror 1223) when the user declines the prompt, OSError otherwise.
     argv[0] and cwd must be absolute: an elevated launch must never search PATH for its program. ValueError,
     before any prompt, for an empty argument or one holding a control character: lag-doctor never builds
     either, so one means a bug upstream, found here rather than in an elevated window that closes at once.
+    `hwnd`: the window the prompt belongs to (lag-doctor's window, M4); None for none, as from a console. It blocks
+    until the prompt is answered, so a window calls it off its own thread.
     """
+    if hwnd is not None and (isinstance(hwnd, bool) or not isinstance(hwnd, int) or not 0 < hwnd < 1 << 64):
+        raise ValueError(f"not a window handle for an elevated launch: {hwnd!r}")
     if not argv or not all(isinstance(a, str) and a and not _CONTROL.search(a) for a in argv):
         raise ValueError(f"bad argv for an elevated launch: {argv!r}")
     if not isinstance(cwd, str) or "\0" in cwd:
@@ -414,6 +418,7 @@ def launch_elevated(argv: list[str], cwd: str) -> ElevatedChild:
     info.lpParameters = subprocess.list2cmdline(argv[1:])     # the MS C runtime quoting python.exe parses
     info.lpDirectory = cwd
     info.nShow = SW_SHOWNORMAL
+    info.hwnd = hwnd                                       # None: NULL, no owner window
     if not _ShellExecuteExW(ctypes.byref(info)):
         err = ctypes.get_last_error()
         if err == ERROR_CANCELLED:

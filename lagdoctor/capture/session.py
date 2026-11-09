@@ -13,9 +13,14 @@ recording and later ones are only counted (CtrlC), so a second press while the
 collectors stop cannot lose the capture.
 
 lag-doctor's own processes go into target["tool_pids"] (handle-free snapshots,
-once the collectors have started their children and again just before they are
-stopped), so the analysis never blames them for the lag: this process and what
-it started, and each tool root it was given (the relay) with what that started.
+at every status tick once the collectors have had time to start their children,
+and again just before they are stopped), so the analysis never blames them for
+the lag: this process and what it started, each tool root it was given or finds
+(the relay, the window's WebView2 browser processes) with what those started,
+and each process it was told to count alone (lag-doctor's window itself).
+
+Whoever follows the recording besides the console (Observers: lag-doctor's
+window, M4) is told of each tick and event, contained like the status line.
 
 With a relay (relay/client.py), frame timing and the game-server tracker run in
 it, with administrator rights; their collectors here are fed from its pipe.
@@ -51,8 +56,8 @@ CAPTURE_LOCK_NAME = "Local\\lag-doctor-capture"
 # Which result() keys go where (docs/DESIGN.md, "What each collector's result() returns").
 NETWORK_FLOW_KEYS = ("targets", "probes", "lost", "wifi_scans", "route", "downloads", "download_sources")
 FLOW_KEYS = ("server", "talkers", "talkers_scope", "game_wire_bytes", "gaps", "server_rx", "layout", "health")
-# lag-doctor's own processes are first listed at the first status tick this far in, once the collectors have
-# had a status period to start their children (PresentMon, nvidia-smi), and again just before they stop.
+# lag-doctor's own processes are listed at every status tick from this far in, once the collectors have had a
+# status period to start their children (PresentMon, nvidia-smi), and again just before they stop.
 TOOL_SIGHT_S = 0.5
 MAX_TOOL_PIDS = 64                         # bounded: lag-doctor itself starts only a handful
 # Frame timing is on, the game window was in front this long, and not one frame came: say so at once, while
@@ -74,6 +79,12 @@ class SessionOptions:
     # lag-doctor's processes outside this one, as (pid, create_time): the relay. Each counts, with every process it
     # started (its PresentMon), while that exact process still runs.
     tool_procs: tuple[tuple[int, int], ...] = ()
+    # Counted alone, without the processes they start: lag-doctor's window, whose children may be a store client or a
+    # browser it opened, which stay countable.
+    tool_alone: tuple[tuple[int, int], ...] = ()
+    # More of lag-doctor's own, found in each snapshot and counted like tool_procs: the window's WebView2 browser
+    # processes, which a recovery replaces. Given the snapshot; returns (pid, create_time) pairs.
+    tool_roots: Callable[[dict[int, Any]], Iterable[tuple[int, int]]] | None = None
     # A relay/client.RelayLink: frame timing and the game-server tracker come through it (whichever it runs).
     relay: Any = None
 
@@ -83,6 +94,44 @@ def request_stop(stop: threading.Event, reason: str) -> None:
     if not stop.is_set() and not getattr(stop, "reason", ""):
         stop.reason = reason
     stop.set()
+
+
+class Observers:
+    """Who follows a recording besides its console (M4: lag-doctor's window, through `watch --control`).
+
+    on_tick(elapsed, live) once a status period, with each collector's live() values; on_event(kind, data) when
+    something happens: "target" (the game was chosen), "recording" (everything has started), "mark" (the lag key),
+    "frames_lost" (frame timing stopped working), "stopping", "saving" and "saved" (the capture is on disk). Each is
+    contained the way the status line is: one that raises is not called again, and the capture says so (unless it
+    first fails at "saved", when the capture is on disk already); neither can stop the recording or lose it. They run
+    on the thread where the thing happened (the lag key's own thread for a mark), so they must return at once: the
+    checks that end a recording, and the save, wait behind them.
+    """
+
+    def __init__(self, on_tick: Callable[[float, dict[str, dict[str, Any]]], None] | None = None,
+                 on_event: Callable[[str, dict[str, Any]], None] | None = None) -> None:
+        self.on_tick, self.on_event = on_tick, on_event
+        self.failed: dict[str, str] = {}           # "tick" or "event": the type of what it raised, once it has
+
+    def tick(self, elapsed: float, live: dict[str, dict[str, Any]]) -> None:
+        self._call("tick", self.on_tick, elapsed, live)
+
+    def event(self, kind: str, **data: Any) -> None:
+        self._call("event", self.on_event, kind, data)
+
+    def _call(self, which: str, fn: Callable[..., None] | None, *args: Any) -> None:
+        if fn is None or which in self.failed:
+            return
+        try:
+            fn(*args)
+        except Exception as exc:  # noqa: BLE001 - whoever follows a recording must never end it
+            self.failed.setdefault(which, type(exc).__name__)
+
+    def notes(self) -> list[str]:
+        """For the capture: which of them stopped, and why, in plain words."""
+        what = {"tick": "its progress", "event": "what happened during it"}
+        return [f"The window following this recording stopped being told {what[k]} ({why}); the recording itself "
+                "went on." for k, why in sorted(self.failed.items())]
 
 
 class CtrlC:
@@ -157,7 +206,11 @@ class CaptureLock:
 
 
 class Session:
-    """Run one capture. Tests inject collectors, the inventory, the liveness check and the process snapshot."""
+    """Run one capture. Tests inject collectors, the inventory, the liveness check and the process snapshot.
+
+    The default liveness check and the sighting of lag-doctor's own processes share one snapshot each status tick
+    (each one costs several milliseconds: docs/research/overhead.md, section 5.3).
+    """
 
     def __init__(self, target: dict[str, Any], opts: SessionOptions,
                  collectors: list[Collector] | None = None,
@@ -165,7 +218,8 @@ class Session:
                  alive: Callable[[], bool] | None = None,
                  hotkey_factory: Callable[..., Any] | None = None,
                  printer: Callable[[str], None] | None = None,
-                 processes: Callable[[], dict[int, Any]] | None = None) -> None:
+                 processes: Callable[[], dict[int, Any]] | None = None,
+                 observers: Observers | None = None) -> None:
         self.target = dict(target)
         self.opts = opts
         self.inventory = dict(inventory) if inventory is not None else None
@@ -174,16 +228,21 @@ class Session:
         self.hotkey_factory = hotkey_factory
         self.printer = printer or (lambda line: print(line, end="", flush=True))
         self.processes = processes
+        self.observers = observers if observers is not None else Observers()
         self.marks: list[float] = []
         self.notes: list[str] = []
         self._marks_lock = threading.Lock()
         self.origin = 0.0
+        self._started = False                      # the origin is set: a mark now means something
         self.stop_reason = ""
         self._printer_broken = False
+        self._hotkey_on = False
+        self._tick_procs: dict[int, Any] | None = None   # this status tick's snapshot, once one was taken
         self._tools: dict[int, None] = {}          # lag-doctor's own PIDs seen so far (an ordered set)
         self._tools_listed = False
         self._tools_error = ""
-        self._first_sighting_done = False
+        self._roots_error = ""                     # opts.tool_roots failed, at least once
+        self._tools_capped = False                 # one was left out because the list was full
         self._frames_warned = False                # the "frame timing is not working" line is said once
         self._front_without_frames = 0.0           # seconds the game was in front with no frame yet
         self._frames_checked_at: float | None = None
@@ -207,9 +266,10 @@ class Session:
             if self.collectors is None:
                 self.collectors = default_collectors(self.target, self.inventory, self.opts)
             if self.alive is None:
-                self.alive = _default_alive(self.target)
+                self.alive = _default_alive(self.target, self._snapshot_once)
 
             self.origin = clock.now()
+            self._started = True
             started_at = datetime.now().astimezone().isoformat(timespec="seconds")
             hotkey = None
             # From the first start on, whatever happens (an exception, a KeyboardInterrupt), everything stops.
@@ -220,6 +280,7 @@ class Session:
             finally:
                 guard.stopping = True
                 self._print(STOPPING_MESSAGE + "\n")
+                self.observers.event("stopping", reason=self.stop_reason)
                 if hotkey is not None:
                     self._stop_hotkey(hotkey)
                 self._sight_tools()                   # before the stop ends PresentMon and nvidia-smi
@@ -249,6 +310,7 @@ class Session:
                               "no marks were recorded.")
             return None
         if started:
+            self._hotkey_on = True
             return listener
         why = getattr(listener, "error", "") or "unknown reason"
         self.notes.append(f"The lag key {self.opts.hotkey} could not be registered ({why}); no marks were recorded.")
@@ -260,13 +322,28 @@ class Session:
         except Exception as exc:  # noqa: BLE001 - the collectors must still be stopped
             self.notes.append(f"The lag key could not be released cleanly ({type(exc).__name__}: {exc}).")
 
+    def _snapshot_once(self) -> dict[int, Any]:
+        """Every process now, from at most one snapshot a status tick: the liveness check and the sighting of
+        lag-doctor's own processes share it."""
+        if self._tick_procs is None:
+            self._tick_procs = self.processes() if self.processes is not None else _snapshot()
+        return self._tick_procs
+
     def _sight_tools(self) -> None:
         """Add the lag-doctor processes running now (one handle-free snapshot) to target["tool_pids"]."""
         try:
-            procs = self.processes() if self.processes is not None else _snapshot()
-            for pid in tool_pids(procs, self.target, self.opts.tool_procs):
+            procs = self._snapshot_once()
+            roots = list(self.opts.tool_procs)
+            if self.opts.tool_roots is not None:
+                try:
+                    roots += [(int(pid), int(created)) for pid, created in self.opts.tool_roots(procs)]
+                except Exception as exc:  # noqa: BLE001 - the rest of lag-doctor's own are still listed
+                    self._roots_error = self._roots_error or f"{type(exc).__name__}: {exc}"
+            for pid in tool_pids(procs, self.target, roots, alone=self.opts.tool_alone):
                 if len(self._tools) < MAX_TOOL_PIDS:
                     self._tools.setdefault(pid)
+                elif pid not in self._tools:
+                    self._tools_capped = True
             self._tools_listed = True
         except Exception as exc:  # noqa: BLE001 - the capture goes on; the analysis is told below
             self._tools_error = self._tools_error or f"{type(exc).__name__}: {exc}"
@@ -281,13 +358,27 @@ class Session:
             self._printer_broken = True
             self.notes.append(f"The status line stopped: the console could not be written to ({type(exc).__name__}).")
 
-    def _on_mark(self, when: float) -> None:
+    def mark(self, when: float | None = None) -> float | None:
+        """Mark "it lagged now" at `when` (lagdoctor.clock time; default now): the lag key's press, or a caller's.
+        Returns the mark, in seconds from the start; None before the recording has started (nothing is kept)."""
+        if not self._started:
+            return None
+        when = clock.now() if when is None else when
         with self._marks_lock:
             self.marks.append(round(when - self.origin, 3))
+            at = self.marks[-1]
+        self.observers.event("mark", t=at)               # outside the lock: an observer never holds it
+        return at
+
+    def _on_mark(self, when: float) -> None:
+        self.mark(when)
 
     def _watch(self, stop: threading.Event) -> None:
         try:
+            self.observers.event("recording", duration_s=self.opts.duration_s, hotkey=self._hotkey_on,
+                                 frames=self.opts.frames, network=self.opts.network)
             while True:
+                self._tick_procs = None                  # each tick takes a fresh one, the first time it is needed
                 elapsed = clock.now() - self.origin
                 if stop.is_set():
                     self.stop_reason = getattr(stop, "reason", "") or "stopped"
@@ -299,8 +390,7 @@ class Session:
                     self.stop_reason = "game exited"
                     self.notes.append(f"The game exited after {elapsed:.0f} s, so the capture ended there.")
                     return
-                if not self._first_sighting_done and elapsed >= TOOL_SIGHT_S:
-                    self._first_sighting_done = True
+                if elapsed >= TOOL_SIGHT_S:          # then every tick: a WebView2 recovery's new processes too
                     self._sight_tools()
                 self._route_server()
                 live = {c.name: c.live() for c in self.collectors}
@@ -309,6 +399,7 @@ class Session:
                 if frames is not None and frames.ended:
                     live["frames"] = {}             # PresentMon is gone: no frame rate frozen at its last value
                 self._print("\r" + status_line(elapsed, live, console_width()))
+                self.observers.tick(elapsed, live)
                 wait = STATUS_PERIOD_S
                 if self.opts.duration_s is not None:
                     wait = max(0.0, min(wait, self.opts.duration_s - elapsed))
@@ -345,6 +436,7 @@ class Session:
         self._frames_warned = True
         self._print(f"\nFrame timing is not working: {why}. Everything else is still being recorded; stop with "
                     "Ctrl+C if you need frame timing.\n")
+        self.observers.event("frames_lost", why=why)
 
     def _route_server(self) -> None:
         """When the flow tracker finds the game server, the network sampler starts pinging it too."""
@@ -431,6 +523,13 @@ class Session:
         elif self._tools_error:
             self.notes.append(f"lag-doctor could not list its own processes ({self._tools_error}), so the analysis "
                               "may name them among the other programs.")
+        if self._roots_error:
+            self.notes.append(f"lag-doctor could not find some of its own processes ({self._roots_error}), so the "
+                              "analysis may name them among the other programs.")
+        if self._tools_capped:
+            self.notes.append(f"lag-doctor listed only the first {MAX_TOOL_PIDS} of its own processes, so the "
+                              "analysis may name the others among the other programs.")
+        self.notes.extend(self.observers.notes())
 
         with self._marks_lock:
             marks = sorted(m for m in self.marks if 0 <= m <= duration_s + 1.0)
@@ -590,39 +689,47 @@ def own_processes(procs: dict[int, Any] | None = None, *, me: int | None = None,
 
 
 def tool_pids(procs: dict[int, Any], target: dict[str, Any], extra: Iterable[tuple[int, int]] = (), *,
-              me: int | None = None, image_path: Callable[[int], str | None] | None = None,
-              launcher: str | None = None) -> list[int]:
+              alone: Iterable[tuple[int, int]] = (), me: int | None = None,
+              image_path: Callable[[int], str | None] | None = None, launcher: str | None = None) -> list[int]:
     """lag-doctor's own processes in one snapshot, ours first: own_processes(), each `extra` (pid, create_time)
     still running as that process (the relay), and the processes lag-doctor and those run (PresentMon, nvidia-smi),
-    but never the game's own process tree, even when lag-doctor started the game (scripts/e2e.py runs LagLab)."""
+    but never the game's own process tree, even when lag-doctor started the game (scripts/e2e.py runs LagLab). Each
+    `alone` counts only itself, while it is that process: lag-doctor's window, whose other children stay countable."""
     from lagdoctor.capture.target import descendants
     own = own_processes(procs, me=me, image_path=image_path, launcher=launcher)
     if not own:
         return []
     out = dict.fromkeys(pid for pid, _ in own)
     roots = [own[0]]
+    game, game_created = target.get("pid"), target.get("create_time")
+    theirs = (descendants(procs, game, game_created) if isinstance(game, int) and isinstance(game_created, int)
+              else set())
     for pid, created in extra:
         p = procs.get(pid)
-        if p is not None and p.create_time == created:
+        if p is not None and p.create_time == created and pid not in theirs:
             out.setdefault(pid)
             roots.append((pid, created))
-    game, created = target.get("pid"), target.get("create_time")
-    theirs = descendants(procs, game, created) if isinstance(game, int) and isinstance(created, int) else set()
+    for pid, alone_created in alone:
+        p = procs.get(pid)
+        if p is not None and p.create_time == alone_created and pid not in theirs:
+            out.setdefault(pid)
     for root, root_created in roots:
         for pid in sorted(descendants(procs, root, root_created) - theirs):
             out.setdefault(pid)
     return list(out)
 
 
-def _default_alive(target: dict[str, Any]) -> Callable[[], bool]:
+def _default_alive(target: dict[str, Any],
+                   snapshot: Callable[[], dict[int, Any]] | None = None) -> Callable[[], bool]:
     """Is the game still running? When Windows cannot answer one second, assume yes and ask again
-    the next: ending (and possibly losing) a long capture over one failed snapshot would be worse."""
+    the next: ending (and possibly losing) a long capture over one failed snapshot would be worse.
+    `snapshot`: where its process list comes from (the session's snapshot of this tick); default, one of its own."""
     from lagdoctor.capture.target import is_alive
     pid, created = target["pid"], target.get("create_time")
 
     def alive() -> bool:
         try:
-            return is_alive(pid, created)
+            return is_alive(pid, created) if snapshot is None else is_alive(pid, created, snapshot())
         except OSError:
             return True
     return alive

@@ -38,5 +38,8 @@
    "file": "lagdoctor/winapi/elevation.py",
    "old": "_CONTROL = re.compile(r\"[\\x00-\\x1f]\")",
    "new": "_CONTROL = re.compile(r\"[\\x00]\")",
-   "tests": ["tests/test_presentmon_elevation.py::test_an_ambiguous_launch_is_refused_before_any_prompt"]}
+   "tests": ["tests/test_presentmon_elevation.py::test_an_ambiguous_launch_is_refused_before_any_prompt"]},
+  {"name": "the prompt belongs to no window whatever it was given", "file": "lagdoctor/winapi/elevation.py", "old": "    info.hwnd = hwnd                                       # None: NULL, no owner window", "new": "    pass", "tests": ["tests/test_presentmon_elevation.py::test_the_prompt_belongs_to_the_window_it_is_given_and_to_none_by_default"]},
+  {"name": "a bad window handle reaches the prompt", "file": "lagdoctor/winapi/elevation.py", "old": "    if hwnd is not None and (isinstance(hwnd, bool) or not isinstance(hwnd, int) or not 0 < hwnd < 1 << 64):", "new": "    if False:", "tests": ["tests/test_presentmon_elevation.py::test_a_bad_window_handle_is_refused_before_any_prompt"]},
+  {"name": "True is taken for a window handle", "file": "lagdoctor/winapi/elevation.py", "old": "(isinstance(hwnd, bool) or not isinstance(hwnd, int)", "new": "(not isinstance(hwnd, int)", "tests": ["tests/test_presentmon_elevation.py::test_a_bad_window_handle_is_refused_before_any_prompt"]}
 ]

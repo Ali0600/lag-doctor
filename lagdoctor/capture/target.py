@@ -230,10 +230,11 @@ def _check_identity(pid: int, create_time: int) -> None:
         raise ValueError(f"not a process create time: {create_time!r}")
 
 
-def is_alive(pid: int, create_time: int) -> bool:
-    """True while that exact process runs (a reused PID does not count). Raises OSError if Windows cannot say."""
+def is_alive(pid: int, create_time: int, procs: dict[int, ProcInfo] | None = None) -> bool:
+    """True while that exact process runs (a reused PID does not count). Raises OSError if Windows cannot say.
+    `procs`: a snapshot already taken (the session's of this tick); default, a new one."""
     _check_identity(pid, create_time)
-    p = _snapshot().get(pid)
+    p = (_snapshot() if procs is None else procs).get(pid)
     return p is not None and p.create_time == create_time
 
 
