@@ -148,7 +148,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   the agent's shell was "not installed" for the user. `setup`, `watch`, `fix` and `undo` refuse there (exit 5,
   `paths.private_copy`) and `scripts/e2e.py` stops before its UAC prompt (exit 3). `scripts/etw_access.py`
   (E1) has no such check and raises its UAC prompt at once, so an agent never runs it either. Run them all in the
-  user's Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`).
+  user's Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`). Nor does an agent open a
+  store link (`steam://`, `com.epicgames.launcher://`), which starts a game on the owner's screen: Steam's own logs
+  and `appcache\appinfo.vdf`, read-only, show how a launch behaves (`docs/research/desktop-app.md`, section 14).
 - **`scripts/stage2` creates throwaway Windows services** (the capture-service experiments, `docs/INSTALLER-PLAN.md`
   Stage 2). It runs only on GitHub's hosted runners, from `.github/workflows/experiments.yml` (started by hand, or by
   a pull request that changes it, `scripts/stage2` or a module the experiments import, which its `paths:` lists and
@@ -230,7 +232,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
 - **The repo is public** (https://github.com/Ali0600/lag-doctor). Never commit the owner's personal details: write
   user-folder paths as `%LOCALAPPDATA%`, `%TEMP%` or `<repo>`, and leave out this PC's name and SID, its adapter and
   power-plan GUIDs, its public IP and MAC addresses (tests use documentation ranges, `192.168.0.x` for a home network,
-  and made-up MACs and GUIDs), what else runs on it, and when its owner played or downloaded what. Push only `main` and
+  and made-up MACs and GUIDs), what else runs on it, and when its owner played or downloaded what. That includes the
+  store app ids of the owner's games: write `<appid>`, since the pre-push hook refuses them even where the game's name
+  is already in the docs (it refused a Steam app id on 2026-11-09). Push only `main` and
   branches cut from it: the history from before the 2026-11-07 rewrite stays in `refs/backup/`, `refs/original/` and
   the merged `worktree-*` branches, and `.git/hooks/pre-push` (local, not in the repo) refuses any commit that holds
   those details. Pull request bodies, review comments and issue text are public too, and no hook reads them: a
