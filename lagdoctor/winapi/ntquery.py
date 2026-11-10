@@ -202,6 +202,19 @@ _k32.GetLogicalDriveStringsW.argtypes = [wintypes.DWORD, wintypes.LPWSTR]
 _k32.GetLogicalDriveStringsW.restype = wintypes.DWORD
 _k32.QueryDosDeviceW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
 _k32.QueryDosDeviceW.restype = wintypes.DWORD
+# The mount manager's volume list (fileapi.h): a find handle over volume names, which is not a process handle.
+_k32.FindFirstVolumeW.argtypes = [wintypes.LPWSTR, wintypes.DWORD]
+_k32.FindFirstVolumeW.restype = wintypes.HANDLE
+_k32.FindNextVolumeW.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD]
+_k32.FindNextVolumeW.restype = wintypes.BOOL
+_k32.FindVolumeClose.argtypes = [wintypes.HANDLE]
+_k32.FindVolumeClose.restype = wintypes.BOOL
+_k32.GetVolumePathNamesForVolumeNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD,
+                                                  ctypes.POINTER(wintypes.DWORD)]
+_k32.GetVolumePathNamesForVolumeNameW.restype = wintypes.BOOL
+_INVALID_HANDLE = wintypes.HANDLE(-1).value
+ERROR_NO_MORE_FILES = 18
+ERROR_MORE_DATA = 234
 
 
 def _nt_error(call: str, status: int) -> OSError:
@@ -389,7 +402,67 @@ def _drive_devices() -> dict[str, str]:
         drive = root[:2].upper()
         if _k32.QueryDosDeviceW(drive, target, len(target)):
             out[target.value] = drive         # the first string of the multi-string is the current target
+    try:
+        for device, folder in folder_mounts(_volume_entries()).items():
+            out.setdefault(device, folder)
+    except OSError:
+        pass        # a volume mounted on a folder then keeps its NT path, which the folder rule says it cannot match
     return out
+
+
+def folder_mounts(entries: Iterable[tuple[str | None, list[str]]]) -> dict[str, str]:
+    """NT device name -> the folder that a volume with no drive letter is mounted on (a disk added as C:\\SteamLib),
+    from the mount manager's (device, mount points) pairs. A volume with a drive letter is left to the letter, and a
+    mount point that is not a folder on a drive letter is not taken."""
+    out: dict[str, str] = {}
+    for device, mounts in entries:
+        if not device or not device.startswith("\\Device\\") \
+                or any(len(m) == 3 and m[1:] == ":\\" and m[0].isalpha() for m in mounts):
+            continue
+        folder = next((m for m in mounts if len(m) > 4 and m[0].isascii() and m[0].isalpha() and m[1:3] == ":\\"
+                       and m.endswith("\\") and "\0" not in m), None)
+        if folder is not None:
+            out[device] = folder[:-1]
+    return out
+
+
+def _volume_entries() -> list[tuple[str | None, list[str]]]:
+    """(NT device, mount points) of every volume: FindFirstVolumeW names each as \\\\?\\Volume{GUID}\\,
+    QueryDosDeviceW gives its device and GetVolumePathNamesForVolumeNameW the folders it is mounted on."""
+    name = ctypes.create_unicode_buffer(64)
+    find = _k32.FindFirstVolumeW(name, len(name))
+    if not find or find == _INVALID_HANDLE:
+        raise ctypes.WinError(ctypes.get_last_error())
+    out: list[tuple[str | None, list[str]]] = []
+    target = ctypes.create_unicode_buffer(1024)
+    try:
+        while True:
+            volume = name.value
+            device = None
+            if volume.startswith("\\\\?\\") and volume.endswith("\\") \
+                    and _k32.QueryDosDeviceW(volume[4:-1], target, len(target)):
+                device = target.value
+            out.append((device, _mount_points(volume)))
+            if not _k32.FindNextVolumeW(find, name, len(name)):
+                err = ctypes.get_last_error()
+                if err == ERROR_NO_MORE_FILES:
+                    return out
+                raise ctypes.WinError(err)
+    finally:
+        _k32.FindVolumeClose(find)
+
+
+def _mount_points(volume: str) -> list[str]:
+    size = 512
+    for _ in range(3):
+        buf = ctypes.create_unicode_buffer(size)
+        need = wintypes.DWORD(0)
+        if _k32.GetVolumePathNamesForVolumeNameW(volume, buf, size, ctypes.byref(need)):
+            return [m for m in buf[:min(need.value, size)].split("\0") if m]
+        if ctypes.get_last_error() != ERROR_MORE_DATA or need.value <= size:
+            return []
+        size = min(need.value, 1 << 16)
+    return []
 
 
 def nt_to_dos(nt_path: str, devices: dict[str, str]) -> str:

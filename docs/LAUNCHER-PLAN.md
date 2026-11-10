@@ -551,11 +551,24 @@ The app's half was built on 2026-11-09 (DESIGN.md, The app), with these choices 
   thin `winapi/launch.py` that only hands the link to Explorer's `IShellDispatch2::ShellExecute` (DESIGN.md keeps
   policy out of `winapi/`). The `test_no_handles` extension ships with it.
 - [x] The folder wait: `in_folder` and `wait_for_target` in `target.py`, and the folder rule in `accept_target`, with
-  `find_target` untouched (DESIGN.md, "Play's folder wait"). It also passes over processes in another Windows
-  session, programs on the ignore list and an `exclude` list (for the re-arm), resolves a folder reached through a
-  junction or a subst drive, and judges by windows alone, saying so, when the GPU counters fail three samples in a
-  row. The re-arm itself (a chosen process that exits within about 20 s) is the recorder's, with `watch
-  --wait-folder`.
+  `find_target` untouched (DESIGN.md, "Play's folder wait"). Both judge a program by one function,
+  `program_reason`, against the folder's forms (`folder_forms`: the folder and its real path through a junction or
+  a subst drive, worked out on the player's side, before the prompt). The wait also passes over processes in another
+  Windows session, programs on the ignore list and an `exclude` list, tries a failed path read again, keeps its
+  counts through a GPU sample with no reading, and judges by windows alone, saying so, when the counters fail three
+  samples in a row. `running_from` lists what already runs from the folder, for the pre-flight. `ntquery` now names
+  a volume mounted on a folder (no drive letter) by that folder, and an 8.3 short name is written out long first.
+  The re-arm itself (a chosen process that exits within about 20 s) is the recorder's, with `watch --wait-folder`.
+- For the relay step, from the folder wait's review (2026-11-09):
+  - Its start deadline must cover the wait: today the relay gives up when `start` has not come within
+    `START_WAIT_S` (300 s), which the wait's own 300 s deadline, the inventory and Steam's steps can outrun. Derive
+    the one from the other, and pin the inequality in a test.
+  - The re-arm and the relay's one `start`: a launcher that draws, then leaves, would already have had `start`
+    sent for it, and a fresh relay would refuse the game, which started before it. Either hold `start` until the
+    chosen process has run about 20 s and still owns its window, or let the protocol take one re-target, checked by
+    the same folder rule. `exclude` helps only while the tried process still runs; a launcher that hides in the
+    tray but keeps drawing nothing never exits, so the re-arm should also fire when the chosen process loses its
+    window or stops drawing early.
 - The relay's folder policy, so the prompt comes at Play, before the game starts.
 - Screen 6, and the folder wait for games without Play. The CLI gets it too: `watch --wait-folder`.
 
