@@ -850,3 +850,127 @@ def test_powershell_reads_the_analyze_command_as_the_same_file(monkeypatch, tmp_
     *shown, last = run.stdout.splitlines()
     assert [Path(line).resolve() for line in shown] == [f.resolve() for f in files]
     assert last == odd
+
+
+# ------------------------------------------------------------------- a measured part ---
+
+def _part(cap: Capture, t0: float, t1: float) -> Diagnosis:
+    from lagdoctor.analysis.crop import crop
+    return diagnose(crop(cap, t0, t1))
+
+
+def test_a_measured_part_is_named_in_both_headers_and_shaded_on_every_chart():
+    cap = make_capture()                      # about 25 s, a lag-key press at 5 s
+    d = _part(cap, 10.0, 20.0)
+    page = html_report.render(d, cap, capture_path=Path(r"C:\Users\Jo Tester\cap.ldcap.json.gz"))
+    assert "25s recorded &middot; 10s analysed &middot; " in page
+    assert ("Analysed 10s, from 10s to 20s of the recording (the part you chose); the rest is not counted, nor the 1 "
+            "lag-key press in it. It is shaded on the charts.") in page
+    assert page.count('class="band skip"') == 8              # before and after the part, on all four time charts
+    assert html_report.OUTSIDE_MARK in page and "--from 10 --to 20</code>" in page
+    text = console.render(d, cap)
+    assert "lag-doctor report: game.exe (25s recorded, 10s analysed, started 2026-11-04 15:30)" in text
+    assert "Analysed 10s, from 10s to 20s of the recording (the part you chose)" in text
+
+
+def test_a_report_of_the_whole_recording_shades_and_names_no_part():
+    cap = make_capture()
+    d = diagnose(cap)
+    page = html_report.render(d, cap, capture_path=Path(r"C:\Users\Jo Tester\cap.ldcap.json.gz"))
+    assert 'class="band skip"' not in page and "analysed &middot;" not in page and "--from" not in page
+    assert html_report.OUTSIDE_MARK not in page and "analysed" not in console.render(d, cap).splitlines()[0]
+    assert page.count("<svg") == 4 and "could not be drawn" not in page            # and every chart was drawn
+
+
+def _loading_capture() -> Capture:
+    """60 fps, then a 5 s load that presents nothing, then 60 fps again: the load's end is the first frame after it."""
+    hz = 1000.0 / 60
+    ms = [hz] * 600 + [5000.0] + [hz] * 1800
+    cap = synth.capture(synth.frames_table(ms, display_ms=ms, displayed=1), None, hz=60.0, duration=50.0)
+    cap.sources = synth.sources(("frames",))
+    return cap
+
+
+def test_a_wait_the_part_starts_in_is_never_the_charts_worst_or_its_scale():
+    """A part that starts inside the load: the analysis leaves out the frame that carried it (crop.frames_inside), and
+    so does the chart, in its note and in a short part's scale (where the 99.9th percentile would reach it)."""
+    cap = _loading_capture()
+    load_end = cap.frames[F.T][600]
+    for t1 in (load_end + 12.0, 50.0):                          # a short part (about 720 frames) and a long one
+        d = _part(cap, load_end - 0.5, t1)
+        page = html_report.render(d, cap)
+        assert d.stats["worst_frame_ms"] < 20.0
+        assert "the worst took" not in page and ">1000 ms<" not in page
+    assert "the worst took 5000 ms" in html_report.render(diagnose(cap), cap)
+
+
+def test_a_part_without_frames_of_its_own_says_nothing_of_frames_cut_off():
+    cap = make_capture(spike_at=(100,))                         # a 400 ms frame about 1 s in, frames to about 25 s
+    cap.duration_s = 60.0
+    page = html_report.render(_part(cap, 30.0, 50.0), cap)
+    assert "cut off at the top" not in page
+
+
+def test_the_parts_length_is_the_difference_of_its_shown_ends():
+    part = {"from_s": 12.6, "to_s": 47.4, "recorded_s": 60.0, "how": "set"}
+    assert labels.part_note(part).startswith("Analysed 34s, from 13s to 47s of the recording")
+    assert labels.part_length(dict(part, from_s=192.6, to_s=793.4)) == "10m"
+
+
+def test_the_frame_charts_scale_and_note_follow_the_part():
+    """A loading screen's long frame before the part is drawn, clamped at the top, and never named as the worst."""
+    cap = make_capture(spike_at=(100,))                      # the 400 ms frame comes about 1 s in
+    assert "the worst took 400 ms" in html_report.render(diagnose(cap), cap)
+    assert "the worst took" not in html_report.render(_part(cap, 10.0, 25.0), cap)
+
+
+def test_presses_outside_the_part_are_counted_as_the_recording_keeps_them():
+    """A part that ends with the recording keeps a press up to 1 s past its end, as the recording does."""
+    to_end = {"from_s": 10.0, "to_s": 25.0, "recorded_s": 25.0, "how": "set"}
+    assert labels.outside_marks([5.0, 12.0, 25.5, 26.5], to_end) == [5.0, 26.5]
+    earlier = dict(to_end, to_s=20.0)
+    assert labels.outside_marks([5.0, 12.0, 20.5], earlier) == [5.0, 20.5]
+    assert labels.outside_marks([5.0], None) == [] and labels.outside_marks("junk", to_end) == []
+
+
+def test_dots_outside_the_chart_are_left_out_like_its_lines_and_bands():
+    ch = charts.Chart("t", 0.0, 10.0, 0.0, 100.0)
+    ch.dots([(5.0, 50.0), (20.0, 50.0), (-1.0, 50.0)], "bad", "lost ping")
+    assert ch.svg().count("<circle") == 1
+
+
+def test_the_summary_keeps_the_recordings_length_and_the_part_apart(tmp_path):
+    import json
+    from lagdoctor.report import summary
+    cap = make_capture()
+    s = summary.build(_part(cap, 10.0, 20.0), cap, "watch")
+    assert s["duration_s"] == 10.0 and s["recorded_s"] == pytest.approx(cap.duration_s)
+    assert (s["measured_from_s"], s["measured_to_s"], s["measured_how"]) == (10.0, 20.0, "set")
+    (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps(s), encoding="utf-8")
+    back = summary.read(tmp_path)
+    assert (back["duration_s"], back["measured_from_s"], back["measured_to_s"], back["measured_how"]) == \
+        (10.0, 10.0, 20.0, "set")
+    whole = summary.build(diagnose(cap), cap, "watch")
+    assert whole["duration_s"] == whole["recorded_s"] == pytest.approx(cap.duration_s)
+    assert whole["measured_from_s"] is None and whole["measured_to_s"] is None and whole["measured_how"] is None
+    assert whole["frames_measured"] is True and s["frames_measured"] is True
+
+
+def test_a_parts_summary_says_frame_timing_was_not_measured_when_the_part_has_no_frames():
+    """PresentMon recorded, but not in the part: the part's diagnosis says so, and so does its summary."""
+    from lagdoctor.report import summary
+    cap = make_capture()                                        # frames to about 25 s
+    cap.duration_s = 60.0
+    assert summary.build(_part(cap, 30.0, 50.0), cap, "analyze")["frames_measured"] is False
+
+
+@pytest.mark.parametrize("bad", [{"measured_from_s": 30.0}, {"measured_to_s": 99999.0}, {"measured_how": "guess"},
+                                 {"measured_from_s": "10"}, {"recorded_s": None}, {"measured_from_s": float("nan")}])
+def test_a_summarys_part_that_cannot_be_one_reads_back_as_none(tmp_path, bad):
+    import json
+    from lagdoctor.report import summary
+    cap = make_capture()
+    s = dict(summary.build(_part(cap, 10.0, 20.0), cap, "watch"), **bad)
+    (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps(s), encoding="utf-8")
+    back = summary.read(tmp_path)
+    assert back["measured_from_s"] is None and back["measured_to_s"] is None and back["measured_how"] is None

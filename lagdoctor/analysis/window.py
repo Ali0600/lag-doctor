@@ -14,10 +14,15 @@ TABLES = ("system", "gpu", "network")
 
 
 def _time(v: Any) -> float | None:
-    """A row's time when it is a real, finite number; anything a damaged capture holds instead is None."""
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+    """A row's time when it is a real, finite number; anything a damaged capture holds instead is None, an int too
+    large for a float included (math.isfinite raises on one, and a file can hold it)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    return float(v)
+    try:
+        v = float(v)
+    except OverflowError:
+        return None
+    return v if math.isfinite(v) else None
 
 
 def _cut(table: Any, t0: float, t1: float) -> dict[str, list]:

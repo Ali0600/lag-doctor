@@ -228,10 +228,16 @@ def _old_clean(obj):
     return obj
 
 
+# Capture fields the file format never held, named here rather than read from model.py: `span` exists only on a copy
+# cut to part of a recording (analysis/crop.py), which is never saved.
+NEVER_SAVED = ("span",)
+
+
 def _old_save(cap: Capture, path) -> None:
-    """Capture.save as it was before (asdict, json.dump, gzip level 9)."""
+    """Capture.save as it was before (asdict, json.dump, gzip level 9), over the fields the format holds."""
     with gzip.open(path, "wt", encoding="utf-8") as f:
-        json.dump(_old_clean(asdict(cap)), f, separators=(",", ":"))
+        json.dump(_old_clean({k: v for k, v in asdict(cap).items() if k not in NEVER_SAVED}), f,
+                  separators=(",", ":"))
 
 
 def _canonical(path) -> str:

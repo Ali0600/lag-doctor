@@ -26,6 +26,8 @@ uv run pytest -q tests/test_app_recording.py             # M4: the recorder the 
 uv run python -m tests.app_demo <home> [--pictures]      # a demo library of made-up games, under <home>\sessions
 uv run python -m tests.app_harness <home> <out.json> [<shots>]   # drive the window on it; LAGDOCTOR_HOME=<home>
 uv run python scripts/make_icon.py                       # rewrite lag-doctor's icon, lagdoctor/app/lag-doctor.ico
+uv run python scripts/overhead/bench.py cycles --suite <name> --out <dir>   # lag-doctor's own cost on LagLab, ~6.5 min a suite
+uv run python scripts/overhead/phase_lock.py <capture>.ldcap.json.gz      # do frames at its sampling moments run long?
 ```
 
 CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 on every pull request and on every
@@ -100,7 +102,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `write_bytes`: Python's `write_text` writes CRLF on Windows. The copy holds `lagdoctor/`, `laglab/`, `tests/`,
   `scripts/`, `docs/`, `.github/`, `installer/`, `pyproject.toml`, `uv.lock`, `LICENSE` and `.python-version`
   (`COPY_DIRS`, `COPY_FILES`): a test that reads any other file fails before its sabotage (BAD-BASE) until that file
-  is added there.
+  is added there. Keep a run's `TEMP` short (a few letters under `%TEMP%`), never a deep folder such as an agent's
+  scratchpad: one test's file sits 144 characters below `TEMP` (`tests/test_report.py`'s PowerShell test), long paths
+  are off on this laptop, and past 259 characters Python's own `write_bytes` raises FileNotFoundError before any
+  sabotage, so red-first reported three mutations BAD-BASE (2026-11-09).
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
   a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
 - **The game folder check reads folders, never the game** (`capture/gamefiles.py`, what Compare's drop-in and Unreal
@@ -119,6 +124,13 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   numbers. Tests use a made-up profile (`C:\Users\Jo Tester` in `tests/test_report.py`). The console summary keeps
   real paths on purpose (DESIGN.md, Report).
 - **Column names come from `lagdoctor/model.py`** (`F`, `S`, `G`, `N`); `SeriesBuilder` rejects unknown names.
+- **A measured part keeps the recording's own times** (`lagdoctor/analysis/crop.py`, DESIGN.md "The measured part").
+  On a cropped capture `duration_s` is the part's length, never an end time: code that counts from the start counts
+  from `_Env.start`, and text that names a share or a time of the recording names `_Env.part` ("the capture" until
+  it is cut; `tests/test_crop.py` scans every string rules.py and diagnose.py show for text naming the whole capture,
+  recording or session). A new `net_flows` key needs its decision in `crop.NET_FLOWS` (a test fails until it has
+  one); a total over the whole recording becomes None in a part. A cropped capture is never saved (`Capture.save`
+  refuses it).
 - **One clock**: `lagdoctor.clock.now()` (QPC seconds). PresentMon runs with `--qpc_time`; its rows are
   timed by `TimeInQPC`, never by when they arrive (they arrive 0.1–2 s late, in bursts).
 - **PresentMon**: parse its CSV by header name; on a pipe it is Latin-1 text, not UTF-16. Stop it with
@@ -146,8 +158,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   app is an MSIX package, and the agent's shell has its `%LOCALAPPDATA%` and `%APPDATA%` writes moved into
   `...\Packages\Claude_pzs8sxrjxfjjc\LocalCache` (measured 2026-11-05; `%TEMP%` and the home folder are not
   moved), where the user's terminal and the elevated recording window never see them: a PresentMon set up from
-  the agent's shell was "not installed" for the user. `setup`, `watch`, `fix` and `undo` refuse there (exit 5,
-  `paths.private_copy`) and `scripts/e2e.py` stops before its UAC prompt (exit 3). `scripts/etw_access.py`
+  the agent's shell was "not installed" for the user. `setup`, `watch`, `fix`, `undo` and `sweep` refuse there
+  (exit 5, `paths.private_copy`) and `scripts/e2e.py` stops before its UAC prompt (exit 3). `scripts/etw_access.py`
   (E1) has no such check and raises its UAC prompt at once, so an agent never runs it either. Run them all in the
   user's Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`). Nor does an agent open a
   store link (`steam://`, `com.epicgames.launcher://`), which starts a game on the owner's screen: Steam's own logs
@@ -158,7 +170,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   2026-11-09). Nor does an agent change a game's own files (its settings, saves or install folder): Documents is not
   moved, so an edit to a game's config there (FINAL FANTASY VII REBIRTH keeps its own under `Documents\My Games`)
   changes the owner's real game, while one under `%LOCALAPPDATA%` lands in the private copy yet reads back as applied
-  (`docs/research/settings-sweeps.md`, section 6). Reading them is fine.
+  (`docs/research/settings-sweeps.md`, section 6). Reading them is fine. `lagdoctor sweep` does change a game's
+  settings file, and records each run, so only the owner runs it, in their terminal; its tests keep the settings file
+  under the test's own `tmp_path` (`tests/sweep_world.py`), and the one that drives `cmd_watch` uses stand-in
+  collectors.
 - **`scripts/stage2` creates throwaway Windows services** (the capture-service experiments, `docs/INSTALLER-PLAN.md`
   Stage 2). It runs only on GitHub's hosted runners, from `.github/workflows/experiments.yml` (started by hand, or by
   a pull request that changes it, `scripts/stage2` or a module the experiments import, which its `paths:` lists and
@@ -200,6 +215,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   test's own, in the relay's. An `App` a test builds passes its own `recorder` and `launcher`: the defaults start
   `watch --control stdio --elevate` and raise the real UAC prompt (`tests/test_app_recording.py` also makes
   `launch_elevated` refuse, so a slip fails instead of prompting).
+- **The overhead benchmark** (`scripts/overhead/bench.py`, `docs/research/overhead.md`) opens a LagLab window for
+  about 6.5 minutes a suite and holds lag-doctor's capture lock for the whole run, so the owner's own `watch` refuses
+  meanwhile (exit 4), and the benchmark refuses to start while a recording runs: run it when the owner is not
+  mid-game, and only on a quiet PC (its CPU figures nearly double under load). Its `pm-` suites need an
+  administrator terminal, so they are the owner's; without one, or without a PresentMon that passes `watch`'s check,
+  it exits 2 before starting anything.
 - **The app's page puts outside text on screen as text only.** Game, process and window names, evidence,
   reasons and the player's note (`watch --note`, cleaned by `model.clean_note` in every writer and reader) reach the
   page as JSON and go into the DOM through `el()` in `lagdoctor/app/assets/app.js`, which makes

@@ -22,6 +22,14 @@ verification log; trust a note's *Corrected* entries over its body.
      still read it as an independent readout, and there its trap stands: `psutil.Process(pid)` (the
      constructor itself), all its methods, `psutil.process_iter()` and `psutil.pid_exists()` open the process
      (WT 9.4), and only `psutil.pids()` does not.
+   - **Play starts nothing itself.** A game starts only through its store's link, which Explorer opens
+     (`winapi/launch.py`), so neither the store client nor the game is ever lag-doctor's child. Every other place that
+     starts a program is listed by file and function in `tests/test_no_handles.py` (`SPAWN_ALLOWED`), which fails on
+     a new one until it is listed on purpose. The place listed is where the program starts: a starter kept under
+     another name is followed to each use, a spawning module passed around counts, and lag-doctor's own launchers
+     (`open_through_explorer`, `launch_elevated`, PresentMon's `spawn`) count as starters. The app's opener
+     (`app.main.open_local`) opens only lag-doctor's own existing files and folders, never a link, so no page request
+     can open a store link inside lag-doctor's process.
 2. **Evidence or silence.** Every finding carries the numbers behind it. A source that did not run is
    reported as *not measured*, never as *fine*; a cause that was checked and ruled out is listed as
    *checked and fine* with what was measured.
@@ -244,8 +252,9 @@ up from there was "not installed" for the user's terminal and the elevated recor
   form, which RAM disks without a Mount Manager entry still give), never whether the process has a package
   identity; `paths.redirected()` is the pure reading of that path.
 - `cli.main` runs it once, before anything is written (the journal healing writes), per
-  `cli.PRIVATE_COPY_POLICY`: `setup`, `watch`, `fix`, `undo` and `app` (its log and WebView2's data folder; from M4
-  its recordings) save files other windows must find and refuse
+  `cli.PRIVATE_COPY_POLICY`: `setup`, `watch`, `fix`, `undo`, `app` (its log and WebView2's data folder; from M4
+  its recordings) and `sweep` (its state, the journal and its runs; it also probes the settings file's own folder)
+  save files other windows must find and refuse
   (exit 5, saying where the files would go and to open PowerShell from the Start menu); `check` and `analyze`
   only read the PC and print a one-line note, and the journal is not healed under a private copy. A probe that
   cannot be made refuses the savers too. The relay saves nothing, so it needs no probe. When lag-doctor's own
@@ -269,6 +278,8 @@ lagdoctor/
             elevation.py                                rights + UAC relaunch
             pipe.py                                     the locked named pipe (the relay, the capture service)
             webview2.py                                 WebView2 from ctypes, through the runtime's own export (the app)
+            launch.py                                   Explorer opens a link, as from a click (Play's store launch)
+  stores/   launch.py                                   Play's store links, built from fixed templates (M6)
   relay/    protocol.py server.py client.py __main__.py   frame timing and the network trace with admin rights
             process.py                                  priority of other processes (fixes/priority)
   capture/  base.py (done) target.py sysmon.py gpumon.py netmon.py netflows.py presentmon.py inventory.py
@@ -276,7 +287,8 @@ lagdoctor/
   analysis/ stats.py (done) frames.py events.py attribute.py rules.py diagnose.py
             window.py                                   the samples around a moment (the app's Results)
   fixes/    base.py journal.py registry.py catalog.py (done) + power.py refresh_rate.py gpu_preference.py
-            gamebar.py windowed.py priority.py
+            gamebar.py windowed.py priority.py game_setting.py (the settings sweep's edits; no report offers it)
+  sweep/    inifile.py plan.py results.py runner.py command.py   `lagdoctor sweep`: settings tried run by run
   report/   charts.py labels.py console.py html.py (done) summary.py (summary.json, for the app's library)
   app/      main.py window.py bridge.py library.py views.py assets/ lag-doctor.ico     the desktop app (M1)
   setup.py  fetch + verify PresentMon
@@ -322,7 +334,10 @@ class Snapshotter:                                 # one reusable buffer, grown 
     def snapshot(self, threads_for: Iterable[int] = ()) -> dict[int, ProcInfo]
 def pids(snapshotter: Snapshotter | None = None) -> frozenset[int]   # every running PID, 0 included, from one
                                                   # snapshot: the list EnumProcesses (psutil.pids) gives, no handle
-def image_path(pid: int) -> str | None            # SystemProcessIdInformation (88) + QueryDosDeviceW
+def image_path(pid: int) -> str | None            # SystemProcessIdInformation (88) + QueryDosDeviceW; a volume
+                                                  # with no drive letter by the folder it is mounted on (the mount
+                                                  # manager's volume list), else its NT path
+def folder_mounts(entries) -> dict[str, str]      # NT device -> mount folder, for volumes no drive letter names
 def self_check(snapshotter=None) -> None          # compare our own process with GetProcessTimes /
                                                   # GetProcessIoCounters; raise if the layout drifted
 # CreateTime is raw FILETIME ticks (100 ns since 1601 UTC), the number GetProcessTimes returns.
@@ -378,6 +393,8 @@ def known_folder(folder_id: str) -> str           # SHGetKnownFolderPath for thi
                                                   # CoTaskMemFree); OSError (.winerror = the HRESULT) on failure
 def documents() -> str                            # FOLDERID_Documents, wherever OneDrive moved it
 def local_app_data() -> str                       # FOLDERID_LocalAppData
+def long_path(path: str) -> str | None            # GetLongPathNameW: 8.3 short names written out long (it reads
+                                                  # folder entries, opens no file); None when the path is gone
 
 # winapi/storage.py (WT 9.5) ---------------------------------------------------------------------------
 def media_type(path: str) -> str                  # "SSD" | "HDD" | "Unknown"  (seek penalty, access 0)
@@ -512,6 +529,15 @@ class PipeClient:
 # One read and one write may run at once. Waits run in 100 ms slices, so Ctrl+C and close() land within one. Each
 # direction's OVERLAPPED and buffer belong to the pipe, and a call an exception interrupts is cancelled and waited out
 # before the exception goes on (a message it had received is the next read's): Windows never writes freed memory.
+
+# winapi/launch.py (Play's store launch; research note desktop-app.md, sections 5 and 14) -------------------
+def open_through_explorer(target: str, args: str = "", show: int = SW_SHOWNORMAL) -> dict
+                                                  # the desktop's IShellDispatch2::ShellExecute, reached through
+                                                  # ShellWindows' desktop folder view: what starts is Explorer's
+                                                  # child; {explorer_pid, foreground_allowed}; OSError when the
+                                                  # desktop cannot be reached, which is never worked around
+SLOTS; IIDS; CLSID_SHELL_WINDOWS; SID_TOP_LEVEL_BROWSER   # 6 slots and 7 IIDs, each read back from the SDK's
+                                                  # C headers (tests/test_launch.py, needs windows_sdk)
 
 # winapi/webview2.py (the app's window; research note desktop-app.md, sections 3 and 11) -----------------
 SLOTS: dict[str, dict[str, int]]; IIDS: dict[str, str]   # only what lag-doctor calls or implements, every entry
@@ -735,6 +761,9 @@ before it loads with None; one holding another type is "damaged", as any field o
 through `clean_note`, so text a file holds is shown only as printable characters, and a note longer than `NOTE_MAX`
 (a newer build's) is cut to it, ending in "...", never refused.
 
+`span` is not in the format: only a copy cut to part of the recording has one (analysis/crop.py), `save` refuses such a
+copy, and a file holding a `span` key loads as the whole recording, the key named in the note above.
+
 ## Inventory keys (capture/inventory.py)
 
 `collect(target=None, process_names=None, *, registry=None) -> dict`. `None` means unknown. Rules and the
@@ -810,6 +839,56 @@ def game_pids(pid: int, create_time: int) -> set[int]   # the target and its des
   2 % mean 3D use, and candidates within 1 point are tied (both inferred). A busy 3D engine alone is not a
   game: CUDA compute shows as `engtype_3D` (WT verify log). Ties go to the foreground window's process.
 
+**Play's folder wait** (LAUNCHER-PLAN M6): a store starts the game, so lag-doctor waits for it by its install folder.
+
+```python
+def check_folder(folder) -> str                  # the folder in Windows' form; ValueError says why not
+def folder_forms(folder) -> tuple[str, ...]      # it, plus its real path through a junction or subst drive; opens
+                                                 # the folder (never on a network drive); the player's side only
+def check_forms(folders) -> tuple[str, ...]      # 1 to 4 forms, each checked again
+def program_reason(image: str | None, folders: tuple[str, ...]) -> str | None   # why a program is under none of
+                                                 # them; None if it is under one. The folder rule's one test
+def folder_reason(image, folder) -> str | None   # the same against one form; in_folder(image, folder) -> bool
+def running_from(folders, procs=None) -> dict    # this session's processes from the folder, now (Play's
+                                                 # pre-flight): {running: [{pid, create_time, name, exe}],
+                                                 # unreadable: [{pid, create_time, name}]}
+def wait_for_target(folder, *, folders=None, since=None, deadline_s=300.0, cancel=None, on_status=None, exclude=(),
+                    pick=None, clock=time.monotonic, sleep=None) -> dict
+# find_target's dict with how "folder", plus folder, folders (the forms matched) and judged_by ("3d" | "window");
+# raises TargetNotFound (how far it got by the deadline, and what could not be measured), WaitCancelled (cancel set,
+# or pick chose nothing), ValueError (an argument), OSError (processes or windows unreadable 3 rounds in a row)
+def filetime_now() -> int                        # the system time in create-time units (100 ns since 1601)
+```
+- **The folder** comes from library files any local account can write, and the rule takes in every program under it,
+  so `check_folder` takes only a plain local drive path below the root, outside the Windows folder, with no `.` or
+  `..` part and no name Windows would change or refuse. A program is under it when its image path, slashes and case
+  folded, starts with the folder and a separator (`Game 2` is not under `Game`). Windows names a program by the path
+  it was opened through, junctions and subst drives resolved, so `folder_forms` adds the folder's real path. It
+  opens the folder, and refuses one on a network drive before that (a sleeping server could hold the call), so it
+  runs on the player's side before the UAC prompt; the prompt approves its forms and the relay never resolves a path
+  the player can change. `program_reason` writes an 8.3 short name in the image's path out long first
+  (`winapi.folders.long_path`). An image path Windows leaves in NT form (a volume no drive letter or folder names)
+  or a share never matches, and says so.
+- **The wait** opens no process. Each process created after `since` (default: 2 s before the call; Play passes the
+  relay's create time) has its image path read once, through `ntquery.image_path`; a failed read is tried again, up
+  to 3 times, and then counted. A process counts when `program_reason` puts it under one of the forms, it runs in
+  lag-doctor's Windows session, its name is not on the ignore list, and it is not in `exclude` (a launcher the caller
+  already tried). The GPU is sampled (1 s) only while such a process owns a window that counts for auto mode, and
+  the process must still own it after each sample. The game is the first to draw at least 2 % of a 3D engine on two
+  samples in a row, so stubs, bootstrappers and store relaunches, which never draw or exit, are passed over for as
+  long as they run. A sample with no reading changes no count, and still takes a sample's time when it fails at
+  once; three in a row make a window that stays for two rounds enough, and `on_status("windows-only", {why})` says
+  so. Several at once go to `pick` (default: the busiest, ties to the foreground). The other stages are heard once
+  each: `waiting`, `started` and `window`, with the first process's pid and name. The deadline's reason names only
+  the programs that reached its stage, and counts what could not be measured: unreadable paths, paths with no drive
+  letter, samples with no reading.
+- **`accept_target`'s folder mode**: `accept_target(procs, pid, create_time, session=, folders=, since=, image=)`
+  takes a process that runs as that exact process in `session`, started after `since` (the relay's own create
+  time) and runs a program `program_reason` puts under one of `folders`; `image` is its path, which each side reads
+  for itself. Exactly one of `approved=` (M3's running game) and `folders=` is given. Given the wait's own
+  `folders`, it takes the game the wait found (a test pins that). The relay does not use it yet: that comes with
+  Play's relay step, which needs `start` to carry the game.
+
 ## Analysis
 
 All pure functions over a `Capture`; thresholds from LC 2–5, NE 2 and 4.6 (they are starting points
@@ -842,8 +921,60 @@ RULES: list[Rule]
 def run_rules(cap, ctx: dict) -> tuple[list[Finding], dict[str, str], dict[str, str]]  # findings, cleared, unchecked
 # analysis/diagnose.py
 def diagnose(cap) -> Diagnosis
+# analysis/crop.py (M5: the measured part, below)
+def check_span(cap, t0, t1) -> tuple[float, float]  # the span crop cuts; ValueError (one clause) for anything else
+def crop(cap, t0, t1, how="set") -> Capture         # `cap` cut to [t0, t1] for diagnose(); how: "key" or "set"
 ```
 `ctx` = `{"frames": main chain, "stats", "bound", "events", "event_causes": attribute()'s summary}`.
+
+### The measured part (analysis/crop.py)
+A recording starts when the game is found, so it holds the game starting up (shader preparation, menus, loading).
+`crop(cap, t0, t1)` returns a new Capture holding only what happened from t0 to t1, and the unchanged `diagnose()`
+runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-11-09).
+- **Times stay the recording's own** (seconds from its t = 0), so a cropped diagnosis's events, marks and moments land
+  on the whole recording's charts as they are, and a time a report shows is the one the status line showed.
+  `duration_s` becomes the span's length; the Capture's `span` is `{from_s, to_s, recorded_s, how}`, which diagnose
+  copies into `stats["span"]`. Code that reads `duration_s` reads a length, never an end: the rules count "from the
+  start" from `_Env.start` (shader_compile's first third), and their words name `_Env.part`, "the capture" until it
+  is cut and "the measured part" after. `tests/test_crop.py` scans every string rules.py and diagnose.py can show
+  (each f-string whole) for "in", "of", "during", "over", "through", "throughout", "across" or "for" the capture, the
+  recording or the session, and checks a cut diagnosis's shown texts, its headline among them.
+- **The cut**: the four tables, the other programs' samples and the lag-key presses keep their rows with
+  t0 <= t <= t1, every column kept even where its cut is empty (`analysis.window`); a part that runs to the
+  recording's end keeps a press up to 1 s past it, as the recording does. A frame whose own interval began before t0
+  is left out (`crop.frames_inside`): any row whose MsBetweenPresents reaches back past t0, and each chain's first
+  shown row whose MsBetweenDisplayChange does (it counts from the frame shown before, so after a load whose first
+  present was never shown, the next one carries the wait); later rows cannot reach that far. A start set at the end of
+  a loading screen would otherwise make the wait a frame of the part. From the recording's own start every row is
+  kept, as the whole recording's analysis keeps PresentMon's first. The HTML frame chart counts the part's frames
+  through the same function. A table source with rows, but none in the span, becomes `unavailable`, "it recorded
+  nothing in the measured part", and the rules' "needs X" reasons then say it "recorded nothing in the measured part"
+  rather than "was not recorded"; a source that failed keeps its own reason.
+- **net_flows** (`crop.NET_FLOWS`, one decision per key the collectors write, which a test holds to
+  `session.NETWORK_FLOW_KEYS` and `FLOW_KEYS`): the lists of times are cut (`lost`, `wifi_scans`, `downloads`,
+  `server_rx`); each server gap is clipped to the span and one wholly outside it is gone, a gap that began before
+  the span keeping when it began as a fourth field, which events.py reads as `detail["since"]` (so the headline says
+  the server "had stopped answering before the measured part, at 1m", never the part's start); the server flow keeps
+  its record with its four packet and byte totals None and its first and last packet clipped, and when the flow
+  recorded (the server for the most seconds) came wholly outside the span, the span's own packet bins say when packets
+  came; with none of those and no server gap in the span, `in_part` is False, and `server_lag` says "the game
+  server's packets all came outside the measured part" instead of guessing a TCP-only game; `probes` are counted
+  again (lost, the lost-probe times in the span; sent, those
+  plus the span's rows that hold that target's round trip: exact, since the network collector counts a probe as sent
+  only when it was answered or lost), None for a capture without the lost-probe times; the per-program and
+  whole-recording byte totals (`talkers`, `game_wire_bytes`) become None, since they cannot be split by time, and
+  `bandwidth_hog` then says so (or that counting stopped with the ETW consumer); a key this version does not know
+  becomes None. None stays None (not recorded) and a
+  list whose cut is empty stays a list (recorded, nothing in the span).
+- **Refused** (`check_span`; `analyze --from/--to` checks through it, and the app's trim handles, M5's app half, are
+  to use it too): ends that are not numbers (an integer too large for a float included), a start before 0 or at or
+  after the recording's end, an end not after the start, a part shorter than `MIN_SPAN_S` (10 s, to the millisecond:
+  frames.BOUND_MIN_S, shorter than any verdict on what limits the game; a refused length is rounded down), and a
+  capture that is a part already (its `duration_s` is the part's length); an end past the recording is its end.
+- **Never saved**: `Capture.save` refuses a capture whose `span` is set, `span` is not part of the file format
+  (`to_json` and `from_json` leave it out; a file holding one loads as the whole recording with a note), and the
+  capture file always stays whole. Everything else (the inventory, the target, the notes, `started_at`,
+  `clock_origin`) stays as recorded.
 
 ### Frames and stats
 - Series for stutter detection: `display_ms` over displayed frames (fallback `frame_ms` when display
@@ -895,6 +1026,8 @@ ping_gw_ms, ping_inet_ms, ping_server_ms   float           medians
 jitter_ms, loss_pct                        float           internet anchor: mean consecutive difference; lost / sent
 marks                                      list            [{t, events: [ids], causes: [every signal that moved, best
                                                            first]}], one per lag-key press
+span                                       dict            {from_s, to_s, recorded_s, how}: the measured part analysed
+                                                           (analysis/crop.py); absent for the whole recording
 ```
 
 ### The bound verdict (LC 3.4)
@@ -1184,6 +1317,7 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 | `game_mode_on` | `{}` | `HKCU\Software\Microsoft\GameBar\AutoGameModeEnabled` = 1 | registry; `effective_mode()` = game_mode while playing | no |
 | `windowed_optimizations_on` | `{}` | `DirectXUserGlobalSettings` field `SwapEffectUpgradeEnable=1;`, other fields kept | registry | game |
 | `background_priority` | `{"pid": int, "create_time": int, "class": "below_normal", "exclude": [pids], "name": str, "game_name": str \| None}` | priority class of one of the user's own non-game processes, for this session only | `priority_class()` | no |
+| `game_setting` | `{"file": ini path, "section": str, "key": str, "value": str, "game": exe name}` | one value in a game's own settings file, only for a settings sweep (below); refused while a process with the game's image name runs | the file read again | game |
 
 - Registry value semantics marked *unverified* in WT 8 are community-sourced; each such fix says so in its
   description and plan notes. The string-field fixes journal and restore only their own `key=value;` field.
@@ -1203,6 +1337,10 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 - Advice only (never automated): hardware GPU scheduling, Memory Integrity / VBS (information only), the MUX
   / "Ultimate" GPU mode and the OEM fan/power mode (Armoury Crate), drivers, in-game settings, frame caps,
   cooling, Wi-Fi band and placement, pausing downloads, closing apps, the Wi-Fi background-scan setting.
+  The one exception, which the owner asked for (DECISIONS 2026-11-09): a settings sweep writes the in-game settings
+  it tries into the game's settings file through `game_setting`, for the sweep's length only, and puts the
+  originals back at its end. No report suggests `game_setting`, so `fix` never offers it; `undo` and the start-up
+  heal treat its entries as any other's.
 - Never offered: disabling security features, killing or suspending processes, HKLM or policy changes,
   anything that touches the game process (including its priority: that needs a handle, WT 9.2).
 
@@ -1235,6 +1373,18 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
   CPU/GPU chart, VRAM chart, ping chart (lost pings from the collector's own record), marks on every time chart,
   finding cards, marked moments, worst moments, checked-and-fine, system snapshot, not measured. Each section
   falls back to a note on odd values instead of failing the page.
+- **A measured part** (a diagnosis whose `stats["span"]` is set, `labels.measured_part`): both reports still draw the
+  whole recording, every time a time into it. The header adds "10m analysed" and one sentence (`labels.part_note`:
+  "Analysed 10m, from 3m 12s to 13m 12s of the recording (the part you chose); the rest is not counted, nor the 2
+  lag-key presses in it."), the length being the difference of the two ends as shown (`labels.part_length`), so
+  they always add up. On the HTML page every time chart shades what was left out (class `skip`, its own neutral
+  colour in both themes) and draws the presses outside the part apart ("not analysed"); the frame chart's scale and
+  its "cut off at the top" note come from the frames the analysis counted (`crop.frames_inside`), so a loading
+  screen's long frame is drawn clamped and never named the worst, and a part without frames of its own takes the
+  whole recording's scale and no such note. The footer's command picks the part out again (`--from 192 --to 792`,
+  `html.part_args`, to the millisecond, as `--from` and `--to` are read). summary.json's `frames_measured` for a part
+  is the diagnosis's (PresentMon may have recorded only outside it). Without a part the reports are as before. Chart
+  dots outside the chart's range are left out, as its lines, bands and vertical lines are.
 - **The HTML never shows the Windows user name**: it is meant to be shared. `html.e()`, which every string on the
   page passes through (the footer, the game's exe in This PC, a reason quoting PresentMon's path, evidence),
   shows a folder under a user's profile by the variable that names it (`html.user_neutral`):
@@ -1254,12 +1404,15 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 ```
 lagdoctor watch [--game NAME | --pid PID | --auto] [--duration S] [--server IP] [--no-network]
                 [--elevate | --no-elevate] [--out DIR] [--hotkey KEY | --hotkey none] [--note TEXT]
-lagdoctor analyze CAPTURE            re-run the analysis on a saved capture
+lagdoctor analyze CAPTURE [--from TIME] [--to TIME]   re-run the analysis on a saved capture, or on part of it
 lagdoctor check                      settings check-up without a game running
 lagdoctor fix [ID ...] [--list]      apply fixes suggested by the last report (asks first)
 lagdoctor undo [ID | --all]          restore from the journal
 lagdoctor setup                      fetch + verify PresentMon, explain how to get ETW rights
 lagdoctor app                        lag-doctor's window: recorded games and their results (see The app)
+lagdoctor sweep --game NAME --settings FILE --try KEY=VALUE [--try ...] [--runs N] [--window S] [--no-warm-up]
+                [--start-key KEY]    try settings run by run and compare them (see The settings sweep)
+lagdoctor sweep --resume [FOLDER]    go on with an unfinished sweep; a finished one shows its results
 ```
 
 - Each `watch` writes `capture.ldcap.json.gz`, `diagnosis.json`, `report.html` and `summary.json` into a new folder under
@@ -1275,6 +1428,15 @@ lagdoctor app                        lag-doctor's window: recorded games and the
 - `analyze` writes into a fresh session folder (with `analyzed-capture.txt` naming its source), never beside
   the capture, and never changes what `fix` uses. A damaged, foreign or newer-format file gets one plain line. The
   capture's note comes with it into the new report and summary.
+- `analyze --from TIME --to TIME` analyses only that part of the recording (M5, "The measured part" under Analysis):
+  times into the recording as the report and the status line show them (`192`, `3:12`, `1:03:12`, `3m12s`,
+  `cli._time_into`, which keeps them to the millisecond and refuses anything else, past 32 characters included,
+  before the capture is read). A missing end is the recording's own, an end past it is its end, and a part covering
+  the whole recording is the whole recording, however short. `crop.check_span`
+  refuses the rest in one line, "That part of <path> cannot be analysed: <why>." (exit 2, no folder): a start
+  before 0 or at the end, an end not after the start, a part under `crop.MIN_SPAN_S` (10 s). The capture file is
+  never changed. `cli.analyze_and_report(cap, ..., span=(t0, t1, how))` crops before the diagnosis and hands the
+  writers the whole recording.
 - The relay (see The relay) writes no file; the window that started the recording saves, analyses and reports it.
   `watch` exit codes: 2 bad arguments, the game not found, or a game the relay would refuse (in another Windows
   session), 3 the game exited during the UAC prompt, 4 another recording is running, 5 its files would land in
@@ -1306,11 +1468,32 @@ lagdoctor app                        lag-doctor's window: recorded games and the
   `launcher` starts the relay elevated (default `elevation.launch_elevated`, through `relay/client.launch`);
   `cancel`, set before the recording begins, ends watch with nothing recorded (exit 130, `EXIT_CANCELLED`; see The
   control channel); `tool_alone` and `tool_roots` go to `SessionOptions` (the app's window and its WebView2
-  processes). `watch --control stdio` is all of these, driven by the app (The control channel).
+  processes); `remember` False leaves `last-session.txt` alone, so `fix` keeps acting on the last ordinary watch,
+  while summary.json still says `watch`, and `show_summary` False leaves the analysis' console summary out (both for
+  a settings sweep's runs). `watch --control stdio` is all of these, driven by the app (The control channel).
 - `fix` applies only offered fixes, with the offered params, after showing the plan and its notes; it refuses
   to run elevated. A plan-time refusal is reported, never a traceback. Every command except `setup` first
   settles journal entries a crash left `pending`, and marks session-only changes whose process has ended as
   undone (checked without opening the process).
+
+## Play's store launch (lagdoctor/stores/)
+
+Play (LAUNCHER-PLAN M6) starts a game only through its store's link, which Explorer opens (the owner's choice,
+DECISIONS 2026-11-09), so the store creates the game and lag-doctor holds no handle to it.
+
+```python
+def steam_link(appid: str) -> str                 # steam://rungameid/<appid>, digits only (1 to 4294967295)
+def epic_link(namespace: str, item: str, app: str) -> str   # Epic's documented three-part form, each id letters
+                                                  # and digits with dashes, underscores and dots inside (RFC 3986's
+                                                  # unreserved set; Fortnite's namespace is "fn", the engine "UE_5.4")
+def store_of(link) -> "steam" | "epic" | None     # only for a link those two built, matched whole
+def play(link: str) -> dict                       # winapi/launch.py's dict plus "store"; ValueError for any other
+                                                  # link, PermissionError when lag-doctor runs elevated
+```
+- The fields come from library files every local account can write, so each link is built from a fixed template
+  and only after its fields pass the grammar; Steam's carries no arguments, so Steam shows no prompt for it.
+- `play` hands the link to `winapi.launch.open_through_explorer` and nothing else: when Explorer's desktop cannot
+  be reached it fails, and the link is never opened another way.
 
 ## The app (lagdoctor/app)
 
@@ -1388,7 +1571,10 @@ owner's run.
   `cli.analyze_and_report`: `kind` (`watch` or `analyze`), `tool_version`, `capture_tool_version`, `game`, `exe`,
   `exe_name`, `started_at`, `duration_s`, `lag_type`, `headline`, `frames`, `avg_fps`, `low1_fps`, `stutters_per_min`,
   `worst_frame_ms`, `top_cause`, `frames_source`, `frames_measured`, `refresh_hz`, `power_plan`, `power_mode`,
-  `launcher`, and what lay beside the game (`summary.game_files`, from the inventory's `game`): `game_exe`
+  `launcher`; since M5 `duration_s` is the length the numbers cover (the measured part's when one was analysed), and the
+  optional `recorded_s` (the whole recording's), `measured_from_s`, `measured_to_s` and `measured_how` (the part
+  analysed, all None for the whole recording, and read back only when they make a part of it); and what lay beside
+  the game (`summary.game_files`, from the inventory's `game`): `game_exe`
   `{state, why, bytes, modified}`, `drop_ins` and `unreal_config` `{state, why, files: [[name, sha (16 hex digits or
   null), bytes, modified], ...] (at most 30), more}`, with `state` `checked`, `not_checked` (the reason in `why`) or,
   for `unreal_config`, `not_unreal`; an Unreal game's `~mods` paks are among `drop_ins`; and `note`, the capture's
@@ -1436,6 +1622,83 @@ def window(cap, t0, t1, frames=None) -> dict      # {t0, t1, frames, system, gpu
                                                   # ValueError unless t0 and t1 are finite and in order
 ```
 
+## The settings sweep (lagdoctor/sweep/)
+
+`lagdoctor sweep` tries a game's settings one after another and compares them, the assisted sweep the owner chose
+(DECISIONS 2026-11-09; research in `docs/research/settings-sweeps.md`). lag-doctor writes each setting into the game's
+settings file while the game is closed; the player starts the game, loads a save, goes to a spot and plays each run;
+each run is an ordinary recording measured over a fixed window from a key the player presses at the spot. Nothing is
+typed on the player's PC, and the game is never started, stopped or opened by lag-doctor.
+
+- **What it may change** (`fixes/game_setting.py` over `sweep/inifile.py`): values the settings file already has, in
+  a plain `.ini` on a local disk (a drive letter, no stream name, not a link or a file with other names), one
+  `Key=Value` line each, written as `inifile.VALUE` allows (letters, digits, `.`, `_`, `+`, `-`). Only the value's
+  characters change; comments, line order, spacing, line endings, the byte-order mark and the encoding stay byte for
+  byte (UTF-8 read with surrogateescape, UTF-16 by its mark), and the new file replaces the old one whole (a move
+  refused by OneDrive or a scanner is tried again for 10 s). Names match as ASCII only (`.Key` and `+Key` lines never),
+  a section is its header's text as written, and a key set twice in its section, a header with anything after its
+  `]`, a file over 1 MB, one OneDrive keeps online only (never opened), one marked read-only, and one in a folder whose
+  new files land in another app's private copy are all refused. Every write goes through the journal (`game_setting`),
+  refused while a process with the game's image name runs. A value the game writes back in its own spelling (75.000000
+  for 75, True for true: `inifile.same_value`) is the same value everywhere: lag-doctor's own (`also_ours`), the
+  original, the file's other values. The one line it adds is an original the game dropped, and only an undo adds it.
+- **The journal is the record of what is in the file** (`runner.outstanding`: the `game_setting` entries for that file
+  that are pending, applied or in conflict), not the sweep's state: an edit that reached the file just before a crash
+  is put back like any other. A new sweep refuses while one is outstanding for its file (it would take it for the file
+  as it was), and every lag-doctor start says when one is (`cli._settle_journal`), naming `lagdoctor sweep --resume`
+  and `lagdoctor undo game_setting` (undo by fix id, which leaves other fixes alone). A pending one under a minute old
+  is left alone at start: a sweep in another window may be making it. One sweep of a file at a time: a named mutex
+  after the file's normalised path (`command.SweepLock`).
+- **The plan** (`sweep/plan.py`, saved as `sweep.json` under `paths.sweeps_dir()`, apart from the sessions, with a
+  byte copy of the file as it was): A is the file as it was, B onwards one `--try` each (at most 5, each changing at
+  most 4 values); a warm-up block in a seeded shuffled order, not counted (`--no-warm-up` leaves it out); then
+  `--runs` counted blocks (default 3, 2 to 10) that rotate one seeded order by one place each (a Latin square), so
+  every setting takes every place equally often. The file's other values are kept with it (`others`). The state is
+  written whole after every step; a stopped or killed sweep goes on with `--resume`. States: running, stopped (can go
+  on), finished, ended (cannot go on: `why_ended`).
+- **A run** (`sweep/runner.py`): wait for the game to have closed; undo every outstanding edit; check the file holds
+  its originals (a value changed since the sweep began ends it) and its other values as the runs so far had them (a
+  change is said, and the player decides whether runs count with the file as it is, which `notes` records); write the
+  setting's values and read every one back; register the start key (Ctrl+Alt+S by default; `--start-key` needs Ctrl,
+  Alt or Win), so a key another program holds is found before the player starts the game; the player starts the game,
+  goes to the spot and presses Enter; `watch` records (`--game`, `--no-network`, `--hotkey none`, `--elevate` unless
+  `can_trace`, `--out` the sweep's `runs` folder, a note naming the run; through `cmd_watch` with `remember` and
+  `show_summary` False); the first press after `recording` and before `stopping` starts the window: a rising chime,
+  `--window` seconds (default 60, 30 to 600), a closing chime 3 s later (`TAIL_S`, for PresentMon's late rows) and
+  `request_stop`. A run saved is judged whatever watch's exit code or error after the save (its report failing, a
+  Ctrl+C during the analysis); one that saved nothing fails (exit 1, 2, 3) or stops the sweep (4, 5, 6). No press
+  within 5 minutes or frame timing off (the prompt declined) fail it. Once the game has closed, the file is read
+  again: a value the game put back, or a line it dropped, ends the sweep, since what the run used cannot be told.
+  Sounds that cannot play are said after the run.
+- **What counts** (`sweep/results.py`): the window `[press, press + window]` of the main swap chain, cut exactly
+  (`clipped_frames`: the frame across each edge counts only its part inside), through `frames.frame_stats`, so a
+  run's average FPS and 1 % low are the report's own. A run counts (else it is offered again, or skipped) only when
+  frame timing ran, the recording lasted the window, the window holds 1,000 frames or more and its frames come within
+  1 s of both ends, the game was in front in every sample but those within 0.5 s of the ends, other programs took 10 %
+  or more of the game's GPU in at most 5 % of the samples, and the NVIDIA clock's 90th percentile was within 15 % of
+  its 10th (a GPU that has not heated up yet runs about twice as fast on the owner's laptop); and only when the power
+  plan, Windows' power mode, mains power and the refresh rate match the first good run's. The NVIDIA power limit is
+  recorded, not held: Dynamic Boost moves it by itself, and the laptop's own mode shows as a plan change. What could
+  not be read is listed as not checked. An exe of another size or date than that run's ends the sweep: an update.
+- **The comparison**: settings in order of average FPS, each with its counted good runs' average FPS and 1 % low and
+  their 95 % t intervals; B onwards compared with A by Welch's interval in % of A's mean, widened for the number of
+  settings compared (Bonferroni), so that all the comparisons hold together 95 % of the time: "faster" or "slower" only
+  when the interval excludes 0, else "no measurable difference"; no spread at all is said as "in every run". The last
+  lines say A's run-to-run spread and the difference the sweep could see 80 % of the time ((t + t at 80 %) x sd x
+  sqrt(2/n)). Picture quality is left to the player.
+- **Ending**: when the sweep finishes or stops (Ctrl+C, q, the end of input, a problem, an error nobody expected), it
+  waits for the game to close and undoes every outstanding edit, each tried even when another stays, then says what
+  the file holds, read back. A value the game wrote in place of lag-doctor's (or a line it dropped) is put back only
+  when the player says so. The sweep's Ctrl+C guard (`runner.Interrupts`, also Ctrl+Break) raises only the first
+  press; once the sweep is stopping, presses are counted, and a press during the wait for the game leaves the edits
+  for `--resume` or `lagdoctor undo game_setting`. `--resume` puts outstanding edits back first, whatever the sweep's
+  state, before anything else. Closing the console window puts them back at once when the game is closed
+  (`command.CloseCleanup`, one write at a time with the runner through `runner.WRITE_LOCK`).
+- **Not built**: a sweep screen in the app; an unattended sweep (DECISIONS backlog); settings kept outside an ini
+  (the registry, binary saves); mods set aside and put back; a check of processes other than the game's image name
+  (a launcher of another name that writes the settings). The sweep's start key is its own until watch has one
+  (`docs/LAUNCHER-PLAN.md`, M5): then a run uses watch's, and `runner._record` is where it plugs in.
+
 ## Testing
 
 - **Unit**: pure functions on literal sample points; parsers against fixture text taken from real tool output
@@ -1446,6 +1709,10 @@ def window(cap, t0, t1, frames=None) -> dict      # {t0, t1, frames, system, gpu
   `nvidia-smi`, `Get-NetRoute`).
 - **ETW without rights**: a private in-process session (allowed for standard users) proves the consumer
   path (NE 5.6); PresentMon's `--etl_file` replay proves the frames path.
+- **The settings sweep**: whole sweeps in `tests/test_sweep_runner.py` through a stand-in world
+  (`tests/sweep_world.py`): a settings file under the test's own folder, a game process that is only a flag, the
+  player's answers, a start key and timers the test fires, and captures built at a set frame rate; one test drives the
+  real `cmd_watch` seam with quick collectors. No test edits a real game's file or registers a real start key.
 - **The app's recording**: `tests/test_app_recording.py`, with `tests/fake_recorder.py` in the recorder's place (the
   recorder's side of the real control channel, through `control.Channel`, recording nothing) and a harmless process
   of the test's own in the relay's (`fake_recorder.stand_in_prompt`, handed over as the real one is); no test can reach

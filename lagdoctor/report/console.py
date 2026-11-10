@@ -84,8 +84,12 @@ def _header(out: _Out, d: Diagnosis, cap: Capture, checkup: bool) -> None:
         out.para(f"lag-doctor settings check-up (no game recorded, {when})")
         out.add()
         return
+    part = labels.measured_part(d.stats)
+    analysed = f"{labels.part_length(part)} analysed, " if part else ""
     out.para(f"lag-doctor report: {labels.game_name(cap.target)} ({fmt_elapsed(cap.duration_s)} recorded, "
-             f"started {when})")
+             f"{analysed}started {when})")
+    if part:
+        out.para(labels.part_note(part, len(labels.outside_marks(cap.marks, part))))
     out.add()
     lag = _word(labels.LAG_TYPES, d.lag_type).upper()
     out.para(f"VERDICT [{lag}] {d.headline}")

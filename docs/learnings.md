@@ -1011,3 +1011,41 @@ section 5.2) ran the IGCL probe again beside `Get-Counter` on the Energy Meter c
 the package second by second.
 **Takeaway**: before a new sensor's value reaches a report, read the same quantity from an independent source over the
 same seconds; on an integrated GPU, "GPU energy" may be the whole package's.
+
+### A running program's path is the path it was opened through: junctions resolved, short names kept
+Windows gives a process's image path (NtQuerySystemInformation class 88, as QueryFullProcessImageName does) as the
+file was opened. A program started through a junction or a subst drive comes back as its real path. One started
+through an 8.3 short name (`C:\PROGRA~1\...`) comes back short. One on a volume that no drive letter names (a disk
+mounted on `C:\SteamLib`) comes back as `\Device\HarddiskVolumeN\...`, until something maps that device to its mount
+folder through the mount manager's volume list.
+**Why it came up**: Play's folder wait finds the game by its install folder (`capture/target.py`, 2026-11-09). Its
+review measured a program started through a junction in `%TEMP%`, which came back as the junction's target, and one
+started through `C:\PROGRA~1`, which came back short. The first version matched the junction's real path in the wait
+but not in the relay's check, so the two sides disagreed on the same game.
+**Takeaway**: before testing whether a process runs from a folder, resolve the folder (`os.path.realpath`) and write
+the image's short names out long (GetLongPathNameW, which opens no file), and do both inside the one function every
+side calls.
+
+### Edit one value of a text file without knowing its encoding, and leave every other byte as it was
+A program that changes one setting in someone else's file must not rewrite the rest: a different line ending, a lost
+byte-order mark or a re-encoded accented letter is a change the file's owner never asked for. Python can do it
+without knowing the encoding: detect a byte-order mark (UTF-8, UTF-16 LE or BE) and decode with that codec; decode a
+file without one as UTF-8 with `errors="surrogateescape"`, which turns every byte that is not UTF-8 into a placeholder
+that encodes back to the same byte; split lines on `\r\n|\n|\r` keeping each ending; change only the value's
+characters; and before writing anything, check that encoding the unchanged text gives the original bytes.
+**Why it came up**: `lagdoctor sweep` writes each setting it tries into a game's `GameUserSettings.ini` and puts the
+original back, and its tests prove the file comes back byte for byte in four encodings and with an ANSI byte in it.
+**Takeaway**: for an in-place edit of a file you do not own, round-trip first (decode, encode, compare with the raw
+bytes) and refuse a file that does not survive it; never write text you decoded with a guessed codec.
+
+### Cut a recording at its own clock, and count totals again or drop them
+To analyse part of a timed recording, keep every timestamp as it was and make the length the part's: shifting the
+part to start at zero has to reach every time the data holds, and some sit inside text ("stopped at t=812.3 s") that
+cannot be shifted. Counters kept over the whole recording do not cut at all: count them again from the events they
+were built from when those are logged, or drop them.
+**Why it came up**: M5's `crop` (`lagdoctor/analysis/crop.py`). Keeping the clock left one change in the analysis
+(shader_compile's "first third" counted from 0) instead of about a dozen places in the reports and the app adding the
+start back. The ping probes could be counted again exactly from their logged losses; each program's network bytes
+could not, so a part drops them rather than spread a startup download over play.
+**Takeaway**: slice timed data in its own coordinates, read every length-versus-end use of its duration, and
+recount or drop each running total, never keep it.

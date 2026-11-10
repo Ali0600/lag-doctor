@@ -466,7 +466,9 @@ def _net_losses(cap: Capture) -> list[LagEvent]:
 
 
 def _net_gaps(cap: Capture) -> list[LagEvent]:
-    """Each gap the net_flows tracker reported, [t, ms, kind] with t the moment the server went quiet."""
+    """Each gap the net_flows tracker reported, [t, ms, kind] with t the moment the server went quiet. A fourth field
+    is a measured part's (analysis/crop.py): the gap began before the part at that time, and was clipped to the part's
+    start, so its detail keeps it as "since" for the words."""
     nf = cap.net_flows if isinstance(cap.net_flows, dict) else {}
     gaps = nf.get("gaps")
     out = []
@@ -477,8 +479,12 @@ def _net_gaps(cap: Capture) -> list[LagEvent]:
         kind = g[2] if len(g) > 2 and isinstance(g[2], str) else None
         if t is None or ms is None or ms < GAP_MIN_MS:
             continue
+        detail: dict[str, Any] = {"ms": float(ms), "kind": kind}
+        since = fa._bounded(g[3]) if len(g) > 3 else None
+        if since is not None and since < t:
+            detail["since"] = float(since)
         out.append(LagEvent(id=0, kind="net_gap", t_start=float(t), t_end=float(t) + ms / 1000.0,
-                            severity=float(ms), detail={"ms": float(ms), "kind": kind}))
+                            severity=float(ms), detail=detail))
     return out
 
 

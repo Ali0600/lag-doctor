@@ -251,13 +251,16 @@ class Capture:
     schema: str = CAPTURE_SCHEMA
     tool_version: str = ""
     note: str | None = None                  # the player's own words about this recording (watch --note): clean_note
+    # Set only on a copy cut to part of the recording (analysis/crop.py): {from_s, to_s, recorded_s, how}. Never saved
+    # or read from a file, which always holds the whole recording.
+    span: dict[str, Any] | None = field(default=None, init=False)
 
     def to_json(self) -> dict[str, Any]:
         return _clean_floats(self._fields())
 
     def _fields(self) -> dict[str, Any]:
-        """The fields as they are (no copy): _clean_floats and save() turn nested dataclasses into dicts."""
-        return {f.name: getattr(self, f.name) for f in fields(self)}
+        """The saved fields as they are (no copy): _clean_floats and save() turn nested dataclasses into dicts."""
+        return {f.name: getattr(self, f.name) for f in fields(self) if f.init}
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> "Capture":
@@ -266,7 +269,7 @@ class Capture:
         if not isinstance(data, dict):
             raise CaptureError("foreign", "not a lag-doctor capture (it holds no capture record)")
         _check_schema(data.get("schema"))
-        known = {f.name: f for f in fields(cls)}
+        known = {f.name: f for f in fields(cls) if f.init}
         kwargs = {k: v for k, v in data.items() if k in known}
         extra = [str(k) for k in data if k not in known]
         missing = [n for n, f in known.items()
@@ -299,7 +302,10 @@ class Capture:
         is quick (closing the console window leaves it 4.5 s) and never builds a copy of the whole capture.
         Floats are written as "%.6f" text, which loads as exactly round(x, 6), the value to_json() holds.
         One worker thread compresses and writes while the next column is encoded (zlib lets go of the GIL).
+        A copy cut to part of the recording (`span` set) is refused: saved, it would read as the whole recording.
         """
+        if self.span is not None:
+            raise ValueError("a capture cut to part of the recording is never saved: save the whole recording")
         path = Path(path)
         tmp = path.with_name(path.name + ".tmp")
         try:

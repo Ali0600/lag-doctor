@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from lagdoctor.report.charts import number
+from lagdoctor.report.charts import fmt_elapsed, number
 
 # A reason the capture's own sources carry can open with what the list already says it is about ("frame timing
 # (PresentMon): frame timing was skipped: ..."); earlier builds wrote this prefix for every frame source that was off.
@@ -277,6 +277,55 @@ def event_text(ev) -> str:
     return EVENT_KINDS.get(kind, kind) + (f" ({sev})" if sev else "")
 
 
+# How the measured part of a recording was set (analysis/crop.py HOWS, which a test holds equal to these keys).
+PART_HOW = {"key": "measured from your start key", "set": "the part you chose"}
+PART_SLACK_S = 1e-3                     # rounding a saved diagnosis's seconds may leave
+
+
+def measured_part(stats: Any) -> dict[str, Any] | None:
+    """The measured part a diagnosis covers (Diagnosis.stats["span"], analysis/crop.py) as {from_s, to_s, recorded_s,
+    how}, every value checked; None for a diagnosis of the whole recording, or a record that does not add up (a saved
+    diagnosis can hold anything)."""
+    span = stats.get("span") if isinstance(stats, dict) else None
+    if not isinstance(span, dict):
+        return None
+    lo, hi, rec = (number(span.get(k)) for k in ("from_s", "to_s", "recorded_s"))
+    how = span.get("how")
+    if lo is None or hi is None or rec is None or not isinstance(how, str) or how not in PART_HOW \
+            or not 0.0 <= lo < hi <= rec + PART_SLACK_S:
+        return None
+    return {"from_s": lo, "to_s": hi, "recorded_s": rec, "how": how}
+
+
+def outside_marks(marks: Any, part: dict[str, Any] | None) -> list[float]:
+    """The lag-key presses (a capture's `marks`) outside the measured part, which its analysis never saw: the capture
+    keeps them all. A part that runs to the recording's end keeps the presses up to 1 s past it, as the recording
+    does (capture/session.py)."""
+    if part is None:
+        return []
+    lo, hi = part["from_s"], part["to_s"]
+    late = hi + 1.0 if hi >= part["recorded_s"] - PART_SLACK_S else hi
+    return [t for t in (number(m) for m in (marks if isinstance(marks, list) else [])) if t is not None
+            and not lo <= t <= late]
+
+
+def part_length(part: dict[str, Any]) -> str:
+    """A measured part's length as the reports show it: the difference of its two ends as they are shown (each
+    rounded to the second), so "from 13s to 47s" never reads as 35 s long."""
+    return fmt_elapsed(round(part["to_s"]) - round(part["from_s"]))
+
+
+def part_note(part: dict[str, Any], outside_marks: int = 0) -> str:
+    """What the reports say about a measured part: 'Analysed 10m, from 3m 12s to 13m 12s of the recording (the part you
+    chose); the rest is not counted.'"""
+    lo, hi = part["from_s"], part["to_s"]
+    text = (f"Analysed {part_length(part)}, from {fmt_elapsed(lo)} to {fmt_elapsed(hi)} of the recording "
+            f"({PART_HOW[part['how']]}); the rest is not counted")
+    if outside_marks > 0:
+        text += f", nor the {outside_marks} lag-key press{'es' if outside_marks != 1 else ''} in it"
+    return text + "."
+
+
 def marks(stats: dict, events: list) -> list[tuple[float, list, list[str]]]:
     """CC-5: (time, [the lag events in its window], [signals that moved]) for each of the user's lag-key presses,
     from Diagnosis.stats["marks"] (analysis/diagnose.mark_list); entries a damaged file spoiled are left out."""
@@ -432,10 +481,12 @@ def sorted_topics(causes: Any) -> list[str]:
 NEEDS = "needs "                      # how a reason that a missing source blocked begins (rules._Env.need)
 
 
-def needs_source(source: str) -> str:
+def needs_source(source: str, in_part: bool = False) -> str:
     """Why a cause could not be checked when a source it needs was not measured. The source's own reason, path and
     command included, is in the Not measured list, once; repeating it here chained colons ("needs X, which was not
-    measured: frame timing was skipped: ...")."""
+    measured: frame timing was skipped: ..."). `in_part`: the source recorded, but nothing in the measured part."""
+    if in_part:
+        return f"{NEEDS}{source_text(source)}, which recorded nothing in the measured part (see Not measured)"
     return f"{NEEDS}{source_text(source)}, which was not recorded (see Not measured)"
 
 

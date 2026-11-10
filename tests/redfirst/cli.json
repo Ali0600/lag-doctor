@@ -171,8 +171,8 @@
    "tests": ["tests/test_cli.py::test_analyze_never_writes_beside_the_capture_or_changes_what_fix_uses"]},
   {"name": "analyze changes what fix uses",
    "file": "lagdoctor/cli.py",
-   "old": "    code = analyze_and_report(cap, path, out_dir, remember=False)",
-   "new": "    code = analyze_and_report(cap, path, out_dir, remember=True)",
+   "old": "    code = analyze_and_report(cap, path, out_dir, remember=False, span=span)",
+   "new": "    code = analyze_and_report(cap, path, out_dir, remember=True, span=span)",
    "tests": ["tests/test_cli.py::test_analyze_never_writes_beside_the_capture_or_changes_what_fix_uses"]},
   {"name": "a file that is not a capture ends in a traceback",
    "file": "lagdoctor/cli.py",
@@ -199,7 +199,7 @@
   {"name": "closing the window never says the stop is ours", "file": "lagdoctor/cli.py", "old": "                    self._netflows.expect_external_stop()        # first: the tracker reads the stop as ours", "new": "                    pass", "tests": ["tests/test_cli.py::test_closing_the_window_is_a_stop_the_flow_tracker_asked_for"]},
   {"name": "watch ignores the stop it was given", "file": "lagdoctor/cli.py", "old": "    stop = stop if stop is not None else threading.Event()", "new": "    stop = threading.Event()", "tests": ["tests/test_cli.py::test_an_external_stop_ends_the_recording_and_is_its_reason"]},
   {"name": "the summary is printed past the given say", "file": "lagdoctor/cli.py", "old": "    show = say if say is not None else print          # the summary, which is plain ASCII already", "new": "    show = print", "tests": ["tests/test_cli.py::test_a_watch_says_every_line_through_the_say_it_was_given"]},
-  {"name": "the analysis is not given the say", "file": "lagdoctor/cli.py", "old": "    return _analyze_saved(cap, cap_path, out_dir, say=say)", "new": "    return _analyze_saved(cap, cap_path, out_dir)", "tests": ["tests/test_cli.py::test_a_watch_says_every_line_through_the_say_it_was_given"]},
+  {"name": "the analysis is not given the say", "file": "lagdoctor/cli.py", "old": "    return _analyze_saved(cap, cap_path, out_dir, say=say, remember=remember, show_summary=show_summary)", "new": "    return _analyze_saved(cap, cap_path, out_dir, remember=remember, show_summary=show_summary)", "tests": ["tests/test_cli.py::test_a_watch_says_every_line_through_the_say_it_was_given"]},
   {"name": "the recording is not given the say", "file": "lagdoctor/cli.py", "old": "            return _record(args, target, exe, frames, frames_why, relay, stop=stop, say=say,", "new": "            return _record(args, target, exe, frames, frames_why, relay, stop=stop,", "tests": ["tests/test_cli.py::test_a_watch_says_every_line_through_the_say_it_was_given"]},
   {"name": "a busy recording is said past the given say", "file": "lagdoctor/cli.py", "old": "    if not _take_lock(lock, say):", "new": "    if not _take_lock(lock):", "tests": ["tests/test_cli.py::test_a_busy_recording_is_said_through_the_given_say"]},
   {"name": "the given say is never used", "file": "lagdoctor/cli.py", "old": "    return given if given is not None else say", "new": "    return say", "tests": ["tests/test_cli.py::test_a_watch_says_every_line_through_the_say_it_was_given"]},
@@ -218,6 +218,6 @@
   {"name": "observers are not told the save began", "file": "lagdoctor/cli.py", "old": "            observers.event(\"saving\", frames=n)", "new": "            pass", "tests": ["tests/test_cli.py::test_an_external_stop_ends_the_recording_and_is_its_reason"]},
   {"name": "the [Y/n] question is said past the given say", "file": "lagdoctor/cli.py", "old": "_interactive(interactive), _ask, say=say)", "new": "_interactive(interactive), _ask)", "tests": ["tests/test_cli.py::test_the_prompts_lines_go_through_the_given_say_too"]},
   {"name": "the relay's lines are said past the given say", "file": "lagdoctor/cli.py", "old": "                        relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher)", "new": "                        relay, code = _start_relay(args, target, exe, may_trace, launcher=launcher)", "tests": ["tests/test_cli.py::test_the_prompts_lines_go_through_the_given_say_too"]},
-  {"name": "a summary that cannot be saved is said past the given say", "file": "lagdoctor/cli.py", "old": "    _write_summary(d, cap, out_dir, \"watch\" if remember else \"analyze\", say=say)", "new": "    _write_summary(d, cap, out_dir, \"watch\" if remember else \"analyze\")", "tests": ["tests/test_cli.py::test_the_prompts_lines_go_through_the_given_say_too"]},
+  {"name": "a summary that cannot be saved is said past the given say", "file": "lagdoctor/cli.py", "old": "    _write_summary(d, cap, out_dir, kind or (\"watch\" if remember else \"analyze\"), say=say)", "new": "    _write_summary(d, cap, out_dir, kind or (\"watch\" if remember else \"analyze\"))", "tests": ["tests/test_cli.py::test_the_prompts_lines_go_through_the_given_say_too"]},
   {"name": "a console handler that cannot be set is said past the recording's say", "file": "lagdoctor/cli.py", "old": "_ConsoleControl(stop, saved, network=opts.network and relay is None, say=say)", "new": "_ConsoleControl(stop, saved, network=opts.network and relay is None)", "tests": ["tests/test_cli.py::test_the_prompts_lines_go_through_the_given_say_too"]}
 ]
