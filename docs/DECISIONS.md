@@ -96,8 +96,56 @@
 - **Keep the app's view showing while its window can still be seen** during a recording (a second monitor), if
   Windows' own occlusion state can tell "in sight" from "covered by the game"; today an inactive window hides its view
   and draws one still line. Revisit hook: `AppWindow.shown` (DECISIONS 2026-11-09, M4's end).
+- **An unattended settings sweep** (B of 2026-11-09's sweep fork): the assisted sweep plus key presses lag-doctor sends
+  to the game's menus and a close request between runs, so nobody has to sit through each run. Needs frame timing
+  without a UAC prompt per launch (Performance Log Users, E2 in `docs/INSTALLER-PLAN.md`, or Stage 4's capture
+  service), a game known to take injected keys (`docs/research/settings-sweeps.md`, section 8, question 4), and the
+  owner lifting the rule that nothing types on the player's PC. Revisit hook: the per-run steps of the sweep runner,
+  where the player now starts the game, presses the start key and quits.
+- **The headroom from each game thread on its own**, instead of the busiest thread at each sample: the sampler would
+  keep per-thread CPU over 1 s windows, so several busy threads no longer read as one busier one and the CPU's
+  ceiling stops leaning low. Revisit hook: `ProcessRates.update` in `capture/sysmon.py` and `frames.headroom`'s `u`.
 
 ---
+
+## 2026-11-09: The headroom estimate comes from thread time, and is context, not evidence
+
+A 2026-11-09 audit found the bound verdict names one limit and nothing about the next, so it cannot say how much a
+faster or cooler part would help. `frames.headroom` now gives each side's ceiling (DESIGN, Headroom).
+- **The CPU's ceiling from thread CPU time, as a range from the 0.85 saturation edge to 1 (chosen)**: its busiest
+  thread, or every core where that is busier.
+- **From PresentMon's `MsCPUBusy`**: rejected; it is wall time from one `Present()` to the next, so in a GPU-bound
+  game it fills the frame (16.55 ms of a 16.9 ms frame, `docs/learnings.md`) and only restates the frame rate.
+- **As evidence for or against `gpu_limit` and `cpu_limit` (chosen: context)**: the sentence is inserted into their
+  evidence after scoring, so no verdict or rank moves; a test holds the score equal with and without it.
+- **Its own finding**: rejected; a headroom is not a cause of lag, and a finding of its own would compete in the
+  ranking and the headline.
+- **The console shows it under "limited by" (chosen)**, once, rather than only among the findings' first three
+  lines, where a GPU limit ranked fourth would hide it; the HTML shows every finding whole, so it stays in the card.
+Revisit hook: `frames.headroom`, `rules.headroom_text` and `rules._with_headroom`.
+
+---
+
+## 2026-11-09: A settings sweep, assisted first: lag-doctor edits the settings file, the player plays each run
+
+Asked on 2026-11-08: could lag-doctor run short runs of a game with different settings (config files edited, or a
+mod's files set aside), record each and rank them? The research (`docs/research/settings-sweeps.md`) found it possible
+for single-player games, with every run restarting the game, and the hard parts in reaching the same scene each time,
+the run-to-run noise and heat. Put to the owner with A recommended; the owner answered "do A) Assisted: lag-doctor
+edits the settings file for each variant and undoes it afterwards. You start the game, load the save, press a key at
+the spot and quit. It ranks the results with their noise."
+- **A: assisted (chosen)**: lag-doctor writes each setting into the game's settings file while the game is closed,
+  through the fix journal, and puts the original back at the end; the player starts the game, loads a save, presses a
+  start key at a chosen spot and quits; each run is a recording measured over a fixed window from the key, and the
+  settings are ranked against their own run-to-run spread. Nothing is typed on the player's PC. Each run still asks
+  one UAC prompt, unless the account records frame timing without one.
+  - This is an exception to DESIGN's "in-game settings are advice only", which the owner asked for: only for the
+    length of a sweep, only keys already in the file, only while the game is closed, journaled and put back at the
+    end, and never offered by `lagdoctor fix`.
+- **B: unattended**, A plus menu keys and a close request sent by lag-doctor: deferred, worth trying (Backlog).
+- **C: not now**: not chosen.
+
+The build's own choices are recorded below as it lands.
 
 ## 2026-11-09: M4's end flashes the taskbar button and never brings the window forward
 
