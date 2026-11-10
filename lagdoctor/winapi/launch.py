@@ -12,8 +12,9 @@ ShlDisp.h), which tests/test_launch.py reads back from those headers:
 CoCreateInstance(ShellWindows) -> IShellWindows::FindWindowSW(CSIDL_DESKTOP, SWC_DESKTOP, SWFO_NEEDDISPATCH) ->
 IServiceProvider::QueryService(SID_STopLevelBrowser, IShellBrowser) -> IShellBrowser::QueryActiveShellView ->
 IShellView::GetItemObject(SVGIO_BACKGROUND, IDispatch) -> IShellFolderViewDual::get_Application ->
-IShellDispatch2::ShellExecute. ShellWindows is registered only as a local server, so creating it reaches the
-running Explorer's desktop; with no Explorer the desktop is not found, and the call is refused.
+IShellDispatch2::ShellExecute. ShellWindows is registered only as a local server: a running Explorer serves it, and
+with none, COM would start shell32's own server for it (rundll32), whose list holds no desktop. So the call first asks
+user32 for the shell's desktop window (GetShellWindow) and refuses at once when there is none, starting nothing.
 
 The call is a cross-process one into Explorer: it blocks while Explorer does not answer, so a window's caller makes
 it off its UI thread.
@@ -100,6 +101,7 @@ _SysFreeString = _bind(_oleaut32, "SysFreeString", None, ctypes.c_void_p)
 _GetWindowThreadProcessId = _bind(_user32, "GetWindowThreadProcessId", wintypes.DWORD, wintypes.HWND,
                                   ctypes.POINTER(wintypes.DWORD))
 _AllowSetForegroundWindow = _bind(_user32, "AllowSetForegroundWindow", wintypes.BOOL, wintypes.DWORD)
+_GetShellWindow = _bind(_user32, "GetShellWindow", wintypes.HWND)
 
 
 def guid(text: str) -> GUID:
@@ -223,9 +225,10 @@ def open_through_explorer(target: str, args: str = "", show: int = SW_SHOWNORMAL
     Explorer, so a program that starts is Explorer's child, and this process gets no handle to it.
 
     Returns {"explorer_pid": the process that owns the desktop window, "foreground_allowed": whether that process
-    was lent the right to bring what it opens to the front}. Raises OSError when Explorer's desktop cannot be
-    reached (Explorer restarting, another shell) or a call fails, and ValueError for a target or arguments it does
-    not take. Which targets are opened is the caller's policy: this only makes the call.
+    was lent the right to bring what it opens to the front}: Explorer took the target, which is not to say anything
+    started (a link no program handles gets Explorer's own prompt, as a double-click would). Raises OSError when
+    Explorer's desktop cannot be reached (Explorer restarting, another shell) or a call fails, and ValueError for a
+    target or arguments it does not take. Which targets are opened is the caller's policy: this only makes the call.
     """
     for name, text in (("target", target), ("args", args)):
         if not isinstance(text, str) or "\0" in text or len(text) > MAX_TARGET_CHARS:
@@ -234,6 +237,8 @@ def open_through_explorer(target: str, args: str = "", show: int = SW_SHOWNORMAL
         raise ValueError("no target for Explorer to open")
     if isinstance(show, bool) or not isinstance(show, int) or not 0 <= show <= 11:
         raise ValueError(f"not a show command: {show!r}")
+    if not _GetShellWindow():
+        raise OSError("Explorer's desktop was not found: Explorer may be restarting, or another program is the shell")
     init = _CoInitializeEx(None, COINIT_APARTMENTTHREADED)
     if init not in (S_OK, S_FALSE, RPC_E_CHANGED_MODE):
         raise ComError("CoInitializeEx", init)

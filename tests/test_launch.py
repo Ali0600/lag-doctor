@@ -3,17 +3,21 @@ it may open, built how).
 
 The vtable slots, IIDs and constants are read back from the Windows SDK's own C headers. One live case has Explorer
 start a windowless helper program and checks that Explorer, not this process, became its parent: that the six calls
-of the chain reach the slots they name, and that Play would leave no store client in lag-doctor's process tree.
+of the chain reach the slots they name, and that Play would leave no store client in lag-doctor's process tree. The
+other cases that reach Explorer answer ShellExecute themselves, so they can never open anything.
 """
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import uuid
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -92,6 +96,14 @@ def test_every_iid_clsid_and_constant_is_the_sdk_headers_own():
         assert m and int(m.group(1), 0) == value, name
     m = re.search(r"#define\s+CSIDL_DESKTOP\s+(0x[0-9A-Fa-f]+|\d+)", header("ShlObj_core.h"))
     assert m and int(m.group(1), 0) == shell.CSIDL_DESKTOP
+    shared = sdk_um().parent / "shared"
+    for name, value, path in [("VT_EMPTY", shell.VT_EMPTY, shared / "wtypes.h"),
+                              ("VT_I4", shell.VT_I4, shared / "wtypes.h"),
+                              ("VT_BSTR", shell.VT_BSTR, shared / "wtypes.h"),
+                              ("CLSCTX_LOCAL_SERVER", shell.CLSCTX_LOCAL_SERVER, shared / "wtypesbase.h"),
+                              ("COINIT_APARTMENTTHREADED", shell.COINIT_APARTMENTTHREADED, sdk_um() / "objbase.h")]:
+        m = re.search(r"\b" + name + r"\s*=\s*(0x[0-9A-Fa-f]+|\d+)", path.read_text(encoding="latin-1"))
+        assert m and int(m.group(1), 0) == value, name
 
 
 def test_a_variant_has_the_size_the_abi_gives_it():
@@ -100,12 +112,45 @@ def test_a_variant_has_the_size_the_abi_gives_it():
 
 # ---------------------------------------------------------------- Explorer itself ---
 
-HELPER = (
+HELPER = (                                       # writes its pid and parent's under another name, then renames
     "import json, os, sys, time\n"
-    "json.dump({'pid': os.getpid(), 'ppid': os.getppid()}, open(sys.argv[1], 'w'))\n"
+    "tmp = sys.argv[1] + '.tmp'\n"
+    "with open(tmp, 'w') as f:\n"
+    "    json.dump({'pid': os.getpid(), 'ppid': os.getppid()}, f)\n"
+    "os.replace(tmp, sys.argv[1])\n"
     "t = time.time()\n"
     "while time.time() - t < 30 and not os.path.exists(sys.argv[2]):\n"
     "    time.sleep(0.1)\n")
+SHELL_EXECUTE = (shell.SLOTS["IShellDispatch2"]["ShellExecute"], 5)      # (slot, argument count): slots repeat
+FIND_WINDOW = (shell.SLOTS["IShellWindows"]["FindWindowSW"], 6)          # across interfaces, the pair does not
+E_FAIL = -0x7FFFBFFB                                                     # 0x80004005
+
+
+class Chain:
+    """The real COM chain to Explorer's desktop, with chosen calls answered here instead. IShellDispatch2::
+    ShellExecute never runs (the test fails first), so nothing is ever opened; every release is recorded."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, answers: dict) -> None:
+        self.answers = answers
+        self.calls: Counter = Counter()
+        self.released: list[int] = []
+        real_vcall, real_release = shell.vcall, shell._release
+
+        def vcall(this, slot, argtypes, *args, restype=shell.ctypes.c_long):
+            key = (slot, len(argtypes))
+            self.calls[key] += 1
+            if key in self.answers:
+                return self.answers[key]
+            if key == SHELL_EXECUTE:
+                pytest.fail("IShellDispatch2::ShellExecute was reached")
+            return real_vcall(this, slot, argtypes, *args, restype=restype)
+
+        def release(ptr):
+            self.released.append(ptr)
+            real_release(ptr)
+
+        monkeypatch.setattr(shell, "vcall", vcall)
+        monkeypatch.setattr(shell, "_release", release)
 
 
 def test_explorer_starts_what_it_is_handed_as_its_own_child(tmp_path):
@@ -120,7 +165,6 @@ def test_explorer_starts_what_it_is_handed_as_its_own_child(tmp_path):
         while not out.exists() and time.perf_counter() < deadline:
             time.sleep(0.05)
         assert out.exists(), "the helper Explorer was handed never wrote its file"
-        time.sleep(0.05)
         seen = json.loads(out.read_text(encoding="utf-8"))
         procs = ntquery.Snapshotter().snapshot()
         me = procs[os.getpid()]
@@ -148,26 +192,65 @@ def test_open_through_explorer_refuses_a_show_command_out_of_range(show, monkeyp
         shell.open_through_explorer("x", "", show)
 
 
-def test_a_desktop_that_cannot_be_found_is_an_error_and_releases_what_it_got(monkeypatch):
-    released = []
-    real = shell.vcall
-
-    def vcall(this, slot, argtypes, *args, restype=shell.ctypes.c_long):
-        if slot == shell.SLOTS["IShellWindows"]["FindWindowSW"] and len(argtypes) == 6:
-            return shell.S_FALSE                     # no window of that class: nothing is returned
-        return real(this, slot, argtypes, *args, restype=restype)
-
-    real_release = shell._release
-
-    def release(ptr):
-        released.append(ptr)
-        real_release(ptr)
-
-    monkeypatch.setattr(shell, "vcall", vcall)
-    monkeypatch.setattr(shell, "_release", release)
+def test_a_desktop_that_cannot_be_found_is_an_error_and_releases_what_it_got(monkeypatch, tmp_path):
+    chain = Chain(monkeypatch, {FIND_WINDOW: shell.S_FALSE})         # no window of that class: nothing returned
     with pytest.raises(OSError, match="desktop was not found"):
-        shell.open_through_explorer("steam://rungameid/1")
-    assert len(released) == 1 and released[0]       # the ShellWindows object it made, and nothing was opened
+        shell.open_through_explorer(str(tmp_path / "nothing.txt"))
+    assert chain.calls[FIND_WINDOW] == 1 and chain.calls[SHELL_EXECUTE] == 0
+    assert len(chain.released) == 1 and chain.released[0]               # the ShellWindows object it made
+
+
+def test_a_call_that_fails_in_the_chain_is_an_error_and_every_interface_is_released(monkeypatch, tmp_path):
+    chain = Chain(monkeypatch, {SHELL_EXECUTE: E_FAIL})
+    with pytest.raises(shell.ComError, match="ShellExecute failed: HRESULT 0x80004005"):
+        shell.open_through_explorer(str(tmp_path / "nothing.txt"))
+    assert chain.calls[SHELL_EXECUTE] == 1
+    assert len(chain.released) == 9 and all(chain.released)            # the nine the chain got, each once
+
+
+def test_a_window_that_closes_while_it_is_reached_is_an_error_before_anything_is_opened(monkeypatch, tmp_path):
+    chain = Chain(monkeypatch, {})
+    monkeypatch.setattr(shell, "window_pid", lambda hwnd: None)
+    with pytest.raises(OSError, match="closed while it was being reached"):
+        shell.open_through_explorer(str(tmp_path / "nothing.txt"))
+    assert chain.calls[SHELL_EXECUTE] == 0 and len(chain.released) == 9
+
+
+def test_no_shell_desktop_is_refused_before_com_is_asked_at_all(monkeypatch):
+    monkeypatch.setattr(shell, "_GetShellWindow", lambda: 0)            # Explorer restarting, or another shell
+    monkeypatch.setattr(shell, "_CoCreateInstance", lambda *a: pytest.fail("COM was asked to start ShellWindows"))
+    with pytest.raises(OSError, match="desktop was not found"):
+        shell.open_through_explorer("x")
+
+
+def test_com_that_cannot_start_on_this_thread_is_an_error(monkeypatch):
+    monkeypatch.setattr(shell, "_CoInitializeEx", lambda reserved, flags: -0x7FF8FFF2)   # E_OUTOFMEMORY
+    monkeypatch.setattr(shell, "_desktop", lambda held: pytest.fail("Explorer was reached"))
+    with pytest.raises(shell.ComError, match="CoInitializeEx"):
+        shell.open_through_explorer("x")
+
+
+def test_a_thread_already_in_the_other_apartment_is_used_as_it_is_and_left_so(monkeypatch, tmp_path):
+    chain = Chain(monkeypatch, {SHELL_EXECUTE: E_FAIL})
+    uninit = []
+    monkeypatch.setattr(shell, "_CoUninitialize", lambda: uninit.append(1))
+    seen = {}
+
+    def worker():
+        mta = shell._CoInitializeEx(None, 0)                            # COINIT_MULTITHREADED, as a worker may be
+        try:
+            shell.open_through_explorer(str(tmp_path / "nothing.txt"))
+        except shell.ComError as exc:
+            seen["error"] = str(exc)
+        finally:
+            if mta in (shell.S_OK, shell.S_FALSE):
+                ctypes.WinDLL("ole32").CoUninitialize()                 # the thread's own, not the code's
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join(30)
+    assert "ShellExecute failed" in seen.get("error", ""), seen
+    assert uninit == [] and len(chain.released) == 9                  # RPC_E_CHANGED_MODE: nothing to undo
 
 
 # ---------------------------------------------------------------- the links ---
@@ -233,3 +316,34 @@ def test_play_refuses_when_lag_doctor_runs_elevated(monkeypatch):
     monkeypatch.setattr(elevation, "is_elevated", lambda: True)
     with pytest.raises(PermissionError, match="administrator rights"):
         store_launch.play(store_launch.steam_link("220"))
+
+
+def test_play_has_no_other_way_when_explorer_cannot_be_reached(monkeypatch):
+    def unreachable(link, *a, **k):
+        raise OSError("Explorer's desktop was not found")
+
+    monkeypatch.setattr(store_launch.shell, "open_through_explorer", unreachable)
+    from lagdoctor.winapi import elevation
+    monkeypatch.setattr(elevation, "is_elevated", lambda: False)
+    monkeypatch.setattr(os, "startfile", lambda *a, **k: pytest.fail("the link was opened another way"))
+    with pytest.raises(OSError, match="desktop was not found"):
+        store_launch.play(store_launch.steam_link("220"))
+
+
+# ---------------------------------------------------------------- the app's opener ---
+
+def test_the_apps_opener_opens_only_lag_doctors_own_files_and_folders(tmp_path, monkeypatch):
+    from lagdoctor.app import main as app_main
+    opened = []
+    monkeypatch.setattr(app_main.os, "startfile", opened.append)
+    report = tmp_path / "report.html"
+    report.write_text("x", encoding="utf-8")
+    app_main.open_local(str(report))
+    app_main.open_local(str(tmp_path))
+    assert opened == [str(report), str(tmp_path)]
+    for bad in ["steam://rungameid/220", "com.epicgames.launcher://apps/a%3Ab%3Ac?action=launch&silent=true",
+                "https://example.com/", "report.html", "\\\\server\\share\\report.html", str(tmp_path / "gone.html"),
+                str(report) + ":stream", "C:", "a\0b", ""]:
+        with pytest.raises(PermissionError, match="only its own files and folders"):
+            app_main.open_local(bad)
+    assert len(opened) == 2

@@ -25,7 +25,11 @@ verification log; trust a note's *Corrected* entries over its body.
    - **Play starts nothing itself.** A game starts only through its store's link, which Explorer opens
      (`winapi/launch.py`), so neither the store client nor the game is ever lag-doctor's child. Every other place that
      starts a program is listed by file and function in `tests/test_no_handles.py` (`SPAWN_ALLOWED`), which fails on
-     a new one until it is listed on purpose.
+     a new one until it is listed on purpose. The place listed is where the program starts: a starter kept under
+     another name is followed to each use, a spawning module passed around counts, and lag-doctor's own launchers
+     (`open_through_explorer`, `launch_elevated`, PresentMon's `spawn`) count as starters. The app's opener
+     (`app.main.open_local`) opens only lag-doctor's own existing files and folders, never a link, so no page request
+     can open a store link inside lag-doctor's process.
 2. **Evidence or silence.** Every finding carries the numbers behind it. A source that did not run is
    reported as *not measured*, never as *fine*; a cause that was checked and ruled out is listed as
    *checked and fine* with what was measured.
