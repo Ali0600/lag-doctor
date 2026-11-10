@@ -286,10 +286,12 @@ connection to Microsoft, as the runtime does on its own.
 
 ## Experience Gained
 
-- **Windows systems programming from Python**: 17 ctypes modules over 17 Windows DLLs plus NVIDIA's NVML
+- **Windows systems programming from Python**: 20 ctypes modules over 19 Windows DLLs plus NVIDIA's NVML
   (real-time and private ETW sessions, PDH, NtQuerySystemInformation, DXGI/DXCore, ICMP, WLAN) and no third-party
   package at run time, with zero handles opened to the game and imports limited to the 264 standard-library modules
-  the shipped Python runtime itself reports it can import, both enforced by syntax-tree scans of the code; and a
+  the shipped Python runtime itself reports it can import, both enforced by syntax-tree scans of the code, as is every
+  place that starts a program (a game starts only through Explorer's own ShellExecute, whose 6 COM slots are read
+  back from the SDK's headers); and a
   desktop app in its own WebView2 window over raw COM vtables, with no loader DLL and its 100 slots and 35 IIDs pinned
   against Microsoft's SDK IDL, whose tests drive the real window on CI through a whole recording (a stand-in recorder
   on the real control channel) and crash its page and its browser process mid-recording to prove both recover.
@@ -303,14 +305,14 @@ connection to Microsoft, as the runtime does on its own.
   did wrong; its bottleneck verdict says how far off the next limit is (the CPU, the GPU or the screen, and how
   many times faster the limiting part must get), from thread CPU time rather than PresentMon's CPU Busy, which
   read 16.55 ms of a 16.9 ms GPU-bound frame.
-- **Testing that proves itself**: 3,760 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 3,847 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 43 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 2,539 deliberate sabotages in
-  51 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 2,587 deliberate sabotages in
+  52 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
 - **Supply chain and least privilege**: a per-machine WiX MSI of 179 files built in CI from pinned inputs (Python
