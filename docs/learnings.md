@@ -110,6 +110,17 @@ roughly a quarter or more of that "busy" time not running at all.
 **Takeaway**: judge the CPU side from thread CPU time, never from PresentMon's CPU Busy; how fast the CPU could go in
 a GPU-bound game takes a second recording with lighter graphics.
 
+### A per-sample maximum over several noisy series reads high
+Averaging "the busiest of N threads" at each sample gives more than the busiest thread's own average: each sample
+picks whichever thread's noise ran high that time. Thread time moves in 15.625 ms steps, 16 to a 250 ms sample, so
+that noise is large: simulated with Windows' accounting, one thread at 75 % reads 75.0 %, two read 81.2 %, four read
+85.9 % (past the 85 % at which lag-doctor calls a thread saturated) and eight read 89.1 %.
+**Why it came up**: the headroom estimate divides the frame rate by the busiest-thread figure, so a game with several
+busy threads gets a CPU ceiling that leans low, and the 2026-11-09 audit had found the same figure can call such a
+game main-thread bound.
+**Takeaway**: average each series over the window first and take the maximum of those averages; a mean of per-sample
+maxima is an upper bound, never an estimate of the busiest one.
+
 ### Max-per-pixel downsampling must not treat empty buckets as gaps
 The report's charts keep the maximum of each pixel column so one stutter among 100,000 frames still reaches
 the top. Marking every empty bucket as a gap turned a 1 Hz ping line into dots.

@@ -550,8 +550,7 @@ def limit_texts(cause, h, bound=GPU_BOUND, cap=None, fps=58.0):
 
 
 def test_a_gpu_limit_says_how_far_off_the_cpus_limit_is():
-    # The audit's FF7 reading, the example sentence of the task: second, after the frame-timing line, with what it
-    # rests on said last
+    # DESIGN's example sentence (Headroom): second, after the frame-timing line, with what it rests on said last
     texts = limit_texts("gpu_limit", room())
     assert texts[1] == ("At these settings the CPU could feed about 66-78 FPS, so a GPU about 1.1-1.3x faster would "
                         "make the CPU the limit.")
@@ -625,7 +624,7 @@ def test_the_headroom_lines_are_context_and_never_move_the_score():
 
 
 def heat(clock=780, top=2100, watts=61.0, limit=102.8, reasons="sw_thermal_slowdown", share=97.0, idle=0):
-    """NVIDIA readings of a GPU held down by heat (the FF7 recording's), the first `idle` of them idle at 210 MHz."""
+    """Made-up NVIDIA readings of a laptop GPU held down by heat, the first `idle` of them idle at 210 MHz."""
     return synth.gpu_table(30, nv_util_pct=99.0, nv_throttle_pct=share, nv_power_cap_pct=0.0, nv_temp_c=88.0,
                            nv_clock_mhz=lambda t: 210 if t <= idle else clock, nv_clock_max_mhz=top,
                            nv_power_w=watts, nv_power_limit_w=limit,

@@ -525,8 +525,8 @@ def test_refresh_comes_from_the_games_display():
 # ------------------------------------------------------------------------------------- headroom ---
 
 def test_headroom_scales_the_steady_rate_by_the_busiest_threads_load():
-    # The audit's FF7 case: GPU-bound at 16.9 ms frames, the GPU busy 16.1 ms, the busiest game thread at 75 % of a
-    # CPU. From 0.85 a thread counts as saturated, at 1 it is: the CPU could feed 59.2 x [0.85 / 0.75, 1 / 0.75]
+    # GPU-bound at 16.9 ms frames, the GPU busy 16.1 ms, the busiest game thread at 75 % of a CPU. From 0.85 a thread
+    # counts as saturated, at 1 it is: the CPU could feed 59.2 x [0.85 / 0.75, 1 / 0.75]
     b = bound_of(16.9, 16.1, thread=75.0, hz=144.003)
     h = b["headroom"]
     assert b["verdict"] == "gpu" and h["steady_fps"] == pytest.approx(1000.0 / 16.9)
@@ -538,8 +538,8 @@ def test_headroom_scales_the_steady_rate_by_the_busiest_threads_load():
 
 
 def test_headroom_never_reads_ms_cpu_busy():
-    # PresentMon's CPU Busy is wall time from one Present() to the next: 16.55 ms of a 16.9 ms GPU-bound frame in FF7,
-    # so 1000 / CPU Busy restates the frame rate. The CPU's side comes from thread time alone, whatever CPU Busy says
+    # PresentMon's CPU Busy is wall time from one Present() to the next: 16.55 ms of a 16.9 ms GPU-bound frame in a real
+    # game (docs/learnings.md), so 1000 / CPU Busy restates the frame rate. The CPU's side comes from thread time alone
     wall = bound_of(16.9, 16.1, thread=75.0, hz=144.003, cpu_busy=16.55)["headroom"]
     short = bound_of(16.9, 16.1, thread=75.0, hz=144.003, cpu_busy=4.0)["headroom"]
     assert wall["cpu_fps"] == short["cpu_fps"] == pytest.approx([67.061, 78.895], abs=1e-3)

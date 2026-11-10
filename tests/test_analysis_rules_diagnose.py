@@ -349,9 +349,9 @@ def test_the_diagnosis_survives_json_and_the_reports_render_it():
 # ------------------------------------------------------------------------------------ headroom ---
 
 def heat_bound(fps_ms: float = 16.9, n: int = 3000) -> Capture:
-    """Shaped like the audit's FF7 recording, all of it made up: GPU-bound on a fixed 144 Hz screen, frames held 2 or 3
-    refreshes, the busiest game thread at 75 % of a CPU, PresentMon's CPU Busy at nearly the whole frame (wall time),
-    and an NVIDIA GPU held at 780 of its 2,100 MHz by heat while drawing 61 of its 103 W."""
+    """A made-up capture: GPU-bound on a fixed 144 Hz screen, frames held 2 or 3 refreshes, the busiest game thread at
+    75 % of a CPU, PresentMon's CPU Busy at nearly the whole frame (wall time), and an NVIDIA GPU held at 780 of its
+    2,100 MHz by heat while drawing 61 of its 103 W."""
     p = 1000.0 / 144.003
     shown = [2 * p if i % 2 == 0 else 3 * p for i in range(n)]
     secs = 2.0 + n * fps_ms / 1000.0

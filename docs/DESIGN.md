@@ -817,13 +817,20 @@ def main_chain(cap) -> dict[str, list]              # F columns of the swap chai
 def frame_stats(fr, duration_s) -> dict             # the frame keys of Diagnosis.stats
 def bound(cap, fr, events) -> dict                  # LC 3.4, steady windows only (event frames excluded):
 # {verdict: "gpu"|"cpu_main"|"cpu_all"|"waiting"|"vsync"|"capped"|"mixed"|"unknown", r, ft_ms, gpu_ms,
-#  busiest_thread, cap_fps, refresh_hz, vsync: bool|None, vrr: bool|None, confidence, notes: [str],
+#  busiest_thread, cpu_share (the game's CPU over every logical CPU), cap_fps, refresh_hz, vsync: bool|None,
+#  vrr: bool|None, confidence, notes: [str], steady_fps, headroom (below) | None,
 #  gpu_probable: {seconds, share, windows, marks, marks_busy, holds} | None (no frame timing, verdict unknown)}
+def headroom(b, shared) -> dict | None              # how far the other sides are from their limits (Headroom):
+# {steady_fps, gpu_fps, cpu_fps: [low, high] | None, cpu_from: "thread"|"all_cores", display_fps,
+#  steps_fps: [refresh / k ...] | None, limit: "gpu"|"cpu"|None, next: "cpu"|"gpu"|"display"|"cpu_or_display"|None,
+#  speedup: [low, high] | None}
 # analysis/events.py
 def find_events(cap, fr, stats) -> list[LagEvent]
 # analysis/attribute.py
 def attribute(cap, fr, events, bound) -> dict       # fills ev.causes (best first) and ev.detail["why"];
                                                     # returns {cause: {a, n, share, lift, label}} (LC 5.2)
+def nvidia_depth(cap, keep=None) -> dict | None     # {readings, clock_mhz, clock_max_mhz, power_w, power_limit_w}:
+                                                    # medians over the readings not naming gpu_idle that keep() takes
 # analysis/rules.py
 @dataclass
 class Rule:  cause: str; family: str; needs: tuple[str, ...]; gate: str | None; fn: Callable
@@ -862,6 +869,21 @@ hitch_rate_bound                           float | None    3/n when zero hitches
 dropped_pct                                float           % of frames never displayed
 frames_source                              str             "display" or "present"
 bound, bound_r, gpu_busy_pct               str, float, float   verdict; r; 100 x median GPU busy / median frame time
+steady_fps                                 float           the frame rate outside stutters and FPS drops (bound)
+bound_gpu_ms, bound_frame_ms               float           G and FT of r: median GPU busy less the HAGS margin, median
+                                                           app frame time, over the steady frames
+busiest_thread_pct                         float           the busiest game thread, % of one logical CPU (bound)
+gpu_ceiling_fps                            float           headroom: what the GPU's own work allows (Headroom)
+cpu_ceiling_low_fps, cpu_ceiling_high_fps  float           headroom: what the CPU could feed, as a range
+cpu_ceiling_from                           str             "thread" or "all_cores": which figure set it
+display_steps_fps                          list | None     refresh / k down to 20 FPS, where frames sit on whole
+                                                           refreshes
+next_limit, speedup_low, speedup_high      str, float, float   for a GPU or CPU verdict: the next limit, and how many
+                                                           times faster the limiting part must get for it to take over
+headroom, headroom_note                    str | None      the sentence and labels.HEADROOM_NOTE, each only when a
+                                                           gpu_limit or cpu_limit finding carries it (headroom_line)
+gpu_clock_mhz, gpu_clock_max_mhz           float           NVIDIA: median clock, readings not naming gpu_idle; top
+gpu_power_w, gpu_power_limit_w             float           NVIDIA: median power drawn, enforced limit, same readings
 refresh_hz, present_mode, runtime          float, str, str     the game's display; most common mode and runtime
 swap_chains, main_chain                    int, str        chains seen; the address the analysis used (the
                                                            HTML frame chart draws only that chain)
@@ -887,6 +909,46 @@ median was 71 % while the GPU was pegged in its last minutes and at every mark. 
 game's GPU >= 10 % busy (`frames.gpu_shared`, LC 4.6), a `capped` or
 `waiting` verdict becomes `unknown`: a shared GPU paces a game as evenly as a cap. `bound` also returns
 `steady_fps`, the rate outside stutters and drops.
+
+### Headroom (frames.headroom)
+The bound verdict names one limit; `headroom` says how close the other sides are to theirs, from the same steady
+frames (none with fewer than 300 of them or 10 s), and so roughly how much a faster or cooler part would help:
+- **GPU**: `gpu_fps` = 1000 / G (G as r uses it). None while other programs share the game's GPU (`gpu_shared`): G
+  leaves their work out (PM 3.2).
+- **CPU**: `cpu_fps` = `steady_fps` × [max(1, 0.85 / u), 1 / u], u the busiest game thread's share of one logical
+  CPU, or the game's share of every logical CPU (`cpu_share`) where that is busier (`cpu_from`). From 0.85 a thread
+  counts as saturated (LC 3.2), at 1 it is. Never `MsCPUBusy`: it runs from one `Present()` to the next, so time the
+  game waits for the GPU outside `Present()` counts, and in a GPU-bound game it fills the frame (PM 3.2, LC 0 item 3,
+  learnings).
+- **Display**: the refresh rate; where 90 % or more of the displayed frames sit on whole refreshes (a fixed-refresh
+  screen, under VSync or composition), `steps_fps`: refresh / k down to 20 FPS, the rates at which the pace is even.
+- **Next limit**: for a GPU or CPU verdict, the lowest other ceiling (`cpu_or_display` when the CPU's range spans
+  the refresh rate) and `speedup` = [next low / limit high, next high / limit low], never under 1, the limit's own
+  range running from `steady_fps` to its ceiling (its ceiling alone under a VSync lock, which rounds `steady_fps`
+  down). None where the other side was not measured, or where a CPU verdict did not come from saturated threads
+  (VSync's `MsCPUBusy` branch).
+
+The rules say it in one sentence (`rules.headroom_text`), second in the evidence of `gpu_limit` and `cpu_limit`
+after their frame-timing line, with the screen's even steps after it (`rules._steps_text`) and `labels.HEADROOM_NOTE`
+last: "At these settings the CPU could feed about 66-78 FPS, so a GPU about 1.1-1.3x faster would make the CPU the
+limit". A GPU that heat alone held down at least 30 % of the time, whose top clock is at least the speedup's high
+end above its held clock, adds "heat held this one at 37% of its top clock, so keeping it cooler may be enough" (the
+frame rate rises less than the clock, hence "may"). The lines are added after scoring, so they never move a cause's
+score. Where the other side was not measured the sentence says the gain is unknown, and why, without the note.
+
+What the estimate cannot see, said by the note ("a rough estimate for this game at these settings ... not a
+benchmark") and here: the busiest-thread figure is the mean of per-tick maxima over all the game's threads
+(`capture/sysmon.py`), so several busy threads read as one busier one, more so as thread time moves in 15.625 ms
+steps (WT 3.5, about 6 % of a 250 ms tick), whose noise a per-tick maximum picks up; and work a game does per second
+rather than per frame does not grow with the frame rate. All three make the CPU's figure lean low, as does a game
+that spins while it waits for the GPU. It holds for this game at these settings only: the real check is a second
+recording with lighter graphics, read in Compare.
+
+For an NVIDIA GPU held down by heat or power, `gpu_throttle` says how deep, second in its evidence: its median
+clock against its top clock and the power it drew against its limit (`attribute.nvidia_depth` over the readings
+that named what held it, never the idle ones; "so heat held it back, not its power limit" under 95 % of the limit),
+and `gpu_limit`'s heat line adds the median clock. `Diagnosis.stats` keeps the same medians over every reading that
+is not idle.
 
 ### Lag events (LC 2.4; NE 2.2, 4.6)
 - **stutter**: `D ≥ 2.5 × M` and `D − M ≥ 8 ms`, where `M` = median of the previous
@@ -989,7 +1051,9 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   signal (`attribute.throttle_readings`: NVML's counters kept growing at idle, 99-100 % with no heat named), and
   a GPU idle in every reading is unchecked. The power-cap share counts a reading only where its reasons named
   `sw_power_cap` (`attribute.power_cap_readings`: on driver 591.86 the counter read 42 % over 169 readings that
-  never named it), and the text says so when the counter moved without the reason.
+  never named it), and the text says so when the counter moved without the reason. Its second line says how deep:
+  the median clock against the top clock and the power against its limit (Headroom).
+- `gpu_limit`, `cpu_limit`: the headroom sentence second, the screen's even steps third, its note last (Headroom).
 - `cpu_throttle`: `% Performance Limit` under 100 on >= 25 % of samples, a passive thermal limit, a drop of
   >= 20 % from the first two minutes, or the level itself: a median `% Processor Performance` at or below 80 % of
   the base clock (a quiet mode set outside Windows held it at 70 % with no limit reported). A CPU held only by the
@@ -1105,13 +1169,14 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 
 ## Report
 
-- **Console**: the headline, key stats ("limited by" the bound verdict), up to three findings with their top
-  evidence lines and fixes, the moments the user marked with the lag key (how many matched a lag event, which
-  showed nothing in what was measured), then "checked and fine" (neutral topic names: "Game Mode", never "Game
-  Mode off"), "not measured" and "could not check", grouped by the missing source. Fits one terminal screen; a
-  fix command and the report's path are never wrapped (the path on a line of its own), no line breaks at a hyphen
-  or inside a word; control characters from capture strings never reach the terminal. `check` prints a settings
-  check-up instead (no verdict line, one line for what needs a recording).
+- **Console**: the headline, key stats ("limited by" the bound verdict), the headroom under them ("Headroom: " and
+  `Diagnosis.stats` "headroom" with its note, shown there once and so left out of the findings' lines), up to three
+  findings with their top evidence lines and fixes, the moments the user marked with the lag key (how many matched a
+  lag event, which showed nothing in what was measured), then "checked and fine" (neutral topic names: "Game Mode",
+  never "Game Mode off"), "not measured" and "could not check", grouped by the missing source. Fits one terminal
+  screen; a fix command and the report's path are never wrapped (the path on a line of its own), no line breaks at a
+  hyphen or inside a word; control characters from capture strings never reach the terminal. `check` prints a
+  settings check-up instead (no verdict line, one line for what needs a recording).
 - **Both reports** list the same "not measured" sources (`labels.not_measured`: the capture's own source list,
   a source whose state is "ok" but that the analysis had nothing of (`Diagnosis.measured`: "it ran but recorded
   nothing"), then the standard sources it never recorded), each named in words (`labels.SOURCES`: "the game's own
@@ -1288,13 +1353,20 @@ owner's run.
   `{state, why, bytes, modified}`, `drop_ins` and `unreal_config` `{state, why, files: [[name, sha (16 hex digits or
   null), bytes, modified], ...] (at most 30), more}`, with `state` `checked`, `not_checked` (the reason in `why`) or,
   for `unreal_config`, `not_unreal`; an Unreal game's `~mods` paks are among `drop_ins`; and `note`, the capture's
-  note through `model.clean_note`. These four keys came after the schema's first build and are optional in it: a
-  summary without them, or a capture from before the folder check or the note, reads back with each None. Read back
-  field by field: one of the wrong type reads as None, and the note through `clean_note` again. A failed write is said
-  and the analysis goes on.
+  note through `model.clean_note`; and what limited the frame rate with how close the other parts were
+  (`summary.headroom_fields`): `bound` and `next_limit` (each only as one of its own words), `steady_fps`,
+  `bound_gpu_ms`, `bound_frame_ms`, `busiest_thread_pct`, `gpu_ceiling_fps`, `cpu_ceiling_low_fps`,
+  `cpu_ceiling_high_fps`, `speedup_low`, `speedup_high`, `gpu_clock_mhz`, `gpu_clock_max_mhz`, `gpu_power_w`,
+  `gpu_power_limit_w` and `headroom`, the sentence (Headroom). These keys came after the schema's first build and are
+  optional in it: a summary without them, or a capture from before the folder check or the note, reads back with
+  each None. Read back field by field: one of the wrong type reads as None, and the note through `clean_note` again.
+  A failed write is said and the analysis goes on.
 - **The views** (`views.py`), plain dicts: `library_view`, `game_view`, `results_view` (the saved diagnosis through
   `Diagnosis.from_json`, analysed again only when it cannot be read), `moment_view` (`analysis.window` 5 s either side
-  of an event, at most 120 s of it), `compare_view` (the numbers with the better side marked, beside the conditions:
+  of an event, at most 120 s of it), `compare_view` (the numbers with the better side marked, then what limited the
+  frame rate: the FPS outside lag moments (higher is better), "Limited by", GPU busy per frame ("16.1 of 16.9 ms"),
+  the busiest game thread, the NVIDIA GPU clock ("780 of 2,100 MHz") and the headroom sentence, "-" in a summary from
+  before them, with `labels.HEADROOM_NOTE` in the note when either side has a sentence; beside the conditions:
   first "Your note", each recording's note or "-", differing only when both have one and they differ; then
   power plan and mode, refresh rate, how frames were timed, measured length, and what changed in the game itself:
   the exe by size and date, the drop-in files and the Unreal settings files by name, a name both sides hold in
