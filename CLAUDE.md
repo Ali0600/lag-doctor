@@ -102,7 +102,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `write_bytes`: Python's `write_text` writes CRLF on Windows. The copy holds `lagdoctor/`, `laglab/`, `tests/`,
   `scripts/`, `docs/`, `.github/`, `installer/`, `pyproject.toml`, `uv.lock`, `LICENSE` and `.python-version`
   (`COPY_DIRS`, `COPY_FILES`): a test that reads any other file fails before its sabotage (BAD-BASE) until that file
-  is added there.
+  is added there. Keep a run's `TEMP` short (a few letters under `%TEMP%`), never a deep folder such as an agent's
+  scratchpad: one test's file sits 144 characters below `TEMP` (`tests/test_report.py`'s PowerShell test), long paths
+  are off on this laptop, and past 259 characters Python's own `write_bytes` raises FileNotFoundError before any
+  sabotage, so red-first reported three mutations BAD-BASE (2026-11-09).
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
   a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
 - **The game folder check reads folders, never the game** (`capture/gamefiles.py`, what Compare's drop-in and Unreal
