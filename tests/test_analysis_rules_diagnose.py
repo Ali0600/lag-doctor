@@ -41,7 +41,7 @@ def test_every_laglab_scenario_passes_the_end_to_end_judge(mode, seed, hiccups):
     s = synth.laglab(mode, seed=seed, hiccups=hiccups)
     d = diagnose(s.cap)
     assert discrete(s.cap) and "intel" in s.log["gl_renderer"].lower()     # so the judge demands wrong_gpu too
-    v = judge(mode, s.log, s.cap.clock_origin, d, has_discrete_gpu=discrete(s.cap))
+    v = judge(mode, s.log, s.cap.clock_origin, d, has_discrete_gpu=discrete(s.cap), capture_s=s.cap.duration_s)
     assert v.ok, [(c.name, c.detail) for c in v.checks if not c.ok]
     assert not [w for w in d.unchecked.values() if w.startswith("the check failed")]
 

@@ -31,6 +31,7 @@ import random
 from dataclasses import dataclass, field, fields
 from typing import Any, Sequence
 
+from laglab.app import hog_bursts
 from lagdoctor.model import F, G, N, S, Capture, SeriesBuilder, SourceStatus
 
 ORIGIN = 5000.0                   # perf_counter() at capture t = 0
@@ -48,6 +49,14 @@ MODES = ("smooth", "gpu", "cpu", "hitch", "hitch-io", "hitch-wait", "hog", "pace
 # Measured with laglab.app._wait_until at 120 FPS on this laptop, headless, ML job running: 3 of 1,197
 # intervals woke more than 1.4 ms late (worst 19.2 ms). Off by default; see `hiccups`.
 MEASURED_HICCUP_RATE = 3 / 1197
+# What the hogs do to hog mode's game work (laglab.app.FixedWork), fitted to LagLab on this laptop (2026-11-10:
+# 6 ms of work, 32 hogs holding every CPU at 95 %, LagLab in front): frames took 11.4 ms in the bursts (86 FPS),
+# against 8.34 ms (the 120 FPS cap) between them, and 0 to 3 of the ~340 frames of a 4 s burst took over 20 ms.
+# The work runs slower, not less often: a hog on the core's other thread and a lower all-core clock stretch every
+# loop turn, while the thread stays busy the whole time, so its CPU share does not fall.
+HOG_STRETCH = (1.6, 1.8)
+HOG_WAIT_SHARE = 0.003            # now and then the thread still waits out a hog's time slice
+HOG_WAIT_MS = (10.0, 50.0)
 
 
 @dataclass
@@ -64,9 +73,9 @@ class Knobs:
     every_s: float = 3.0          # --every
     io_reads: int = 1500          # --io-reads (4 KiB each)
     io_read_ms: tuple[float, float] = (0.08, 0.16)   # one uncached 4 KiB read on NVMe (model)
-    hog_on_s: float = 6.0         # --hog-on
-    hog_off_s: float = 6.0        # --hog-off
-    hog_game_ms: float = 4.0      # --hog-game-ms
+    hog_on_s: float = 3.0         # --hog-on
+    hog_off_s: float = 2.0        # --hog-off
+    hog_game_ms: float = 6.0      # --hog-game-ms
     hogs: int = 2 * LOGICAL_CPUS  # --hogs default: 2 per CPU
     pace_short_ms: float = 4.0    # --pace-short-ms
     pace_long_ms: float = 20.0    # --pace-long-ms
@@ -117,7 +126,8 @@ def laglab(mode: str = "smooth", **kw: Any) -> Synth:
            "params": {"mode": mode, "fps_cap": k.fps_cap, "every": k.every_s, "hitch_ms": k.hitch_ms},
            "t_start": ORIGIN + k.start_s, "t_stop": ORIGIN + game.stop,
            "frames": [ORIGIN + f.start for f in game.frames],
-           "hitches": game.hitches, "hog_bursts": [[ORIGIN + a, ORIGIN + b] for a, b in game.bursts]}
+           "hitches": game.hitches, "hog_bursts": [[ORIGIN + a, ORIGIN + b] for a, b in game.bursts],
+           "front": _front(k)}
     sources = {"frames": SourceStatus("ok", tool="PresentMon 2.6.0") if k.with_frames else
                SourceStatus("unavailable", "PresentMon needs admin rights or Performance Log Users: access denied"),
                "system": SourceStatus("ok") if k.with_system else SourceStatus("failed", "sampler did not run"),
@@ -135,6 +145,20 @@ def laglab(mode: str = "smooth", **kw: Any) -> Synth:
     truth = ([(h["start"] - ORIGIN, h["end"] - ORIGIN) for h in game.hitches] if game.hitches
              else list(game.bursts))
     return Synth(cap=cap, log=log, truth=truth, knobs=k)
+
+
+def _front(k: Knobs) -> list[list]:
+    """LagLab's log["front"] (laglab.app.FrontWatch): in front from its first frame, away in each `unfocused` span."""
+    spans: list[list[float]] = []
+    for a, b in sorted(k.unfocused):
+        if spans and a <= spans[-1][1]:
+            spans[-1][1] = max(spans[-1][1], b)
+        else:
+            spans.append([a, b])
+    out: list[list] = [[ORIGIN + k.start_s, True]]
+    for a, b in spans:
+        out += [[ORIGIN + a, False], [ORIGIN + b, True]]
+    return out
 
 
 # ------------------------------------------------------------------------ the game ---
@@ -162,11 +186,8 @@ def _run_game(mode: str, k: Knobs, rng: random.Random) -> _Game:
     """LagLab's main loop, one frame at a time (laglab/app.py main())."""
     t, stop = k.start_s, k.duration_s - k.tail_s
     bursts: list[tuple[float, float]] = []
-    if mode == "hog":
-        a = k.start_s + k.warmup_s
-        while a < stop:
-            bursts.append((a, min(a + k.hog_on_s, stop)))
-            a += k.hog_on_s + k.hog_off_s
+    if mode == "hog":                         # LagLab's own schedule
+        bursts = [(a, b) for a, b in hog_bursts(k.start_s, stop - k.start_s, k.warmup_s, k.hog_on_s, k.hog_off_s)]
     budget = 1.0 / k.fps_cap if k.fps_cap > 0 and mode not in ("gpu", "cpu") else 0.0
     next_hitch = t + k.warmup_s
     gpu_free = prev_ready = t
@@ -190,12 +211,9 @@ def _run_game(mode: str, k: Knobs, rng: random.Random) -> _Game:
         elif mode == "hog":
             work += k.hog_game_ms
         if any(a <= fs < b for a, b in bursts):
-            # 2 hogs per logical CPU: the game's thread gets a third to a half of a core, and is now and
-            # then left waiting through a whole hog quantum or two
-            stretch = rng.uniform(2.0, 3.0)
-            run(work * stretch / 1000.0, 1.0 / stretch)
-            if rng.random() < 0.10:
-                t += rng.uniform(15.0, 50.0) / 1000.0
+            run(work * rng.uniform(*HOG_STRETCH) / 1000.0)        # busy all along, only slower (HOG_STRETCH)
+            if rng.random() < HOG_WAIT_SHARE:
+                t += rng.uniform(*HOG_WAIT_MS) / 1000.0
         else:
             run(work / 1000.0)
         if mode in HITCH_MODES and fs >= next_hitch:

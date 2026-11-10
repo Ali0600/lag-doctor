@@ -54,7 +54,7 @@ def test_the_end_to_end_judge_passes_the_hitch_modes(mode):
     s = synth.laglab(mode)
     _, _, evs, _, _ = pipeline(s)
     v = judge(mode, s.log, s.cap.clock_origin, Diagnosis(lag_type="stutter", headline="", events=evs),
-              has_discrete_gpu=False)
+              has_discrete_gpu=False, capture_s=s.cap.duration_s)
     assert v.ok, [(c.name, c.detail) for c in v.checks if not c.ok]
 
 
@@ -66,12 +66,15 @@ def test_steady_modes_have_no_stutters(mode):
     assert stats["hitches"] == 0 and stats["hitch_rate_bound"] == pytest.approx(3 / stats["frames"])
     if mode == "smooth":
         v = judge("smooth", s.log, s.cap.clock_origin, Diagnosis(lag_type="none", headline="", events=evs),
-                  has_discrete_gpu=False)
+                  has_discrete_gpu=False, capture_s=s.cap.duration_s)
         assert v.ok, [(c.name, c.detail) for c in v.checks if not c.ok]
 
 
+# hog: changed on purpose (2026-11-10). Its game work is now a fixed amount the hogs can slow (laglab.app.FixedWork),
+# 6 ms of it, so that bursts drop below 80 % of the 120 FPS cap; the main thread then works and spins out the cap for
+# 98 % of a CPU between bursts, and a capped verdict needs it under 85 % (LC 3.2).
 @pytest.mark.parametrize("mode, verdict", [("smooth", "capped"), ("hitch", "capped"), ("hitch-io", "capped"),
-                                           ("hitch-wait", "capped"), ("hog", "capped"), ("gpu", "gpu"),
+                                           ("hitch-wait", "capped"), ("hog", "cpu_main"), ("gpu", "gpu"),
                                            ("cpu", "cpu_main"), ("pace", "waiting")])
 def test_bound_verdict_per_mode(mode, verdict):
     _, _, _, b, _ = pipeline(synth.laglab(mode))
@@ -232,7 +235,7 @@ def test_the_end_to_end_judge_passes_the_smooth_control_with_the_measured_hiccup
     from lagdoctor.analysis.diagnose import diagnose
     s = synth.laglab("smooth", seed=seed, hiccups=synth.MEASURED_HICCUP_RATE)
     d = diagnose(s.cap)
-    v = judge("smooth", s.log, s.cap.clock_origin, d, has_discrete_gpu=True)
+    v = judge("smooth", s.log, s.cap.clock_origin, d, has_discrete_gpu=True, capture_s=s.cap.duration_s)
     assert v.ok, [(c.name, c.detail) for c in v.checks if not c.ok]
 
 

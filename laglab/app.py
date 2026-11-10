@@ -15,6 +15,7 @@ import tempfile
 import time
 from ctypes import wintypes
 from pathlib import Path
+from typing import Callable
 
 MODES = {
     "smooth": "Light load, capped at --fps-cap. The control case: nothing should be wrong.",
@@ -23,7 +24,7 @@ MODES = {
     "hitch": "Smooth, plus --hitch-ms of main-thread CPU work every --every seconds.",
     "hitch-io": "Smooth, plus a burst of uncached random disk reads every --every seconds.",
     "hitch-wait": "Smooth, plus a --hitch-ms sleep on the main thread every --every seconds.",
-    "hog": "Moderate load while background processes burn every CPU core in bursts.",
+    "hog": "A fixed amount of main-thread work per frame while background processes burn every CPU core in bursts.",
     "pace": "Uneven frame pacing: frames alternate between --pace-short-ms and --pace-long-ms.",
 }
 HITCH_MODES = {"hitch", "hitch-io", "hitch-wait"}
@@ -32,6 +33,9 @@ HITCH_MODES = {"hitch", "hitch-io", "hitch-wait"}
 # Stay far below it: any frame over this halves the shader's work at once.
 GPU_FRAME_LIMIT_S = 0.4
 MAX_ITERATIONS = 400_000
+# Hog mode measures its game work in the warmup's frames until this long before the first burst (the hogs then wake).
+HOG_MEASURE_GAP_S = 0.2
+HOG_MIN_WARMUP_S = 0.5
 
 VERT = """#version 330 core
 in vec2 position;
@@ -73,6 +77,96 @@ def _burn(seconds: float) -> None:
     x = 0
     while time.perf_counter() < end:
         x += 1
+
+
+class FixedWork:
+    """Hog mode's game work: a fixed amount of computation each frame, sized during the warmup.
+
+    Busy-waiting for a fixed time (_burn) ends on time whatever else runs, so background programs cannot slow it, and
+    Windows wakes a sleeping foreground thread ahead of busy ones of the same priority: measured 2026-11-10 on this
+    laptop, 32 hogs held every CPU at 95 % and LagLab still drew a frame every 8.34 ms. A fixed count of loop turns
+    takes longer when a hog shares the core and the clock drops: with 6 ms of it, 120 FPS fell to 86 FPS in the
+    bursts. measure() runs one warmup frame's worth by the clock and counts the turns; fix() takes the 90th percentile
+    of those counts (the warmup overlaps the recorder's start, which slows some of them); run() then does that many
+    turns, each with the clock call measure() makes, whatever the clock says.
+    """
+
+    def __init__(self, ms: float, clock: Callable[[], float] = time.perf_counter) -> None:
+        self.ms = ms
+        self.samples: list[int] = []
+        self.turns: int | None = None
+        self.frames = 0                     # frames run with the fixed count
+        self._clock = clock
+
+    def measure(self) -> None:
+        end, n = self._clock() + self.ms / 1000.0, 0
+        while self._clock() < end:
+            n += 1
+        self.samples.append(n)
+
+    def fix(self) -> int:
+        if not self.samples:
+            raise RuntimeError("hog mode's game work was never measured: lengthen --warmup")
+        ordered = sorted(self.samples)
+        self.turns = max(1, ordered[min(len(ordered) - 1, int(0.9 * len(ordered)))])
+        return self.turns
+
+    def run(self) -> None:
+        if self.turns is None:
+            self.fix()
+        n, clock = 0, self._clock
+        while n < self.turns:
+            clock()
+            n += 1
+        self.frames += 1
+
+
+class FrontWatch:
+    """Whether LagLab's window was the foreground window, kept as changes: [[perf_counter time, in front], ...], the
+    first at the first frame. The end-to-end judge reads it (scripts/e2e_truth.py, front_check): a run whose window
+    was not in front says nothing about the doctor, since Windows shows nothing of a covered window and a change of
+    focus makes the game hitch. Asked by process id, so it needs no window handle; probe() is for the tests."""
+
+    def __init__(self, changes: list, probe: Callable[[], bool] | None = None) -> None:
+        self.changes = changes
+        if probe is None:
+            u32 = ctypes.WinDLL("user32", use_last_error=True)
+            u32.GetForegroundWindow.argtypes = []
+            u32.GetForegroundWindow.restype = wintypes.HWND
+            u32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+            u32.GetWindowThreadProcessId.restype = wintypes.DWORD
+            me = os.getpid()
+
+            def probe() -> bool:
+                owner = wintypes.DWORD(0)
+                hwnd = u32.GetForegroundWindow()
+                return bool(hwnd) and bool(u32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))) \
+                    and owner.value == me
+        self._probe = probe
+
+    def note(self, t: float) -> None:
+        front = bool(self._probe())
+        if not self.changes or self.changes[-1][1] != front:
+            self.changes.append([t, front])
+
+
+def hog_bursts(t_start: float, duration: float, warmup: float, on: float, off: float) -> list[list[float]]:
+    """When hog mode's hogs burn ([from, to] on LagLab's clock): from the end of the warmup, `on` seconds every
+    `on + off`, and only bursts that end before LagLab stops (hog.py is told to stop after the last). A burst cut
+    short by the exit makes too short a slowdown to be a lag event, and the doctor then reads its busy seconds as
+    quiet ones: on 30 s of the synthetic model, that baseline hid every other burst (docs/DECISIONS.md, 2026-11-10)."""
+    t0, stop, period = t_start + warmup, t_start + duration, on + off
+    out: list[list[float]] = []
+    while on > 0 and period > 0 and t0 + len(out) * period + on <= stop:
+        out.append([t0 + len(out) * period, t0 + len(out) * period + on])
+    return out
+
+
+def hog_args(t0: float, on: float, off: float, bursts: list[list[float]], parent: int) -> list[str]:
+    """hog.py and its arguments: the bursts' schedule from t0, ending with the last whole burst (none: at t0)."""
+    burn_s = bursts[-1][1] - t0 if bursts else 0.0
+    return [str(Path(__file__).with_name("hog.py")), "--t0", repr(t0), "--on", str(on), "--off", str(off),
+            "--duration", repr(burn_s), "--parent", str(parent)]
 
 
 def _wait_until(deadline: float) -> None:
@@ -192,14 +286,21 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap.add_argument("--io-reads", type=int, default=1500, help="random 4 KiB reads per hitch-io burst")
     ap.add_argument("--io-file-mb", type=int, default=512, help="size of the hitch-io scratch file")
     ap.add_argument("--hogs", type=int, default=0, help="background hog processes (default 2 per CPU)")
-    ap.add_argument("--hog-on", type=float, default=6.0)
-    ap.add_argument("--hog-off", type=float, default=6.0)
-    ap.add_argument("--hog-game-ms", type=float, default=4.0, help="main-thread work per frame in hog mode")
+    # Short bursts, close together: the doctor names background programs only from 5 or more lag moments
+    # (LIFT_MIN_EVENTS in lagdoctor/analysis/attribute.py), and each burst is one FPS drop, which needs 2 s below 80 %
+    # of the cap; a 30 s run holds 5 of them (docs/DECISIONS.md, 2026-11-10).
+    ap.add_argument("--hog-on", type=float, default=3.0, help="seconds of each hog burst (default 3)")
+    ap.add_argument("--hog-off", type=float, default=2.0, help="seconds between hog bursts (default 2)")
+    ap.add_argument("--hog-game-ms", type=float, default=6.0,
+                    help="main-thread work per frame in hog mode, as measured in the warmup (default 6)")
     ap.add_argument("--pace-short-ms", type=float, default=4.0)
     ap.add_argument("--pace-long-ms", type=float, default=20.0)
     ap.add_argument("--pid-file", type=Path, help="write this process's PID here once frames are flowing")
     ap.add_argument("--log", type=Path, help="write the ground-truth log here as JSON")
-    return ap.parse_args(argv)
+    args = ap.parse_args(argv)
+    if args.mode == "hog" and args.warmup < HOG_MIN_WARMUP_S:
+        ap.error(f"hog mode measures its game work in the warmup: --warmup must be at least {HOG_MIN_WARMUP_S} s")
+    return args
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -226,12 +327,15 @@ def main(argv: list[str] | None = None) -> int:
         "hog_pids": [],
         "hog_survivors": [],
         "gpu_iterations": [],
+        "front": [],          # FrontWatch: when LagLab's window was the foreground window
+        "game_work": None,    # hog mode: FixedWork's measured size and how many frames ran it
     }
 
-    reader = io_path = job = None
+    reader = io_path = job = game_work = None
     hogs: list[subprocess.Popen] = []
     window = pyglet.window.Window(args.width, args.height, caption=f"LagLab - {args.mode}", vsync=args.vsync)
     try:
+        front = FrontWatch(log["front"])
         program = ShaderProgram(Shader(VERT, "vertex"), Shader(FRAG, "fragment"))
         vlist = program.vertex_list(6, GL_TRIANGLES, position=("f", QUAD))
         log["gl_renderer"] = gl_info.get_renderer()
@@ -252,24 +356,17 @@ def main(argv: list[str] | None = None) -> int:
             from laglab.jobs import KillOnCloseJob
             job = KillOnCloseJob()
             hog_t0 = t_start + args.warmup
+            game_work = FixedWork(args.hog_game_ms)
+            log["hog_bursts"] = hog_bursts(t_start, args.duration, args.warmup, args.hog_on, args.hog_off)
             count = args.hogs or 2 * (os.cpu_count() or 4)
-            hog_script = Path(__file__).with_name("hog.py")
             base_python = getattr(sys, "_base_executable", sys.executable)
             for _ in range(count):
                 p = subprocess.Popen(
-                    [base_python, "-I", str(hog_script), "--t0", repr(hog_t0), "--on", str(args.hog_on),
-                     "--off", str(args.hog_off), "--duration", str(t_stop - hog_t0 + 1.0),
-                     "--parent", str(os.getpid())],
+                    [base_python, "-I", *hog_args(hog_t0, args.hog_on, args.hog_off, log["hog_bursts"], os.getpid())],
                     creationflags=subprocess.CREATE_NO_WINDOW)
                 job.add(p.pid)
                 hogs.append(p)
             log["hog_pids"] = [p.pid for p in hogs]
-            period = args.hog_on + args.hog_off
-            k = 0
-            while hog_t0 + k * period < t_stop:
-                on0 = hog_t0 + k * period
-                log["hog_bursts"].append([on0, min(on0 + args.hog_on, t_stop)])
-                k += 1
 
         next_hitch = t_start + args.warmup
         pace_short = True
@@ -287,8 +384,11 @@ def main(argv: list[str] | None = None) -> int:
 
             if args.mode == "cpu":
                 _burn(args.target_ms / 1000)
-            elif args.mode == "hog":
-                _burn(args.hog_game_ms / 1000)
+            elif game_work is not None:                        # hog mode: work the hogs can slow down
+                if frame_start < hog_t0 - HOG_MEASURE_GAP_S:
+                    game_work.measure()
+                else:
+                    game_work.run()
             if args.mode in HITCH_MODES and frame_start >= next_hitch:
                 h0 = time.perf_counter()
                 detail: dict = {}
@@ -308,6 +408,7 @@ def main(argv: list[str] | None = None) -> int:
             program.stop()
             window.flip()
             frames.append(frame_start)
+            front.note(frame_start)
 
             if args.pid_file and len(frames) == 1:
                 _write_json_atomic(args.pid_file, {"pid": os.getpid(), "exe": log["exe"]})
@@ -353,6 +454,9 @@ def main(argv: list[str] | None = None) -> int:
             reader.close()
         if io_path is not None:
             io_path.unlink(missing_ok=True)
+        if game_work is not None:
+            log["game_work"] = {"ms": game_work.ms, "turns": game_work.turns, "measured": len(game_work.samples),
+                                "frames": game_work.frames}
         if args.log:
             _write_json_atomic(args.log, log)
 
