@@ -19,6 +19,7 @@ import bisect
 import math
 import ntpath
 import re
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
@@ -1475,9 +1476,51 @@ def _refresh_rate(cap: Capture, ctx: dict) -> Any:
                       "the game makes.", fixes)
 
 
+def _refresh_holds(e: _Env) -> tuple[Counter, int] | None:
+    """(the displayed frames counted by how many whole refreshes each stayed on screen, the shorter of the two
+    adjacent counts that hold the most of them); None when the refresh rate or the displayed frame times are unknown.
+    Worked out once per capture: vsync_judder and uneven_pacing read the same holds."""
+    if "holds" not in e.memo:
+        hz = e.refresh
+        _, _, d, source = fa.display_series(e.fr)
+        if not hz or source != "display" or not d:
+            e.memo["holds"] = None
+        else:
+            period = 1000.0 / hz
+            held = Counter(max(1, round(x / period)) for x in d)
+            e.memo["holds"] = (held, max(sorted(held), key=lambda n: held[n] + held[n + 1]))
+    return e.memo["holds"]
+
+
+def _vsync_shaped(e: _Env) -> bool:
+    """The screen's refresh shapes what it shows: on a fixed refresh that quantises the display (no cap, VRR not seen,
+    QUANTISED_PCT on whole periods), VSYNC_SHARE of the displayed frames stay up for one of two adjacent whole numbers
+    of refreshes, most often two or more. Swings in the game's own presents then reach the screen as VSync judder; a
+    game whose frame times swing further spreads its holds over three counts or more (LagLab's pace mode: 64 % on
+    two). Where most frames take one refresh, uneven presents stay uneven_pacing's case, as before. One predicate for
+    vsync_judder and uneven_pacing."""
+    holds, q = _refresh_holds(e), _fin(e.bound.get("quantised_pct"))
+    if holds is None or e.verdict == "capped" or q is None or q < QUANTISED_PCT or e.bound.get("vrr") is True:
+        return False
+    held, lo = holds
+    usual = lo if held[lo] >= held[lo + 1] else lo + 1
+    return usual >= 2 and (held[lo] + held[lo + 1]) / sum(held.values()) >= fa.VSYNC_SHARE
+
+
+def _count_word(n: int) -> str:
+    return ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine")[n - 1] if 1 <= n <= 9 else str(n)
+
+
+def _part_of_refresh(n: int) -> str:
+    return {2: "half the refresh", 3: "a third of the refresh", 4: "a quarter of the refresh"}.get(
+        n, f"the refresh divided by {n}")
+
+
 def _vsync_judder(cap: Capture, ctx: dict) -> Any:
-    """LC 2.4, 4.14: VSync on a fixed refresh with the game a little slower than it, so frames alternate between
-    one and two refreshes. Frames dropped because the game runs faster than the screen are dropped_frames'."""
+    """LC 2.4, 4.14: VSync on a fixed refresh with the game between two whole divisors of it, so frames alternate
+    between k and k + 1 refreshes: one and two above half the refresh rate, two and three just below it (58 FPS on
+    144 Hz). A steady lock at one count (72 FPS on 144 Hz) is no judder. Frames dropped because the game runs faster
+    than the screen are dropped_frames'."""
     c = _Case(cap, ctx, "vsync_judder")
     e = c.env
     if e.verdict == "capped":
@@ -1497,37 +1540,45 @@ def _vsync_judder(cap: Capture, ctx: dict) -> Any:
                                             "VRR or VSync off", q, "%", QUANTISED_PCT)
         return c.conclude()
     period = 1000.0 / hz
-    _, _, d, source = fa.display_series(e.fr)
-    if source != "display" or not d:
+    holds = _refresh_holds(e)
+    if holds is None:
         c.lack("frame_timing", W_STEADY, "the displayed frame times were not measured")
         return c.conclude()
-    k = [max(1, round(x / period)) for x in d]
-    if st.median(k) != 1:
-        return None                        # under half the refresh rate: that is low FPS, not judder
-    if _uneven_presents(e):
+    held, lo = holds
+    if _uneven_presents(e) and not _vsync_shaped(e):
         return None                        # the game's own uneven frames: the uneven_pacing rule's case
-    share = sum(1 for x in k if x >= 2) / len(k)
+    usual, other = (lo, lo + 1) if held[lo] >= held[lo + 1] else (lo + 1, lo)
+    n = sum(held.values())
+    share = sum(v for h, v in held.items() if (h > usual if other > usual else h < usual)) / n   # k = 1: held 2+
+    held_for = f"{other} or more refreshes" if other > usual else (f"{other} or fewer refreshes" if other > 1
+                                                                   else "one refresh")
+    most = "most" if 2 * held[usual] > n else f"{100 * held[usual] / n:.0f}%"
     ids = [ev.id for ev in e.events if ev.kind == "pacing"]
     shared = _contention(e)
     if share >= JUDDER_SHARE and shared is not None and e.verdict == "unknown":
         # A7: a shared GPU hid whether a cap (frame_cap's case, above), VSync or the GPU itself sets the cadence
-        return Unchecked("vsync_judder", f"{100 * share:.0f}% of frames stayed on screen for 2 or more refreshes, but "
+        return Unchecked("vsync_judder", f"{100 * share:.0f}% of frames stayed on screen for {held_for}, but "
                                          f"other programs kept the game's GPU {shared:.0f}% busy, so whether VSync, a "
                                          "frame-rate cap or the shared GPU sets that cadence could not be told")
     if share >= JUDDER_SHARE:
-        c.support("frame_timing", W_STEADY, f"{100 * share:.0f}% of frames stayed on screen for 2 or more refreshes "
-                                            f"({2 * period:.1f} ms) while most took one ({period:.1f} ms): judder "
+        c.support("frame_timing", W_STEADY, f"{100 * share:.0f}% of frames stayed on screen for {held_for} "
+                                            f"({other * period:.1f} ms) while {most} took {_count_word(usual)} "
+                                            f"({usual * period:.1f} ms): judder "
                                             f"({100 * JUDDER_SHARE:.0f}% or more)", 100 * share, "%", 100 * JUDDER_SHARE)
     else:
-        c.against("frame_timing", W_STEADY, f"{100 * (1 - share):.0f}% of frames were shown for one refresh: no judder",
+        c.against("frame_timing", W_STEADY, f"{100 * held[usual] / n:.0f}% of frames were shown for "
+                                            f"{_count_word(usual)} refresh{'es' if usual > 1 else ''}: no judder",
                   100 * share, "%", 100 * JUDDER_SHARE)
     fixes = [_advice("Turn on VRR (G-SYNC or FreeSync) if the screen supports it"),
-             _advice(f"Or cap the frame rate at {hz / 2:.0f} FPS (half the refresh)", "Every frame then stays on "
-                                                                                 "screen for the same time."),
+             _advice(f"Or cap the frame rate at {hz / (lo + 1):.0f} FPS ({_part_of_refresh(lo + 1)})",
+                     "Every frame then stays on screen for the same time."),
              _advice("Or turn VSync off", "That trades judder for tearing.")]
-    return c.conclude("VSync judder: frames alternate between one and two refreshes",
-                      "The game runs a little slower than the screen refreshes, so with VSync some frames stay up "
-                      "twice as long as others, which looks jerky.", fixes, ids)
+    why = ("The game runs a little slower than the screen refreshes, so with VSync some frames stay up twice as long "
+           "as others, which looks jerky." if lo == 1 else
+           f"The game runs between {hz / (lo + 1):.0f} and {hz / lo:.0f} FPS on a {hz:.0f} Hz screen, so with VSync "
+           "some frames stay up one refresh longer than others, which looks jerky.")
+    return c.conclude(f"VSync judder: frames alternate between {_count_word(lo)} and {_count_word(lo + 1)} refreshes",
+                      why, fixes, ids)
 
 
 @dataclass
@@ -1654,12 +1705,13 @@ def _uneven_pacing(cap: Capture, ctx: dict) -> Any:
     if share is None:
         c.lack("frame_timing", W_STEADY, "the capture's length is unknown")
         return c.conclude()
+    if share >= UNEVEN_SHARE and _vsync_shaped(e):
+        return None                        # holds on two adjacent refresh counts: vsync_judder's case, never fine
     if share >= UNEVEN_SHARE:
         swing = max(_fin(ev.detail.get("present_swing_pct")) or 0.0 for ev in uneven)
-        sev = st.median([float(ev.severity) for ev in uneven])
         # A1: one frame-time pattern is a steady metric past its threshold, never a direct readout (LC 5.1)
         c.support("frame_timing", W_STEADY, f"the game's own frame times swung by {ev_mod.PACING_SWING_MS:.0f} ms or "
-                                            f"more on up to {swing:.0f}% of frames (median swing {sev:.1f} ms), over "
+                                            f"more on up to {swing:.0f}% of frames, over "
                                             f"{100 * share:.0f}% of the capture ({100 * UNEVEN_SHARE:.0f}% or more)",
                   100 * share, "%", 100 * UNEVEN_SHARE)
     else:

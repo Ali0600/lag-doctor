@@ -46,8 +46,10 @@ def test_every_laglab_scenario_passes_the_end_to_end_judge(mode, seed, hiccups):
     assert not [w for w in d.unchecked.values() if w.startswith("the check failed")]
 
 
-@pytest.mark.parametrize("mode, lag, lead", [("smooth", "none", None), ("gpu", "low_fps", "wrong_gpu"),
-                                             ("cpu", "low_fps", "cpu_limit"), ("hitch", "stutter", "game_cpu_spike"),
+# gpu and cpu: changed on purpose. Their frames stay up 3 or 4 of the 144 Hz refreshes (40 FPS), which is VSync judder
+# vsync_judder used to miss once most frames took 2 or more, so they are low FPS and uneven pacing: "mixed".
+@pytest.mark.parametrize("mode, lag, lead", [("smooth", "none", None), ("gpu", "mixed", "wrong_gpu"),
+                                             ("cpu", "mixed", "cpu_limit"), ("hitch", "stutter", "game_cpu_spike"),
                                              ("hitch-io", "stutter", "asset_streaming"),
                                              ("hitch-wait", "stutter", "game_stall"), ("hog", "mixed", "background_hogs")])
 def test_lag_type_and_the_finding_the_headline_names(mode, lag, lead):
@@ -74,7 +76,8 @@ def test_laglabs_pace_mode_is_uneven_and_low_and_the_headline_names_the_uneven_p
 
 def test_headlines_carry_the_numbers_and_the_rule_of_three():
     gpu = diagnose(synth.laglab("gpu").cap).headline
-    assert gpu.startswith("Low frame rate (40 FPS average on a 144 Hz screen), most likely running on the wrong GPU")
+    assert gpu.startswith("Several problems: Low frame rate (40 FPS average on a 144 Hz screen) and uneven frame pacing "
+                          "over 98% of the capture, most likely running on the wrong GPU; possible: VSync judder;")
     assert "no hitches ≥ 50 ms in" in gpu and "at 95% confidence" in gpu
     hitch = diagnose(synth.laglab("hitch").cap).headline
     assert hitch.startswith("9 stutters (18.0 a minute, worst ") and "no hitches" not in hitch
@@ -232,6 +235,37 @@ def test_when_the_drops_claimer_outranks_the_steady_limit_the_headline_still_nam
     d = diagnose(gpu_bound_with_drops(drop_r=0.40))
     assert [f.cause for f in d.findings[:2]] == ["background_hogs", "gpu_limit"]
     assert "most likely GPU at its limit; likely: background programs" in d.headline, d.headline
+
+
+def held_two_or_three(seed=5, n=1700):
+    """A GPU-bound game under VSync on the 144 Hz panel (a made-up shape): frames stay up two or three refreshes (now
+    and then one or four) in runs, each presented that hold plus up to 1.5 ms of jitter; GPU busy 16.5 ms a frame."""
+    import random
+    rng = random.Random(seed)
+    p = 1000.0 / synth.REFRESH_HZ
+    holds = [2]
+    while len(holds) < n:
+        holds.append(holds[-1] if rng.random() < 0.5 else rng.choices([1, 2, 3, 4], [3, 52, 43, 2])[0])
+    ms = [h * p + rng.uniform(-1.5, 1.5) for h in holds]
+    fr = synth.frames_table(ms, gpu_ms=16.5, display_ms=[h * p for h in holds], displayed=1)
+    cap = synth.capture(fr, hz=synth.REFRESH_HZ, duration=1.0 + sum(ms) / 1000.0)
+    cap.sources = synth.sources(("frames",))
+    return cap
+
+
+def test_a_game_vsync_holds_two_and_three_refreshes_is_named_vsync_judder_with_the_48_fps_cap():
+    # A real recording held 92 % of its frames two or three refreshes on a 144 Hz screen with VSync on, and its report
+    # said "the game itself hands over its frames at uneven intervals": vsync_judder gave up once most frames held two
+    d = diagnose(held_two_or_three())
+    pace = [e for e in d.events if e.kind == "pacing"]
+    assert d.stats["bound"] == "gpu" and pace
+    assert max(e.detail["present_swing_pct"] for e in pace) > 10.0        # the presents swing too
+    judder = [f for f in d.findings if f.cause == "vsync_judder"]
+    assert judder and judder[0].title == "VSync judder: frames alternate between two and three refreshes"
+    assert "Or cap the frame rate at 48 FPS (a third of the refresh)" in [x.title for x in judder[0].fixes]
+    assert set(judder[0].event_ids) == {e.id for e in pace}
+    assert "uneven_pacing" not in causes(d) and "uneven_pacing" not in d.cleared
+    assert "the game itself hands over its frames at uneven intervals" not in d.headline
 
 
 def test_every_frame_rate_rule_is_sorted_into_a_steady_lead_or_left_out_on_purpose():

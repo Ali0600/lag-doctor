@@ -1026,7 +1026,16 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   `labels.plan_has_power_mode`), whatever slider position the capture holds.
 - `vsync_judder` (real VSync judder) and `dropped_frames` (the game presents faster than a fixed refresh and
   frames are dropped, `rules._dropped_judder`); `uneven_pacing`: pacing events with uneven *presents*
-  (present_swing_pct > 10 %) covering ≥ 10 % of the capture, weighed as a steady metric.
+  (present_swing_pct > 10 %) covering ≥ 10 % of the capture, weighed as a steady metric, its text never quoting the
+  events' severity (the displayed frames' swing) as the game's own. `vsync_judder` judges the displayed holds in
+  whole refreshes (`rules._refresh_holds`) between the two adjacent counts k and k + 1 that hold the most frames, at
+  any k: one and two above half the refresh rate, two and three for 58 FPS on 144 Hz; frames on the other side of the
+  usual hold ≥ 10 % is judder, one count only (72 FPS on 144 Hz) is no judder, and the cap it offers is refresh /
+  (k + 1). Uneven presents leave it to `uneven_pacing`, except where the screen shapes them (`rules._vsync_shaped`,
+  one predicate for both: no cap, frames quantised, VRR not seen, the usual hold 2 or more, and ≥ 90 % of the holds on
+  the two counts): then they are VSync's judder and `uneven_pacing` stays silent. A real recording held 92 % of its
+  frames on two or three refreshes and was reported as the game's own uneven pacing. Where most frames take one
+  refresh, uneven presents stay `uneven_pacing`'s, as before.
 - `game_dvr`: background recording known off concludes against; unknown is advice only (no auto-fix);
   `game_dvr_off` is offered only when background recording is known on.
 - `not_focused`: the share of the capture behind another window (>= 10 %, on the CPU side), or the lift test.

@@ -1313,14 +1313,82 @@ def test_vsync_judder_needs_ninety_percent_of_frames_on_whole_refreshes(q, kind)
     assert isinstance(res, kind)
 
 
-def test_vsync_judder_leaves_caps_low_fps_and_uneven_presents_to_their_own_rules():
+def test_vsync_judder_leaves_caps_and_a_games_own_uneven_presents_to_their_own_rules():
     assert run("vsync_judder", make(), frames=judder_frames(80, 20),
                bound={"verdict": "capped", "quantised_pct": 100.0}) is None
-    assert run("vsync_judder", make(), frames=judder_frames(20, 80),
-               bound={"verdict": "gpu", "quantised_pct": 100.0}) is None
     uneven = LagEvent(1, "pacing", 0.0, 29.0, 8.0, {"present_swing_pct": 60.0})
-    assert run("vsync_judder", make(), frames=judder_frames(80, 20), events=[uneven],
+    assert run("vsync_judder", make(), frames=judder_frames(80, 20), events=[uneven],      # one refresh: as before
                bound={"verdict": "gpu", "quantised_pct": 100.0}) is None
+
+
+def holds_frames(holds, jitter=(0.0,)):
+    """Frames each shown for the given whole number of the 144 Hz panel's refreshes and presented that hold plus the
+    next jitter value (ms, repeating): presents that follow the display, displayed intervals on whole periods."""
+    p = 1000.0 / 144.0
+    return synth.frames_table([h * p + jitter[i % len(jitter)] for i, h in enumerate(holds)],
+                              display_ms=[h * p for h in holds], displayed=1)
+
+
+def spread(**counts):
+    """Holds by count, e.g. spread(two=52, three=48) -> [2] * 52 + [3] * 48."""
+    words = {"one": 1, "two": 2, "three": 3, "four": 4}
+    return [h for name, n in counts.items() for h in [words[name]] * n]
+
+
+@pytest.mark.parametrize("holds, title, evidence, cap", [
+    (spread(one=20, two=80), "one and two", "20% of frames stayed on screen for one refresh (6.9 ms) while most took "
+                                            "two (13.9 ms)", "72 FPS (half the refresh)"),
+    (spread(two=52, three=48), "two and three", "48% of frames stayed on screen for 3 or more refreshes (20.8 ms) while "
+                                                "most took two (13.9 ms)", "48 FPS (a third of the refresh)"),
+    (spread(three=41, four=59), "three and four", "41% of frames stayed on screen for 3 or fewer refreshes (20.8 ms) "
+                                                  "while most took four (27.8 ms)", "36 FPS (a quarter of the refresh)")])
+def test_vsync_judder_is_judged_between_any_two_adjacent_whole_numbers_of_refreshes(holds, title, evidence, cap):
+    # Most frames held two refreshes or more used to read as low FPS, not judder, so the rule gave up: 80 FPS on
+    # 144 Hz (1 or 2), 58 FPS (2 or 3), 40 FPS (3 or 4). The cap that ends it is refresh / (k + 1)
+    res = run("vsync_judder", make(), frames=holds_frames(holds), bound={"verdict": "gpu", "quantised_pct": 100.0})
+    assert is_finding(res, "medium") and res.title == f"VSync judder: frames alternate between {title} refreshes"
+    assert res.evidence[0].text == evidence + ": judder (10% or more)."
+    assert [f.title for f in res.fixes] == ["Turn on VRR (G-SYNC or FreeSync) if the screen supports it",
+                                            f"Or cap the frame rate at {cap}", "Or turn VSync off"]
+
+
+def test_a_steady_lock_at_two_refreshes_is_no_judder():
+    # what the old "median hold 1" guard protected: 72 FPS on 144 Hz, every frame two refreshes, is even
+    res = run("vsync_judder", make(), frames=holds_frames(spread(two=100)),
+              bound={"verdict": "gpu", "quantised_pct": 100.0})
+    assert isinstance(res, rules.Cleared) and res.text == "100% of frames were shown for two refreshes: no judder."
+
+
+FOLLOWS = ([2, 3] * 43 + [2] * 7 + [1] * 4 + [4] * 3) * 10         # per 100 frames: 2: 50, 3: 43, 1: 4, 4: 3
+OWN = ([1] * 37 + [2] * 8 + [3] * 55) * 10          # a game's own 4 / 20 ms swings spread over three counts (pace mode)
+SWUNG = LagEvent(1, "pacing", 0.0, 29.0, 6.9, {"present_swing_pct": 30.0, "swing_pct": 30.0, "criterion": "swing"})
+
+
+def test_presents_that_swing_with_two_and_three_refreshes_are_vsync_judder_not_the_games_own_pacing():
+    # A GPU-bound game under VSync (made-up numbers of a real recording's shape): 93 % of its frames stay up two or
+    # three refreshes, and its presents swing, so the pacing events flag uneven presents. vsync_judder gave up twice
+    # (most frames past one refresh; uneven presents), and uneven_pacing called the swing the game's own
+    frames, bound = holds_frames(FOLLOWS, jitter=(0.9, -0.6, 0.2, -1.1, 0.5)), {"verdict": "gpu", "quantised_pct": 100.0}
+    res = run("vsync_judder", make(), frames=frames, bound=bound, events=[SWUNG])
+    assert is_finding(res, "medium") and res.event_ids == [1]
+    assert res.title == "VSync judder: frames alternate between two and three refreshes"
+    assert res.evidence[0].text == ("46% of frames stayed on screen for 3 or more refreshes (20.8 ms) while 50% took "
+                                    "two (13.9 ms): judder (10% or more).")
+    assert "Or cap the frame rate at 48 FPS (a third of the refresh)" in [f.title for f in res.fixes]
+    assert run("uneven_pacing", make(), frames=frames, bound=bound, events=[SWUNG]) is None    # never "fine" either
+    # control: the game's own swings spread its holds over three counts; that stays uneven pacing, as before
+    own = holds_frames(OWN)
+    assert run("vsync_judder", make(), frames=own, bound=bound, events=[SWUNG]) is None
+    assert is_finding(run("uneven_pacing", make(), frames=own, bound=bound, events=[SWUNG]), "medium")
+
+
+@pytest.mark.parametrize("off, judder", [(100, True), (101, False)])     # 900 or 899 of 1,000 holds on two and three
+def test_swinging_presents_are_judder_only_with_ninety_percent_of_the_holds_on_two_counts(off, judder):
+    holds = [2] * 500 + [3] * (500 - off) + [1] * 50 + [4] * (off - 50)
+    frames, bound = holds_frames(holds), {"verdict": "gpu", "quantised_pct": 100.0}
+    got = (is_finding(run("vsync_judder", make(), frames=frames, bound=bound, events=[SWUNG])),
+           is_finding(run("uneven_pacing", make(), frames=frames, bound=bound, events=[SWUNG])))
+    assert got == (judder, not judder)
 
 
 def anim_pacing(t0=0.5, t1=29.5, ms=6.4, i=1):
@@ -1444,6 +1512,14 @@ def test_uneven_pacing_is_a_steady_metric_never_a_direct_readout(span):
     # pin "likely" from half the capture on, which made hitches' own swings outrank the hitches.
     res = run("uneven_pacing", make(), events=[pacing(1.0, 1.0 + span, 70.0)])
     assert is_finding(res, "medium") and res.event_ids == [1]
+
+
+def test_uneven_pacing_never_gives_the_screens_swing_as_the_games_own():
+    # a pacing event's severity is the median swing of the displayed frames (events.py), which this text printed as
+    # "the game's own frame times ... (median swing 9.0 ms)"
+    res = run("uneven_pacing", make(), events=[pacing(1.0, 29.0, 70.0)])
+    assert res.evidence[0].text == ("The game's own frame times swung by 4 ms or more on up to 70% of frames, over 93% "
+                                    "of the capture (10% or more).")
 
 
 def test_uneven_pacing_never_covers_more_than_the_whole_capture():

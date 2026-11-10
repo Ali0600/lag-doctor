@@ -467,16 +467,17 @@
   "old": "    if e.verdict == \"capped\":\n        return None                        # a cap that does not divide the refresh",
   "new": "    if False:\n        return None                        # a cap that does not divide the refresh",
   "tests": [
-   "tests/test_analysis_rules.py::test_vsync_judder_leaves_caps_low_fps_and_uneven_presents_to_their_own_rules"
+   "tests/test_analysis_rules.py::test_vsync_judder_leaves_caps_and_a_games_own_uneven_presents_to_their_own_rules"
   ]
  },
  {
   "name": "judder judged on uneven presents",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if _uneven_presents(e):\n        return None",
+  "old": "    if _uneven_presents(e) and not _vsync_shaped(e):\n        return None",
   "new": "    if False:\n        return None",
   "tests": [
-   "tests/test_analysis_rules.py::test_vsync_judder_leaves_caps_low_fps_and_uneven_presents_to_their_own_rules"
+   "tests/test_analysis_rules.py::test_vsync_judder_leaves_caps_and_a_games_own_uneven_presents_to_their_own_rules",
+   "tests/test_analysis_rules.py::test_presents_that_swing_with_two_and_three_refreshes_are_vsync_judder_not_the_games_own_pacing"
   ]
  },
  {
@@ -1741,6 +1742,91 @@
   "new": "    elif False:",
   "tests": [
    "tests/test_analysis_rules.py::test_a_gpu_verdict_from_too_few_steady_frames_never_claims_frame_timing"
+  ]
+ },
+ {
+  "name": "judder given up on presents that swing",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if _uneven_presents(e) and not _vsync_shaped(e):\n        return None",
+  "new": "    if _uneven_presents(e):\n        return None",
+  "tests": [
+   "tests/test_analysis_rules.py::test_presents_that_swing_with_two_and_three_refreshes_are_vsync_judder_not_the_games_own_pacing",
+   "tests/test_analysis_rules.py::test_swinging_presents_are_judder_only_with_ninety_percent_of_the_holds_on_two_counts",
+   "tests/test_analysis_rules_diagnose.py::test_a_game_vsync_holds_two_and_three_refreshes_is_named_vsync_judder_with_the_48_fps_cap"
+  ]
+ },
+ {
+  "name": "ninety percent on two counts made exclusive",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "(held[lo] + held[lo + 1]) / sum(held.values()) >= fa.VSYNC_SHARE",
+  "new": "(held[lo] + held[lo + 1]) / sum(held.values()) > fa.VSYNC_SHARE",
+  "tests": [
+   "tests/test_analysis_rules.py::test_swinging_presents_are_judder_only_with_ninety_percent_of_the_holds_on_two_counts"
+  ]
+ },
+ {
+  "name": "a game held one refresh exempted from its own uneven presents",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return usual >= 2 and (held[lo]",
+  "new": "    return usual >= 1 and (held[lo]",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsync_judder_leaves_caps_and_a_games_own_uneven_presents_to_their_own_rules"
+  ]
+ },
+ {
+  "name": "uneven pacing keeps the screen's VSync judder",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if share >= UNEVEN_SHARE and _vsync_shaped(e):\n        return None",
+  "new": "    if False:\n        return None",
+  "tests": [
+   "tests/test_analysis_rules.py::test_presents_that_swing_with_two_and_three_refreshes_are_vsync_judder_not_the_games_own_pacing",
+   "tests/test_analysis_rules_diagnose.py::test_a_game_vsync_holds_two_and_three_refreshes_is_named_vsync_judder_with_the_48_fps_cap"
+  ]
+ },
+ {
+  "name": "judder counted on one side of the usual hold only",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "(h > usual if other > usual else h < usual)",
+  "new": "(h > usual)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsync_judder_is_judged_between_any_two_adjacent_whole_numbers_of_refreshes"
+  ]
+ },
+ {
+  "name": "judder share counts the usual hold",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    share = sum(v for h, v in held.items() if (h > usual if other > usual else h < usual)) / n",
+  "new": "    share = held[usual] / n",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_steady_lock_at_two_refreshes_is_no_judder"
+  ]
+ },
+ {
+  "name": "the judder cap always half the refresh",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "{hz / (lo + 1):.0f} FPS ({_part_of_refresh(lo + 1)})",
+  "new": "{hz / 2:.0f} FPS ({_part_of_refresh(2)})",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsync_judder_is_judged_between_any_two_adjacent_whole_numbers_of_refreshes",
+   "tests/test_analysis_rules_diagnose.py::test_a_game_vsync_holds_two_and_three_refreshes_is_named_vsync_judder_with_the_48_fps_cap"
+  ]
+ },
+ {
+  "name": "the judder pair taken at the shortest hold",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "max(sorted(held), key=lambda n: held[n] + held[n + 1])",
+  "new": "min(held)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_presents_that_swing_with_two_and_three_refreshes_are_vsync_judder_not_the_games_own_pacing"
+  ]
+ },
+ {
+  "name": "uneven pacing quotes the screen's swing as the game's",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"more on up to {swing:.0f}% of frames, over \"",
+  "new": "f\"more on up to {swing:.0f}% of frames (median swing {max(float(ev.severity) for ev in uneven):.1f} ms), over \"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_uneven_pacing_never_gives_the_screens_swing_as_the_games_own"
   ]
  }
 ]

@@ -532,7 +532,9 @@ windowed events:
   pacing episode  : over 2 s, > 10% of |D_i - D_(i-1)| >= 4 ms (CapFrameX bins [S11]), or
                     p95(|MsAnimationError|) > 2 ms
   VSync judder    : VSync on, no VRR (§3.3), median D == 1 refresh period and >= 10% of intervals at
-                    2 periods
+                    2 periods; more generally, holds alternating between k and k + 1 periods with
+                    >= 10% on the side away from the usual one, at any k (58 FPS on 144 Hz: 2P and 3P)
+                    [inferred: the same one-refresh swing, measured on a real recording 2026-11-09]
 ```
 
 Summary numbers for every run:
@@ -1186,8 +1188,11 @@ at 144 [verified: L4]. Displayed FPS is capped at the lower refresh rate under V
 
 **VSync judder:**
 
-- VSync is quantised (§3.3) and FPS sits below refresh, so intervals alternate between 1P and 2P.
-- Manual: enable VRR where available; otherwise cap at refresh/2, or turn VSync off.
+- VSync is quantised (§3.3) and FPS sits below refresh, so intervals alternate between 1P and 2P;
+  below refresh/2 they alternate between kP and (k + 1)P the same way (58 FPS on 144 Hz: 2P and 3P)
+  [inferred].
+- Manual: enable VRR where available; otherwise cap at refresh/2 (refresh/(k + 1) below it), or turn
+  VSync off.
 
 **Misconfigured cap:**
 
@@ -2057,7 +2062,7 @@ The default thresholds are [inferred] unless a source is given.
 | 4.11b Cross-adapter copy | **static config** + GPU engine | game on the dGPU; window's display target on the iGPU LUID; HybridPresent=1 | Manual: MUX/dGPU ("Ultimate") mode — this model family lists "MUX Switch + Optimus"; dGPU-wired monitor | S6, S26, S42, S52, L4 |
 | 4.12 Power plan / battery / mode | **static config** + CPU/GPU limits | AC=0; saver=1; effective mode 0/1; power mode best efficiency; OEM "Silent" | Auto: Best Performance power mode on AC (reversible). Manual: plug in, OEM mode | S34, S35, S36, L4 |
 | 4.13 Refresh below max | **static config** | current Hz < max Hz at the current resolution | Auto: dynamic mode change + timed revert (reversible) | S37, L4 |
-| 4.14 VSync judder / bad cap / blt present | **frame timing** | quantised ≥ 90% and ≥ 10% at 2P; cap C < 0.9 × refresh; PresentMode `Composed: Copy with *` | Manual: VRR, cap = refresh − 3 [unverified], Optimizations for windowed games | S1, S26, S27, S47 |
+| 4.14 VSync judder / bad cap / blt present | **frame timing** | quantised ≥ 90% and ≥ 10% at 2P (at (k + 1)P or kP around the usual hold, any k [inferred]); cap C < 0.9 × refresh; PresentMode `Composed: Copy with *` | Manual: VRR, cap = refresh − 3 [unverified], Optimizations for windowed games | S1, S26, S27, S47 |
 | 4.15 Overlays / recording | **GPU engine** | other process `videoencode` > 0; encoder util > 0; DVR on | Manual: turn off background recording | S48, L4, L6, L12 |
 | 4.16 Frame generation | **frame timing** | FrameType ≠ Application; MsFlipDelay set; presents ≈ k × simulation rate | Manual (judge on displayed and app cadence) | S1, S5, S16, S17 |
 | 4.17 HAGS | static config | HwSchEnabled from D3DKMT | Manual; info only (needed for DLSS-FG) | S7, S17, S41, L4 |

@@ -96,8 +96,58 @@
 - **Keep the app's view showing while its window can still be seen** during a recording (a second monitor), if
   Windows' own occlusion state can tell "in sight" from "covered by the game"; today an inactive window hides its view
   and draws one still line. Revisit hook: `AppWindow.shown` (DECISIONS 2026-11-09, M4's end).
+- **Lead the headline with whichever finding explains the most lag time**, not the best-ranked claimer. Revisit hook:
+  `diagnose._lead` (DECISIONS 2026-11-09, the audit's eleven bugs).
+- **Save the game's top threads per tick** and judge the busiest thread on each one's median, unbiased even for work
+  that hops between threads. Revisit hook: `sysmon.ProcessRates.update`, `frames.busiest_column` (same entry).
+- **Take uneven presents for VSync's judder where most frames hold one refresh too**. Revisit hook: `usual >= 2` in
+  `rules._vsync_shaped` (same entry).
+- **The game's own packets as the arbiter of ICMP loss** on its server, which would cover rate-limited servers.
+  Revisit hook: `diagnose._ignored_losses` with `rules._packet_loss` (same entry).
 
 ---
+
+## 2026-11-09: How the bottleneck audit's eleven analysis bugs were fixed
+
+The audit of "which part of a PC limits a game" found eleven analysis bugs; the owner said "Fix all eleven". Where a
+fix forked, the implementing session chose; the owner has not weighed in.
+- **The headline's lead (chosen)**: the steady limit leads when the steady low-FPS time is longer than the events the
+  best-ranked claimer claims, and that claimer stays as a side note, so the headline never contradicts the app's Top
+  cause.
+  - **Keep the claimer, document that the headline and Top cause can differ**: rejected; a GPU-bound recording's
+    headline blamed background programs for 4 FPS drops.
+  - **Lead with whichever finding explains the most lag time**: deferred, worth trying; it reorders stutter headlines
+    LC 5.4 ranks by confidence. Revisit hook: `diagnose._lead`.
+- **Throttling's lift test only supports (chosen)**, and adds no line when it does not: LC 5.2's "contradicts" is for
+  stutter causes.
+  - **Count "contradicts" only where the throttle could have risen**: rejected; throttling's claim is the steady
+    frame rate, which no stutter speaks to.
+- **The busiest thread, judged on the thread busiest over the previous second (chosen)**: a new sampler column,
+  `game_lead_thread_pct`, read at the thread's share in the current tick; unbiased for steady loads.
+  - **Each thread's 1 s mean, then the maximum**: rejected; four threads at 80 % still read 85 %.
+  - **The top threads saved per tick, each one's median, then the maximum**: deferred, worth trying; unbiased even for
+    work that hops between threads every second, at the cost of the capture format. Revisit hook:
+    `sysmon.ProcessRates.update` and `frames.busiest_column`.
+- **Under VSync at k >= 2, a thread whose own CPU time a frame passes k - 1 periods is the limit (chosen)**, in place of
+  MsCPUBusy, which counts waits outside Present().
+  - **Only a saturated thread**: rejected; a thread VSync holds waits for the refresh and is never saturated.
+- **VSync judder at any k (chosen)**, judged on the two adjacent hold counts with the most frames, with uneven
+  presents taken for VSync's when 90 % of the holds sit on those two counts (`VSYNC_SHARE`; a real recording: 92 %).
+  - **Only up to two and three refreshes**: rejected; an invented bound. LagLab's gpu and cpu modes (3 or 4 refreshes)
+    now read low FPS and uneven pacing.
+  - **The same exemption where most frames take one refresh**: deferred, worth trying. Revisit hook: `usual >= 2` in
+    `rules._vsync_shaped`.
+- **A game server or router that never answered a ping has no loss events (chosen)**; the internet anchor keeps them
+  (an outage).
+  - **The game's own packets as the arbiter of ICMP loss**: deferred, worth trying; it would also cover rate-limited
+    servers and one that answered, then stopped while its packets kept arriving. Revisit hook:
+    `diagnose._ignored_losses` with `rules._packet_loss`'s list of far losses.
+- **Disk reads capped at what the physical disks read, and none without their counter (chosen)**.
+  - **The game's reads, worded "from disk or from memory"**: rejected; the title and the SSD advice would still claim
+    disk loading.
+
+Revisit hooks: as named above, and `tests/redfirst/analysis_rules.json`, `diagnose.json`, `analysis_frames.json` and
+`sysmon.json`, which pin each choice.
 
 ## 2026-11-09: M4's end flashes the taskbar button and never brings the window forward
 

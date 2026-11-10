@@ -412,6 +412,24 @@ mostly steady time, and the finding that explains it (the part at its limit) cla
 programs, and the headline said "most likely background programs".
 **Takeaway**: pick the cause a summary names by the share of the problem it explains, steady time included.
 
+### The busiest of several noisy readings reads high: pick on one sample, read on another
+Taking, each tick, the maximum over several equally busy threads picks whichever one the noise favoured, so its mean
+sits above every thread's true level; choosing the thread on earlier ticks and reading it on this one removes the bias.
+**Why it came up**: Windows charges thread CPU one 15.625 ms clock tick at a time, so four threads at 75 % each read 86 %
+as "the busiest thread", past the 85 % at which lag-doctor says one CPU thread limits the game; a frame-capped game read
+CPU-bound. The thread busiest over the previous second, read at its share in the current tick, reads 75 %.
+**Takeaway**: never estimate a maximum by averaging per-sample maxima of noisy signals; select on one sample and measure
+on an independent one.
+
+### A number printed under the wrong label misleads its next reader, its author included
+A report line "the game's own frame times swung ... (median swing 7.0 ms)" took its number from the displayed frames,
+not the game's presents.
+**Why it came up**: reading that line for a V-sync judder bug, I took 7.0 ms (one refresh at 144 Hz) for a measurement of
+the game's presents and briefed an investigation that the presents followed the display; the presents were in fact a
+single hump at 16.9 ms, and the line's number was the screen's own swing.
+**Takeaway**: a number on screen is named by the quantity it was computed from; before building on one, trace it back to
+its column.
+
 ### A process's read counter is not a disk read counter
 Windows' per-process I/O counters (`ReadTransferCount`, Task Manager's "I/O read bytes") count every read the
 process asked for, and the file cache serves many of them from memory without touching a disk.
