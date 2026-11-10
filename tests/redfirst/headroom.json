@@ -111,10 +111,19 @@
  {
   "name": "a CPU verdict its threads did not saturate gets no speedup",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "        if cpu is None or gpu is None or not saturated:",
-  "new": "        if cpu is None or gpu is None:",
+  "old": "        if cpu is None or not saturated or (gpu is None and not (idle_gpu and display is not None)):",
+  "new": "        if cpu is None or (gpu is None and not (idle_gpu and display is not None)):",
   "tests": [
    "tests/test_analysis_frames.py::test_headroom_says_nothing_of_a_next_limit_it_cannot_see"
+  ]
+ },
+ {
+  "name": "a GPU inside the HAGS margin leaves the screen as the next limit",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    idle_gpu = g is not None and g <= 0 and shared is None",
+  "new": "    idle_gpu = False",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_of_a_cpu_bound_game_starts_at_the_rate_it_reached"
   ]
  },
  {
@@ -151,6 +160,42 @@
   "new": "if vals[G.CLOCK_MAX_MHZ] else None,",
   "tests": [
    "tests/test_analysis_rules.py::test_the_clock_depth_takes_the_inventorys_top_clock_and_drops_absurd_readings"
+  ]
+ },
+ {
+  "name": "a speedup takes one form at both ends once it rounds to 10",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return f\"{x:.0f}\" if round(x, 1) >= 10 else f\"{x:.1f}\"",
+  "new": "    return f\"{x:.0f}\" if x >= 10 else f\"{x:.1f}\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_limit_names_the_next_limit_in_plain_words"
+  ]
+ },
+ {
+  "name": "frame rates of a thousand or more carry a thousands comma",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    a, b = f\"{lo:,.0f}\", f\"{lo if hi is None else hi:,.0f}\"",
+  "new": "    a, b = f\"{lo:.0f}\", f\"{lo if hi is None else hi:.0f}\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cpu_limit_says_how_far_off_the_gpus_limit_is"
+  ]
+ },
+ {
+  "name": "a borderline verdict never says both sides are close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "against the {steady:.0f} FPS it ran at\"), True",
+  "new": "both close to the {steady:.0f} FPS it ran at\"), True",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_borderline_verdict_gives_both_ceilings"
+  ]
+ },
+ {
+  "name": "a nearly idle GPU sends the CPU's headroom to the screen",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if gpu is None and nxt is None:",
+  "new": "        if gpu is None:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cpu_limit_says_how_far_off_the_gpus_limit_is"
   ]
  },
  {

@@ -925,7 +925,8 @@ frames (none with fewer than 300 of them or 10 s), and so roughly how much a fas
 - **Next limit**: for a GPU or CPU verdict, the lowest other ceiling (`cpu_or_display` when the CPU's range spans
   the refresh rate) and `speedup` = [next low / limit high, next high / limit low], never under 1, the limit's own
   range running from `steady_fps` to its ceiling (its ceiling alone under a VSync lock, which rounds `steady_fps`
-  down). None where the other side was not measured, or where a CPU verdict did not come from saturated threads
+  down). A GPU busy no longer than the HAGS margin (G = 0) has no ceiling to give but is never the next limit: the
+  screen is. None where the other side was not measured, or where a CPU verdict did not come from saturated threads
   (VSync's `MsCPUBusy` branch).
 
 The rules say it in one sentence (`rules.headroom_text`), second in the evidence of `gpu_limit` and `cpu_limit`

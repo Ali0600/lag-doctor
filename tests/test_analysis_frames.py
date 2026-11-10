@@ -563,6 +563,13 @@ def test_headroom_of_a_cpu_bound_game_starts_at_the_rate_it_reached():
     assert b["verdict"] == "cpu_main" and h["cpu_fps"] == pytest.approx([40.0, 40.0 / 0.95])
     assert (h["limit"], h["next"]) == ("cpu", "gpu") and h["gpu_fps"] == pytest.approx(100.0)
     assert h["speedup"] == pytest.approx([100.0 * 0.95 / 40.0, 100.0 / 40.0])
+    # its GPU busy 0.4 ms with HAGS on, inside the 0.5 ms margin (G = 0): no GPU ceiling, and the screen is next
+    b = bound_of(jitter, 0.4, thread=95.0, hz=144.003, hags=True)
+    h = b["headroom"]
+    assert b["verdict"] == "cpu_main" and b["gpu_ms"] == 0.0 and h["gpu_fps"] is None and h["next"] == "display"
+    assert h["speedup"] == pytest.approx([144.003 * 0.95 / 40.0, 144.003 / 40.0])
+    b = bound_of(jitter, 0.4, thread=95.0, hags=True)                       # nor a refresh rate: nothing to say
+    assert b["headroom"]["next"] is None
 
 
 @pytest.mark.parametrize("thread, nxt, want", [

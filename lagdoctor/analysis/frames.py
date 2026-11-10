@@ -678,8 +678,9 @@ def headroom(b: dict[str, Any], shared: float | None = None) -> dict[str, Any] |
       ceiling ("cpu", "gpu", "display", or "cpu_or_display" where the CPU's range spans the refresh rate); and
       [low, high], how many times faster the limiting part must get for that to take over: [next low / limit high,
       next high / limit low], never under 1. The limit's own range runs from steady_fps to its ceiling, or is its
-      ceiling alone under a VSync lock, which rounds steady_fps down to refresh / k. next and speedup stay None where
-      the other side was not measured, or the CPU's threads were not what saturated it.
+      ceiling alone under a VSync lock, which rounds steady_fps down to refresh / k. A GPU busy no longer than the HAGS
+      margin (G = 0) is never the next limit: the screen is. next and speedup stay None where the other side was not
+      measured, or the CPU's threads were not what saturated it.
     """
     steady, n, secs = _num(b.get("steady_fps")), _num(b.get("steady_frames")), _num(b.get("steady_s"))
     if steady is None or steady <= 0 or n is None or n < BOUND_MIN_FRAMES or secs is None or secs < BOUND_MIN_S:
@@ -687,6 +688,7 @@ def headroom(b: dict[str, Any], shared: float | None = None) -> dict[str, Any] |
     steady = float(steady)
     g = _num(b.get("gpu_ms"))
     gpu = 1000.0 / g if g is not None and g > 0 and shared is None else None
+    idle_gpu = g is not None and g <= 0 and shared is None      # GPU busy within the HAGS margin: never the next limit
     cpu, cpu_from, saturated = None, None, False
     load = [(float(u), edge, name) for u, edge, name in ((_num(b.get("busiest_thread")), THREAD_BOUND, "thread"),
                                                          (_num(b.get("cpu_share")), ALL_CORES_BOUND, "all_cores"))
@@ -722,10 +724,11 @@ def headroom(b: dict[str, Any], shared: float | None = None) -> dict[str, Any] |
         else:
             nxt, want = "cpu_or_display", (cpu[0], display)
     else:
-        if cpu is None or gpu is None or not saturated:
+        if cpu is None or not saturated or (gpu is None and not (idle_gpu and display is not None)):
             return out
         own = (cpu[0], cpu[1])
-        nxt, want = ("gpu", (gpu, gpu)) if display is None or gpu <= display else ("display", (display, display))
+        nxt, want = (("gpu", (gpu, gpu)) if gpu is not None and (display is None or gpu <= display)
+                     else ("display", (display, display)))
     out["next"] = nxt
     out["speedup"] = [max(1.0, want[0] / own[1]), max(1.0, want[1] / own[0])]
     return out

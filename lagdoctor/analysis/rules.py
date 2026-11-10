@@ -856,12 +856,12 @@ def _pair(v: Any) -> tuple[float, float] | None:
 
 
 def _fps_text(lo: float, hi: float | None = None) -> str:
-    a, b = f"{lo:.0f}", f"{lo if hi is None else hi:.0f}"
+    a, b = f"{lo:,.0f}", f"{lo if hi is None else hi:,.0f}"
     return f"{a} FPS" if a == b else f"{a}-{b} FPS"
 
 
 def _x_text(x: float) -> str:
-    return f"{x:.0f}" if x >= 10 else f"{x:.1f}"
+    return f"{x:.0f}" if round(x, 1) >= 10 else f"{x:.1f}"
 
 
 def _faster(speedup: tuple[float, float] | None) -> str | None:
@@ -946,8 +946,7 @@ def _headroom(e: _Env) -> tuple[str | None, bool]:
                 ([f"the CPU could feed about {_fps_text(*cpu)}"] if cpu else [])
         if not sides:
             return None, False
-        near = "both close to" if len(sides) == 2 else "close to"
-        return _sentence(f"at these settings {' and '.join(sides)}, {near} the {steady:.0f} FPS it ran at"), True
+        return _sentence(f"at these settings {' and '.join(sides)}, against the {steady:.0f} FPS it ran at"), True
     limit, nxt, speedup = h.get("limit"), h.get("next"), _pair(h.get("speedup"))
     faster = _faster(speedup)
     screen = f"the {hz:.0f} Hz screen" if hz else "the screen"
@@ -970,11 +969,16 @@ def _headroom(e: _Env) -> tuple[str | None, bool]:
         cool = _cooler(e, speedup) if faster and speedup else None
         return _sentence(text + (f"; {cool}" if cool else "")), True
     if limit == "cpu":
-        if gpu is None:
+        if gpu is None and nxt is None:
             why = ("other programs shared the game's GPU, so its own time per frame says too little"
                    if _contention(e) is not None else "the GPU's own time per frame was not measured")
             return _sentence(f"how much a faster CPU would help is unknown: {why}"), False
         per = " per core" if e.verdict == "cpu_main" else ""
+        if gpu is None:        # busy no longer than the HAGS margin: the screen comes first (frames.headroom)
+            draw = "at these settings the GPU was nearly idle"
+            text = (f"{draw}, so a CPU {faster} faster{per} would reach {screen}'s limit" if faster else
+                    f"{draw}, and the game already reaches {screen}'s rate")
+            return (_sentence(text), True) if nxt == "display" else (None, False)
         draw = f"at these settings the GPU could draw about {_fps_text(gpu)}"
         if nxt == "gpu":
             text = (f"{draw}, so a CPU {faster} faster{per} would make the GPU the limit" if faster else

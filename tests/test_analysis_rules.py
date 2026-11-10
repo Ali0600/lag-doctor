@@ -568,6 +568,9 @@ def test_a_gpu_limit_says_how_far_off_the_cpus_limit_is():
                                         "1.2x faster would make the CPU the limit."),
     ("cpu", (1.0, 1.04), (58.5, 61.0), "At these settings the CPU could feed about 58-61 FPS, so it is at its limit "
                                        "too: a faster GPU alone would gain little."),
+    ("display", (9.96, 10.4), (1100.0, 1300.0), "At these settings the CPU could feed about 1,100-1,300 FPS, more than "
+                                                "the 144 Hz screen shows, so a GPU about 10x faster would reach the "
+                                                "screen's limit."),       # 9.96 rounds to 10: one form for both ends
 ])
 def test_a_gpu_limit_names_the_next_limit_in_plain_words(nxt, speedup, cpu, text):
     assert limit_texts("gpu_limit", room(nxt=nxt, speedup=speedup, cpu=cpu))[1] == text
@@ -577,10 +580,15 @@ def test_a_cpu_limit_says_how_far_off_the_gpus_limit_is():
     one = limit_texts("cpu_limit", room("cpu", "gpu", (2.2, 2.4), (40.0, 42.0), 95.0, 40.0), CPU_BOUND, fps=40.0)
     assert one[1] == ("At these settings the GPU could draw about 95 FPS, so a CPU about 2.2-2.4x faster per core would "
                       "make the GPU the limit.") and one[-1] == labels.HEADROOM_NOTE
-    every = limit_texts("cpu_limit", room("cpu", "display", (2.9, 3.0), (48.0, 50.0), 400.0, 48.0),
+    every = limit_texts("cpu_limit", room("cpu", "display", (2.9, 3.0), (48.0, 50.0), 2215.0, 48.0),
                         {**CPU_BOUND, "verdict": "cpu_all"}, fps=48.0)
-    assert every[1] == ("At these settings the GPU could draw about 400 FPS, more than the 144 Hz screen shows, so a CPU "
-                        "about 2.9-3.0x faster would reach the screen's limit.")     # every core: no "per core"
+    assert every[1] == ("At these settings the GPU could draw about 2,215 FPS, more than the 144 Hz screen shows, so a "
+                        "CPU about 2.9-3.0x faster would reach the screen's limit.")     # every core: no "per core"
+    # its GPU busy within the HAGS margin (G = 0): no ceiling to give, but never the next limit either
+    idle = limit_texts("cpu_limit", room("cpu", "display", (3.4, 3.6), (40.0, 42.0), None, 40.0),
+                       {**CPU_BOUND, "gpu_ms": 0.0}, fps=40.0)
+    assert idle[1] == ("At these settings the GPU was nearly idle, so a CPU about 3.4-3.6x faster per core would reach "
+                       "the 144 Hz screen's limit.") and idle[-1] == labels.HEADROOM_NOTE
 
 
 def test_without_the_other_side_the_headroom_says_it_is_unknown_and_claims_no_figures():
@@ -598,8 +606,12 @@ def test_without_the_other_side_the_headroom_says_it_is_unknown_and_claims_no_fi
 def test_a_borderline_verdict_gives_both_ceilings():
     texts = limit_texts("gpu_limit", room(None, None, None, (62.0, 73.0), 70.0, 60.0),
                         {**GPU_BOUND, "verdict": "mixed", "r": 0.82}, cap=make(system=engine(70.0)), fps=60.0)
-    assert texts[1] == ("At these settings the GPU could draw about 70 FPS and the CPU could feed about 62-73 FPS, both "
-                        "close to the 60 FPS it ran at.")
+    assert texts[1] == ("At these settings the GPU could draw about 70 FPS and the CPU could feed about 62-73 FPS, "
+                        "against the 60 FPS it ran at.")
+    # borderline on r alone, the CPU far from its limit: the figures say so, never "both close"
+    texts = limit_texts("gpu_limit", room(None, None, None, (170.0, 200.0), 72.0, 60.0),
+                        {**GPU_BOUND, "verdict": "mixed", "r": 0.83}, cap=make(system=engine(70.0)), fps=60.0)
+    assert texts[1].endswith("the CPU could feed about 170-200 FPS, against the 60 FPS it ran at.")
 
 
 def test_a_screen_with_frames_on_whole_refreshes_names_its_even_steps_after_the_headroom():
