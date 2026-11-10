@@ -330,6 +330,11 @@ def in_folder(image: str | None, folder: str) -> bool:
 MAX_FORMS = 4           # forms of one folder the rule takes: the folder itself and its resolved path, with room
 
 
+def _real_path(path: str) -> str:
+    """os.path.realpath, looked up when called (the tests replace this, never the os.path function itself)."""
+    return os.path.realpath(path)
+
+
 def folder_forms(folder: object) -> tuple[str, ...]:
     """The forms of a game's install folder that its programs are matched against: the folder as check_folder returns
     it, then its real path when that names another plain local folder. Windows names a program by the path it was
@@ -346,7 +351,7 @@ def folder_forms(folder: object) -> tuple[str, ...]:
         raise ValueError(f"{folder} is not on a local disk (it is on a network drive, or no drive has that letter)")
     forms = [folder]
     try:
-        real = check_folder(os.path.realpath(folder))
+        real = check_folder(_real_path(folder))
     except (OSError, ValueError):
         real = None
     if real is not None and fold_path(real) != fold_path(folder) \

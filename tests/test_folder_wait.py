@@ -127,15 +127,20 @@ class World:
                 value()
 
     # ---- what the wait reads
-    def clock(self) -> float:
+    def _advance(self, seconds: float) -> None:
+        """Move the time on; past ten times the deadline the wait has broken its own deadline, whichever call it
+        was in (a wait whose deadline check is gone never asks the clock again)."""
+        self.t += seconds
         if self.t > self.limit:
             raise AssertionError(f"the wait was still running at {self.t:g} s, ten times past its deadline")
         self._apply()
+
+    def clock(self) -> float:
+        self._advance(0.0)
         return self.t
 
     def sleep(self, seconds: float) -> None:
-        self.t += seconds
-        self._apply()
+        self._advance(seconds)
 
     def snapshot(self, threads_for=()) -> dict[int, ProcInfo]:
         self._apply()
@@ -164,8 +169,7 @@ class World:
         if self.fail_at_once and (self.gpu_fails or n in self.fail_on):
             raise OSError("the GPU Engine counter could not be added")
         at_start = {pid: v for pid, v in self.gpu.items() if pid in self.procs}
-        self.t += seconds
-        self._apply()
+        self._advance(seconds)
         if self.gpu_fails or n in self.fail_on:
             raise OSError("the GPU Engine counters gave no reading in 1.0 s")
         out = {pid: v for pid, v in self.gpu.items() if pid in self.procs}
@@ -310,21 +314,21 @@ def test_check_forms_takes_one_to_four_checked_folders():
 
 def test_folder_forms_adds_the_real_path_of_a_junction_or_subst_drive(monkeypatch):
     monkeypatch.setattr(tgt.storage, "drive_type", lambda root: tgt.storage.DRIVE_FIXED)
-    monkeypatch.setattr(tgt.os.path, "realpath", lambda p: "E:\\Library\\Lantern Drift")
+    monkeypatch.setattr(tgt, "_real_path", lambda p: "E:\\Library\\Lantern Drift")
     assert tgt.folder_forms(GAME_DIR) == (GAME_DIR, "E:\\Library\\Lantern Drift")
-    monkeypatch.setattr(tgt.os.path, "realpath", lambda p: "c:/games/lantern drift/")
+    monkeypatch.setattr(tgt, "_real_path", lambda p: "c:/games/lantern drift/")
     assert tgt.folder_forms(GAME_DIR) == (GAME_DIR,)                            # itself
-    monkeypatch.setattr(tgt.os.path, "realpath", lambda p: "\\\\server\\games\\Lantern Drift")
+    monkeypatch.setattr(tgt, "_real_path", lambda p: "\\\\server\\games\\Lantern Drift")
     assert tgt.folder_forms(GAME_DIR) == (GAME_DIR,)                            # a share is never taken
-    monkeypatch.setattr(tgt.os.path, "realpath", lambda p: "C:\\Windows\\System32")
+    monkeypatch.setattr(tgt, "_real_path", lambda p: "C:\\Windows\\System32")
     assert tgt.folder_forms(GAME_DIR) == (GAME_DIR,)                            # nor the Windows folder
-    monkeypatch.setattr(tgt.os.path, "realpath", lambda p: (_ for _ in ()).throw(OSError("gone")))
+    monkeypatch.setattr(tgt, "_real_path", lambda p: (_ for _ in ()).throw(OSError("gone")))
     assert tgt.folder_forms(GAME_DIR) == (GAME_DIR,)
 
 
 def test_folder_forms_refuses_a_folder_on_a_network_drive_before_opening_it(monkeypatch):
     monkeypatch.setattr(tgt.storage, "drive_type", lambda root: 4)            # DRIVE_REMOTE
-    monkeypatch.setattr(tgt.os.path, "realpath", lambda p: pytest.fail("the folder was opened"))
+    monkeypatch.setattr(tgt, "_real_path", lambda p: pytest.fail("the folder was opened"))
     with pytest.raises(ValueError, match="not on a local disk"):
         tgt.folder_forms("Z:\\Games\\Lantern Drift")
     monkeypatch.setattr(tgt.storage, "drive_type", lambda root: 1)            # DRIVE_NO_ROOT_DIR
