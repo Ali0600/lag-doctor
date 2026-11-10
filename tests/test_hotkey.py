@@ -8,8 +8,9 @@ import pytest
 from lagdoctor.winapi import hotkey
 from lagdoctor.winapi.hotkey import HotkeyListener, parse_hotkey
 
-# An unlikely combination, so the test never fights the user's own shortcuts.
+# Unlikely combinations, so the test never fights the user's own shortcuts (tests/conftest.py allows only these).
 TEST_KEY = "ctrl+alt+shift+f24"
+OTHER_KEY = "ctrl+alt+shift+f23"
 
 
 @pytest.mark.parametrize("text, expected", [
@@ -83,3 +84,27 @@ def test_a_crashing_callback_does_not_stop_the_listener():
         assert second.wait(5)
     finally:
         lst.stop()
+
+
+def test_two_listeners_hold_two_keys_at_once_and_each_press_reaches_only_its_own():
+    # watch's lag key and start key (M5): one listener, one thread, per key, both under the same id.
+    heard: dict[str, list[float]] = {TEST_KEY: [], OTHER_KEY: []}
+    events = {TEST_KEY: threading.Event(), OTHER_KEY: threading.Event()}
+
+    def on(key):
+        def on_press(t: float) -> None:
+            heard[key].append(t)
+            events[key].set()
+        return on_press
+    a, b = HotkeyListener(TEST_KEY, on(TEST_KEY)), HotkeyListener(OTHER_KEY, on(OTHER_KEY))
+    try:
+        assert a.start(), a.error
+        assert b.start(), b.error
+        assert a._thread_id != b._thread_id
+        assert b._simulate_press() and events[OTHER_KEY].wait(5)
+        assert a._simulate_press() and events[TEST_KEY].wait(5)
+        assert len(heard[TEST_KEY]) == len(heard[OTHER_KEY]) == 1
+    finally:
+        a.stop()
+        b.stop()
+    assert not a.registered and not b.registered

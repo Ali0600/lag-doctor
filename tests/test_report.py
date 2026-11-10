@@ -974,3 +974,39 @@ def test_a_summarys_part_that_cannot_be_one_reads_back_as_none(tmp_path, bad):
     (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps(s), encoding="utf-8")
     back = summary.read(tmp_path)
     assert back["measured_from_s"] is None and back["measured_to_s"] is None and back["measured_how"] is None
+
+
+# ------------------------------------------------------------------ the start key (M5) ---
+
+def _keyed(at, registered=True):
+    cap = make_capture()                      # about 25 s
+    cap.start_key = {"key": "ctrl+alt+s", "registered": registered, "window_s": 15.0, "at": at}
+    return cap
+
+
+def test_a_start_key_that_measured_nothing_is_said_in_both_reports_and_a_part_or_none_says_nothing():
+    note = ("The start key Ctrl+Alt+S was not pressed, so the whole recording was analysed, startup included. To "
+            "analyse only part of it, run lagdoctor analyze on the capture with --from (and --to).")
+    assert labels.unmeasured_note("the start key Ctrl+Alt+S was not pressed") == note
+    assert labels.unmeasured_note("") is None
+    cap = _keyed(None)
+    d = diagnose(cap)
+    assert note in html_report.render(d, cap) and note in " ".join(console.render(d, cap).split())
+    for quiet in (make_capture(), _keyed(5.0)):           # no start key; one whose part was analysed whole, as asked
+        d = diagnose(quiet)
+        assert "startup included" not in " ".join((html_report.render(d, quiet) + console.render(d, quiet)).split())
+    keyed = _keyed(5.0)
+    d = _part(keyed, 5.0, 20.0)                           # the start key's part: its own note, none of this one
+    assert "startup included" not in " ".join((html_report.render(d, keyed) + console.render(d, keyed)).split())
+
+
+def test_the_footers_command_makes_the_same_analysis_again():
+    keyed, plain = _keyed(5.0), make_capture()
+    assert html_report.rerun_args(None, plain) == ""                       # the whole recording: as analyze does
+    assert html_report.rerun_args(None, _keyed(None)) == ""                # no part was measured: the same
+    assert html_report.rerun_args(None, keyed) == " --from 0"              # all of a recording that measured one
+    from lagdoctor.analysis.crop import crop
+    key_part = crop(keyed, 5.0, 20.0, how="key").span
+    assert html_report.rerun_args(key_part, keyed) == ""                   # analyze finds the start key's part
+    set_part = crop(keyed, 10.0, 20.0, how="set").span
+    assert html_report.rerun_args(set_part, keyed) == html_report.part_args(set_part) == " --from 10 --to 20"

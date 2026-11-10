@@ -443,3 +443,39 @@ def test_a_chime_that_cannot_play_is_said_once_after_the_run(tmp_path):
     assert runner.run(sweep, folder, world.seams()) == 0
     notes = [line for line in world.said if "could not be played" in line]
     assert len(notes) == len(sweep.slots) and "the window ends 60 s after your press" in notes[0]
+
+
+# ----------------------------------------------------------- watch's start key measures each run (M5) ---
+
+def test_each_run_measures_with_watchs_own_start_key_window_and_wait(tmp_path):
+    sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
+    world = World(tmp_path, sweep, FPS, answers=[GO] * 4, plays=steady_plays(sweep))
+    assert runner.run(sweep, folder, world.seams()) == 0
+    for argv in world.argv:
+        assert argv[argv.index("--start-key") + 1] == sweep.start_key
+        assert float(argv[argv.index("--window") + 1]) == sweep.window_s
+        assert float(argv[argv.index("--start-by") + 1]) == runner.START_WAIT_S
+    # Each run's check let the key go before its recording, which registers it itself (World asserts it then).
+    assert len(world.listeners) == len(sweep.slots) and all(lst.started and lst.stopped for lst in world.listeners)
+
+
+def test_a_start_key_taken_after_the_check_fails_the_run_with_the_low_chime(tmp_path):
+    sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
+    plays = steady_plays(sweep)
+    plays[0] = Play(key_taken=True)
+    world = World(tmp_path, sweep, FPS, answers=[GO, "n", GO, GO, GO], plays=plays)
+    assert runner.run(sweep, folder, world.seams()) == 0
+    assert sweep.runs[0].state == "failed"
+    assert sweep.runs[0].why == ("another program took the start key Ctrl+Alt+S before the recording began, so it "
+                                 "could not be pressed")
+    assert world.sounds[0] == "problem" and world.sounds.count("start") == len(sweep.slots) - 1
+
+
+def test_a_press_while_a_run_the_sweep_stopped_is_stopping_plays_no_rising_chime(tmp_path):
+    sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
+    plays = steady_plays(sweep)
+    plays[0] = Play(frames=False, press_in_stop=True)
+    world = World(tmp_path, sweep, FPS, answers=[GO, "n", GO, GO, GO], plays=plays)
+    assert runner.run(sweep, folder, world.seams()) == 0
+    assert sweep.runs[0].why == "frame timing was off (was the UAC prompt declined?)"
+    assert world.sounds[0] == "problem" and world.sounds.count("start") == len(sweep.slots) - 1

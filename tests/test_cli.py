@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from lagdoctor import cli, paths
+from lagdoctor import cli, clock, paths
 from lagdoctor.capture import session as sess
 from lagdoctor.capture import target as tgt
 from lagdoctor.capture.base import Collector
@@ -42,7 +42,7 @@ BASE_PY = getattr(sys, "_base_executable", sys.executable)
 STORE: dict[str, object] = {}
 GAME = {"pid": 4242, "create_time": 133000000000000001, "name": "Game.exe", "exe": r"C:\Games\Game.exe",
         "window_title": "Game", "monitor_device": None, "adapter_luid": None, "how": "pid", "candidates": []}
-WATCH = ["watch", "--pid", "4242", "--duration", "0.2", "--no-network", "--hotkey", "none"]
+WATCH = ["watch", "--pid", "4242", "--duration", "0.2", "--no-network", "--hotkey", "none", "--start-key", "none"]
 FAKE_GAME_S = 10.0             # the faked game exits after this (see fake_world)
 
 
@@ -356,7 +356,8 @@ def fake_world(monkeypatch):
             # The fake game ends by itself: a recording a test did not expect (no --duration) ends, never hangs.
             ends = time.monotonic() + FAKE_GAME_S
             super().__init__(target, opts, collectors=cols, inventory=inventory or {"adapters": []},
-                             alive=lambda: time.monotonic() < ends, printer=lambda line: None, observers=observers)
+                             alive=lambda: time.monotonic() < ends, printer=lambda line: None, observers=observers,
+                             hotkey_factory=seen.get("keys"))      # a test's stand-in keys; none: the real listener
     monkeypatch.setattr(sess, "Session", QuickSession)
     return seen
 
@@ -367,15 +368,15 @@ def test_auto_is_chosen_only_when_no_game_was_named(fake_world, tmp_path):
                        (["--pid", "4242"], {"auto": False, "pid": 4242, "name": None}),
                        (["--game", "Game.exe"], {"auto": False, "pid": None, "name": "Game.exe"})):
         fake_world["find"].clear()
-        code = cli.main(["watch", *argv, "--duration", "0.1", "--no-network", "--hotkey", "none", "--no-elevate",
-                         "--out", str(tmp_path / "out")])
+        code = cli.main(["watch", *argv, "--duration", "0.1", "--no-network", "--hotkey", "none", "--start-key", "none",
+                         "--no-elevate", "--out", str(tmp_path / "out")])
         assert code == 0 and fake_world["find"] == [want]
 
 
 @pytest.mark.parametrize("flags", [[], ["--elevate"], ["--game", "Game.exe"]])
 def test_a_watch_without_presentmon_stops_before_it_even_looks_for_the_game(fake_world, capsys, tmp_path, flags):
     # A 14-minute recording was once made this way, its frames missing, the reason only in the report afterwards.
-    assert cli.main(["watch", *flags, "--no-network", "--hotkey", "none",
+    assert cli.main(["watch", *flags, "--no-network", "--hotkey", "none", "--start-key", "none",
                      "--out", str(tmp_path / "out")]) == cli.EXIT_NOT_READY
     out = capsys.readouterr().out
     assert out.startswith("Frame timing is not available: PresentMon is not installed (test)")
@@ -388,7 +389,7 @@ def test_a_watch_without_presentmon_stops_before_it_even_looks_for_the_game(fake
 
 def test_a_watch_without_frame_timing_says_so_before_it_records(fake_world, capsys, tmp_path):
     assert cli.main(["watch", "--pid", "4242", "--no-elevate", "--duration", "0.1", "--no-network",
-                     "--hotkey", "none", "--out", str(tmp_path / "out")]) == 0
+                     "--hotkey", "none", "--start-key", "none", "--out", str(tmp_path / "out")]) == 0
     out = capsys.readouterr().out
     said = out.find("Frame timing is off for this recording: PresentMon is not installed (test)")
     assert 0 <= said < out.index("Recording. Play normally")
@@ -602,7 +603,7 @@ def test_an_elevated_watch_records_here_with_frame_timing_through_the_relay(fake
     sess.Session.run = run
     try:
         assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.2", "--hotkey", "none",
-                         "--out", str(tmp_path / "out")]) == 0
+                         "--start-key", "none", "--out", str(tmp_path / "out")]) == 0
     finally:
         sess.Session.run = real_run
     (launch,) = fake_relay["launches"]
@@ -662,7 +663,7 @@ def test_with_a_relay_closing_the_window_leaves_the_network_trace_to_the_relay(f
         real(self, stop, saved, network, **kw)
     monkeypatch.setattr(cli._ConsoleControl, "__init__", init)
     assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.2", "--hotkey", "none",
-                     "--out", str(tmp_path / "out")]) == 0
+                     "--start-key", "none", "--out", str(tmp_path / "out")]) == 0
     assert seen == [False]                  # this window never stops the relay's ETW session by name
 
 
@@ -678,7 +679,7 @@ def test_a_declined_prompt_records_here_still_holding_the_lock(fake_relay, monke
         return real_run(self, *a, **k)
     monkeypatch.setattr(sess.Session, "run", run)
     assert cli.main(["watch", "--pid", "4242", "--duration", "0.1", "--elevate", "--no-network", "--hotkey", "none",
-                     "--out", str(tmp_path / "out")]) == 0
+                     "--start-key", "none", "--out", str(tmp_path / "out")]) == 0
     out = capsys.readouterr().out
     assert "The UAC prompt was declined, so lag-doctor records without frame timing." in out
     assert held_while_recording == [True]
@@ -736,7 +737,7 @@ def test_a_relative_lagdoctor_home_still_hands_the_relay_an_absolute_presentmon(
     monkeypatch.setenv("LAGDOCTOR_HOME", "relative-home")
     monkeypatch.setattr(cli, "_presentmon_exe", lambda: (Path("relative-home") / "PresentMon-2.6.0-x64.exe", ""))
     assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.1", "--no-network", "--hotkey",
-                     "none"]) == 0
+                     "none", "--start-key", "none"]) == 0
     exe = fake_relay["launches"][0]["presentmon_exe"]
     assert exe.is_absolute() and exe == (tmp_path / "relative-home" / "PresentMon-2.6.0-x64.exe").resolve()
 
@@ -858,7 +859,7 @@ def test_an_elevated_watch_starts_the_real_relay_through_the_real_launch(fake_wo
         rec = ShellExecuteRelay(server.Parts(verify=lambda exe: None, etw=Etw))
         monkeypatch.setattr(elevation, "_ShellExecuteExW", rec)
         assert cli.main(["watch", "--pid", str(game.pid), "--elevate", "--duration", "0.2", "--hotkey", "none",
-                         "--out", str(tmp_path / "out")]) == 0
+                         "--start-key", "none", "--out", str(tmp_path / "out")]) == 0
     finally:
         game.stdin.close()
         game.wait(10)
@@ -879,7 +880,7 @@ def test_an_elevated_watch_starts_the_real_relay_through_the_real_launch(fake_wo
 # ------------------------------------------- watch for a caller other than this console (M2's seams) ---
 
 def _watch_args(*extra):
-    return cli.build_parser().parse_args(["watch", "--pid", "4242", "--hotkey", "none", *extra])
+    return cli.build_parser().parse_args(["watch", "--pid", "4242", "--hotkey", "none", "--start-key", "none", *extra])
 
 
 def test_a_watch_says_every_line_through_the_say_it_was_given(fake_world, tmp_path, capsys):
@@ -1333,8 +1334,8 @@ class Fake(sess.Session):
 sess.Session = Fake
 tgt.find_target = lambda **kw: {"pid": 4242, "create_time": 1, "name": "Game.exe", "how": "pid"}
 cli._presentmon_exe = lambda: (None, "frame timing was skipped: test")
-code = cli.main(["watch", "--pid", "4242", "--no-elevate", "--no-network", "--hotkey", "none",
-                 "--out", os.path.join(out, "sessions")])
+code = cli.main(["watch", "--pid", "4242", "--no-elevate", "--no-network", "--hotkey", "none", "--start-key", "none",
+                 "--no-sound", "--out", os.path.join(out, "sessions")])
 mark("main_returned", str(code))
 raise SystemExit(code)
 '''
@@ -1388,3 +1389,180 @@ def test_a_real_console_event_while_recording_still_saves_the_capture(tmp_path, 
     assert Capture.load(caps[0]).target["stop_reason"] == STOP_REASON[mode]
     if mode != "close":                     # after a close Windows ends the process once the save is done
         assert code == 0 and (out / "main_returned").read_text(encoding="utf-8") == "0"
+
+
+# --------------------------------------------------------------------- watch's start key (M5) ---
+
+def test_watch_measures_from_its_start_key_by_default_and_none_turns_it_off():
+    p = cli.build_parser()
+    a = p.parse_args(["watch"])
+    assert (a.start_key, a.window, a.start_by, a.no_sound) == ("ctrl+alt+s", 600.0, 1200.0, False)
+    assert (cli.DEFAULT_START_KEY, cli.DEFAULT_WINDOW_S, cli.DEFAULT_START_BY_S) == ("ctrl+alt+s", 600.0, 1200.0)
+    assert [p.parse_args(["watch", "--start-key", k]).start_key for k in ("none", "OFF", "", "Alt+Win+F7")] == \
+        ["none", "none", "none", "alt+win+f7"]
+    a = p.parse_args(["watch", "--window", "10", "--start-by", "0.5", "--no-sound"])
+    assert (a.window, a.start_by, a.no_sound) == (10.0, 0.5, True)
+    assert p.parse_args(["watch", "--window", "3600"]).window == cli.MAX_WINDOW_S
+
+
+@pytest.mark.parametrize("bad", [["--start-key", "s"], ["--start-key", "shift+s"], ["--start-key", "ctrl+alt+"],
+                                 ["--window", "9.99"], ["--window", "3600.5"], ["--window", "nan"],
+                                 ["--window", "ten"], ["--start-by", "0"], ["--start-by", "nan"],
+                                 ["--start-by", "86401"]])
+def test_a_start_key_window_or_wait_watch_cannot_use_is_refused_by_the_parser(bad):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["watch", *bad])
+
+
+def test_the_shortest_window_is_the_shortest_part_and_the_sweeps_start_key_is_watchs():
+    from lagdoctor.analysis import crop
+    from lagdoctor.sweep import plan, runner
+    assert cli.WINDOW_MIN_S == crop.MIN_SPAN_S and plan.START_KEY == cli.DEFAULT_START_KEY
+    assert runner.TAIL_S == sess.WINDOW_TAIL_S
+
+
+@pytest.mark.parametrize("start,lag", [("ctrl+alt+l", "ctrl+alt+l"), ("alt+ctrl+l", "control+alt+l")])
+def test_a_start_key_that_is_the_lag_key_is_refused_before_anything_starts(fake_world, capsys, start, lag):
+    assert cli.main(["watch", "--pid", "4242", "--hotkey", lag, "--start-key", start, "--no-network"]) == \
+        cli.EXIT_BAD_ARGS
+    assert fake_world["find"] == [] and fake_world["sessions"] == []
+    assert (f"The start key and the lag key are the same key ({start.title()}): give --start-key another one."
+            in capsys.readouterr().out)
+
+
+def test_a_console_watch_gets_the_consoles_chimes_unless_no_sound(monkeypatch, _no_real_keys_or_sounds):
+    got = []
+    monkeypatch.setattr(cli, "cmd_watch", lambda args, **kw: got.append(kw["sound"]) or 0)
+    assert cli.main(["watch", "--pid", "4242"]) == 0
+    assert cli.main(["watch", "--pid", "4242", "--no-sound"]) == 0
+    assert got[1] is None and got[0] is not None and got[0]("start") is True
+    assert _no_real_keys_or_sounds.played == ["start"]
+
+
+def test_the_consoles_chimes_follow_the_recording_and_one_that_fails_is_kept():
+    played = []
+    cues = cli._Cues(lambda name: played.append(name) or name != "mark")
+    for kind, data in [("recording", {}), ("start_key", {"registered": True}), ("measuring", {"at": 1.0}),
+                       ("mark", {"t": 1.5}), ("frames_lost", {"why": "x"}), ("stopping", {"reason": sess.WINDOW_ENDED}),
+                       ("saving", {}), ("saved", {})]:
+        cues.on_event(kind, data)
+    assert played == ["start", "mark", "problem", "done"] and cues.failed == {"mark"}
+    for kind, data, sound in [("stopping", {"reason": sess.NO_START}, "problem"), ("stopping", {"reason": "Ctrl+C"},
+                              None), ("stopping", {"reason": "duration"}, None),
+                              ("start_key", {"registered": False}, "problem")]:
+        played.clear()
+        cli._Cues(lambda name: played.append(name) or True).on_event(kind, data)
+        assert played == ([sound] if sound else []), (kind, data)
+    raising = cli._Cues(lambda name: 1 / 0)
+    raising.on_event("measuring", {})                # a chime is never worth the recording
+    assert raising.failed == {"start"}
+
+
+def test_the_recording_line_says_where_to_press_what_is_measured_and_when_it_stops():
+    assert cli._recording_line("ctrl+alt+s", "ctrl+alt+l", 600.0, 1200.0, None, chimes=True) == (
+        "Recording. Go to the spot you want measured and press Ctrl+Alt+S there to start 10 minutes of measuring, "
+        "with a rising chime; the startup before it is never counted. Press Ctrl+Alt+L the moment it lags. Ctrl+C "
+        "stops. With no Ctrl+Alt+S press within 20 minutes, it stops and analyses all of it.")
+    quiet = cli._recording_line("ctrl+alt+s", None, 90.0, None, 30.0, chimes=False)
+    assert "90 s of measuring;" in quiet and "chime" not in quiet and "lags" not in quiet
+    assert quiet.endswith("Ctrl+C stops. Stops by itself after 30 s.")
+
+
+class _PressesStart:
+    """watch's listeners in a test: the start key presses itself `after` seconds in, once the recording has begun."""
+
+    def __init__(self, after: float = 0.15) -> None:
+        self.after, self.made = after, []
+
+    def __call__(self, key, on_press):
+        outer = self
+        self.made.append(key)
+
+        class Listener:
+            error = None
+
+            def start(self):
+                if key == cli.DEFAULT_START_KEY:
+                    threading.Timer(outer.after, lambda: on_press(clock.now())).start()
+                return True
+
+            def stop(self):
+                pass
+        return Listener()
+
+
+def test_a_watch_measures_from_its_start_key_with_a_chime_and_a_part_too_short_analyses_all_of_it(
+        fake_world, tmp_path, capsys, _no_real_keys_or_sounds):
+    fake_world["keys"] = keys = _PressesStart()
+    assert cli.main(["watch", "--pid", "4242", "--duration", "0.6", "--no-network", "--no-elevate",
+                     "--out", str(tmp_path / "out")]) == 0
+    assert keys.made == [cli.DEFAULT_HOTKEY, cli.DEFAULT_START_KEY]           # one listener per key
+    opts = fake_world["sessions"][0]["opts"]
+    assert (opts.start_key, opts.window_s, opts.start_by_s) == ("ctrl+alt+s", 600.0, 1200.0)
+    [made] = list((tmp_path / "out").iterdir())
+    cap = Capture.load(made / cli.CAPTURE_NAME)
+    assert cap.start_key["registered"] is True and 0.1 <= cap.start_key["at"] < 0.6
+    assert _no_real_keys_or_sounds.played == ["start"]                      # the duration ended it: no "done"
+    assert "span" not in json.loads((made / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8"))["stats"]
+    out = " ".join(capsys.readouterr().out.split())               # the summary wraps at the console's width
+    assert "press Ctrl+Alt+S there to start 10 minutes of measuring, with a rising chime" in out
+    assert re.search(r"The start key Ctrl\+Alt\+S was pressed only 0\.\d s before the recording ended, and a part "
+                     r"needs at least 10 s, so the whole recording was analysed, startup included\.", out), out
+
+
+def test_a_chime_that_could_not_play_is_said_once_after_the_recording(fake_world, tmp_path, capsys,
+                                                                      _no_real_keys_or_sounds):
+    _no_real_keys_or_sounds.sound_ok = False
+    fake_world["keys"] = _PressesStart()
+    assert cli.main(["watch", "--pid", "4242", "--duration", "0.5", "--no-network", "--no-elevate",
+                     "--out", str(tmp_path / "out")]) == 0
+    assert capsys.readouterr().out.count("(A chime could not be played during the recording") == 1
+
+
+def _keyed_capture(tmp_path: Path, *, pressed: bool = True) -> Path:
+    from tests import synth
+    cap = synth.startup_then_smooth(startup_s=60.0, total_s=180.0)
+    cap.target = {"pid": 20000, "create_time": 5, "name": "Friend.exe"}
+    cap.start_key = {"key": "ctrl+alt+s", "registered": True, "window_s": 60.0, "at": 70.0 if pressed else None}
+    return cap.save(tmp_path / "keyed.ldcap.json.gz")
+
+
+def _made(folder: Path) -> tuple[dict, dict, str]:
+    return (json.loads((folder / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8")),
+            json.loads((folder / "summary.json").read_text(encoding="utf-8")),
+            (folder / cli.REPORT_NAME).read_text(encoding="utf-8"))
+
+
+def test_a_watch_analyses_the_part_its_start_key_measured(tmp_path):
+    p = _keyed_capture(tmp_path)
+    out_dir = tmp_path / "session"
+    out_dir.mkdir()
+    assert cli._analyze_saved(Capture.load(p), p, out_dir, remember=False, show_summary=False) == 0
+    d, summary, page = _made(out_dir)
+    assert d["stats"]["span"] == {"from_s": 70.0, "to_s": 130.0, "recorded_s": 180.0, "how": "key"}
+    assert d["lag_type"] == "none" and summary["kind"] == "watch" and summary["measured_how"] == "key"
+    assert "(measured from your start key)" in page
+
+
+def test_a_watch_whose_start_key_was_not_pressed_analyses_all_of_it_and_both_reports_say_so(tmp_path, capsys):
+    p = _keyed_capture(tmp_path, pressed=False)
+    out_dir = tmp_path / "session"
+    out_dir.mkdir()
+    assert cli._analyze_saved(Capture.load(p), p, out_dir, remember=False) == 0
+    d, summary, page = _made(out_dir)
+    assert "span" not in d["stats"] and d["lag_type"] == "stutter" and summary["measured_how"] is None
+    note = "The start key Ctrl+Alt+S was not pressed, so the whole recording was analysed, startup included."
+    assert note in " ".join(capsys.readouterr().out.split()) and note in page
+
+
+def test_analyze_takes_the_start_keys_part_by_default_and_from_0_takes_all_of_it(tmp_path):
+    p = _keyed_capture(tmp_path)
+    assert cli.main(["analyze", str(p)]) == 0
+    [first] = list(paths.sessions_dir().iterdir())
+    assert cli.main(["analyze", str(p), "--from", "0"]) == 0
+    [second] = [f for f in paths.sessions_dir().iterdir() if f != first]
+    (d1, _, page1), (d2, _, page2) = _made(first), _made(second)
+    assert d1["stats"]["span"]["how"] == "key" and "span" not in d2["stats"]
+    # Each footer's command makes the same analysis again: none needed for the start key's part, --from 0 for all.
+    assert "keyed.ldcap.json.gz&quot;</code>" in page1 and "keyed.ldcap.json.gz&quot; --from 0</code>" in page2
+    assert "was not pressed" not in page2                       # all of it, as asked: no word of the start key

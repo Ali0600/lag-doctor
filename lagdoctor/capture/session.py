@@ -2,7 +2,8 @@
 
 The session owns no measurement itself. It decides which collectors to run,
 starts them with the same origin, watches for the end (duration, Ctrl+C, the
-game exiting), stops them in parallel so one slow stop cannot stretch the
+game exiting, the start key's measured window or no press in time), stops them
+in parallel so one slow stop cannot stretch the
 others, and copies each collector's result() into the Capture exactly as the
 table in docs/DESIGN.md says. A collector that crashes or cannot start leaves
 its status in Capture.sources; the session carries on with the rest.
@@ -66,6 +67,11 @@ MAX_TOOL_PIDS = 64                         # bounded: lag-doctor itself starts o
 NO_FRAMES_WARN_S = 10.0
 FRAMES_FAILED = ("failed", "unavailable")   # PresentMon's states that mean no more frames will come
 CANCELLED = "cancelled before it began"     # the stop reason when SessionOptions.cancel came first
+# The start key (M5, DECISIONS 2026-11-09): the recording runs on this long past the measured window, since
+# PresentMon's rows arrive up to 2 s late; the window itself is what is analysed.
+WINDOW_TAIL_S = 3.0
+WINDOW_ENDED = "the measured window ended"            # the stop reasons of the start key's own ends
+NO_START = "the start key was not pressed in time"
 
 
 @dataclass
@@ -91,6 +97,12 @@ class SessionOptions:
     # Set before everything has started (M4: the window's Cancel): the session stops what it started, says nothing of
     # a recording, and ends with stop_reason CANCELLED; the caller keeps no capture.
     cancel: threading.Event | None = None
+    # The start key (M5): its first press once the recording has begun starts the measured window, window_s long
+    # (None: to the recording's end), and the recording stops WINDOW_TAIL_S after it. With start_by_s, a recording
+    # with no press by then stops. None: no start key, as before (the whole recording is analysed).
+    start_key: str | None = None
+    window_s: float | None = None
+    start_by_s: float | None = None
 
 
 def request_stop(stop: threading.Event, reason: str) -> None:
@@ -105,7 +117,9 @@ class Observers:
 
     on_tick(elapsed, live) once a status period, with each collector's live() values; on_event(kind, data) when
     something happens: "waiting" (the game is being looked for), "target" (the game was chosen), "recording"
-    (everything has started), "mark" (the lag key),
+    (everything has started), "start_key" (with a start key, right after "recording": whether Windows gave it, the
+    window and the time a press must come by), "measuring" (the start key's press: the window runs from `at` until
+    `until`), "mark" (the lag key),
     "frames_lost" (frame timing stopped working), "stopping", "saving" and "saved" (the capture is on disk). Each is
     contained the way the status line is: one that raises is not called again, and the capture says so (unless it
     first fails at "saved", when the capture is on disk already); neither can stop the recording or lose it. They run
@@ -137,6 +151,26 @@ class Observers:
         what = {"tick": "its progress", "event": "what happened during it"}
         return [f"The window following this recording stopped being told {what[k]} ({why}); the recording itself "
                 "went on." for k, why in sorted(self.failed.items())]
+
+
+class Joined(Observers):
+    """Several Observers told the same ticks and events, in order, each contained on its own: one that raises (and is
+    then not called again) never keeps the others from hearing (M5: the console's chimes beside a caller's)."""
+
+    def __init__(self, *parts: Observers) -> None:
+        super().__init__()
+        self.parts = parts
+
+    def tick(self, elapsed: float, live: dict[str, dict[str, Any]]) -> None:
+        for p in self.parts:
+            p.tick(elapsed, live)
+
+    def event(self, kind: str, **data: Any) -> None:
+        for p in self.parts:
+            p.event(kind, **data)
+
+    def notes(self) -> list[str]:
+        return [n for p in self.parts for n in p.notes()]
 
 
 class CtrlC:
@@ -236,12 +270,15 @@ class Session:
         self.observers = observers if observers is not None else Observers()
         self.marks: list[float] = []
         self.notes: list[str] = []
-        self._marks_lock = threading.Lock()
+        self._marks_lock = threading.Lock()        # the marks, and the start key's press and phase
         self.origin = 0.0
         self._started = False                      # the origin is set: a mark now means something
         self.stop_reason = ""
         self._printer_broken = False
         self._hotkey_on = False
+        self.start_at: float | None = None         # the start key's press that counts, seconds from the start
+        self._start_on = False                     # Windows gave the start key
+        self._start_open = False                   # from "recording" to "stopping": a start press counts
         self._tick_procs: dict[int, Any] | None = None   # this status tick's snapshot, once one was taken
         self._tools: dict[int, None] = {}          # lag-doctor's own PIDs seen so far (an ordered set)
         self._tools_listed = False
@@ -276,18 +313,23 @@ class Session:
             self.origin = clock.now()
             self._started = True
             started_at = datetime.now().astimezone().isoformat(timespec="seconds")
-            hotkey = None
+            hotkey = start = None
             # From the first start on, whatever happens (an exception, a KeyboardInterrupt), everything stops.
             try:
                 self._start_collectors()
                 hotkey = self._start_hotkey()
+                start = self._start_start_key()
                 self._watch(stop)
             finally:
                 guard.stopping = True
+                with self._marks_lock:
+                    self._start_open = False          # a start press from here on changes nothing
                 self._print(STOPPING_MESSAGE + "\n")
                 self.observers.event("stopping", reason=self.stop_reason)
                 if hotkey is not None:
                     self._stop_hotkey(hotkey)
+                if start is not None:
+                    self._stop_hotkey(start, "start key")
                 self._sight_tools()                   # before the stop ends PresentMon and nvidia-smi
                 self._stop_all()
             end = clock.now()
@@ -300,13 +342,17 @@ class Session:
             except Exception as exc:  # noqa: BLE001 - one collector must not stop the capture
                 c.set_status("failed", f"could not start: {type(exc).__name__}: {exc}")
 
+    def _key_factory(self) -> Callable[..., Any]:
+        """What makes a key's listener: (key, on_press) -> start() -> bool, stop(), error. One listener per key."""
+        if self.hotkey_factory is not None:
+            return self.hotkey_factory
+        from lagdoctor.winapi.hotkey import HotkeyListener
+        return HotkeyListener
+
     def _start_hotkey(self):
         if not self.opts.hotkey:
             return None
-        factory = self.hotkey_factory
-        if factory is None:
-            from lagdoctor.winapi.hotkey import HotkeyListener
-            factory = HotkeyListener
+        factory = self._key_factory()
         try:
             listener = factory(self.opts.hotkey, self._on_mark)
             started = listener.start()
@@ -321,11 +367,31 @@ class Session:
         self.notes.append(f"The lag key {self.opts.hotkey} could not be registered ({why}); no marks were recorded.")
         return None
 
-    def _stop_hotkey(self, listener) -> None:
+    def _start_start_key(self):
+        """The start key's listener (SessionOptions.start_key), or None. One Windows will not give is said at once,
+        while the player is still at the console, and noted: the recording goes on as one without a start key."""
+        key = self.opts.start_key
+        if not key:
+            return None
+        try:
+            listener = self._key_factory()(key, self._on_start)
+            if listener.start():
+                self._start_on = True
+                return listener
+            why = getattr(listener, "error", "") or "unknown reason"
+        except Exception as exc:  # noqa: BLE001 - a start key that cannot be used must not end the capture either
+            why = f"{type(exc).__name__}: {exc}"
+        self.notes.append(f"The start key {key} could not be registered ({why}), so no part was measured from it.")
+        self._print(f"\nThe start key {key.title()} could not be registered ({why}), so the whole recording will be "
+                    "analysed. To measure from a press, close the program that uses it, or record again with "
+                    "another --start-key.\n")
+        return None
+
+    def _stop_hotkey(self, listener, what: str = "lag key") -> None:
         try:
             listener.stop()
         except Exception as exc:  # noqa: BLE001 - the collectors must still be stopped
-            self.notes.append(f"The lag key could not be released cleanly ({type(exc).__name__}: {exc}).")
+            self.notes.append(f"The {what} could not be released cleanly ({type(exc).__name__}: {exc}).")
 
     def _snapshot_once(self) -> dict[int, Any]:
         """Every process now, from at most one snapshot a status tick: the liveness check and the sighting of
@@ -378,6 +444,48 @@ class Session:
     def _on_mark(self, when: float) -> None:
         self.mark(when)
 
+    def start(self, when: float | None = None) -> float | None:
+        """The start key's press at `when` (lagdoctor.clock time; default now). The first once the recording has begun
+        (the "recording" event) and before it stops starts the measured window: returns it, in seconds from the start.
+        Any other press changes nothing and returns None: one before or after, and every one after the first."""
+        when = clock.now() if when is None else when
+        with self._marks_lock:
+            if not self._start_open or self.start_at is not None:
+                return None
+            self.start_at = at = round(when - self.origin, 3)
+        window = self.opts.window_s
+        self.observers.event("measuring", at=at, until=None if window is None else round(at + window, 3))
+        return at
+
+    def _on_start(self, when: float) -> None:
+        self.start(when)
+
+    def _window_end(self) -> float | None:
+        """When the recording is due to stop for the start key, in seconds from the start: WINDOW_TAIL_S past the
+        measured window, or the time a press must come by; None while neither applies. For the wait between ticks."""
+        with self._marks_lock:
+            at = self.start_at
+        if at is not None:
+            return None if self.opts.window_s is None else at + self.opts.window_s + WINDOW_TAIL_S
+        return self.opts.start_by_s if self._start_on else None
+
+    def _start_stop(self, elapsed: float) -> str | None:
+        """The start key's reason to stop at `elapsed`, if it has one: the window and its tail have run (WINDOW_ENDED),
+        or no press came by start_by_s (NO_START, only for a key Windows gave). Decided under the press's lock, which
+        then lets no press count, so none can land between the decision and the stop."""
+        with self._marks_lock:
+            at = self.start_at
+            if at is not None:
+                if self.opts.window_s is None or elapsed < at + self.opts.window_s + WINDOW_TAIL_S:
+                    return None
+                reason = WINDOW_ENDED
+            elif self._start_on and self.opts.start_by_s is not None and elapsed >= self.opts.start_by_s:
+                reason = NO_START
+            else:
+                return None
+            self._start_open = False
+        return reason
+
     def _watch(self, stop: threading.Event) -> None:
         try:
             if self.opts.cancel is not None and self.opts.cancel.is_set():
@@ -385,6 +493,13 @@ class Session:
                 return
             self.observers.event("recording", duration_s=self.opts.duration_s, hotkey=self._hotkey_on,
                                  frames=self.opts.frames, network=self.opts.network)
+            if self.opts.start_key:
+                self.observers.event("start_key", key=self.opts.start_key, registered=self._start_on,
+                                     window_s=self.opts.window_s,
+                                     start_by_s=self.opts.start_by_s if self._start_on else None)
+            with self._marks_lock:
+                self._start_open = self._start_on    # from here on, the start key's first press counts
+            said_start = False
             while True:
                 self._tick_procs = None                  # each tick takes a fresh one, the first time it is needed
                 elapsed = clock.now() - self.origin
@@ -394,6 +509,14 @@ class Session:
                 if self.opts.duration_s is not None and elapsed >= self.opts.duration_s:
                     self.stop_reason = "duration"
                     return
+                why = self._start_stop(elapsed)
+                if why is not None:
+                    self.stop_reason = why
+                    self._print("\n" + self._start_end_line(why) + "\n")
+                    return
+                if not said_start and self.start_at is not None:
+                    said_start = True                    # said here, between status lines, never from the key's thread
+                    self._print("\n" + self._measuring_line() + "\n")
                 if not self.alive():
                     self.stop_reason = "game exited"
                     self.notes.append(f"The game exited after {elapsed:.0f} s, so the capture ended there.")
@@ -408,14 +531,32 @@ class Session:
                     live["frames"] = {}             # PresentMon is gone: no frame rate frozen at its last value
                 self._print("\r" + status_line(elapsed, live, console_width()))
                 self.observers.tick(elapsed, live)
-                wait = STATUS_PERIOD_S
-                if self.opts.duration_s is not None:
-                    wait = max(0.0, min(wait, self.opts.duration_s - elapsed))
-                stop.wait(wait)
+                stop.wait(self._next_wait(elapsed))
         except KeyboardInterrupt:
             self.stop_reason = "Ctrl+C"
         finally:
             self._print("\n")
+
+    def _next_wait(self, elapsed: float) -> float:
+        """The wait for the next tick at `elapsed`: a status period, cut short so the duration's end or the start key's
+        lands on time rather than a tick late."""
+        wait = STATUS_PERIOD_S
+        for end in (self.opts.duration_s, self._window_end()):
+            if end is not None:
+                wait = max(0.0, min(wait, end - elapsed))
+        return wait
+
+    def _measuring_line(self) -> str:
+        at, window = self.start_at or 0.0, self.opts.window_s
+        if window is None:
+            return f"Measuring from {clock_text(at)} to the end of the recording."
+        return f"Measuring from {clock_text(at)} for {span_words(window)}, until {clock_text(at + window)}."
+
+    def _start_end_line(self, why: str) -> str:
+        if why == WINDOW_ENDED:
+            return f"Measured {span_words(self.opts.window_s or 0.0)} from your start key, so the recording stops."
+        return (f"The start key was not pressed within {span_words(self.opts.start_by_s or 0.0)}, so the recording "
+                "stops, and all of it will be analysed.")
 
     def _check_frames(self, live: dict[str, dict[str, Any]], elapsed: float) -> None:
         """Say once, on its own line, that frame timing is not working: PresentMon failed or ended mid-recording
@@ -541,12 +682,16 @@ class Session:
 
         with self._marks_lock:
             marks = sorted(m for m in self.marks if 0 <= m <= duration_s + 1.0)
+            # The start key as it was used (analysis/crop.key_part finds the measured part from it, then and later).
+            start_key = None if not self.opts.start_key else {
+                "key": self.opts.start_key, "registered": self._start_on, "window_s": self.opts.window_s,
+                "at": self.start_at}
         return Capture(
             started_at=started_at, clock_origin=self.origin, duration_s=round(duration_s, 3),
             target=target, sources=sources, inventory=inventory,
             frames=fr.get("columns") or {}, system=sysr.get("columns") or {}, gpu=gpur.get("columns") or {},
             network=netr.get("columns") or {}, others=sysr.get("others") or [], net_flows=net_flows,
-            marks=marks, notes=list(self.notes), tool_version=__version__)
+            marks=marks, notes=list(self.notes), tool_version=__version__, start_key=start_key)
 
 
 def _stop_quietly(c: Collector, timeout: float) -> None:
@@ -559,6 +704,21 @@ def _stop_quietly(c: Collector, timeout: float) -> None:
 
 
 # ------------------------------------------------------------------ status --
+
+def clock_text(seconds: float) -> str:
+    """A time into the recording as the status line shows it ('3:12', '63:12'), which `analyze --from` reads back."""
+    m, s = divmod(int(max(0.0, seconds)), 60)
+    return f"{m}:{s:02d}"
+
+
+def span_words(seconds: float) -> str:
+    """A length in plain words: '10 minutes', '1 minute', '90 s'."""
+    whole = round(seconds)
+    if whole >= 60 and whole % 60 == 0:
+        n = whole // 60
+        return f"{n} minute{'s' if n != 1 else ''}"
+    return f"{seconds:.0f} s" if abs(seconds - whole) < 0.05 else f"{seconds:.1f} s"
+
 
 def console_width() -> int:
     """The console's width in columns now (a window can be resized while it records); 80 without a console."""

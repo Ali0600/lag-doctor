@@ -1268,3 +1268,211 @@ def test_e2e_preflight_refuses_a_private_copy(monkeypatch, tmp_path, capsys):
     assert e2e.main(["--modes", "smooth", "--out", str(tmp_path / "e2e")]) == 3
     out = capsys.readouterr().out
     assert out.startswith("Nothing ran: Windows keeps the files") and "App_1" in out and "Start menu" in out
+
+
+# ------------------------------------------------------------------------- the start key (M5) ---
+
+START = "ctrl+alt+s"
+
+
+class Keys:
+    """Every key's listener the session makes, one per key: press(key) delivers a press from another thread, as
+    Windows does, at the clock's now. Windows will not give the keys in `refuse`."""
+
+    def __init__(self, refuse=()):
+        self.made, self.refuse, self.live = [], set(refuse), {}
+
+    def __call__(self, key, on_press):
+        keys = self
+        self.made.append(key)
+
+        class Listener:
+            error = f"{key} is already used by another program" if key in keys.refuse else None
+
+            def start(self):
+                if key in keys.refuse:
+                    return False
+                keys.live[key] = on_press
+                return True
+
+            def stop(self):
+                keys.live.pop(key, None)
+        return Listener()
+
+    def press(self, key, when=None):
+        on_press = self.live[key]
+        t = threading.Thread(target=on_press, args=(clock.now() if when is None else when,))
+        t.start()
+        t.join(5)
+
+
+def _with_start(**kw):
+    opts = dict(duration_s=SAFETY_S, hotkey="ctrl+alt+l", start_key=START, window_s=600.0, start_by_s=1200.0)
+    opts.update(kw)
+    return SessionOptions(**opts)
+
+
+def test_the_start_keys_first_press_after_recording_starts_the_measured_window(monkeypatch):
+    _counted(monkeypatch)
+    keys, events, ticks, stop = Keys(), [], [], threading.Event()
+
+    def on_tick(elapsed, live):
+        ticks.append(elapsed)
+        if len(ticks) == 2:
+            keys.press(START)
+            keys.press(START)                      # a second press changes nothing
+        if len(ticks) == 4:
+            sess.request_stop(stop, "enough")
+    s = Session(TARGET, _with_start(), collectors=full_set(), inventory=INVENTORY, alive=lambda: True,
+                hotkey_factory=keys, printer=lambda line: None,
+                observers=sess.Observers(on_tick=on_tick, on_event=lambda kind, data: events.append((kind, data))))
+    cap = s.run(stop)
+    assert [k for k, _ in events] == ["recording", "start_key", "measuring", "stopping"], events
+    assert events[1][1] == {"key": START, "registered": True, "window_s": 600.0, "start_by_s": 1200.0}
+    at = cap.start_key["at"]
+    assert events[2][1] == {"at": at, "until": round(at + 600.0, 3)}
+    assert cap.start_key == {"key": START, "registered": True, "window_s": 600.0, "at": at} and at == s.start_at
+    assert ticks[1] - 0.001 <= at < ticks[2] and at == round(at, 3)      # on the capture's clock, to the millisecond
+    assert cap.marks == []                         # the start key's press is never a lag mark (DECISIONS 2026-11-09)
+    assert keys.made == ["ctrl+alt+l", START] and keys.live == {}         # one listener per key, both let go
+
+
+def test_a_start_press_before_the_recording_began_or_after_it_stopped_changes_nothing():
+    events = []
+    s = Session(TARGET, _with_start(duration_s=0.05), collectors=full_set(), inventory=INVENTORY,
+                alive=lambda: True, hotkey_factory=Keys(), printer=lambda line: None,
+                observers=sess.Observers(on_event=lambda kind, data: events.append(kind)))
+    assert s.start() is None                       # before the recording began
+    cap = s.run()
+    assert s.start() is None and s.start_at is None           # after it stopped
+    assert "measuring" not in events and cap.start_key["at"] is None
+
+
+def test_the_window_and_its_tail_or_no_press_in_time_end_the_recording_at_their_time():
+    s = Session(TARGET, _with_start(window_s=10.0, start_by_s=30.0), collectors=[], inventory=INVENTORY)
+    assert sess.WINDOW_TAIL_S == 3.0               # PresentMon's rows arrive up to 2 s late
+    s._start_on = s._start_open = True
+    assert s._start_stop(29.999) is None and s._start_stop(30.0) == sess.NO_START and not s._start_open
+    s._start_open, s.start_at = True, 5.0          # pressed at 5 s: the window runs to 15 s, its tail to 18 s
+    assert s._start_stop(17.999) is None and s._start_open
+    assert s._start_stop(18.0) == sess.WINDOW_ENDED and not s._start_open     # no press counts once decided
+    s.opts.window_s = None                         # measured to the recording's end: nothing ends it here
+    assert s._start_stop(1e6) is None
+    s._start_on, s.start_at = False, None          # a key Windows did not give: no press can be waited for
+    assert s._start_stop(1e6) is None
+
+
+def test_the_wait_for_the_next_tick_lands_on_the_start_keys_end(monkeypatch):
+    monkeypatch.setattr(sess, "STATUS_PERIOD_S", 1.0)
+    s = Session(TARGET, _with_start(duration_s=None, window_s=10.0, start_by_s=30.0), collectors=[],
+                inventory=INVENTORY)
+    assert s._next_wait(29.5) == 1.0               # Windows did not give the key: no time a press must come by
+    s._start_on = True
+    assert s._next_wait(29.5) == pytest.approx(0.5) and s._next_wait(10.0) == 1.0 and s._next_wait(31.0) == 0.0
+    s.start_at = 5.0
+    assert s._next_wait(17.75) == pytest.approx(0.25) and s._next_wait(12.0) == 1.0
+
+
+def test_no_press_in_time_stops_the_recording_and_says_so():
+    events, lines = [], []
+    s = Session(TARGET, _with_start(start_by_s=0.3), collectors=full_set(), inventory=INVENTORY, alive=lambda: True,
+                hotkey_factory=Keys(), printer=lines.append,
+                observers=sess.Observers(on_event=lambda kind, data: events.append((kind, data))))
+    cap = s.run()
+    assert cap.target["stop_reason"] == sess.NO_START and cap.duration_s < SAFETY_S
+    assert cap.start_key == {"key": START, "registered": True, "window_s": 600.0, "at": None}
+    assert dict(events)["stopping"] == {"reason": sess.NO_START}
+    assert ("\nThe start key was not pressed within 0.3 s, so the recording stops, and all of it will be analysed.\n"
+            in lines)
+
+
+def test_the_measured_window_stops_the_recording_and_both_are_said(monkeypatch):
+    _counted(monkeypatch)
+    monkeypatch.setattr(sess, "WINDOW_TAIL_S", 0.05)
+    keys, lines, ticks = Keys(), [], []
+
+    def on_tick(elapsed, live):
+        ticks.append(elapsed)
+        if len(ticks) == 1:
+            keys.press(START)
+    s = Session(TARGET, _with_start(window_s=0.3), collectors=full_set(), inventory=INVENTORY, alive=lambda: True,
+                hotkey_factory=keys, printer=lines.append, observers=sess.Observers(on_tick=on_tick))
+    cap = s.run()
+    assert cap.target["stop_reason"] == sess.WINDOW_ENDED
+    assert cap.duration_s >= cap.start_key["at"] + 0.3 + 0.05 and cap.duration_s < SAFETY_S
+    measuring = [line for line in lines if line.startswith("\nMeasuring from 0:00 for 0.3 s, until 0:00.")]
+    ended = lines.index("\nMeasured 0.3 s from your start key, so the recording stops.\n")
+    assert len(measuring) == 1 and lines.index(measuring[0]) < ended
+
+
+def test_a_start_key_windows_will_not_give_is_said_and_noted_and_the_recording_goes_on():
+    events, lines = [], []
+    s = Session(TARGET, _with_start(duration_s=0.3, start_by_s=0.05), collectors=full_set(), inventory=INVENTORY,
+                alive=lambda: True, hotkey_factory=Keys(refuse=[START]), printer=lines.append,
+                observers=sess.Observers(on_event=lambda kind, data: events.append((kind, data))))
+    cap = s.run()
+    assert cap.target["stop_reason"] == "duration"               # no press can come, so none is waited for
+    assert dict(events)["start_key"] == {"key": START, "registered": False, "window_s": 600.0, "start_by_s": None}
+    assert cap.start_key == {"key": START, "registered": False, "window_s": 600.0, "at": None}
+    said = "".join(lines)
+    assert ("The start key Ctrl+Alt+S could not be registered (ctrl+alt+s is already used by another program), so the "
+            "whole recording will be analysed.") in said and "another --start-key" in said
+    assert any(note.startswith("The start key ctrl+alt+s could not be registered") for note in cap.notes)
+
+
+def test_a_start_key_that_cannot_be_used_at_all_never_ends_the_capture():
+    def factory(key, on_press):
+        if key == START:
+            raise OSError("no message queue")
+        return _Registered()
+    s = Session(TARGET, _with_start(duration_s=0.05), collectors=full_set(), inventory=INVENTORY, alive=lambda: True,
+                hotkey_factory=factory, printer=lambda line: None)
+    cap = s.run()
+    assert cap.start_key["registered"] is False and cap.target["stop_reason"] == "duration"
+    assert any("OSError: no message queue" in note for note in cap.notes)
+
+
+def test_without_a_start_key_there_is_no_second_listener_and_nothing_of_one_is_kept():
+    keys, events = Keys(), []
+    s = Session(TARGET, SessionOptions(duration_s=0.05, hotkey="ctrl+alt+l"), collectors=full_set(),
+                inventory=INVENTORY, alive=lambda: True, hotkey_factory=keys, printer=lambda line: None,
+                observers=sess.Observers(on_event=lambda kind, data: events.append(kind)))
+    cap = s.run()
+    assert keys.made == ["ctrl+alt+l"] and cap.start_key is None and "start_key" not in events
+
+
+def test_the_recordings_own_duration_is_checked_before_the_start_keys_end():
+    s = Session(TARGET, _with_start(duration_s=0.0, start_by_s=0.0), collectors=full_set(), inventory=INVENTORY,
+                alive=lambda: True, hotkey_factory=Keys(), printer=lambda line: None)
+    assert s.run().target["stop_reason"] == "duration"
+
+
+def test_joined_observers_each_hear_everything_and_one_that_raises_silences_only_itself():
+    heard_a, heard_b = [], []
+
+    def bad(kind, data):
+        heard_a.append(kind)
+        raise RuntimeError("boom")
+    a = sess.Observers(on_event=bad)
+    b = sess.Observers(on_tick=lambda elapsed, live: heard_b.append("tick"),
+                       on_event=lambda kind, data: heard_b.append(kind))
+    both = sess.Joined(a, b)
+    both.event("recording", x=1)
+    both.tick(1.0, {})
+    both.event("stopping", reason="r")
+    assert heard_a == ["recording"] and heard_b == ["recording", "tick", "stopping"]
+    assert both.notes() == a.notes() and len(both.notes()) == 1
+
+
+@pytest.mark.parametrize("seconds,words", [(600, "10 minutes"), (60, "1 minute"), (1200.0, "20 minutes"),
+                                           (90, "90 s"), (30.0, "30 s"), (0.3, "0.3 s"), (59.96, "1 minute"),
+                                           (61, "61 s")])
+def test_a_length_is_said_in_plain_words(seconds, words):
+    assert sess.span_words(seconds) == words
+
+
+@pytest.mark.parametrize("seconds,text", [(0, "0:00"), (192.9, "3:12"), (3792, "63:12"), (-1, "0:00")])
+def test_a_time_is_said_as_the_status_line_shows_it(seconds, text):
+    assert sess.clock_text(seconds) == text
+    if seconds >= 0:
+        assert status_line(seconds, {}).startswith(text + " |")

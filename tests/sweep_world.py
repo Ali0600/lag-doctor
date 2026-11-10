@@ -1,10 +1,12 @@
-"""A stand-in world for settings-sweep tests: recordings, a game process, a start key and timers, all made up.
+"""A stand-in world for settings-sweep tests: recordings, a game process and a start key, all made up.
 
 `capture_at` builds a run's recording at a steady frame rate. `World` plays the player and the PC for the runner
 (lagdoctor/sweep/runner.py): its `record` stands in for `watch`, reading the settings file as the game would at its
-start, pressing the start key, firing the window's timer and saving a capture, then the game quits. Everything a run
-does differently (no press, frame timing off, another window in front, the game writing its own value back) is one
-knob of a `Play`.
+start, telling the events watch's start key tells (the press, then the window's end, or no press in time) and saving a
+capture, then the game quits. Watch's own rules for the key (a press before the recording or after it changes nothing,
+the window's end, the time a press must come by) are its session's, tested in tests/test_session.py; here they are
+what watch tells. Everything a run does differently (no press, frame timing off, another window in front, the game
+writing its own value back) is one knob of a `Play`.
 """
 from __future__ import annotations
 
@@ -13,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from lagdoctor.capture.session import request_stop
+from lagdoctor.capture.session import NO_START, WINDOW_ENDED, request_stop
 from lagdoctor.fixes import game_setting
 from lagdoctor.fixes.game_setting import GameSettingFix
 from lagdoctor.fixes.journal import Journal
@@ -71,32 +73,16 @@ class Listener:
         self.stopped = True
 
 
-class Timer:
-    """A timer the test fires itself."""
-
-    def __init__(self, seconds: float, fn: Callable[[], None]) -> None:
-        self.seconds, self.fn = seconds, fn
-        self.started = self.cancelled = False
-
-    def start(self) -> None:
-        self.started = True
-
-    def cancel(self) -> None:
-        self.cancelled = True
-
-    def fire(self) -> None:
-        if self.started and not self.cancelled:
-            self.fn()
-
-
 @dataclass
 class Play:
     """How one run goes. The defaults: a good run at the setting's frame rate."""
 
     fps: float | None = None              # None: the world's frame rate for the setting the file holds
     press: bool = True                    # the player presses the start key
-    press_early: bool = False             # ... before the recording has begun (it must be ignored)
-    press_late: bool = False              # ... again after the recording has stopped (it must be ignored too)
+    press_early: bool = False             # ... before the recording has begun (watch ignores it: nothing is told)
+    press_late: bool = False              # ... again after the recording has stopped (watch ignores it too)
+    press_in_stop: bool = False           # ... while a run the sweep stopped is still stopping (watch tells that one)
+    key_taken: bool = False               # watch could not register the start key (taken after the sweep's check)
     frames: bool = True                   # frame timing on (False: the UAC prompt was declined)
     code: int = 0                         # watch's exit code when nothing was saved
     code_after: int = 0                   # watch's exit code after the save (130: Ctrl+C during the analysis)
@@ -126,7 +112,6 @@ class World:
         self.seen: list[dict[str, str]] = []           # what the file held as each run's game started
         self.argv: list[list[str]] = []
         self.listeners: list[Listener] = []
-        self.timers: list[Timer] = []
         self.sleeps = 0
         self.listener_ok = True
         self.journal = Journal(tmp / "journal.json", lock_timeout=0.3)
@@ -145,7 +130,7 @@ class World:
     def seams(self) -> runner.Seams:
         return runner.Seams(say=self.say, ask=self.ask, record=self.record, running=self.is_running,
                             sleep=self.sleep, hotkey=self.hotkey, sound=self.sound, load=Capture.load,
-                            fix=self.fix, journal=self.journal, can_trace=lambda: False, timer=self.timer,
+                            fix=self.fix, journal=self.journal, can_trace=lambda: False,
                             now_iso=lambda: "2026-11-09T21:00:00+01:00", read_text=game_setting.read_text)
 
     def sound(self, name: str) -> bool:
@@ -191,11 +176,6 @@ class World:
         self.listeners.append(listener)
         return listener
 
-    def timer(self, seconds: float, fn: Callable[[], None]) -> Timer:
-        t = Timer(seconds, fn)
-        self.timers.append(t)
-        return t
-
     def file_values(self) -> dict[str, str | None]:
         text = inifile.decode(Path(self.sweep.settings_file).read_bytes())[0]
         return {o.key: inifile.get_value(text, o.section, o.key) for o in self.sweep.original}
@@ -235,39 +215,37 @@ class World:
         self.seen.append(self.file_values())
         if play.code:
             return play.code
+        # One listener for the key at a time: the sweep's check let it go before the recording registers it.
         listener = self.listeners[-1]
-        assert listener.started and not listener.stopped
-        if play.press_early:
-            listener.on_press(ORIGIN + 1.0)              # before "recording": ignored
+        assert listener.started and listener.stopped, "the sweep still held the start key as the recording began"
+        key = argv[argv.index("--start-key") + 1]
+        window = float(argv[argv.index("--window") + 1])
+        start_by = float(argv[argv.index("--start-by") + 1])
+        assert key == self.sweep.start_key and window == self.sweep.window_s and start_by == runner.START_WAIT_S
+        # As watch: a press before "recording" or after "stopping" (play.press_early, press_late) is never told.
         observers.event("recording", duration_s=None, hotkey=False, frames=play.frames, network=False)
-        pressed = play.frames and play.press and not play.ends_by_itself
+        observers.event("start_key", key=key, registered=not play.key_taken, window_s=window,
+                        start_by_s=None if play.key_taken else start_by)
         capture = dict(play.capture)
         if play.ends_by_itself:
             observers.event("stopping", reason="game exited")
-            listener.on_press(ORIGIN + 30.0)             # after "stopping", with no stop event set: ignored
             capture.setdefault("duration", 25.0)
             capture.setdefault("draws_until", 25.0)
-            fps = play.fps if play.fps is not None else self.fps[self.variant_on_disk()]
-            return self._save(play, argv, observers, capture_at(fps, **capture))
-        if pressed:
-            listener.on_press(ORIGIN + PRESS_T)
+        elif stop.is_set():                              # the sweep stopped the run: frame timing off, the key taken
+            if play.press_in_stop:                       # pressed before watch's next tick saw the stop: told
+                observers.event("measuring", at=PRESS_T, until=PRESS_T + window)
+            observers.event("stopping", reason=getattr(stop, "reason", ""))
+        elif play.press:
+            observers.event("measuring", at=PRESS_T, until=PRESS_T + window)
             if play.ctrl_c:
                 request_stop(stop, "Ctrl+C")
                 capture.setdefault("duration", PRESS_T + 10.0)     # stopped 10 s into the window
                 capture.setdefault("draws_until", PRESS_T + 10.0)
+                observers.event("stopping", reason="Ctrl+C")
             else:
-                window = [t for t in self.timers if t.seconds == self.sweep.window_s + runner.TAIL_S and t.started]
-                assert window, "no timer was started for the window"
-                window[-1].fire()
-        elif play.frames:
-            no_press = [t for t in self.timers if t.seconds == runner.START_WAIT_S and t.started]
-            no_press[-1].fire()
-        assert stop.is_set()
-        observers.event("stopping", reason=getattr(stop, "reason", ""))
-        if play.press_late:
-            before = len(self.timers)
-            listener.on_press(ORIGIN + 95.0)             # after "stopping": ignored
-            assert len(self.timers) == before, "a press after the recording stopped started a timer"
+                observers.event("stopping", reason=WINDOW_ENDED)  # watch stops the recording after the window
+        else:
+            observers.event("stopping", reason=NO_START)          # no press within --start-by
         fps = play.fps if play.fps is not None else self.fps[self.variant_on_disk()]
         return self._save(play, argv, observers, capture_at(fps, **capture))
 

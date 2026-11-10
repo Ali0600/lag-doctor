@@ -365,6 +365,7 @@ def real_seams() -> runner.Seams:
     from lagdoctor.winapi import elevation
     from lagdoctor.winapi.hotkey import HotkeyListener
     player = Player(paths.home(), log=lambda text: None)
+    player.prepare(("start", "done", "problem"))     # they play on the start key's thread, which must not wait
 
     def record(argv: list[str], stop: threading.Event, observers) -> int:
         try:
@@ -380,13 +381,8 @@ def real_seams() -> runner.Seams:
         except EOFError:
             return None
 
-    def timer(seconds: float, fn: Callable[[], None]) -> threading.Timer:
-        t = threading.Timer(seconds, fn)
-        t.daemon = True
-        return t
-
     return runner.Seams(say=cli.say, ask=ask, record=record,
                         running=lambda game: bool(game_setting.processes_named(game)), sleep=time.sleep,
                         hotkey=HotkeyListener, sound=player.play, load=Capture.load,
                         fix=game_setting.GameSettingFix(), journal=_journal(), can_trace=elevation.can_trace,
-                        timer=timer, now_iso=_now_iso, read_text=game_setting.read_text)
+                        now_iso=_now_iso, read_text=game_setting.read_text)

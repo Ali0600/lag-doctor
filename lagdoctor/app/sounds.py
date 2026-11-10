@@ -85,6 +85,13 @@ class Player:
         self.ready[name] = path
         return path
 
+    def prepare(self, names: tuple[str, ...] | None = None) -> None:
+        """Write each sound's file now (all of SOUNDS by default), so playing it later is only the play: a recording's
+        sounds play on the thread a key arrived on, which must return at once. One that cannot be written is logged
+        and plays as False."""
+        for name in names or tuple(SOUNDS):
+            self.path(name)
+
     def play(self, name: str) -> bool:
         """Start the sound and return at once; False when it could not start."""
         try:

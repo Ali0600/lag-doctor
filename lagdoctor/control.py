@@ -20,6 +20,8 @@ From the recorder (`from_recorder` checks them):
   target       {name, pid, how}                 the game was chosen
   elevate      {argv: [str], cwd}               frame timing needs the relay: raise the UAC prompt for this command
   recording    {duration_s, hotkey, frames, network}   everything has started
+  start_key    {key, registered, window_s, start_by_s}  with a start key, after recording: whether Windows gave it
+  measuring    {at, until}                      the start key's press: the measured window, seconds from the start
   mark         {at}                             the lag key, seconds from the start
   frames_lost  {why}                            frame timing stopped working
   stopping     {reason}                         the recording is stopping
@@ -173,6 +175,17 @@ def from_recorder(line: bytes) -> dict[str, Any]:
         _seconds(msg, "duration_s", optional=True)
         for name in ("hotkey", "frames", "network"):
             _bool(msg, name)
+    elif t == "start_key":
+        _fields(msg, "key", "registered", "window_s", "start_by_s")
+        _text(msg, "key", 40)
+        _bool(msg, "registered")
+        _seconds(msg, "window_s", optional=True)
+        _seconds(msg, "start_by_s", optional=True)
+    elif t == "measuring":
+        _fields(msg, "at", "until")
+        at, until = _seconds(msg, "at"), _seconds(msg, "until", optional=True)
+        if until is not None and until <= at:
+            raise ProtocolError("measuring.until is not after measuring.at")
     elif t == "mark":
         _fields(msg, "at")
         if isinstance(msg["at"], bool) or not isinstance(msg["at"], (int, float)) or not math.isfinite(msg["at"]):
@@ -206,10 +219,15 @@ def from_recorder(line: bytes) -> dict[str, Any]:
 def done_reason(code: int, seen: set[str] | frozenset[str], stopped_by: str, *, failed: bool = False) -> str:
     """How a recording ended, from watch's exit code, the events that went out and the stop's reason."""
     from lagdoctor import cli
+    from lagdoctor.capture import session as sess
     if failed:
         return "failed"
     if code == 0:
-        return {"duration": "completed", "game exited": "game_exited"}.get(stopped_by, "stopped")
+        # A recording that stopped by itself completed: its duration, the start key's window, or no press in time
+        # (then all of it was analysed). The app's words for these come with its start key (M5's app half).
+        ends = {"duration": "completed", sess.WINDOW_ENDED: "completed", sess.NO_START: "completed",
+                "game exited": "game_exited"}
+        return ends.get(stopped_by, "stopped")
     if code == cli.EXIT_CANCELLED:
         return "cancelled"
     if code == cli.EXIT_BAD_ARGS:

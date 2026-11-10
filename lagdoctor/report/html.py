@@ -259,6 +259,15 @@ def part_args(part: dict | None) -> str:
     return out
 
 
+def rerun_args(part: dict | None, cap: Capture) -> str:
+    """The `analyze` arguments that make this report again: none for the start key's part, which analyze finds by
+    itself (analysis/crop.key_part), " --from 0" for the whole of a recording that has one, else part_args'."""
+    from lagdoctor.analysis.crop import key_part
+    if part is None:
+        return " --from 0" if key_part(cap)[0] is not None else ""
+    return "" if part["how"] == "key" else part_args(part)
+
+
 # ------------------------------------------------------------------ sections --
 
 def _tiles(d: Diagnosis) -> str:
@@ -640,6 +649,11 @@ def _head(d: Diagnosis, cap: Capture, game: str) -> str:
     if part:
         note += (f'<p class="note">{e(labels.part_note(part, len(labels.outside_marks(cap.marks, part))))} '
                  "It is shaded on the charts.</p>")
+    else:
+        from lagdoctor.analysis.crop import key_part
+        unmeasured = labels.unmeasured_note(key_part(cap)[1])
+        if unmeasured:
+            note += f'<p class="note">{e(unmeasured)}</p>'
     return (f"<header><h1>Lag report: {e(game)}</h1><p class=\"meta\">{exe}{e(when)} &middot; "
             f"{fmt_elapsed(cap.duration_s)} recorded &middot; {analysed}{e(_frames_text(d))}</p>{note}</header>"
             f'<section class="verdict {e(d.lag_type)}"><div class="badge">{e(lag)}</div>'
@@ -655,8 +669,8 @@ def render(d: Diagnosis, cap: Capture, capture_path: Path | None = None) -> str:
     footer = f"lag-doctor {e(__version__)}"
     if capture_path:
         footer += (f" &middot; capture saved at <code>{e(capture_path)}</code> &middot; re-run the analysis in "
-                   f"PowerShell with <code>lagdoctor analyze {e(powershell_path(capture_path))}{e(part_args(part))}"
-                   "</code>")
+                   f"PowerShell with <code>lagdoctor analyze {e(powershell_path(capture_path))}"
+                   f"{e(rerun_args(part, cap))}</code>")
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'

@@ -308,13 +308,27 @@ def test_a_sweep_run_records_through_watch_without_repointing_fix_or_saying_the_
     monkeypatch.setattr(elevation, "can_trace", lambda: True)          # frame timing here, no relay
     monkeypatch.setattr(sess, "_collect_inventory", lambda target: {"adapters": []})
 
+    keys: list[str] = []
+
+    class Key:                                    # watch's listener for the run's start key: never a real one
+        def __init__(self, key, on_press):
+            keys.append(key)
+            self.error = None
+
+        def start(self):
+            return True
+
+        def stop(self):
+            pass
+
     class QuickSession(sess.Session):
         def __init__(self, target, opts, inventory=None, printer=None, observers=None, **kw):
             cols = [_Quick("system", {"columns": {"t": [0.0, 0.25], "cpu_total_pct": [10.0, 11.0]}}),
                     _Quick("frames", {"columns": {"t": [0.1, 0.12, 0.14], "frame_ms": [16.7, 16.6, 16.8]}})]
             ends = time.monotonic() + 10.0
             super().__init__(target, opts, collectors=cols, inventory=inventory or {"adapters": []},
-                             alive=lambda: time.monotonic() < ends, printer=lambda line: None, observers=observers)
+                             alive=lambda: time.monotonic() < ends, printer=lambda line: None, observers=observers,
+                             hotkey_factory=Key)
     monkeypatch.setattr(sess, "Session", QuickSession)
     lines: list[str] = []
     monkeypatch.setattr(cli, "say", lines.append)
@@ -324,15 +338,18 @@ def test_a_sweep_run_records_through_watch_without_repointing_fix_or_saying_the_
 
     def on_event(kind, data):
         events.append((kind, data))
-        if kind == "recording":
-            sess.request_stop(stop, runner.WINDOW_DONE)
+        if kind == "start_key":
+            sess.request_stop(stop, "the test is done with it")
     seams = command.real_seams()
     argv = runner.watch_args(sweep, slot, tmp_path, seams.can_trace())
     assert seams.record(argv, stop, sess.Observers(on_event=on_event)) == 0
     kinds = [k for k, _ in events]
-    assert kinds.index("recording") < kinds.index("saved")
+    assert kinds.index("recording") < kinds.index("start_key") < kinds.index("saved")
     recording = dict(events[kinds.index("recording")][1])
     assert recording["frames"] is True and recording["hotkey"] is False
+    # The run's start key is watch's own, with the sweep's window and wait (one listener for the key).
+    assert keys == [sweep.start_key] and dict(events[kinds.index("start_key")][1]) == {
+        "key": sweep.start_key, "registered": True, "window_s": sweep.window_s, "start_by_s": runner.START_WAIT_S}
     (folder,) = (tmp_path / plan.RUNS_DIR).iterdir()
     assert dict(events[kinds.index("saved")][1])["session"] == folder.name
     assert (folder / cli.CAPTURE_NAME).is_file() and (folder / cli.REPORT_NAME).is_file()

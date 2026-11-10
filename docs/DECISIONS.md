@@ -113,6 +113,72 @@
   today the inventory is read once, before the recording starts, and the start key may come 20 minutes later; a mode
   switched during the startup would be described for the part. Revisit hook: the start key's press in
   `capture/session.py` (M5's second half) and `_collect_inventory` (DECISIONS 2026-11-09, the measured part).
+- **A second press of the start key ends the window early**, as FrameView's, CapFrameX's and PresentMon's own capture
+  keys do: the player decides where the interesting part ends. Today a second press changes nothing, so a stray one
+  cannot cut a measurement short. Revisit hook: `Session.start` in `capture/session.py` (DECISIONS 2026-11-09, the
+  start key).
+- **One edge rule for a sweep run's numbers and its report**: the sweep clips the frame at each edge of its window
+  (`results.window_metrics`), while the run's report, now cut to the same window, leaves out a frame that began
+  before the press (`crop.frames_inside`), so the two can differ by a frame. Revisit hook: those two functions.
+
+---
+
+## 2026-11-09: The start key in `watch` (M5's second part)
+
+`watch` gets a second key beside the lag key: the start key, Ctrl+Alt+S by default. Its first press after the
+recording has started begins a fixed window, 10 minutes by default, and only that window is analysed (the plan's
+"Measuring the right part"). The owner settled three forks on a question card (2026-11-09); the implementing session
+settled the rest, after eight readers mapped the listener, the recording loop, the control channel, the sweep, the
+capture, sound, the tests and the docs.
+
+The owner's:
+- **On by default in a terminal (chosen: "On by default (Recommended)")**: `lagdoctor watch` measures from the start
+  key, and `--start-key none` records as before, the whole session.
+  - **Only when asked**, with `--start-key KEY`: not chosen.
+- **No press: the whole recording, labelled (chosen: "Whole recording, labelled (Recommended)")**: when the start key
+  is on but was never pressed, could not be registered, or was pressed too late for a 10 s part, the whole recording
+  is analysed, startup included, and both reports say so and name the `analyze --from` command that picks a part.
+  - **Nothing until the player sets the start** (the plan's rule for the app's Results): not chosen for the terminal.
+    M5c decides it for the app, which has trim handles.
+- **Sounds in a terminal watch (chosen: "Yes, with --no-sound (Recommended)")**: a rising chime when the start press
+  counts, three notes when the window ends, a low tone when something went wrong, a blip per lag-key press;
+  `--no-sound` turns them off.
+  - **Silent, as before**: not chosen.
+
+The session's:
+- **One listener per key (chosen)**: the session calls its hotkey factory once for each key, so each key has its own
+  `HotkeyListener` thread, and every stand-in in the tests keeps its shape.
+  - **One thread holding both keys under two ids** (the plan's wording, "a second key on the existing listener"):
+    deferred; worth it only if a thread per key ever costs something, since it needs a result per key and a new
+    factory signature. Revisit hook: `Session._start_hotkey`.
+- **Only the first press after "recording" counts (chosen, the sweep's rule)**: an earlier, later or repeated press
+  changes nothing.
+  - **A second press ends the window early**: deferred, worth trying (Backlog). **A second press restarts the
+    window**: rejected, it throws away measured time.
+- **A start key Windows will not give records anyway (chosen)**: said at once, while the player is still at the
+  terminal, and kept as a note; the recording runs as with `--start-key none`, and its whole is analysed, labelled.
+  - **Refuse to record** (the sweep's way, which it keeps): rejected for watch, whose recording is still worth having.
+- **The window's end stops the recording (chosen, the plan's step 6)**, 3 s later for PresentMon's late rows; it is
+  saved and analysed while the player plays on. With no press, the recording stops after 20 minutes (`--start-by`).
+  - **Record on until the game closes**: deferred to M6 (Play's "after the game closes").
+- **The press is saved in the capture (chosen)**: a new optional field, `start_key` {key, registered, window_s, at},
+  after the `note` precedent. The end-of-watch analysis and a later `analyze CAPTURE` find the same part through
+  `crop.key_part`, and `analyze --from/--to` still picks any other.
+  - **Only in diagnosis.json or summary.json**: rejected, `analyze` could not find the part again. **In `target`**:
+    rejected, older builds would read it silently.
+- **watch owns the window and the cap; the sweep follows its events (chosen)**: a sweep run passes `--start-key`,
+  `--window` and `--start-by`, plays its chimes from watch's `measuring` and `stopping` events, and keeps its early
+  check that the key is free, with a probe it releases before watch registers the key.
+  - **The sweep keeps its own listener and timers**: rejected; two copies of one rule drift, and both would race to
+    stop the recording.
+- **One player per sound (chosen)**: a terminal watch plays its own; under `--control stdio` the app keeps playing
+  its own, and a sweep run its own.
+- **The app records the whole session until M5c (chosen)**: its recorder passes `--start-key none`, so M4's screen,
+  clock and words stay true.
+- **A sweep run's report and its numbers may differ by a frame at an edge (accepted)**. **One rule for both**:
+  deferred, worth trying (Backlog).
+
+Revisit hooks: `Session.start` and `Session._watch` in `capture/session.py`, `crop.key_part`, `cli._record`.
 
 ---
 

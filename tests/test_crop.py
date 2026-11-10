@@ -559,3 +559,77 @@ def test_a_file_never_says_it_holds_a_part(tmp_path):
     cap = Capture.load(p)
     assert cap.span is None and any("span" in n for n in cap.notes)
     assert math.isclose(cap.duration_s, 100.0)
+
+
+# ----------------------------------------------------------------- the start key's part (M5) ---
+
+def _keyed(at=20.0, window=30.0, registered=True, key="ctrl+alt+s", **rec) -> Capture:
+    cap = rich_capture()                                            # 100 s
+    cap.start_key = {"key": key, "registered": registered, "window_s": window, "at": at, **rec}
+    return cap
+
+
+def test_the_start_keys_part_runs_from_its_press_for_its_window():
+    assert crop_mod.key_part(_keyed()) == ((20.0, 50.0), "")
+    assert crop_mod.key_part(_keyed(at=80.0)) == ((80.0, 100.0), "")         # the recording ended first
+    assert crop_mod.key_part(_keyed(window=None)) == ((20.0, 100.0), "")      # measured to the recording's end
+    assert crop_mod.key_part(_keyed(at=0, window=10)) == ((0.0, 10.0), "")    # a whole number, exactly the minimum
+
+
+def test_a_recording_without_a_start_key_has_no_part_and_no_word_about_one():
+    assert crop_mod.key_part(rich_capture()) == (None, "")
+    assert crop_mod.key_part(crop(_keyed(), 20.0, 50.0)) == (None, "")        # a cut copy is a part already
+
+
+@pytest.mark.parametrize("change,why", [
+    ({"registered": False}, "the start key Ctrl+Alt+S could not be registered"),
+    ({"at": None}, "the start key Ctrl+Alt+S was not pressed"),
+    ({"at": 95.0}, "the start key Ctrl+Alt+S was pressed only 5.0 s before the recording ended, and a part needs at "
+                   "least 10 s"),
+    ({"at": 90.01}, "the start key Ctrl+Alt+S was pressed only 9.9 s before the recording ended, and a part needs at "
+                    "least 10 s"),
+    ({"at": 100.0}, "the start key Ctrl+Alt+S was pressed after the recording ended"),
+    ({"window": 5.0}, "the start key Ctrl+Alt+S's window was 5.0 s long, and a part needs at least 10 s"),
+])
+def test_a_start_key_that_measured_nothing_says_why(change, why):
+    args = {"at": change.get("at", 20.0), "window": change.get("window", 30.0),
+            "registered": change.get("registered", True)}
+    assert crop_mod.key_part(_keyed(**args)) == (None, why)
+
+
+@pytest.mark.parametrize("record", [
+    ["ctrl+alt+s", 20.0], {"key": "ctrl+alt+s", "registered": "yes", "window_s": 30.0, "at": 20.0},
+    {"key": "ctrl+alt+s", "registered": True, "window_s": 30.0, "at": "20"},
+    {"key": "ctrl+alt+s", "registered": True, "window_s": 30.0, "at": -1.0},
+    {"key": "ctrl+alt+s", "registered": True, "window_s": 0, "at": 20.0},
+    {"key": "ctrl+alt+s", "registered": True, "window_s": "30", "at": 20.0},
+    {"key": "ctrl+alt+s", "registered": True, "window_s": 30.0, "at": 10 ** 400},
+    {"key": "ctrl+alt+s", "registered": True, "window_s": float("nan"), "at": 20.0},
+])
+def test_a_damaged_start_key_record_measures_nothing_and_never_raises(record):
+    cap = rich_capture()
+    cap.start_key = record
+    part, why = crop_mod.key_part(cap)
+    assert part is None and why.endswith("record in the capture is damaged")
+
+
+@pytest.mark.parametrize("key,named", [("ctrl+alt+s", "the start key Ctrl+Alt+S"), ("x" * 41, "the start key"),
+                                       ("ctrl+alt+\x1b[31m", "the start key"), (7, "the start key"),
+                                       ("", "the start key")])
+def test_a_start_keys_name_from_a_file_is_shown_only_when_short_and_plain(key, named):
+    assert crop_mod.key_part(_keyed(at=None, key=key)) == (None, f"{named} was not pressed")
+
+
+def test_a_recording_of_unknown_length_cannot_find_its_start_keys_part():
+    cap = _keyed()
+    cap.duration_s = float("nan")
+    assert crop_mod.key_part(cap) == (None, "the start key Ctrl+Alt+S's part cannot be found: the recording's "
+                                            "length is not known")
+
+
+def test_the_cut_copy_holds_its_own_start_key_record():
+    cap = _keyed()
+    part = crop(cap, 20.0, 50.0, how="key")
+    assert part.start_key == cap.start_key and part.start_key is not cap.start_key
+    part.start_key["at"] = 0.0
+    assert cap.start_key["at"] == 20.0                              # crop stays pure

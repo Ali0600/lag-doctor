@@ -38,7 +38,7 @@ WINDOW_MIN_S, WINDOW_MAX_S, WINDOW_DEFAULT_S = 30.0, 600.0, 60.0  # 30 s keeps 1
 TRIES_MAX = 5                         # settings tried besides the file as it was
 EDITS_MAX = 4                         # values one --try changes
 # The key pressed in the game at the spot: the plan's start key (docs/LAUNCHER-PLAN.md), a feel number the owner has not
-# judged yet. A sweep registers it only while its runs record; watch's own start key (M5) does not exist yet.
+# judged yet. Each run's recording (watch's start key, M5) registers it; a test holds it equal to cli.DEFAULT_START_KEY.
 START_KEY = "ctrl+alt+s"
 VARIANT_IDS = "ABCDEF"
 # stopped: it can go on (--resume); ended: it cannot (the game was updated, or does not keep the file's setting, or the

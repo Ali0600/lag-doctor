@@ -323,6 +323,15 @@ def part_note(part: dict[str, Any], outside_marks: int = 0) -> str:
     return text + "."
 
 
+def unmeasured_note(why: str) -> str | None:
+    """What the reports say when a recording had a start key but the whole of it was analysed (analysis/crop.key_part's
+    `why`, e.g. 'the start key Ctrl+Alt+S was not pressed'); None without a why."""
+    if not why:
+        return None
+    return (f"{why[0].upper()}{why[1:]}, so the whole recording was analysed, startup included. To analyse only part "
+            "of it, run lagdoctor analyze on the capture with --from (and --to).")
+
+
 def marks(stats: dict, events: list) -> list[tuple[float, list, list[str]]]:
     """CC-5: (time, [the lag events in its window], [signals that moved]) for each of the user's lag-key presses,
     from Diagnosis.stats["marks"] (analysis/diagnose.mark_list); entries a damaged file spoiled are left out."""

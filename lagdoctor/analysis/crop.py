@@ -101,6 +101,46 @@ def check_span(cap: Capture, t0: Any, t1: Any) -> tuple[float, float]:
     return lo, hi
 
 
+KEY_TEXT_MAX = 40                # a start key's name from a file, shown only when it is this short and plain
+
+
+def key_part(cap: Capture) -> tuple[tuple[float, float] | None, str]:
+    """The part the start key asks for (Capture.start_key, written by capture/session.py): ((t0, t1), "") with
+    check_span's span for [press, press + window], ending at the recording's end at the latest; (None, why) when the
+    recording had a start key but no part comes of it, `why` a clause the reports follow with ", so the whole
+    recording was analysed" (not registered, not pressed, pressed too late for a MIN_SPAN_S part, a damaged record);
+    (None, "") for a recording without one. The end-of-watch analysis and `analyze CAPTURE` both find the part here."""
+    rec = cap.start_key
+    if rec is None or getattr(cap, "span", None) is not None:    # a cut copy is already a part
+        return None, ""
+    raw = rec.get("key") if isinstance(rec, dict) else None
+    name = (f"the start key {raw.title()}" if isinstance(raw, str) and 0 < len(raw) <= KEY_TEXT_MAX
+            and all(c.isascii() and (c.isalnum() or c == "+") for c in raw) else "the start key")
+    if not isinstance(rec, dict) or not isinstance(rec.get("registered"), bool):
+        return None, f"{name}'s record in the capture is damaged"
+    if not rec["registered"]:
+        return None, f"{name} could not be registered"
+    if rec.get("at") is None:
+        return None, f"{name} was not pressed"
+    at, window = _time(rec.get("at")), rec.get("window_s")
+    span = None if window is None else _time(window)
+    if at is None or at < 0 or (window is not None and (span is None or span <= 0)):
+        return None, f"{name}'s record in the capture is damaged"
+    try:
+        end = recorded_s(cap)
+    except ValueError:
+        return None, f"{name}'s part cannot be found: the recording's length is not known"
+    if at >= end:
+        return None, f"{name} was pressed after the recording ended"
+    if span is not None and round(span, 3) < MIN_SPAN_S:
+        return None, f"{name}'s window was {span:.1f} s long, and a part needs at least {MIN_SPAN_S:.0f} s"
+    try:
+        return check_span(cap, at, end if span is None else at + span), ""
+    except ValueError:              # the recording ended within MIN_SPAN_S of the press
+        return None, (f"{name} was pressed only {math.floor((end - at) * 10) / 10:.1f} s before the recording "
+                      f"ended, and a part needs at least {MIN_SPAN_S:.0f} s")
+
+
 def crop(cap: Capture, t0: Any, t1: Any, how: str = "set") -> Capture:
     """`cap` cut to [t0, t1] (check_span's span), for diagnose(). `how`: "key" (from the start key's press) or "set"
     (the player chose it). ValueError for a span check_span refuses. The result's `span` is
@@ -120,7 +160,7 @@ def crop(cap: Capture, t0: Any, t1: Any, how: str = "set") -> Capture:
     out = replace(cap, duration_s=hi - lo, others=others, marks=marks,
                   net_flows=_net_flows(cap.net_flows, lo, hi, w["network"]), sources=_sources(cap, cut),
                   target=copy.deepcopy(cap.target), inventory=copy.deepcopy(cap.inventory), notes=list(cap.notes),
-                  **cut)
+                  start_key=copy.deepcopy(cap.start_key), **cut)
     out.span = {"from_s": lo, "to_s": hi, "recorded_s": recorded, "how": how}
     return out
 

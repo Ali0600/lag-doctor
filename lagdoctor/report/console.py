@@ -90,6 +90,11 @@ def _header(out: _Out, d: Diagnosis, cap: Capture, checkup: bool) -> None:
              f"{analysed}started {when})")
     if part:
         out.para(labels.part_note(part, len(labels.outside_marks(cap.marks, part))))
+    else:
+        from lagdoctor.analysis.crop import key_part
+        note = labels.unmeasured_note(key_part(cap)[1])      # a start key that measured nothing: why, said once
+        if note:
+            out.para(note)
     out.add()
     lag = _word(labels.LAG_TYPES, d.lag_type).upper()
     out.para(f"VERDICT [{lag}] {d.headline}")
