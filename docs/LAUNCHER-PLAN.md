@@ -543,6 +543,9 @@ The app's half was built on 2026-11-09 (DESIGN.md, The app), with these choices 
 
 - `crop`, plus `analyze --from/--to`.
 - The start-measuring hotkey, a second key on the existing listener, with the fixed window and the sounds.
+  `lagdoctor sweep` (DECISIONS 2026-11-09) registers its own Ctrl+Alt+S for each of its runs until this exists, and
+  records them with `--hotkey none`; this key makes it watch's, and the sweep then uses it (one listener for the key;
+  `runner._record` is the seam, `tests/test_sweep_runner.py` the tests that must keep passing).
 - Trim handles in Results.
 
 It comes in three pull requests: the analysis of a part, the start key in `watch`, and the app's half, which the

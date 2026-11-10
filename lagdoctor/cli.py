@@ -50,7 +50,7 @@ EXIT_CANCELLED = 130           # the caller cancelled before the recording began
 # What each command does when Windows keeps this process's files in another app's private copy
 # (paths.private_copy): "refuse" what saves files other windows must find, "note" what only reads.
 PRIVATE_COPY_POLICY = {"setup": "refuse", "watch": "refuse", "fix": "refuse", "undo": "refuse", "app": "refuse",
-                       "check": "note", "analyze": "note"}
+                       "sweep": "refuse", "check": "note", "analyze": "note"}
 
 # Performance Log Users may trace frames but not enable Kernel-Network, the game-server tracker's provider
 # (measured with scripts/etw_access.py on 2026-11-06; docs/research/install-and-rights.md, E1).
@@ -126,6 +126,29 @@ def build_parser() -> argparse.ArgumentParser:
 
     ap = sub.add_parser("app", help="open lag-doctor's window: your recorded games and their results")
     ap.set_defaults(func=cmd_app)
+
+    from lagdoctor.sweep import plan as sweep_plan
+    sw = sub.add_parser("sweep", help="try a game's settings one after another and compare them (you play each run)",
+                        description="lag-doctor writes each setting into the game's settings file while the game is "
+                        "closed, you play each run from the same spot, and it compares the settings against their own "
+                        "run-to-run spread. Your settings file is put back as it was at the end.")
+    sw.add_argument("--game", metavar="NAME", type=_exe_name, help="the game's exe name, e.g. ff7rebirth_.exe")
+    sw.add_argument("--settings", metavar="FILE", help="the game's settings file (.ini), e.g. its GameUserSettings.ini")
+    sw.add_argument("--try", dest="tries", metavar="KEY=VALUE", action="append", default=[],
+                    help="a setting to try, e.g. sg.ShadowQuality=1 (several at once: commas between); repeat for "
+                         f"more, up to {sweep_plan.TRIES_MAX}")
+    sw.add_argument("--runs", type=_sweep_runs, metavar="N",
+                    help=f"counted runs of each setting (default {sweep_plan.RUNS_DEFAULT})")
+    sw.add_argument("--window", type=_sweep_window, metavar="S",
+                    help=f"seconds measured from the start key in each run (default {sweep_plan.WINDOW_DEFAULT_S:.0f})")
+    sw.add_argument("--no-warm-up", action="store_true",
+                    help="count every run, even each setting's first (by default the first round only warms up)")
+    sw.add_argument("--start-key", type=_start_key, metavar="KEY",
+                    help=f"the key you press in the game at your spot, with Ctrl, Alt or Win (default "
+                         f"{sweep_plan.START_KEY})")
+    sw.add_argument("--resume", nargs="?", const="", metavar="FOLDER",
+                    help="go on with the last unfinished sweep, or the one in FOLDER; a finished one shows its results")
+    sw.set_defaults(func=cmd_sweep)
     return p
 
 
@@ -210,6 +233,19 @@ def _hotkey(text: str) -> str:
     return key
 
 
+def _start_key(text: str) -> str:
+    """A settings sweep's start key: one Windows can register, held with Ctrl, Alt or Win. A key on its own (or with
+    Shift alone) would be taken from the game for the whole run, and a sweep cannot do without one."""
+    key = _hotkey(text)
+    if key == "none":
+        raise argparse.ArgumentTypeError("a sweep needs a start key (e.g. ctrl+alt+s)")
+    mods = {p.strip() for p in key.split("+")[:-1]}
+    if not mods & {"ctrl", "control", "alt", "win"}:
+        raise argparse.ArgumentTypeError(f"{text!r} would take that key from the game: hold it with ctrl, alt or win "
+                                         "(e.g. ctrl+alt+s)")
+    return key
+
+
 def _note(text: str) -> str | None:
     """The player's note, as the capture keeps it (model.clean_note); None for an empty one. One longer than the
     capture keeps is refused here, before anything starts, rather than cut."""
@@ -225,6 +261,28 @@ def _abs_path(text: str) -> Path:
     if not text.strip():
         raise argparse.ArgumentTypeError("give a folder")
     return Path(text).resolve()
+
+
+def _sweep_runs(text: str) -> int:
+    from lagdoctor.sweep import plan
+    try:
+        v = int(text.strip(), 10)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number") from None
+    if not plan.RUNS_MIN <= v <= plan.RUNS_MAX:
+        raise argparse.ArgumentTypeError(f"give from {plan.RUNS_MIN} to {plan.RUNS_MAX} runs")
+    return v
+
+
+def _sweep_window(text: str) -> float:
+    from lagdoctor.sweep import plan
+    try:
+        v = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a number of seconds") from None
+    if not plan.WINDOW_MIN_S <= v <= plan.WINDOW_MAX_S:            # also refuses NaN
+        raise argparse.ArgumentTypeError(f"give from {plan.WINDOW_MIN_S:.0f} to {plan.WINDOW_MAX_S:.0f} seconds")
+    return v
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -246,7 +304,7 @@ def main(argv: list[str] | None = None) -> int:
         return code
     # Under a private copy (a reading command was let through) the journal is not healed: what it writes would
     # land in that copy, apart from the journal the user's own windows keep.
-    if args.cmd in ("watch", "fix", "undo", "check") and not private:
+    if args.cmd in ("watch", "fix", "undo", "check", "sweep") and not private:
         _settle_journal()
     try:
         return args.func(args)
@@ -261,9 +319,12 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
               say: Callable[[str], None] | None = None, interactive: bool | None = None,
               observers: Any = None, launcher: Callable[..., Any] | None = None,
               cancel: threading.Event | None = None, tool_alone: tuple[tuple[int, int], ...] = (),
-              tool_roots: Callable[[dict[int, Any]], Any] | None = None) -> int:
+              tool_roots: Callable[[dict[int, Any]], Any] | None = None, remember: bool = True,
+              show_summary: bool = True) -> int:
     """Record the game, save the capture and analyse it. What a caller other than this console gives it (M4: the
-    app's control channel), each defaulting to the console's own behaviour:
+    app's control channel; a settings sweep's runs), each defaulting to the console's own behaviour:
+    - `remember`: False keeps `lagdoctor fix` on the report it uses now (a sweep's runs try settings on purpose);
+    - `show_summary`: False leaves the analysis' summary out of what watch says (a sweep says its own line per run);
     - `stop`: set it (session.request_stop) to stop the recording, as Ctrl+C does;
     - `cancel`: set it to end watch before the recording begins, with nothing recorded and no session folder
       (EXIT_CANCELLED). It is looked at between the steps (before the game is looked for, once it is found, while the
@@ -330,7 +391,8 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
             _check_cancel(cancel)
             return _record(args, target, exe, frames, frames_why, relay, stop=stop, say=say,
                            interactive=interactive is not False, observers=observers,
-                           tool_alone=tool_alone, tool_roots=tool_roots, cancel=cancel)
+                           tool_alone=tool_alone, tool_roots=tool_roots, cancel=cancel, remember=remember,
+                           show_summary=show_summary)
     except Cancelled:
         say("Cancelled: nothing was recorded.")
         return EXIT_CANCELLED
@@ -342,12 +404,13 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
 def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, frames: bool, frames_why: str,
             relay: Any = None, *, stop: threading.Event | None = None, say: Callable[[str], None] | None = None,
             interactive: bool = True, observers: Any = None, tool_alone: tuple[tuple[int, int], ...] = (),
-            tool_roots: Callable[[dict[int, Any]], Any] | None = None, cancel: threading.Event | None = None) -> int:
+            tool_roots: Callable[[dict[int, Any]], Any] | None = None, cancel: threading.Event | None = None,
+            remember: bool = True, show_summary: bool = True) -> int:
     """Record, save and analyse. Ctrl+C, Ctrl+Break and closing the window all stop the recording; none of them can
     lose it once it is being stopped and saved. With a relay (relay/client.RelayLink), frame timing and the
-    game-server tracker come through it, and it is let go as soon as the recording stops. `stop`, `say`, `observers`
-    and the tool processes as in cmd_watch; `interactive` False: no status line and no console handling (nobody is
-    there)."""
+    game-server tracker come through it, and it is let go as soon as the recording stops. `stop`, `say`, `observers`,
+    the tool processes, `remember` and `show_summary` as in cmd_watch; `interactive` False: no status line and no
+    console handling (nobody is there)."""
     from lagdoctor.capture import session as sess
     from lagdoctor.model import SourceStatus, clean_note
     say = _teller(say)
@@ -393,14 +456,16 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
             observers.event("saved", session=out_dir.name)
         finally:
             saved.set()
-    return _analyze_saved(cap, cap_path, out_dir, say=say)
+    return _analyze_saved(cap, cap_path, out_dir, say=say, remember=remember, show_summary=show_summary)
 
 
-def _analyze_saved(cap, cap_path: Path, out_dir: Path, *, say: Callable[[str], None] | None = None) -> int:
+def _analyze_saved(cap, cap_path: Path, out_dir: Path, *, say: Callable[[str], None] | None = None,
+                   remember: bool = True, show_summary: bool = True) -> int:
     """A watch's analysis. The capture is already on disk, so a Ctrl+C here says where it is."""
     say = _teller(say)
     try:
-        return analyze_and_report(cap, cap_path, out_dir, remember=True, say=say)
+        return analyze_and_report(cap, cap_path, out_dir, remember=remember, kind="watch", show_summary=show_summary,
+                                  say=say)
     except KeyboardInterrupt:
         say(f"Stopped before the analysis finished. The capture is saved at {cap_path}; analyse it with: "
             f"lagdoctor analyze \"{cap_path}\"")
@@ -603,6 +668,13 @@ def cmd_app(args: argparse.Namespace) -> int:
     return app_main.run()
 
 
+def cmd_sweep(args: argparse.Namespace) -> int:
+    """A settings sweep (lagdoctor/sweep/): only the owner runs one, in their own terminal, since it changes the game's
+    settings file and records each run."""
+    from lagdoctor.sweep import command
+    return command.main(args)
+
+
 def _app_tell(text: str) -> None:
     """A message from `lagdoctor app` before its window exists: in the console that started it, or in a message box
     when there is none (the Start-menu shortcut runs pythonw.exe, which has no console)."""
@@ -612,12 +684,14 @@ def _app_tell(text: str) -> None:
 
 # ---------------------------------------------------------------- analyze --
 
-def analyze_and_report(cap, cap_path: Path, out_dir: Path, *, remember: bool = False,
-                       say: Callable[[str], None] | None = None, span: tuple[float, float, str] | None = None) -> int:
+def analyze_and_report(cap, cap_path: Path, out_dir: Path, *, remember: bool = False, kind: str | None = None,
+                       show_summary: bool = True, say: Callable[[str], None] | None = None,
+                       span: tuple[float, float, str] | None = None) -> int:
     """Diagnose, write diagnosis.json and report.html into out_dir, print the summary. remember=True (a watch)
-    makes this the report `fix` acts on. `say`: where every line goes, the summary included (default: printed).
-    `span` (t0, t1, how): analyse only that part of the recording (analysis/crop.py, which refuses a span it cannot
-    cut); the report still draws the whole recording, with the rest shaded."""
+    makes this the report `fix` acts on. `kind`: summary.json's "watch" or "analyze" (default: "watch" when
+    remembered). `show_summary` False: the summary is not said. `say`: where every line goes, the summary included
+    (default: printed). `span` (t0, t1, how): analyse only that part of the recording (analysis/crop.py, which
+    refuses a span it cannot cut); the report still draws the whole recording, with the rest shaded."""
     from lagdoctor.analysis.crop import crop
     from lagdoctor.analysis.diagnose import diagnose
     from lagdoctor.report import console, html
@@ -638,8 +712,9 @@ def analyze_and_report(cap, cap_path: Path, out_dir: Path, *, remember: bool = F
         return 1
     _write_json(out_dir / DIAGNOSIS_NAME, d.to_json())
     report = html.write(d, cap, out_dir / REPORT_NAME, capture_path=cap_path)
-    _write_summary(d, cap, out_dir, "watch" if remember else "analyze", say=say)
-    show(console.render(d, cap, report_path=report, width=_width()))
+    _write_summary(d, cap, out_dir, kind or ("watch" if remember else "analyze"), say=say)
+    if show_summary:
+        show(console.render(d, cap, report_path=report, width=_width()))
     if remember:
         _remember(out_dir)
     return 0
@@ -880,11 +955,18 @@ def _settle_journal(say: Callable[[str], None] | None = None) -> None:
             say(f"The fix journal could not be read; it was copied to {exc.parked} and left in place. Fixes and "
                 f"undo are paused until it can be read again (`lagdoctor undo` says more).")
             return
+        sweep_left = []
         for e in entries:
             try:
                 if e.state == "pending":
+                    if e.fix_id == "game_setting" and _just_begun(e.created_at):
+                        continue                  # a sweep in another window may be making this change right now
                     res = catalog.get(e.fix_id).heal(e, journal)
                     say(f"Settled a change that was interrupted last time: {res.message}")
+                    if e.fix_id == "game_setting" and res.state == "applied":
+                        sweep_left.append(e)
+                elif e.state in ("applied", "conflict") and e.fix_id == "game_setting":
+                    sweep_left.append(e)
                 elif e.state == "applied" and e.session_only:
                     # Decided without read(): a journaled PID may belong to the game by now, and read() opens it.
                     if catalog.get(e.fix_id).ended(e.params):
@@ -893,8 +975,30 @@ def _settle_journal(say: Callable[[str], None] | None = None) -> None:
                 raise
             except Exception as exc:  # noqa: BLE001 - one bad entry is left as it is, and the rest still settle
                 say(f"(Could not check the change {e.id} ({e.fix_id}) in the fix journal: {exc})")
+        if sweep_left:
+            # A sweep that ended without putting its setting back (its window was closed, the PC restarted): the
+            # player plays with that setting until something puts it back, so every start says so.
+            values = ", ".join(f"{e.params.get('key')}={e.after} (was {e.before})" for e in sweep_left
+                               if isinstance(e.params, dict))
+            say(f"A settings sweep left a change in a game's settings file: {values}. `lagdoctor sweep --resume` puts "
+                "it back (and goes on with the sweep), and so does `lagdoctor undo game_setting`.")
     except Exception as exc:  # noqa: BLE001 - a journal problem must not block the tool
         say(f"(Could not check the fix journal: {exc})")
+
+
+PENDING_GRACE_S = 60.0         # a pending entry younger than this may be a change another window is making now
+
+
+def _just_begun(created_at: object) -> bool:
+    """True for a journal entry created under PENDING_GRACE_S ago: healing it now could read the value before the other
+    window's write lands, and settle a change that then happens as one that never did."""
+    try:
+        made = datetime.fromisoformat(str(created_at))
+    except ValueError:
+        return False
+    if made.tzinfo is None:
+        return False
+    return (datetime.now(made.tzinfo) - made).total_seconds() < PENDING_GRACE_S
 
 
 # ------------------------------------------------------------------ setup --
