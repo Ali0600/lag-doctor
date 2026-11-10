@@ -67,6 +67,8 @@ SHARED_GPU_PCT = 10.0        # LC 4.6, 10 row 4.6: other programs on the game ad
                              # the game's own GPU busy then reads short (PM 3.2), whatever holds its frame rate
 MAD_TO_SD = 1.4826           # MAD x 1.4826 estimates the standard deviation of normal data
 IQR_TO_SD = 1.349            # the interquartile range of normal data is 1.349 standard deviations
+# ---- headroom: how far each side is from its own limit (DESIGN, Headroom) -------------------------
+STEP_MIN_FPS = 20.0          # [inferred] a quantised screen's even steps (refresh / k) under 20 FPS are no one's target
 
 FRAME_EVENT_KINDS = ("stutter", "fps_drop")   # what "steady" excludes (DESIGN, bound)
 
@@ -502,6 +504,8 @@ def bound(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent]) -> dict
     (median GPU busy - HAGS margin) / median app frame time; steady_fps is the frame rate of those steady
     frames (displayed ones where display is tracked). While other programs share the game's GPU (gpu_shared),
     a regular cadence is not taken for a cap, nor a short GPU busy for waiting: the verdict is "unknown" (A7).
+    cpu_share is the game's CPU over every logical CPU (LC 3.2's all-core figure), and headroom how far the other
+    sides are from their limits (headroom()).
     """
     events = list(events)
     spans = _merged_spans(events, FRAME_EVENT_KINDS)
@@ -521,7 +525,7 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
     out: dict[str, Any] = {"verdict": "unknown", "r": None, "ft_ms": None, "gpu_ms": None, "busiest_thread": None,
                            "cap_fps": None, "refresh_hz": hz, "vsync": None, "vrr": None, "confidence": "low",
                            "notes": notes, "gpu_busy_pct": None, "quantised_pct": None, "steady_frames": 0,
-                           "steady_s": 0.0, "steady_fps": None}
+                           "steady_s": 0.0, "steady_fps": None, "cpu_share": None, "headroom": None}
 
     means = _window_means(cap, S.GAME_TOP_THREAD_PCT, tick_spans)
     busiest = st.median(means) / 100.0 if means else None
@@ -529,6 +533,7 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
     nlp = _logical_cpus(cap)
     proc_means = _window_means(cap, S.GAME_CPU_PCT, tick_spans)
     proc_share = st.median(proc_means) / 100.0 / nlp if proc_means and nlp else None
+    out["cpu_share"] = proc_share
 
     fm = fr.get(F.FRAME_MS) or []
     frame_ms = [float(fm[i]) for i in rows if _pos(_at(fm, i))]
@@ -650,6 +655,82 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
         verdict, conf = "unknown", "low"
         out["cap_fps"] = None
     out["verdict"], out["confidence"] = verdict, conf
+    out["headroom"] = headroom(out, shared)
+    return out
+
+
+def headroom(b: dict[str, Any], shared: float | None = None) -> dict[str, Any] | None:
+    """How close the sides that do not limit the frame rate are to their own limits, from the steady frames bound()
+    judged (DESIGN, Headroom): an estimate for this game at these settings, never a benchmark. None without a steady
+    stretch long enough for a verdict (BOUND_MIN_FRAMES and BOUND_MIN_S). `shared`: gpu_shared's reading.
+
+    - gpu_fps: 1000 / G, the frame rate the GPU's own work per frame allows (G as r uses it: the median GPU busy less
+      the HAGS margin). None while other programs share the game's GPU: G leaves their work out (PM 3.2).
+    - cpu_fps: [low, high], steady_fps scaled by how busy the CPU was. u is the busiest game thread's share of one
+      logical CPU, or the game's share of every logical CPU (cpu_share) where that is busier (`cpu_from` "thread" or
+      "all_cores"): steady_fps * [max(1, 0.85 / u), 1 / u], since from 0.85 a thread counts as saturated (LC 3.2) and
+      at 1 it is. Never MsCPUBusy: it is wall time from one Present() to the next, so it fills the frame of a GPU-bound
+      game and 1000 / MsCPUBusy only restates the frame rate (PM 3.2, LC 0 item 3, learnings).
+    - display_fps: the refresh rate. steps_fps, where 90 % or more of the displayed frames sit on whole refreshes (a
+      fixed-refresh screen, under VSync or Windows' composition): the rates at which the pace is even, refresh / k for
+      k = 1, 2, ..., down to STEP_MIN_FPS.
+    - limit, next, speedup: for a GPU or CPU verdict, that side ("gpu" or "cpu"); the next limit, the lowest other
+      ceiling ("cpu", "gpu", "display", or "cpu_or_display" where the CPU's range spans the refresh rate); and
+      [low, high], how many times faster the limiting part must get for that to take over: [next low / limit high,
+      next high / limit low], never under 1. The limit's own range runs from steady_fps to its ceiling, or is its
+      ceiling alone under a VSync lock, which rounds steady_fps down to refresh / k. A GPU busy no longer than the HAGS
+      margin (G = 0) is never the next limit: the screen is. next and speedup stay None where the other side was not
+      measured, or the CPU's threads were not what saturated it.
+    """
+    steady, n, secs = _num(b.get("steady_fps")), _num(b.get("steady_frames")), _num(b.get("steady_s"))
+    if steady is None or steady <= 0 or n is None or n < BOUND_MIN_FRAMES or secs is None or secs < BOUND_MIN_S:
+        return None
+    steady = float(steady)
+    g = _num(b.get("gpu_ms"))
+    gpu = 1000.0 / g if g is not None and g > 0 and shared is None else None
+    idle_gpu = g is not None and g <= 0 and shared is None      # GPU busy within the HAGS margin: never the next limit
+    cpu, cpu_from, saturated = None, None, False
+    load = [(float(u), edge, name) for u, edge, name in ((_num(b.get("busiest_thread")), THREAD_BOUND, "thread"),
+                                                         (_num(b.get("cpu_share")), ALL_CORES_BOUND, "all_cores"))
+            if u is not None and u > 0]
+    if load:
+        u, edge, cpu_from = max(load, key=lambda x: x[0])      # the busier one saturates first; a tie keeps the thread
+        u = min(u, 1.0)
+        cpu = [steady * max(1.0, edge / u), steady / u]
+        saturated = u >= edge
+    hz = _num(b.get("refresh_hz"))
+    display = float(hz) if hz is not None and hz > 0 else None
+    q = _num(b.get("quantised_pct"))
+    steps = ([display / k for k in range(1, int(display // STEP_MIN_FPS) + 1)]
+             if display is not None and q is not None and q >= 100.0 * VSYNC_SHARE else [])
+    out: dict[str, Any] = {"steady_fps": steady, "gpu_fps": gpu, "cpu_fps": cpu, "cpu_from": cpu_from,
+                           "display_fps": display, "steps_fps": steps or None, "limit": None, "next": None,
+                           "speedup": None}
+    side = {"gpu": "gpu", "cpu_main": "cpu", "cpu_all": "cpu"}.get(b.get("verdict"))
+    if side is None:
+        return out
+    out["limit"] = side
+    if side == "gpu":
+        if cpu is None:
+            return out
+        if b.get("vsync") is True and gpu is not None:
+            own = (gpu, gpu)
+        else:
+            own = (min(steady, gpu or steady), max(steady, gpu or steady))
+        if display is None or cpu[1] <= display:
+            nxt, want = "cpu", (cpu[0], cpu[1])
+        elif cpu[0] >= display:
+            nxt, want = "display", (display, display)
+        else:
+            nxt, want = "cpu_or_display", (cpu[0], display)
+    else:
+        if cpu is None or not saturated or (gpu is None and not (idle_gpu and display is not None)):
+            return out
+        own = (cpu[0], cpu[1])
+        nxt, want = (("gpu", (gpu, gpu)) if gpu is not None and (display is None or gpu <= display)
+                     else ("display", (display, display)))
+    out["next"] = nxt
+    out["speedup"] = [max(1.0, want[0] / own[1]), max(1.0, want[1] / own[0])]
     return out
 
 
