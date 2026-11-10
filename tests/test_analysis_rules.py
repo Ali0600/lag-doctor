@@ -470,6 +470,44 @@ def test_gpu_limit_names_only_what_the_readings_named(reasons, held):
     assert any(t.startswith(f"The GPU was also held down by {held} 80% of the time") for t in texts), texts
 
 
+def test_a_gpu_verdict_under_point_nine_says_which_rule_made_it():
+    # The 1 ms rule (r above 0.75, the frame within 1 ms of the GPU's busy time) and VSync at k refreshes call the GPU
+    # the limit under r = 0.90, and the evidence then read "(r = 0.84); GPU-bound at 0.90 or more" beside the verdict.
+    def on(hz):
+        return {"displays": [dict(DISPLAY, hz=hz, max_hz=int(hz), modes_hz=[60, int(hz)])]}
+
+    res = run("gpu_limit", make(system=engine(99.0), inventory=on(240.0)), stats={"avg_fps": 166.0},
+              bound={"verdict": "gpu", "r": 0.85, "gpu_ms": 5.1, "ft_ms": 6.0})
+    first = res.evidence[0]
+    assert first.text == ("The GPU was busy 5.1 ms of each 6.0 ms frame (r = 0.85): the GPU idled under 1 ms a frame, "
+                          "so it sets the pace.")
+    assert first.value == pytest.approx(0.9) and first.unit == "ms" and first.threshold == 1.0
+    held = ("VSync rounds the frame rate down to 30 FPS (refresh / 2): the GPU needs 17.0 ms a frame, more than 1 "
+            "refresh period(s) (16.7 ms)")
+    res = run("gpu_limit", make(system=engine(99.0), inventory=on(60.0)), stats={"avg_fps": 30.0},
+              bound={"verdict": "gpu", "r": 0.51, "gpu_ms": 17.0, "ft_ms": 33.3, "vsync": True, "notes": [held]})
+    assert res.evidence[0].text == f"The GPU was busy 17.0 ms of each 33.3 ms frame (r = 0.51): {held}."
+    assert not any("0.90 or more" in e.text for e in res.evidence)
+    # r at 0.90 or more keeps its threshold line
+    res = run("gpu_limit", make(system=engine(99.0)), stats={"avg_fps": 40.0},
+              bound={"verdict": "gpu", "r": 0.99, "gpu_ms": 24.8, "ft_ms": 25.0})
+    assert res.evidence[0].text.endswith("(r = 0.99); GPU-bound at 0.90 or more.")
+
+
+def test_a_gpu_verdict_from_too_few_steady_frames_never_claims_frame_timing():
+    # Under 300 steady frames bound() never computes r: the GPU's 3D engine at 95 % names the GPU instead, and the
+    # evidence said "Frame timing shows the GPU as the limit", counted twice (frame timing and the engine) as likely.
+    note = "only 120 steady frames over 2.0 s; a verdict needs 300 frames and 10 s"
+    res = run("gpu_limit", make(system=engine(99.0)), stats={"avg_fps": 40.0},
+              bound={"verdict": "gpu", "r": None, "notes": [note, "probably GPU-limited: the game kept its GPU engine "
+                                                                    "99% busy (>= 95%)"]})
+    texts = [e.text for e in res.evidence]
+    assert not any("frame timing shows" in t.lower() for t in texts)
+    assert (f"Frame timing could not judge the limit ({note}), so the verdict comes from the GPU's 3D engine."
+            in texts)
+    assert is_finding(res, "medium")                     # the engine alone: possible, never likely
+
+
 def test_gpu_limit_on_a_borderline_split_is_only_worth_checking():
     res = run("gpu_limit", make(system=engine(70.0)), stats={"avg_fps": 40.0}, bound={"verdict": "mixed", "r": 0.82})
     assert is_finding(res, "low") and "borderline" in res.evidence[0].text.lower()

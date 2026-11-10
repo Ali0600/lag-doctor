@@ -739,12 +739,23 @@ def _gpu_limit(cap: Capture, ctx: dict) -> Any:
                                                   f"already reaches the {e.refresh:.0f} Hz display"), firm=True)
         g, ft = _fin(b.get("gpu_ms")), _fin(b.get("ft_ms"))
         detail = f" (r = {r:.2f})" if r is not None else ""
+        notes = [n for n in b.get("notes") or [] if isinstance(n, str)]
+        rounds = next((n for n in notes if n.startswith("VSync rounds")), None)
         if v == "gpu" and r is not None:
             busy = (f"the GPU was busy {g:.1f} ms of each {ft:.1f} ms frame" if g is not None and ft is not None
                     else f"the GPU was busy {100 * r:.0f}% of each frame")
-            c.support("frame_timing", W_STEADY, f"{busy}{detail}; GPU-bound at {fa.R_GPU:.2f} or more", r, "", fa.R_GPU)
-        elif v == "gpu":
-            c.support("frame_timing", W_STEADY, "frame timing shows the GPU as the limit")
+            if r >= fa.R_GPU:
+                c.support("frame_timing", W_STEADY, f"{busy}{detail}; GPU-bound at {fa.R_GPU:.2f} or more", r, "",
+                          fa.R_GPU)
+            elif b.get("vsync") is True and rounds:     # A6: VSync holds it at refresh / k, the GPU past k - 1 periods
+                c.support("frame_timing", W_STEADY, f"{busy}{detail}: {rounds}")
+            else:         # A14: under 0.90, the frame within 1 ms of the GPU's busy time leaves the GPU the limit
+                c.support("frame_timing", W_STEADY, f"{busy}{detail}: the GPU idled under {fa.GPU_GAP_MS:.0f} ms a "
+                                                    "frame, so it sets the pace", ft - g if g is not None and ft
+                          is not None else None, "ms", fa.GPU_GAP_MS)
+        elif v == "gpu":      # bound's fallback: too few steady frames, so the 3D engine named the GPU, not frame timing
+            c.neutral("frame_timing", "frame timing could not judge the limit"
+                      + (f" ({notes[0]})" if notes else "") + ", so the verdict comes from the GPU's 3D engine")
         elif v == "mixed":
             c.support("frame_timing", W_STATIC, f"borderline: the GPU was busy for {100 * (r or 0):.0f}% of each "
                                                 f"frame (between {100 * fa.R_CPU:.0f}% and {100 * fa.R_GPU:.0f}%)",

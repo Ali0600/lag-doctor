@@ -1670,5 +1670,32 @@
   "tests": [
    "tests/test_analysis_rules.py::test_a_driver_holding_up_the_cpu_reaches_possible_and_no_further"
   ]
+ },
+ {
+  "name": "a GPU verdict under 0.90 claims the 0.90 threshold",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            if r >= fa.R_GPU:",
+  "new": "            if True:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_verdict_under_point_nine_says_which_rule_made_it"
+  ]
+ },
+ {
+  "name": "a GPU verdict VSync made is explained by the 1 ms rule",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            elif b.get(\"vsync\") is True and rounds:",
+  "new": "            elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_verdict_under_point_nine_says_which_rule_made_it"
+  ]
+ },
+ {
+  "name": "the engine's fallback verdict counts as frame-timing support",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            c.neutral(\"frame_timing\", \"frame timing could not judge the limit\"",
+  "new": "            c.support(\"frame_timing\", W_STEADY, \"frame timing could not judge the limit\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_verdict_from_too_few_steady_frames_never_claims_frame_timing"
+  ]
  }
 ]
