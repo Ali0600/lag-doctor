@@ -194,6 +194,7 @@ uv run python scripts/e2e.py                                   # LagLab scenario
 uv run python scripts/etw_access.py                            # who may trace on this PC (read-only, UAC prompt)
 uv build --clear --out-dir dist                                # the sdist and the wheel, as CI builds them
 uv run python scripts/wheel_check.py dist                      # install the wheel in a fresh venv and run it there
+uv run python scripts/overhead/bench.py cycles --suite intel-cpu --out <dir>   # what recording costs a game, on LagLab
 ```
 
 - **LagLab** produces one known cause per scenario (GPU-bound, CPU-bound, CPU hitch, disk hitch, wait hitch,
@@ -302,14 +303,14 @@ connection to Microsoft, as the runtime does on its own.
   did wrong; its bottleneck verdict says how far off the next limit is (the CPU, the GPU or the screen, and how
   many times faster the limiting part must get), from thread CPU time rather than PresentMon's CPU Busy, which
   read 16.55 ms of a 16.9 ms GPU-bound frame.
-- **Testing that proves itself**: 3,644 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 3,760 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 43 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 2,429 deliberate sabotages in
-  49 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 2,539 deliberate sabotages in
+  51 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
 - **Supply chain and least privilege**: a per-machine WiX MSI of 179 files built in CI from pinned inputs (Python
