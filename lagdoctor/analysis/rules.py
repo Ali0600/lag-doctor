@@ -63,6 +63,10 @@ NV_UTIL_PCT = 95.0           # LC 4.1: utilization.gpu >= 95 %
 THREAD_WAITING = 0.60        # LC 3.2: "Neither" (waiting) needs the busiest thread below 0.6 of a CPU; from here to
                              # frames.THREAD_BOUND (0.85) is a grey zone where the CPU is not ruled out (A6)
 OTHER_GPU_PCT = fa.SHARED_GPU_PCT             # LC 4.6, 10 row 4.6: another process on the game adapter's engine >= 10 %
+# ---- headroom (frames.headroom; DESIGN, Headroom) -------------------------------------------------
+HEADROOM_CAUSES = ("gpu_limit", "cpu_limit")  # the findings whose evidence carries the headroom sentence
+POWER_AT_LIMIT = 0.95        # [inferred] a GPU drawing 95 % of its power limit or more draws at it
+STEP_ON_FRAC = 0.01          # [inferred] a frame rate within 1 % of a screen's even step is on that step
 # ---- throttling (LC 4.2, 4.5, 10) ----------------------------------------------------------------
 NV_THROTTLE_PCT = attribute.NV_THROTTLE_PCT   # LC 10 (4.2): held down by heat or power >= 30 % of the time
 CPU_LIMIT_SHARE = attribute.LIMIT_SHARE       # LC 4.5: % Performance Limit < 100 on >= 25 % of samples
@@ -791,15 +795,16 @@ def _gpu_limit(cap: Capture, ctx: dict) -> Any:
         heat = _heat_share(e)
         if heat is not None and heat[1] >= NV_THROTTLE_PCT:
             c.neutral("gpu_telemetry", f"the GPU was also held down by {attribute.held_by(e.cap)} "
-                                       f"{heat[1]:.0f}% of the time (see GPU throttling)")
+                                       f"{heat[1]:.0f}% of the time{_held_clock(e)} (see GPU throttling)")
     fps = e.avg_fps
     fixes = [_advice("Lower the render resolution, or use an upscaler (DLSS, FSR or XeSS)"),
              _advice("Turn down the heaviest graphics settings", "Ray tracing, shadows and volumetric effects first."),
              _advice("Cap the frame rate a few FPS below the refresh rate if the screen supports VRR",
                      "An even frame rate feels smoother than one that swings at the GPU's limit.")]
     title = "The graphics card (GPU) is at its limit" + (f" at {fps:.0f} FPS" if fps else "")
-    return c.conclude(title, "The GPU is busy for practically the whole of every frame, so it decides the frame "
-                             "rate. Lighter graphics settings are the way to more FPS.", fixes)
+    return _with_headroom(e, c.conclude(title, "The GPU is busy for practically the whole of every frame, so it "
+                                               "decides the frame rate. Lighter graphics settings are the way to more "
+                                               "FPS.", fixes))
 
 
 def _cpu_limit(cap: Capture, ctx: dict) -> Any:
@@ -844,8 +849,199 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
                                                                 "the delay stays tied to the base rate.")]
     title = ("One game thread maxes out the CPU" if one else "The CPU is maxed out on every core") + \
             (f" at {fps:.0f} FPS" if fps else "")
-    return c.conclude(title, "The GPU sits idle for most of each frame while the game's CPU work finishes, so the "
-                             "CPU decides the frame rate.", fixes)
+    return _with_headroom(e, c.conclude(title, "The GPU sits idle for most of each frame while the game's CPU work "
+                                               "finishes, so the CPU decides the frame rate.", fixes))
+
+
+# ------------------------------------------------------------------------------------ headroom ---
+
+def _pair(v: Any) -> tuple[float, float] | None:
+    """A [low, high] figure of frames.headroom: two finite numbers within MAX_COUNT, else None."""
+    if not isinstance(v, (list, tuple)) or len(v) != 2:
+        return None
+    lo, hi = _fin(v[0]), _fin(v[1])
+    return (lo, hi) if lo is not None and hi is not None else None
+
+
+def _fps_text(lo: float, hi: float | None = None) -> str:
+    a, b = f"{lo:,.0f}", f"{lo if hi is None else hi:,.0f}"
+    return f"{a} FPS" if a == b else f"{a}-{b} FPS"
+
+
+def _x_text(x: float) -> str:
+    return f"{x:.0f}" if round(x, 1) >= 10 else f"{x:.1f}"
+
+
+def _faster(speedup: tuple[float, float] | None) -> str | None:
+    """A speedup range as words: "about 1.1-1.3x"; "at most about 1.2x" when its low end rounds to 1; None when its
+    high end does too (the part would reach the next limit without getting faster) or it is not known."""
+    if speedup is None:
+        return None
+    lo, hi = _x_text(speedup[0]), _x_text(speedup[1])
+    if float(hi) <= 1.0:
+        return None
+    if float(lo) <= 1.0:
+        return f"at most about {hi}x"
+    return f"about {lo}x" if lo == hi else f"about {lo}-{hi}x"
+
+
+def _held_clock(e: _Env) -> str:
+    """", at a median 780 of its 2,100 MHz top clock": the NVIDIA GPU's clock while heat or its power brake held it
+    down (attribute.nvidia_depth); "" without the clocks."""
+    d = attribute.nvidia_depth(e.cap, attribute.heat_named)
+    if d is None or not d["clock_max_mhz"]:
+        return ""
+    return f", at a median {d['clock_mhz']:,.0f} of its {d['clock_max_mhz']:,.0f} MHz top clock"
+
+
+def _nv_depth_text(e: _Env, power: bool = False) -> str | None:
+    """How deep the NVIDIA GPU was held down: its median clock against its top clock and the power it drew against
+    its limit, over the readings that named what held it (heat or the power brake; with power=True the power cap),
+    else over every reading that was not idle. None without its clock and top clock."""
+    keep = attribute.power_cap_named if power else attribute.heat_named
+    held = attribute.nvidia_depth(e.cap, keep)
+    d = held or attribute.nvidia_depth(e.cap)
+    if d is None or not d["clock_max_mhz"]:
+        return None
+    clock, top = d["clock_mhz"], d["clock_max_mhz"]
+    by = attribute.held_by(e.cap)
+    lead = ("at its power cap, " if power else f"while {by} held it down, ") if held else ""
+    text = f"{lead}it ran at a median {clock:,.0f} MHz, {100 * clock / top:.0f}% of its {top:,.0f} MHz top clock"
+    w, limit = d["power_w"], d["power_limit_w"]
+    if w and limit:
+        if w >= POWER_AT_LIMIT * limit:
+            text += f", drawing {w:.0f} W, at its {limit:.0f} W power limit"
+        else:
+            text += f", drawing {w:.0f} W of its {limit:.0f} W power limit"
+            if held and not power and by == "heat":
+                text += ", so heat held it back, not its power limit"
+    return _sentence(text)
+
+
+def _cooler(e: _Env, speedup: tuple[float, float]) -> str | None:
+    """"heat held this one at 37% of its top clock, so keeping it cooler may be enough": said only when heat (never
+    the power brake, which cooling does not lift) held the NVIDIA GPU down NV_THROTTLE_PCT of the time or more and its
+    top clock is at least the speedup's high end above the clock it was held at. The frame rate rises less than the
+    clock, hence "may"."""
+    heat = _heat_share(e)
+    if heat is None or heat[1] < NV_THROTTLE_PCT or attribute.held_by(e.cap) != "heat":
+        return None
+    d = attribute.nvidia_depth(e.cap, attribute.heat_named)
+    if d is None or not d["clock_max_mhz"] or d["clock_max_mhz"] / d["clock_mhz"] < speedup[1]:
+        return None
+    return f"heat held this one at {100 * d['clock_mhz'] / d['clock_max_mhz']:.0f}% of its top clock, so keeping it " \
+           "cooler may be enough"
+
+
+def headroom_text(e: _Env) -> str | None:
+    """The bound's headroom (frames.headroom) in one plain sentence: for the evidence of gpu_limit and cpu_limit, and
+    through Diagnosis.stats["headroom"] for the console summary and Compare (headroom_line). None without a GPU, CPU
+    or borderline verdict and its figures. Worked out once per capture."""
+    if "headroom" not in e.memo:
+        e.memo["headroom"] = _headroom(e)
+    return e.memo["headroom"][0]
+
+
+def _headroom(e: _Env) -> tuple[str | None, bool]:
+    """(the sentence, whether it gives figures, so that labels.HEADROOM_NOTE goes with it)."""
+    h = _dict(e.bound.get("headroom"))
+    steady = _fin(h.get("steady_fps"))
+    if steady is None or steady <= 0:
+        return None, False
+    gpu, cpu, hz = _fin(h.get("gpu_fps")), _pair(h.get("cpu_fps")), _fin(h.get("display_fps"))
+    if e.verdict == "mixed":
+        sides = ([f"the GPU could draw about {_fps_text(gpu)}"] if gpu else []) + \
+                ([f"the CPU could feed about {_fps_text(*cpu)}"] if cpu else [])
+        if not sides:
+            return None, False
+        return _sentence(f"at these settings {' and '.join(sides)}, against the {steady:.0f} FPS it ran at"), True
+    limit, nxt, speedup = h.get("limit"), h.get("next"), _pair(h.get("speedup"))
+    faster = _faster(speedup)
+    screen = f"the {hz:.0f} Hz screen" if hz else "the screen"
+    if limit == "gpu":
+        if cpu is None:
+            return _sentence("how much a faster GPU would help is unknown: the game's thread CPU use was not "
+                             "measured"), False
+        feed = f"at these settings the CPU could feed about {_fps_text(*cpu)}"
+        if nxt == "cpu":
+            text = (f"{feed}, so a GPU {faster} faster would make the CPU the limit" if faster else
+                    f"{feed}, so it is at its limit too: a faster GPU alone would gain little")
+        elif nxt == "display":
+            text = (f"{feed}, more than {screen} shows, so a GPU {faster} faster would reach the screen's limit"
+                    if faster else f"{feed}, more than {screen} shows, and the game already reaches the screen's rate")
+        elif nxt == "cpu_or_display":
+            text = (f"{feed}, so a GPU {faster} faster would make the CPU or {screen} the limit" if faster else
+                    f"{feed}, so the CPU or {screen} is close to the limit too")
+        else:
+            return None, False
+        cool = _cooler(e, speedup) if faster and speedup else None
+        return _sentence(text + (f"; {cool}" if cool else "")), True
+    if limit == "cpu":
+        if gpu is None and nxt is None:
+            why = ("other programs shared the game's GPU, so its own time per frame says too little"
+                   if _contention(e) is not None else "the GPU's own time per frame was not measured")
+            return _sentence(f"how much a faster CPU would help is unknown: {why}"), False
+        per = " per core" if e.verdict == "cpu_main" else ""
+        if gpu is None:        # busy no longer than the HAGS margin: the screen comes first (frames.headroom)
+            draw = "at these settings the GPU was nearly idle"
+            text = (f"{draw}, so a CPU {faster} faster{per} would reach {screen}'s limit" if faster else
+                    f"{draw}, and the game already reaches {screen}'s rate")
+            return (_sentence(text), True) if nxt == "display" else (None, False)
+        draw = f"at these settings the GPU could draw about {_fps_text(gpu)}"
+        if nxt == "gpu":
+            text = (f"{draw}, so a CPU {faster} faster{per} would make the GPU the limit" if faster else
+                    f"{draw}, so it is at its limit too: a faster CPU alone would gain little")
+        elif nxt == "display":
+            text = (f"{draw}, more than {screen} shows, so a CPU {faster} faster{per} would reach the screen's "
+                    "limit" if faster else f"{draw}, more than {screen} shows, and the game already reaches the "
+                                           "screen's rate")
+        else:
+            return None, False
+        return _sentence(text), True
+    return None, False
+
+
+def _steps_text(e: _Env) -> str | None:
+    """The even steps of a screen whose frames sit on whole refreshes (frames.headroom steps_fps): every step above the
+    steady rate and the first at or below it. None where frames do not sit on whole refreshes."""
+    h = _dict(e.bound.get("headroom"))
+    steady, hz = _fin(h.get("steady_fps")), _fin(h.get("display_fps"))
+    raw = h.get("steps_fps")
+    steps = [x for x in (_fin(s) for s in raw) if x is not None and x > 0] if isinstance(raw, list) else []
+    if steady is None or not hz or not steps:
+        return None
+    on = steady * (1.0 + STEP_ON_FRAC)
+    shown = [s for s in steps if s > on] + [s for s in steps if s <= on][:1]
+    names = [f"{s:.0f}" for s in shown]
+    listed = names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
+    return _sentence(f"on this {hz:.0f} Hz screen each frame shows for whole refreshes, so the pace is even at "
+                     f"{listed} FPS and uneven in between")
+
+
+def _with_headroom(e: _Env, res: Any) -> Any:
+    """gpu_limit's or cpu_limit's Finding with the headroom sentence second, after its frame-timing line, so the first
+    lines a summary shows hold it; the screen's even steps after it; and labels.HEADROOM_NOTE last when the sentence
+    gives figures. Added after scoring: they are context, never evidence for or against the cause."""
+    if not isinstance(res, Finding):
+        return res
+    text = headroom_text(e)
+    if text is None:
+        return res
+    steps = _steps_text(e)
+    res.evidence[1:1] = [Evidence(text)] + ([Evidence(steps)] if steps else [])
+    if e.memo["headroom"][1]:
+        res.evidence.append(Evidence(labels.HEADROOM_NOTE))
+    return res
+
+
+def headroom_line(e: _Env, findings: Iterable[Finding]) -> tuple[str | None, str | None]:
+    """(Diagnosis.stats' "headroom", "headroom_note"): the headroom sentence and labels.HEADROOM_NOTE, each only when
+    a gpu_limit or cpu_limit finding carries it, so the console summary and Compare never show a line the report's
+    findings do not."""
+    text = headroom_text(e)
+    held = [x.text for f in findings if f.cause in HEADROOM_CAUSES for x in f.evidence]
+    return (text if text is not None and text in held else None,
+            labels.HEADROOM_NOTE if labels.HEADROOM_NOTE in held else None)
 
 
 def _gpu_contention(cap: Capture, ctx: dict) -> Any:
@@ -1012,9 +1208,14 @@ def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
     fixes = [_advice("Give the laptop more air", "Raise its back, keep the vents clear and clean."),
              _advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
              _advice("Cap the frame rate a little lower", "A capped GPU runs cooler and holds its clock.")]
-    return c.conclude("The GPU slows down from heat or power limits",
-                      f"The NVIDIA driver held the GPU's clock down for much of {c.env.part}, which lowers the frame "
-                      "rate while the GPU is the limit.", fixes)
+    res = c.conclude("The GPU slows down from heat or power limits",
+                     f"The NVIDIA driver held the GPU's clock down for much of {c.env.part}, which lowers the frame "
+                     "rate while the GPU is the limit.", fixes)
+    if isinstance(res, Finding):        # how deep, second: context after scoring, never a point for or against
+        depth = _nv_depth_text(e, power=limited and not (heat is not None and heat[1] >= NV_THROTTLE_PCT))
+        if depth:
+            res.evidence.insert(1, Evidence(depth))
+    return res
 
 
 def _power_cap_item(c: _Case) -> bool:

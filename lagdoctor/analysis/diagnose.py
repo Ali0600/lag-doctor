@@ -34,6 +34,8 @@ def diagnose(cap: Capture) -> Diagnosis:
     b = frames.bound(cap, fr, evs)
     summary = attribute.attribute(cap, fr, evs, b)
     stats.update(bound=b["verdict"], bound_r=b["r"], gpu_busy_pct=b["gpu_busy_pct"], refresh_hz=b["refresh_hz"])
+    stats.update(headroom_stats(b))
+    stats.update(attribute.nvidia_stats(cap))
     stats.update(events.summary_stats(cap, evs))
     stats["main_chain"] = next((c for c in fr.get(F.SWAP_CHAIN) or [] if isinstance(c, str)), None)
     span = getattr(cap, "span", None)
@@ -46,12 +48,27 @@ def diagnose(cap: Capture) -> Diagnosis:
         stats["stutters"] = stats["stutters_per_min"] = None     # not measured, so never "0 stutters"
     findings, cleared, unchecked = rules.run_rules(cap, ctx)
     findings = rank(findings)
+    stats["headroom"], stats["headroom_note"] = rules.headroom_line(env, findings)
     stats["marks"] = mark_list(evs)
     lag = lag_time(evs, findings, stats, b, frames_ok, dropped=_dropped_ids(env))
     lag_type = pick_lag_type(lag, frames_ok)
     return Diagnosis(lag_type=lag_type, headline=headline(lag_type, findings, stats, evs, lag, env),
                      stats=stats, events=evs, findings=findings, measured=measured(cap, stats),
                      cleared=cleared, unchecked=unchecked)
+
+
+def headroom_stats(b: dict[str, Any]) -> dict[str, Any]:
+    """Diagnosis.stats' bound and headroom figures (DESIGN, Diagnosis.stats keys; frames.headroom), each None where
+    it was not measured. The sentence comes later, from the findings that carry it (rules.headroom_line)."""
+    h = b.get("headroom") if isinstance(b.get("headroom"), dict) else {}
+    cpu = h.get("cpu_fps") or (None, None)
+    speedup = h.get("speedup") or (None, None)
+    busiest = rules._fin(b.get("busiest_thread"))
+    return {"steady_fps": b.get("steady_fps"), "bound_gpu_ms": b.get("gpu_ms"), "bound_frame_ms": b.get("ft_ms"),
+            "busiest_thread_pct": 100.0 * busiest if busiest is not None else None,
+            "gpu_ceiling_fps": h.get("gpu_fps"), "cpu_ceiling_low_fps": cpu[0], "cpu_ceiling_high_fps": cpu[1],
+            "cpu_ceiling_from": h.get("cpu_from"), "display_steps_fps": h.get("steps_fps"),
+            "next_limit": h.get("next"), "speedup_low": speedup[0], "speedup_high": speedup[1]}
 
 
 def rank(findings: list[Finding]) -> list[Finding]:
