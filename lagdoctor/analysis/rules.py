@@ -999,7 +999,10 @@ def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
         if hot >= target:
             c.support("gpu_telemetry", W_STEADY, f"the GPU reached {hot:.0f} °C, at or above its {target:.0f} °C "
                                                  "target temperature", hot, "°C", target)
-    _event_link(c, "gpu_throttle", "gpu_telemetry", "the GPU slowing down")
+    # LC 4.2: a steady cause, whose event-linked variant (FPS sagging with the clock) can only support it. LC 5.2's
+    # "contradicts" is for stutter causes: a GPU held down nearly all the time cannot rise at a stutter, and a real
+    # recording held down 97 % of the time read as contradicted and dropped out of the summary.
+    _event_link(c, "gpu_throttle", "gpu_telemetry", "the GPU slowing down", contradict=False)
     _quiet_power_hint(c, gpu=True)
     fixes = [_advice("Give the laptop more air", "Raise its back, keep the vents clear and clean."),
              _advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
@@ -1097,7 +1100,7 @@ def _cpu_throttle(cap: Capture, ctx: dict) -> Any:
     if busiest is not None and busiest < CPU_BUSY_FOR_THROTTLE:
         c.against("cpu_threads", W_STEADY, f"the game's busiest thread used only {100 * busiest:.0f}% of a CPU, so CPU "
                                            "speed is not what holds it back", 100 * busiest, "%", 100 * CPU_BUSY_FOR_THROTTLE)
-    _event_link(c, "cpu_throttle", "cpu_limits", "the CPU slowing down")
+    _event_link(c, "cpu_throttle", "cpu_limits", "the CPU slowing down", contradict=False)   # LC 4.5: as gpu_throttle
     _quiet_power_hint(c, gpu=False)
     fixes = [_advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
              _advice("Give the laptop more air", "Raise its back, keep the vents clear and clean."),
@@ -1207,7 +1210,9 @@ def _ram_pressure(cap: Capture, ctx: dict) -> Any:
                                           f"{COMMIT_WARN_PCT:.0f}%)", commit_top, "%", COMMIT_WARN_PCT)
     if not (avail or faults or commit):
         c.lack("memory", W_STEADY, "no memory counters were read")
-    _event_link(c, "memory_paging", "memory", "Windows paging memory to disk")
+    # attribution counts paging only while RAM is nearly full, so with RAM free it can never coincide with the events:
+    # its "contradicts" then says nothing about the page file (a real recording's 99.9 % commit charge cancelled out)
+    _event_link(c, "memory_paging", "memory", "Windows paging memory to disk", contradict=not roomy)
     if roomy:
         fixes = [_advice("Let Windows manage the page file size, or make it larger",
                          "Search the Start menu for \"View advanced system settings\", then Performance: Settings > "

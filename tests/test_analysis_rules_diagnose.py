@@ -142,6 +142,42 @@ def test_the_headline_names_the_finding_that_claims_the_lags_own_events():
                     "confidence); possible: loading from disk.")
 
 
+def test_a_steady_low_frame_rate_is_led_by_the_part_that_holds_it_not_by_a_few_claimed_drops():
+    # A real GPU-bound recording ran 58 FPS on a 144 Hz screen for 12 minutes with 6 FPS drops, 4 of them claimed by
+    # background programs, and its headline blamed background programs: the steady low rate, most of the lag, was
+    # the GPU's, and the finding that names it claims no events.
+    from lagdoctor.model import LagEvent
+    cap = synth.laglab("hitch").cap
+    evs = [LagEvent(i, "fps_drop", 20.0 * i, 20.0 * i + 2.0, 30.0, {}) for i in range(1, 7)]
+    hogs = Finding(cause="background_hogs", title="t", category="stutter", confidence="high", score=0.95, summary="",
+                   event_ids=[1, 2, 3, 4])
+    limit = Finding(cause="gpu_limit", title="t", category="fps", confidence="high", score=0.9, summary="")
+    stats = {"avg_fps": 58.0, "refresh_hz": 144.0, "duration_s": 750.0}
+
+    def text(verdict, steady_s, findings=(hogs, limit)):
+        b = {"verdict": verdict, "steady_fps": 58.0, "refresh_hz": 144.0, "steady_s": steady_s}
+        env = rules._Env(cap, {"stats": {"frames": 40000}, "bound": b})
+        lag = dg.lag_time(evs, list(findings), stats, b, True)
+        return dg.headline(dg.pick_lag_type(lag, True), list(findings), stats, evs, lag, env)
+
+    assert text("gpu", 700.0) == "Low frame rate (58 FPS average on a 144 Hz screen), most likely GPU at its limit."
+    # the drops are most of the low-FPS time: the finding that claims them leads, as before
+    assert text("gpu", 5.0).endswith(", most likely background programs.")
+    # waiting: no part holds the steady rate, so no steady lead
+    assert text("waiting", 700.0).endswith(", most likely background programs.")
+    # a part that is not the limit's never leads, even when it ranks first
+    cpu = Finding(cause="cpu_throttle", title="t", category="fps", confidence="high", score=0.99, summary="")
+    assert text("gpu", 700.0, (cpu, hogs, limit)).endswith(", most likely GPU at its limit.")
+    # a capped game is its own target: its steady time is never low FPS
+    assert dg.steady_low_s({"verdict": "capped", "steady_fps": 58.0, "refresh_hz": 144.0, "steady_s": 700.0}, True) == 0
+
+
+def test_every_frame_rate_rule_is_sorted_into_a_steady_lead_or_left_out_on_purpose():
+    fps_rules = {r.cause for r in rules.RULES if r.category == "fps"}
+    sorted_in = {c for causes in dg.STEADY_LEADS.values() for c in causes} | set(dg.NOT_STEADY_LEADS)
+    assert sorted_in == fps_rules
+
+
 def test_without_frame_timing_marks_stand_in_at_half_weight_and_the_lag_stays_unknown():
     s = synth.laglab("hitch", with_frames=False, marks=[3.9, 6.9, 9.9, 12.9, 15.9, 18.9])
     d = diagnose(s.cap)

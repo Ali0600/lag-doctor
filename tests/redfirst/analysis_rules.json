@@ -1616,5 +1616,41 @@
   "tests": [
    "tests/test_analysis_rules.py::test_gpu_contention_never_tells_the_player_to_close_windows_itself"
   ]
+ },
+ {
+  "name": "paging that cannot coincide never cancels the page-file warning",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "\"Windows paging memory to disk\", contradict=not roomy)",
+  "new": "\"Windows paging memory to disk\")",
+  "tests": [
+   "tests/test_analysis_rules.py::test_paging_that_cannot_coincide_with_the_stutters_never_cancels_the_page_file_warning"
+  ]
+ },
+ {
+  "name": "paging still counts against while RAM is nearly full",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "\"Windows paging memory to disk\", contradict=not roomy)",
+  "new": "\"Windows paging memory to disk\", contradict=False)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_paging_that_cannot_coincide_with_the_stutters_never_cancels_the_page_file_warning"
+  ]
+ },
+ {
+  "name": "stutters that cannot line up contradict GPU throttling",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "\"the GPU slowing down\", contradict=False)",
+  "new": "\"the GPU slowing down\")",
+  "tests": [
+   "tests/test_analysis_rules.py::test_throttling_held_all_the_time_is_never_contradicted_by_stutters_it_cannot_rise_at"
+  ]
+ },
+ {
+  "name": "stutters that cannot line up contradict CPU throttling",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "\"the CPU slowing down\", contradict=False)",
+  "new": "\"the CPU slowing down\")",
+  "tests": [
+   "tests/test_analysis_rules.py::test_throttling_held_all_the_time_is_never_contradicted_by_stutters_it_cannot_rise_at"
+  ]
  }
 ]

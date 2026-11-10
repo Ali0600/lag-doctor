@@ -938,6 +938,23 @@ def test_cpu_throttle_counts_a_thermal_passive_limit():
     assert is_finding(res, "medium") and "85%" in res.evidence[0].text
 
 
+def test_throttling_held_all_the_time_is_never_contradicted_by_stutters_it_cannot_rise_at():
+    # LC 4.2, 4.5: throttling is a steady cause. A real recording's GPU was held down by heat 97 % of the time, so it
+    # could not rise at any stutter; the lift test read "contradicts" (-2), and the finding fell from likely to
+    # possible and out of the summary's top three.
+    events = [stutter(i, 1.0 + i) for i in range(1, 21)]
+    never = lift("contradicts", a=0, n=20, lift_=None)
+    gpu = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=nv(97.0, nv_reasons="sw_thermal_slowdown"))
+    res = run("gpu_throttle", gpu, bound={"verdict": "gpu"}, events=events, causes={"gpu_throttle": never})
+    assert is_finding(res, "high")
+    assert "0 of 20 stutters and FPS drops coincided with the GPU slowing down." in [e.text for e in res.evidence]
+    cpu = make(system=cpu_sys(limit=80.0), duration=60.0)
+    res = run("cpu_throttle", cpu, bound={"verdict": "cpu_main", "busiest_thread": 0.95}, events=events,
+              causes={"cpu_throttle": never})
+    assert is_finding(res, "medium")                      # held down in every sample (+2), no longer cancelled
+    assert "0 of 20 stutters and FPS drops coincided with the CPU slowing down." in [e.text for e in res.evidence]
+
+
 @pytest.mark.parametrize("later, kind", [(80.0, Finding), (80.1, rules.Cleared)])
 def test_cpu_throttle_counts_a_speed_drop_of_twenty_percent_from_the_start(later, kind):
     perf = (lambda t: 100.0 if t <= 20.0 else later)
@@ -1079,6 +1096,22 @@ def test_free_ram_never_cancels_a_commit_charge_at_the_limit(commit, kind):
         assert any(e.text.endswith("so what ran short was the page file.") for e in res.evidence)
         assert any(fx.title.startswith("Let Windows manage the page file size") for fx in res.fixes)
         assert any("file reads" in e.text for e in res.evidence)      # the hard faults, with RAM free: no support
+
+
+def test_paging_that_cannot_coincide_with_the_stutters_never_cancels_the_page_file_warning():
+    # Attribution counts paging only while RAM is nearly full, so with RAM free it can never coincide with a stutter.
+    # A real recording with free RAM and dozens of stutters read "contradicts" (-2) there, which cancelled its commit
+    # charge at 99.9 % (+2), so the small page file was never reported.
+    events = [stutter(i, 1.0 + i) for i in range(1, 21)]
+    res = run("ram_pressure", make(system=ram(8000.0, commit_pct=99.9)), events=events,
+              causes={"memory_paging": lift("contradicts", a=0, n=20, lift_=None)})
+    assert is_finding(res, "medium")
+    assert res.title == "Windows nearly ran out of memory to hand out: the page file is small"
+    assert "0 of 20 stutters and FPS drops coincided with Windows paging memory to disk." in [e.text for e in res.evidence]
+    # control: with RAM nearly full paging could have coincided, so the same lift test still counts against (-2)
+    assert run("ram_pressure", make(system=ram(1500.0, commit_pct=99.9)), events=events,
+               causes={"memory_paging": lift("contradicts", a=0, n=20, lift_=None)}) is None
+    assert is_finding(run("ram_pressure", make(system=ram(1500.0, commit_pct=99.9))), "medium")
 
 
 def test_ram_pressure_counts_event_linked_paging():

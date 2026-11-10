@@ -989,7 +989,10 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   signal (`attribute.throttle_readings`: NVML's counters kept growing at idle, 99-100 % with no heat named), and
   a GPU idle in every reading is unchecked. The power-cap share counts a reading only where its reasons named
   `sw_power_cap` (`attribute.power_cap_readings`: on driver 591.86 the counter read 42 % over 169 readings that
-  never named it), and the text says so when the counter moved without the reason.
+  never named it), and the text says so when the counter moved without the reason. Its lift test only supports (LC
+  4.2's event-linked variant): throttling is a steady cause, and a GPU held down 97 % of the time cannot rise at a
+  stutter, so LC 5.2's "contradicts", meant for stutter causes, never counts against it. The same holds for
+  `cpu_throttle`.
 - `cpu_throttle`: `% Performance Limit` under 100 on >= 25 % of samples, a passive thermal limit, a drop of
   >= 20 % from the first two minutes, or the level itself: a median `% Processor Performance` at or below 80 % of
   the base clock (a quiet mode set outside Windows held it at 70 % with no limit reported). A CPU held only by the
@@ -997,7 +1000,8 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   "full speed".
 - `ram_pressure`: free RAM under 10 % (5 % or 64 MB critical), hard faults, the commit charge over 80 / 90 %. A
   commit charge over 90 % while RAM stays free is the page file running short: free RAM is no evidence against it
-  then (nor hard faults for it, being file reads), and the finding is titled for the page file.
+  then (nor hard faults for it, being file reads, nor the paging lift test, which counts paging only while RAM is
+  nearly full), and the finding is titled for the page file.
 - `power_plan`: battery, battery saver, a low power mode, or a plan whose own settings (`inventory.power.plan`)
   cap the CPU below 100 % (the performance cores too, on a hybrid CPU), turn boost off, or cool passively while
   plugged in; by its name (whole words of `QUIET_PLAN_WORDS`) only in a capture without those settings. And the
@@ -1057,7 +1061,13 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   and without "local" gaps, named only with ≥ 2 events or ≥ max(1 s, 1 % of the capture).
 - Lag type = the category with the most lag time, "mixed" when the runner-up has ≥ 50 % of it, "none" with
   frames measured and no lag, "unknown" without frames.
-- The headline names the top finding in one sentence; whenever the lag type is not stutter and there were
+- The headline names, in one sentence, the finding that best explains the lag (`diagnose._lead`): when the steady
+  low-FPS time is more than all the lag's events together, the best confident finding of the part the bound verdict
+  names (`diagnose.STEADY_LEADS`: for `gpu` the GPU's limit, throttling, wrong GPU, copy between GPUs or another
+  program on it; for `cpu_main` and `cpu_all` the CPU's limit or throttling); otherwise the best-ranked finding that
+  claims the lag's own events, then one of the lag's category, else the top finding as a side note ("likely: ...").
+  A GPU-bound recording at 58 FPS on a 144 Hz screen once led with the background programs that claimed 4 of its 6
+  FPS drops. Whenever the lag type is not stutter and there were
   severe hitches or freezes it adds "; also N severe hitches, worst X ms"; an open gap reads "the game server
   stopped answering at 13m 22s"; with zero hitches it says "no hitches ≥ 50 ms in N frames (at most 3/N at 95 %)";
   without frames it opens "Frame timing was not measured (why), so stutter and frame rate could not be checked",
