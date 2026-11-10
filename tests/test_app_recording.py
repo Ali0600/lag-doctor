@@ -922,8 +922,8 @@ def test_the_player_writes_each_sound_once_and_mends_a_changed_one(tmp_path, mon
     played, writes = [], []
     import winsound
     monkeypatch.setattr(winsound, "PlaySound", lambda *a: played.append(a))
-    real_replace = sounds.os.replace
-    monkeypatch.setattr(sounds.os, "replace", lambda a, b: (writes.append(b), real_replace(a, b)))
+    real_replace = sounds._replace
+    monkeypatch.setattr(sounds, "_replace", lambda a, b: (writes.append(b), real_replace(a, b)))
     p = sounds.Player(tmp_path, log=lambda s: None)
     assert p.play("start") and p.play("start")
     path = tmp_path / sounds.FOLDER / "start.wav"
@@ -939,8 +939,8 @@ def test_prepared_sounds_are_written_before_they_play_so_a_play_writes_nothing(t
     played, writes = [], []
     import winsound
     monkeypatch.setattr(winsound, "PlaySound", lambda *a: played.append(a))
-    real_replace = sounds.os.replace
-    monkeypatch.setattr(sounds.os, "replace", lambda a, b: (writes.append(Path(b).name), real_replace(a, b)))
+    real_replace = sounds._replace
+    monkeypatch.setattr(sounds, "_replace", lambda a, b: (writes.append(Path(b).name), real_replace(a, b)))
     p = sounds.Player(tmp_path, log=lambda s: None)
     p.prepare(("start", "done"))
     assert writes == ["start.wav", "done.wav"] and played == []          # written, nothing played yet

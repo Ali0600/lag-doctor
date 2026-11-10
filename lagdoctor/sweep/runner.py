@@ -5,8 +5,9 @@ Each run (the assisted sweep the owner chose, DECISIONS 2026-11-09):
 2. Every edit of this sweep still in the file is undone (the fix journal says which: `outstanding`), the file is
    checked to hold its original values and its other values as the runs count them, and the run's setting is written
    through the journal and read back.
-3. The start key is checked (registered and let go at once, so a key another program holds is found now); the player
-   starts the game, loads a save, goes to a chosen spot and presses Enter here.
+3. The start key is registered (check_start_key), so a key another program holds is found now, and held while the
+   player starts the game, loads a save, goes to a chosen spot and presses Enter here; it is let go right before the
+   recording registers it for itself.
 4. The recording starts (`watch`, with one UAC prompt unless this account records frame timing without one), and
    watch's start key measures it (DECISIONS 2026-11-09, the start key). The player goes back to the game and presses
    the key at the spot: a rising chime, then `window_s` seconds are measured, a three-note chime a few seconds later,
@@ -19,7 +20,8 @@ When the sweep ends or stops, every edit is undone once the game has closed, so 
 value the game wrote in place of lag-doctor's is put back only when the player says so. Ctrl+C stops the sweep at
 any point, and a second press while it puts the settings back is only counted, until it waits for the game to close,
 where a press leaves the settings for later (`--resume` or `lagdoctor undo game_setting`). Nothing is typed on the
-player's PC: lag-doctor only listens for the start key, which each run's recording registers and releases.
+player's PC: lag-doctor only listens for the start key, which the sweep holds while the game starts and each run's
+recording registers and releases.
 
 Every effect goes through `Seams`, so the tests drive whole sweeps with no game, recording or console.
 """

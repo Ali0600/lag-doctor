@@ -21,6 +21,7 @@ VOLUME = 0.3                     # of full scale
 FADE_S = 0.008                   # each note fades in and out over this, so it starts and ends without a click
 GAP_S = 0.025                    # silence between two notes
 FOLDER = "sounds"
+_replace = os.replace            # the seam a test patches: never os.replace itself, which every module shares
 # (frequency in Hz, seconds) of each note.
 SOUNDS = {
     "ask": ((880.0, 0.07), (880.0, 0.07)),                        # a double knock: Windows asks, behind the game
@@ -79,7 +80,7 @@ class Player:
                 self.folder.mkdir(parents=True, exist_ok=True)
                 part = path.with_name(path.name + ".part")
                 part.write_bytes(data)
-                os.replace(part, path)
+                _replace(part, path)
         except OSError as exc:
             self.log(f"the {name} sound could not be written: {exc}")
             return None
