@@ -936,6 +936,7 @@ cliff, not a slope: the RTX 3070 Laptop ran about 1,700 MHz at 80-83 °C, then d
 once it reached about 86 °C, with NVML naming `sw_thermal_slowdown`.
 **Why it came up**: Armoury Crate's Turbo mode raised the GPU's power limit from Silent's 55 W to 103 W, but under a
 game the GPU drew about 61 W and sat at 780 MHz and 87-89 °C; only the first seconds of a recording, before it got
-hot, showed the 1,700 MHz it can run. No analysis code read the clock, so the report never said so.
+hot, showed the 1,700 MHz it can run. No analysis code read the clock then, so the report never said so; since the
+headroom estimate, GPU throttling's evidence gives the median clock against the top clock (DESIGN, Headroom).
 **Takeaway**: before tuning power modes, read the GPU's clock against its temperature and its throttle reason; when
 heat binds, the fixes are cooling or less work per frame (a lower render resolution, a frame cap), not more watts.
