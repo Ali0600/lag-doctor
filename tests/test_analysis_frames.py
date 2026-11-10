@@ -498,8 +498,10 @@ def test_vsync_at_two_refreshes_names_a_thread_that_needs_more_than_one_period()
     assert vsync_halved(gpu_ms=5.0, thread=49.0, lead=49.0)["verdict"] == "vsync"        # 16.3 ms fits in one period
     assert vsync_halved(gpu_ms=5.0, thread=80.0, lead=80.0, k=1)["verdict"] == "vsync"   # k = 1: the refresh rate
     # a capture saved before the lead column: each tick's busiest thread is an upper bound (four threads at 40 %
-    # read 53 %), so it counts only when saturated, as before
-    assert vsync_halved(gpu_ms=5.0, thread=60.0)["verdict"] == "vsync"
+    # read 53 %), so it counts only when saturated, as before, and past the edge it says it could not tell
+    old = vsync_halved(gpu_ms=5.0, thread=60.0)
+    assert old["verdict"] == "vsync" and any(fa.THREAD_UPPER_NOTE in x for x in old["notes"])
+    assert not any(fa.THREAD_UPPER_NOTE in x for x in vsync_halved(gpu_ms=5.0, thread=45.0)["notes"])  # 15.0 ms
 
 
 def test_cpu_busy_never_calls_a_game_vsync_holds_cpu_bound():

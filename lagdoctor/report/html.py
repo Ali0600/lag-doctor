@@ -553,7 +553,7 @@ def _not_measured(d: Diagnosis, cap: Capture) -> str:
 def _cpu_gpu_chart(d: Diagnosis, cap: Capture) -> str:
     return _series_chart(
         "CPU and GPU load", cap, cap.system,
-        [(S.GAME_GPU_PCT, "s1", "GPU used by the game"), (S.GAME_TOP_THREAD_PCT, "s2", "game's busiest thread"),
+        [(S.GAME_GPU_PCT, "s1", "GPU used by the game"), (S.GAME_TOP_THREAD_PCT, "s2", "game's busiest thread at each sample"),
          (S.CPU_TOTAL_PCT, "s3", "whole CPU"), (S.GPU_OTHER_PCT, "s4", "GPU used by other programs")],
         100.0, "%", "system", marks=mark_times(d, cap))
 

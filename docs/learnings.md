@@ -118,8 +118,10 @@ that noise is large: simulated with Windows' accounting, one thread at 75 % read
 **Why it came up**: the headroom estimate divides the frame rate by the busiest-thread figure, so a game with several
 busy threads gets a CPU ceiling that leans low, and the 2026-11-09 audit had found the same figure can call such a
 game main-thread bound.
-**Takeaway**: average each series over the window first and take the maximum of those averages; a mean of per-sample
-maxima is an upper bound, never an estimate of the busiest one.
+**Takeaway**: a mean of per-sample maxima is an upper bound, never an estimate of the busiest one. Pick the series on
+earlier samples and read it on the current one (the thread busiest over the second before, read at its share in this
+tick, reads 75 % for four threads at 75 %): averaging each series over a window first and taking the maximum still
+reads high, four threads at 80 % still reading 85 %.
 
 ### Max-per-pixel downsampling must not treat empty buckets as gaps
 The report's charts keep the maximum of each pixel column so one stutter among 100,000 frames still reaches
@@ -422,15 +424,6 @@ mostly steady time, and the finding that explains it (the part at its limit) cla
 **Why it came up**: a game held at 58 FPS by its GPU for 12 minutes had 6 FPS drops, 4 of them claimed by background
 programs, and the headline said "most likely background programs".
 **Takeaway**: pick the cause a summary names by the share of the problem it explains, steady time included.
-
-### The busiest of several noisy readings reads high: pick on one sample, read on another
-Taking, each tick, the maximum over several equally busy threads picks whichever one the noise favoured, so its mean
-sits above every thread's true level; choosing the thread on earlier ticks and reading it on this one removes the bias.
-**Why it came up**: Windows charges thread CPU one 15.625 ms clock tick at a time, so four threads at 75 % each read 86 %
-as "the busiest thread", past the 85 % at which lag-doctor says one CPU thread limits the game; a frame-capped game read
-CPU-bound. The thread busiest over the previous second, read at its share in the current tick, reads 75 %.
-**Takeaway**: never estimate a maximum by averaging per-sample maxima of noisy signals; select on one sample and measure
-on an independent one.
 
 ### A number printed under the wrong label misleads its next reader, its author included
 A report line "the game's own frame times swung ... (median swing 7.0 ms)" took its number from the displayed frames,

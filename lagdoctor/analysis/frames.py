@@ -744,6 +744,10 @@ def headroom(b: dict[str, Any], shared: float | None = None) -> dict[str, Any] |
     return out
 
 
+THREAD_UPPER_NOTE = ("a figure that reads high when several threads are busy (this capture was saved by an earlier "
+                     "lag-doctor)")                                   # rules._holds_open finds the note by it
+
+
 def _vsync_limit(fr: dict[str, list], rows: list[int], ft: float, hz: float, raw_gpu: float | None,
                  busiest: float | None, notes: list[str], lead: bool = False) -> tuple[str, str]:
     """(verdict, confidence) for a game locked to k refreshes a frame (A6). From k = 2, VSync rounds the rate
@@ -771,6 +775,10 @@ def _vsync_limit(fr: dict[str, list], rows: list[int], ft: float, hz: float, raw
                                                      f"period(s) ({one:.1f} ms)"))
         margin = busiest - THREAD_BOUND if busiest >= THREAD_BOUND else work / one - 1.0
         return "cpu_main", ("medium" if margin < CONF_MARGIN else "high")
+    if busiest is not None and not lead and busiest * ft > one:      # each tick's busiest: it may pass, or not
+        notes.append(f"{rounds}, but whether the CPU holds it there could not be told: the busiest game thread read "
+                     f"{100 * busiest:.0f}% of a CPU, {busiest * ft:.1f} ms a frame, more than {k - 1} refresh "
+                     f"period(s) ({one:.1f} ms), {THREAD_UPPER_NOTE}")
     return "vsync", "high"
 
 

@@ -860,6 +860,8 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
     if not targets:
         return {}
     verdict = (bound or {}).get("verdict") if isinstance(bound, dict) else None
+    if verdict == "gpu" and _num((bound or {}).get("r")) is None:
+        verdict = None          # the 3D engine named the GPU, not frame timing: no event's side stands in for it
     margin = fa.HAGS_MARGIN_MS if fa.hags_on(cap) else 0.0
     others = _others(cap)
     causes = _causes(cap, others)

@@ -108,6 +108,12 @@
   unknown (-1, OpenGL) in a composed window still has its frames held on whole refreshes, and `vsync_judder` calls
   it VSync judder and offers "turn VSync off". Revisit hook: the title, summary and fixes of `rules._vsync_judder`,
   with `frames._sync_off` and the present mode (same entry).
+- **Tell a game's own one-refresh swings from VSync's**: LagLab's pace mode at 6 / 14 ms (not its 4 / 20 default)
+  holds its frames one or two refreshes, 53 % on two, and reads as VSync judder. Revisit hook: `rules._vsync_shaped`,
+  with the presents' own swing share beside the displayed one (same entry).
+- **The page file with the RAM size unknown**: when GlobalMemoryStatusEx fails, `ram_pressure` cannot tell the page
+  file from RAM, and the paging lift test still counts against a commit charge at the limit. Revisit hook: the
+  `roomy` branch of `rules._ram_pressure` with attribution's own RAM floor (same entry).
 - **The game's own packets as the arbiter of ICMP loss** on its server, which would cover rate-limited servers.
   Revisit hook: `diagnose._ignored_losses` with `rules._packet_loss` (same entry).
 - **An unattended settings sweep** (B of 2026-11-09's sweep fork): the assisted sweep plus key presses lag-doctor sends
@@ -144,7 +150,11 @@ fix forked, the implementing session chose; the owner has not weighed in.
   MsCPUBusy, which counts waits outside Present().
   - **Only a saturated thread**: rejected; a thread VSync holds waits for the refresh and is never saturated.
 - **VSync judder at any k (chosen)**, judged on the two adjacent hold counts with the most frames, with uneven
-  presents taken for VSync's when 90 % of the holds sit on those two counts (`VSYNC_SHARE`; a real recording: 92 %).
+  presents taken for VSync's when 90 % of the holds sit on those two counts (`VSYNC_SHARE`; a real recording: 92 %)
+  and judder is found there, never under a shared GPU's unknown verdict. Holds that slip both ways are neither judder
+  nor fine: the texts name one side, and a cap at refresh / 2 slipping 5 % each way is no judder to fix.
+  - **Count frames off the usual hold on both sides as judder**: rejected; the title, the summary's range and the cap
+    then named the wrong side (10 % held one refresh around a usual three read "three and four").
   - **Only up to two and three refreshes**: rejected; an invented bound. LagLab's gpu and cpu modes (3 or 4 refreshes)
     now read low FPS and uneven pacing. LagLab presents with VSync off, Windows' composition holding its frames on
     whole refreshes, so the finding's VSync wording and its "turn VSync off" advice are wrong there: a backlog item.

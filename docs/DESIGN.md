@@ -901,7 +901,8 @@ marks                                      list            [{t, events: [ids], c
 `bound()` judges steady stretches only (frames outside stutters and FPS drops, at least 10 s and 300 app
 frames), in order: VSync (displayed intervals quantised on whole refresh periods, SyncInterval not 0 and
 AllowsTearing not 1; with k = round(FT/P) >= 2 the hardware is tested against one period: GPU busy past
-(k-1)·P gives `gpu`; a busiest thread that is saturated, or whose own CPU time a frame (its share times FT)
+(k-1)·P gives `gpu`; a busiest thread that is saturated, or whose own CPU time a frame (its share times FT, on the
+lead thread only: a capture saved before it says this could not be told when its per-tick figure passes)
 passes (k-1)·P, gives `cpu_main`, since a thread VSync holds waits for the refresh and is never saturated; never
 `MsCPUBusy`, which counts the game's waits outside `Present()` (PM 3.2); with a note that VSync rounds the rate
 down to refresh/k), a frame cap (a regular present cadence: robust CoV, (IQR/1.349)/median per 5 s window, under
@@ -950,8 +951,9 @@ benchmark") and here: the busiest-thread figure is the lead thread's (`game_lead
 before each tick), but in a capture saved before that column it is the mean of per-tick maxima over all the
 game's threads, so several busy threads read as one busier one, more so as thread time moves in 15.625 ms steps
 (WT 3.5, about 6 % of a 250 ms tick); and work a game does per second rather than per frame does not grow with the
-frame rate. Both make the CPU's figure lean low, as does a game that spins while it waits for the GPU. It holds for this game at these settings only: the real check is a second
-recording with lighter graphics, read in Compare.
+frame rate. Both make the CPU's figure lean low, as does a game that spins while it waits for the GPU; work that
+moves from one thread to another within a second reads low, which leans it high. It holds for this game at these
+settings only: the real check is a second recording with lighter graphics, read in Compare.
 
 For an NVIDIA GPU held down by heat or power, `gpu_throttle` says how deep, second in its evidence: its median
 clock against its top clock and the power it drew against its limit (`attribute.nvidia_depth` over the readings
@@ -1035,7 +1037,9 @@ Each rule is a pure function `fn(cap, ctx) -> Finding | Cleared | Unchecked | No
 evidence either way, silent), declares the sources it `needs`, its family and category, and for side-specific
 causes a `gate` on the bound verdict (`gpu`: "gpu" or "mixed"; `cpu`: "cpu_main", "cpu_all", "mixed" or
 "unknown", LC 5.1; `gpu_event`: anything but CPU-bound). A gate failure turns a Finding into Cleared (a definite
-verdict) or Unchecked (verdict unknown), except that without frame timing a `gpu`-gated Finding passes where
+verdict) or Unchecked (verdict unknown, or for a CPU-side cause the 3D engine's "gpu" with no r,
+`rules._gpu_by_engine`, which says nothing of the CPU), except that without frame timing a `gpu`-gated Finding
+passes where
 `bound.gpu_probable` holds, with that reading as its last evidence line (`rules._probable_gpu`); when it does not
 hold, the Unchecked reason gives the seconds and marks. A rule whose source was not measured is `unchecked` with
 the reason.
@@ -1094,11 +1098,13 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   (present_swing_pct > 10 %) covering ≥ 10 % of the capture, weighed as a steady metric, its text never quoting the
   events' severity (the displayed frames' swing) as the game's own. `vsync_judder` judges the displayed holds in
   whole refreshes (`rules._refresh_holds`) between the two adjacent counts k and k + 1 that hold the most frames, at
-  any k: one and two above half the refresh rate, two and three for 58 FPS on 144 Hz; frames on the other side of the
-  usual hold ≥ 10 % is judder, one count only (72 FPS on 144 Hz) is no judder, and the cap it offers is refresh /
-  (k + 1). Uneven presents leave it to `uneven_pacing`, except where the screen shapes them (`rules._vsync_shaped`,
-  one predicate for both: no cap, frames quantised, VRR not seen, the usual hold 2 or more, and ≥ 90 % of the holds on
-  the two counts): then they are VSync's judder and `uneven_pacing` stays silent. A real recording held 92 % of its
+  any k: one and two above half the refresh rate, two and three for 58 FPS on 144 Hz; frames on the pair's side of
+  the usual hold ≥ 10 % is judder, one count only (72 FPS on 144 Hz) is no judder, holds that slip both ways (10 %
+  or more off the usual hold, under 10 % on the pair's side) are neither and the rule stays silent, and the cap it
+  offers is refresh / (k + 1). Uneven presents leave it to `uneven_pacing`, except where the screen shapes them
+  (`rules._vsync_shaped`, one predicate for both: no cap, frames quantised, VRR not seen, the usual hold 2 or more,
+  ≥ 90 % of the holds on the two counts, judder found, and no shared GPU under an unknown verdict, where
+  vsync_judder is unchecked): then they are VSync's judder and `uneven_pacing` stays silent. A real recording held 92 % of its
   frames on two or three refreshes and was reported as the game's own uneven pacing. Where most frames take one
   refresh, uneven presents stay `uneven_pacing`'s, as before.
 - `game_dvr`: background recording known off concludes against; unknown is advice only (no auto-fix);
