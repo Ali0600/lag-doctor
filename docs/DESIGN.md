@@ -1831,7 +1831,8 @@ typed on the player's PC, and the game is never started, stopped or opened by la
 - **Red first**: every guard is sabotaged once and must turn its test red (`scripts/redfirst.py`). The runner
   copies the tree to a temp folder and mutates only the copy, so a killed run can never leave a sabotaged guard
   in the working tree; a test that reads the real repo by absolute path is reported UNISOLATED, and one that
-  writes into its own tree stops the run.
+  writes into its own tree stops the run. A test that hangs is ended after a timeout with every process it started
+  (pytest runs in a job object of its own) and reported TIMEOUT, which is not a catch; the run goes on.
 - **No handles**: `tests/test_no_handles.py` fails if `psutil.Process`, `process_iter` or `pid_exists` is
   used outside the allow-list, and if `OpenProcess` appears outside `winapi/process.py`.
 - **Standard library only**: `tests/test_stdlib_only.py` fails if a module under `lagdoctor/` imports anything

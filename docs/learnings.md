@@ -1114,3 +1114,17 @@ app's game list for the drive's whole timeout. Libraries moved with a junction s
 reads links rather than refusing them.
 **Takeaway**: when a path must not leave the local disks, walk it part by part with lstat and readlink, judging each
 link's target, never open it to find out.
+
+### A timeout that kills the child leaves the processes the child started
+`subprocess.run(..., timeout=)` ends a run that hangs with `Popen.kill()`, which on Windows is `TerminateProcess` on
+the direct child only: Windows has no process groups, so whatever that child started keeps running. Through a venv
+the direct child is the `python.exe` launcher; its own job object takes the real interpreter down with it, but that
+job lets processes started inside it leave, so a test's own child survives (2 of the 3 processes below the launcher
+did, measured). Starting the child suspended, putting it in a job object of your own before it runs any code, and
+then letting it run puts every process it starts, at any depth, in that job; `TerminateJobObject` ends them all, and
+the job's `ActiveProcesses` count says when none is left.
+**Why it came up**: `scripts/redfirst.py` ran each pytest under `subprocess.run(timeout=600)` with no handler, so a
+sabotage that made a test hang would have crashed the whole red-first run, and fixing only that would still have left
+the test's own processes running in the copy it was about to delete.
+**Takeaway**: to end a process tree on Windows, put its root in a job object while it is suspended, end the job, and
+wait for its process count to reach zero before trusting that nothing of it is left.
