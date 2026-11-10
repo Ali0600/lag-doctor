@@ -479,14 +479,22 @@ def test_a_gpu_verdict_under_point_nine_says_which_rule_made_it():
     res = run("gpu_limit", make(system=engine(99.0), inventory=on(240.0)), stats={"avg_fps": 166.0},
               bound={"verdict": "gpu", "r": 0.85, "gpu_ms": 5.1, "ft_ms": 6.0})
     first = res.evidence[0]
-    assert first.text == ("The GPU was busy 5.1 ms of each 6.0 ms frame (r = 0.85): the GPU idled under 1 ms a frame, "
+    assert first.text == ("The GPU was busy 5.1 ms of each 6.0 ms frame (r = 0.85): the GPU idled 1 ms a frame or less, "
                           "so it sets the pace.")
     assert first.value == pytest.approx(0.9) and first.unit == "ms" and first.threshold == 1.0
+    # exactly 1 ms is GPU-bound too (frames.GPU_GAP_MS is a <=), so never "under 1 ms"
+    res = run("gpu_limit", make(system=engine(99.0), inventory=on(240.0)), stats={"avg_fps": 200.0},
+              bound={"verdict": "gpu", "r": 0.80, "gpu_ms": 4.0, "ft_ms": 5.0})
+    assert "under" not in res.evidence[0].text and res.evidence[0].value == pytest.approx(1.0)
     held = ("VSync rounds the frame rate down to 30 FPS (refresh / 2): the GPU needs 17.0 ms a frame, more than 1 "
             "refresh period(s) (16.7 ms)")
     res = run("gpu_limit", make(system=engine(99.0), inventory=on(60.0)), stats={"avg_fps": 30.0},
               bound={"verdict": "gpu", "r": 0.51, "gpu_ms": 17.0, "ft_ms": 33.3, "vsync": True, "notes": [held]})
-    assert res.evidence[0].text == f"The GPU was busy 17.0 ms of each 33.3 ms frame (r = 0.51): {held}."
+    assert res.evidence[0].text == f"{held}."
+    # with HAGS on, the busy time after its margin (16.5 ms) never stands beside the note's raw 17.0 ms
+    res = run("gpu_limit", make(system=engine(99.0), inventory=on(60.0)), stats={"avg_fps": 30.0},
+              bound={"verdict": "gpu", "r": 0.495, "gpu_ms": 16.5, "ft_ms": 33.3, "vsync": True, "notes": [held]})
+    assert res.evidence[0].text == f"{held}."
     assert not any("0.90 or more" in e.text for e in res.evidence)
     # r at 0.90 or more keeps its threshold line
     res = run("gpu_limit", make(system=engine(99.0)), stats={"avg_fps": 40.0},
@@ -503,9 +511,19 @@ def test_a_gpu_verdict_from_too_few_steady_frames_never_claims_frame_timing():
                                                                     "99% busy (>= 95%)"]})
     texts = [e.text for e in res.evidence]
     assert not any("frame timing shows" in t.lower() for t in texts)
-    assert (f"Frame timing could not judge the limit ({note}), so the verdict comes from the GPU's 3D engine."
-            in texts)
+    fallback = f"Frame timing could not judge the limit ({note}), so the verdict comes from the GPU's 3D engine."
+    assert fallback in texts
     assert is_finding(res, "medium")                     # the engine alone: possible, never likely
+    # the engine line says the verdict's own 95 %, not the 90 % frame timing would have needed
+    assert "The game kept its GPU's 3D engine 99% busy (95% or more): probably GPU-limited." in texts
+    # nor do the other rules read it as frame timing: the CPU is ruled out by its thread alone, never by "the frame
+    # rate is limited by the graphics card", and the wrong GPU gets no second point for the one reading
+    bound = {"verdict": "gpu", "r": None, "notes": [note], "busiest_thread": 0.30}
+    cpu = run("cpu_limit", make(system=engine(99.0)), stats={"avg_fps": 40.0}, bound=bound)
+    assert isinstance(cpu, rules.Cleared) and cpu.text == "The game's busiest thread ran only 30% of a CPU."
+    wrong = run("wrong_gpu", make(system=engine(99.0), adapter=INTEL), stats={"avg_fps": 40.0}, bound=bound)
+    assert fallback in [e.text for e in wrong.evidence]
+    assert not any("is what limits the frame rate" in e.text for e in wrong.evidence)
 
 
 def test_gpu_limit_on_a_borderline_split_is_only_worth_checking():

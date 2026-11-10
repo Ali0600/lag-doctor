@@ -650,6 +650,8 @@ def _wrong_gpu(cap: Capture, ctx: dict) -> Any:
     v, fps = e.verdict, e.avg_fps
     if not e.frames_measured:
         c.lack("frame_timing", W_STEADY, e.need("frames"))
+    elif _engine_fallback(e):          # the 3D engine named the GPU, not frame timing: no second point for one reading
+        c.neutral("frame_timing", _engine_fallback(e))
     elif v == "gpu":
         c.support("frame_timing", W_STEADY, "and the integrated GPU is what limits the frame rate"
                   + (f" ({fps:.0f} FPS)" if fps else ""))
@@ -728,11 +730,22 @@ def _fps_reaches_display(e: _Env) -> bool:
     return fps is not None and hz is not None and fps >= LIMIT_FPS_FRAC * hz
 
 
+def _engine_fallback(e: _Env) -> str | None:
+    """bound()'s fallback, a "gpu" verdict with r never computed (too few steady frames: the 3D engine at 95 % named the
+    GPU, not frame timing), in the words the rules use for it; None for any other verdict."""
+    if not e.frames_measured or e.verdict != "gpu" or _fin(e.bound.get("r")) is not None:
+        return None
+    notes = [n for n in e.bound.get("notes") or [] if isinstance(n, str)]
+    return ("frame timing could not judge the limit" + (f" ({notes[0]})" if notes else "")
+            + ", so the verdict comes from the GPU's 3D engine")
+
+
 def _gpu_limit(cap: Capture, ctx: dict) -> Any:
     c = _Case(cap, ctx, "gpu_limit")
     e = c.env
     b, v = e.bound, e.verdict
     r = _fin(b.get("r"))
+    fallback = _engine_fallback(e)
     if e.frames_measured:
         if v in ("gpu", "mixed") and _fps_reaches_display(e):
             return Cleared("gpu_limit", _sentence(f"the GPU sets the pace, but at {e.avg_fps:.0f} FPS the game "
@@ -747,15 +760,14 @@ def _gpu_limit(cap: Capture, ctx: dict) -> Any:
             if r >= fa.R_GPU:
                 c.support("frame_timing", W_STEADY, f"{busy}{detail}; GPU-bound at {fa.R_GPU:.2f} or more", r, "",
                           fa.R_GPU)
-            elif b.get("vsync") is True and rounds:     # A6: VSync holds it at refresh / k, the GPU past k - 1 periods
-                c.support("frame_timing", W_STEADY, f"{busy}{detail}: {rounds}")
+            elif b.get("vsync") is True and rounds:     # A6: VSync holds it at refresh / k, the GPU past k - 1 periods;
+                c.support("frame_timing", W_STEADY, rounds)    # the note's raw GPU time (busy here is after HAGS)
             else:         # A14: under 0.90, the frame within 1 ms of the GPU's busy time leaves the GPU the limit
-                c.support("frame_timing", W_STEADY, f"{busy}{detail}: the GPU idled under {fa.GPU_GAP_MS:.0f} ms a "
-                                                    "frame, so it sets the pace", ft - g if g is not None and ft
+                c.support("frame_timing", W_STEADY, f"{busy}{detail}: the GPU idled {fa.GPU_GAP_MS:.0f} ms a frame or "
+                                                    "less, so it sets the pace", ft - g if g is not None and ft
                           is not None else None, "ms", fa.GPU_GAP_MS)
-        elif v == "gpu":      # bound's fallback: too few steady frames, so the 3D engine named the GPU, not frame timing
-            c.neutral("frame_timing", "frame timing could not judge the limit"
-                      + (f" ({notes[0]})" if notes else "") + ", so the verdict comes from the GPU's 3D engine")
+        elif fallback:        # bound's fallback: too few steady frames, so the 3D engine named the GPU, not frame timing
+            c.neutral("frame_timing", fallback)
         elif v == "mixed":
             c.support("frame_timing", W_STATIC, f"borderline: the GPU was busy for {100 * (r or 0):.0f}% of each "
                                                 f"frame (between {100 * fa.R_CPU:.0f}% and {100 * fa.R_GPU:.0f}%)",
@@ -770,7 +782,7 @@ def _gpu_limit(cap: Capture, ctx: dict) -> Any:
     engine = e.steady(S.GAME_GPU_PCT)
     if engine:
         m = st.median(engine)
-        probable = not e.frames_measured
+        probable = not e.frames_measured or fallback is not None      # the verdict's own 95 %, not 90 %
         need = ENGINE_PROBABLE_PCT if probable else ENGINE_BUSY_PCT
         if m >= need:
             c.support("gpu_engine", W_STEADY, f"the game kept its GPU's 3D engine {m:.0f}% busy ({need:.0f}% or more)"
@@ -822,6 +834,8 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
     elif v == "unknown":
         notes = [n for n in b.get("notes") or [] if isinstance(n, str)]
         c.lack("frame_timing", W_STEADY, "the frame-rate limit could not be judged" + (f": {notes[0]}" if notes else ""))
+    elif _engine_fallback(e):          # the 3D engine named the GPU: frame timing never ruled the CPU out
+        c.neutral("frame_timing", _engine_fallback(e))
     else:
         c.against("frame_timing", W_STEADY, f"the frame rate is limited by {labels.BOUND.get(v, v)}")
     if busiest is not None:

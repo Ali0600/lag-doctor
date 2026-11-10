@@ -879,8 +879,9 @@ AllowsTearing not 1; with k = round(FT/P) >= 2 the hardware is tested against on
 outside `Present()` (PM 3.2), with a note that VSync rounds the rate down to refresh/k), a frame cap (a regular present cadence: robust CoV, (IQR/1.349)/median per 5 s window, under 3 %,
 away from k·P, with r < 0.75 and an unsaturated thread), `gpu` (r >= 0.90, or r above 0.75 with FT − G <= 1 ms;
 G minus 0.5 ms when HAGS is on for the game's adapter), `cpu_main` (r <= 0.75 and busiest thread >= 0.85 of a
-CPU over >= 1 s), `cpu_all`, `waiting`, else `mixed`. Without frames, a 3D engine at >= 95 % (median of 1 s
-windows) gives a probable `gpu`; otherwise the verdict stays `unknown` and `gpu_probable` (`frames.probable_gpu`)
+CPU over >= 1 s), `cpu_all`, `waiting`, else `mixed`. Without enough steady frames (or none), a 3D engine at >= 95 %
+(median of 1 s windows) gives a probable `gpu` with no r, which the rules never count as frame-timing evidence
+(`rules._engine_fallback`); otherwise the verdict stays `unknown` and `gpu_probable` (`frames.probable_gpu`)
 reads the same fallback per second: the 1 s windows with the engine at >= 95 %, and the marks whose span touches
 one. It `holds` with >= 10 % of the windows and >= 10 s, or at half the marks or more; the first real capture's
 median was 71 % while the GPU was pegged in its last minutes and at every mark. While other programs keep the

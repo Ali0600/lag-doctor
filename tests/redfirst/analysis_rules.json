@@ -1692,8 +1692,53 @@
  {
   "name": "the engine's fallback verdict counts as frame-timing support",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "            c.neutral(\"frame_timing\", \"frame timing could not judge the limit\"",
-  "new": "            c.support(\"frame_timing\", W_STEADY, \"frame timing could not judge the limit\"",
+  "old": "            c.neutral(\"frame_timing\", fallback)",
+  "new": "            c.support(\"frame_timing\", W_STEADY, fallback)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_verdict_from_too_few_steady_frames_never_claims_frame_timing"
+  ]
+ },
+ {
+  "name": "the 1 ms rule says under 1 ms, though exactly 1 ms counts",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "the GPU idled {fa.GPU_GAP_MS:.0f} ms a frame or \"",
+  "new": "the GPU idled under {fa.GPU_GAP_MS:.0f} ms a frame or \"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_verdict_under_point_nine_says_which_rule_made_it"
+  ]
+ },
+ {
+  "name": "the VSync line quotes the GPU's busy time after the HAGS margin",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                c.support(\"frame_timing\", W_STEADY, rounds)",
+  "new": "                c.support(\"frame_timing\", W_STEADY, f\"{busy}{detail}: {rounds}\")",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_verdict_under_point_nine_says_which_rule_made_it"
+  ]
+ },
+ {
+  "name": "the engine line keeps the 90 % the fallback verdict never used",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        probable = not e.frames_measured or fallback is not None",
+  "new": "        probable = not e.frames_measured",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_verdict_from_too_few_steady_frames_never_claims_frame_timing"
+  ]
+ },
+ {
+  "name": "the fallback clears the CPU as a GPU limit",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif _engine_fallback(e):          # the 3D engine named the GPU: frame timing never ruled the CPU out",
+  "new": "    elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_verdict_from_too_few_steady_frames_never_claims_frame_timing"
+  ]
+ },
+ {
+  "name": "the wrong GPU gets a second point for the fallback",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif _engine_fallback(e):          # the 3D engine named the GPU, not frame timing: no second point for one reading",
+  "new": "    elif False:",
   "tests": [
    "tests/test_analysis_rules.py::test_a_gpu_verdict_from_too_few_steady_frames_never_claims_frame_timing"
   ]
