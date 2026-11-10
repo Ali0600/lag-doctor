@@ -1898,7 +1898,7 @@
   "old": "\n            and share >= JUDDER_SHARE)\n",
   "new": ")\n",
   "tests": [
-   "tests/test_analysis_rules.py::test_holds_off_the_usual_count_on_both_sides_are_judder_and_never_silence_uneven_pacing"
+   "tests/test_analysis_rules.py::test_holds_that_slip_both_ways_are_never_called_fine_and_never_silence_uneven_pacing"
   ]
  },
  {

@@ -547,6 +547,10 @@ def test_the_engine_fallback_never_rules_the_cpu_out():
     blind = make(ok=("system",), src={"frames": NO_FRAMES}, system=engine(99.0))
     res = run("cpu_limit", blind, stats={"frames": 0}, bound={"verdict": "gpu", "busiest_thread": 0.95})
     assert isinstance(res, rules.Unchecked), res
+    # cpu_limit needs frame timing of its own, so the gate's reading of that "gpu" shows on cpu_throttle, which does not
+    blind = make(ok=("system",), src={"frames": NO_FRAMES}, system=cpu_sys(limit=80.0, busiest=95.0), duration=60.0)
+    res = run("cpu_throttle", blind, stats={"frames": 0}, bound={"verdict": "gpu", "busiest_thread": 0.95})
+    assert isinstance(res, rules.Unchecked) and res.text.startswith("whether the CPU limits the frame rate"), res
 
 
 def test_a_cpu_that_cannot_be_ruled_out_is_never_cleared_by_any_cpu_side_rule():
@@ -1626,6 +1630,10 @@ def test_a_steady_lock_at_two_refreshes_is_no_judder():
     res = run("vsync_judder", make(), frames=holds_frames(spread(two=100)),
               bound={"verdict": "gpu", "quantised_pct": 100.0})
     assert isinstance(res, rules.Cleared) and res.text == "100% of frames were shown for two refreshes: no judder."
+    # a lock that slips to three for 5 % of its frames is even too: the share counts the frames off the usual hold
+    res = run("vsync_judder", make(), frames=holds_frames(spread(two=95, three=5)),
+              bound={"verdict": "gpu", "quantised_pct": 100.0})
+    assert isinstance(res, rules.Cleared) and res.text == "95% of frames were shown for two refreshes: no judder."
 
 
 FOLLOWS = ([2, 3] * 43 + [2] * 7 + [1] * 4 + [4] * 3) * 10         # per 100 frames: 2: 50, 3: 43, 1: 4, 4: 3
