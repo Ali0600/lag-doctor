@@ -1,0 +1,228 @@
+[
+ {
+  "name": "attached windows never swap order",
+  "file": "scripts/overhead/bench.py",
+  "old": "        return conds if i % 2 == 0 else conds[::-1]",
+  "new": "        return conds",
+  "tests": [
+   "tests/test_overhead_bench.py::test_two_conditions_alternate_and_swap_order_every_cycle"
+  ]
+ },
+ {
+  "name": "three conditions never rotate",
+  "file": "scripts/overhead/bench.py",
+  "old": "    return conds[k:] + conds[:k]",
+  "new": "    return conds",
+  "tests": [
+   "tests/test_overhead_bench.py::test_three_conditions_rotate_so_each_takes_every_place"
+  ]
+ },
+ {
+  "name": "a window counts the frames outside it",
+  "file": "scripts/overhead/bench.py",
+  "old": "    f = [x for x in frames if ws <= x <= we]",
+  "new": "    f = list(frames)",
+  "tests": [
+   "tests/test_overhead_bench.py::test_frame_figures_read_only_the_window_and_count_the_long_frames"
+  ]
+ },
+ {
+  "name": "a stutter needs three times the local median",
+  "file": "scripts/overhead/bench.py",
+  "old": "out[\"stutter2x_per_min\"] = sum(1 for x, m in zip(d, med) if x > 2 * m) / minutes",
+  "new": "out[\"stutter2x_per_min\"] = sum(1 for x, m in zip(d, med) if x > 3 * m) / minutes",
+  "tests": [
+   "tests/test_overhead_bench.py::test_frame_figures_read_only_the_window_and_count_the_long_frames"
+  ]
+ },
+ {
+  "name": "a window with too few frames still gets figures",
+  "file": "scripts/overhead/bench.py",
+  "old": "    if len(d) < 50:",
+  "new": "    if len(d) < 0:",
+  "tests": [
+   "tests/test_overhead_bench.py::test_a_window_with_too_few_frames_says_so_instead_of_giving_figures"
+  ]
+ },
+ {
+  "name": "the bootstrap does not resample",
+  "file": "scripts/overhead/bench.py",
+  "old": "statistics.median(rng.choices(xs, k=len(xs)))",
+  "new": "statistics.median(xs)",
+  "tests": [
+   "tests/test_overhead_bench.py::test_the_bootstrap_interval_brackets_the_median_and_reads_the_same_each_time"
+  ]
+ },
+ {
+  "name": "a process older than its parent PID's process joins the recorder's tree",
+  "file": "scripts/overhead/bench.py",
+  "old": "p.create_time >= parent.create_time and ",
+  "new": "True and ",
+  "tests": [
+   "tests/test_overhead_bench.py::test_the_recorders_tree_is_its_children_by_parent_and_start_time"
+  ]
+ },
+ {
+  "name": "a recording that began inside its window is kept",
+  "file": "scripts/overhead/bench.py",
+  "old": "        if lead is None or lead < MIN_ORIGIN_LEAD_S:",
+  "new": "        if lead is None or lead < 0.0:",
+  "tests": [
+   "tests/test_overhead_bench.py::test_the_summary_pairs_windows_by_cycle_and_leaves_out_a_recorder_that_did_not_record"
+  ]
+ },
+ {
+  "name": "a failed recorder's window is kept",
+  "file": "scripts/overhead/bench.py",
+  "old": "        if r.get(\"recorder_exit\") != 0:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_overhead_bench.py::test_the_summary_pairs_windows_by_cycle_and_leaves_out_a_recorder_that_did_not_record"
+  ]
+ },
+ {
+  "name": "the change is taken in % of the attached window",
+  "file": "scripts/overhead/bench.py",
+  "old": "xs = [(b[\"metrics\"][k_] - a[\"metrics\"][k_]) / a[\"metrics\"][k_] * 100 if rel",
+  "new": "xs = [(b[\"metrics\"][k_] - a[\"metrics\"][k_]) / b[\"metrics\"][k_] * 100 if rel",
+  "tests": [
+   "tests/test_overhead_bench.py::test_the_summary_pairs_windows_by_cycle_and_leaves_out_a_recorder_that_did_not_record"
+  ]
+ },
+ {
+  "name": "a suite that cannot run is skipped with exit 0",
+  "file": "scripts/overhead/bench.py",
+  "old": "            rc = 2",
+  "new": "            rc = rc",
+  "tests": [
+   "tests/test_overhead_bench.py::test_a_suite_that_cannot_run_here_fails_the_command"
+  ]
+ },
+ {
+  "name": "a pm- suite starts without PresentMon",
+  "file": "scripts/overhead/bench.py",
+  "old": "    if not exe.is_file():",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_overhead_bench.py::test_a_suite_that_cannot_run_here_fails_the_command"
+  ]
+ },
+ {
+  "name": "a misspelt collector name is accepted",
+  "file": "scripts/overhead/recorder.py",
+  "old": "        if unknown:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_overhead_bench.py::test_the_recorder_refuses_a_collector_it_would_not_have"
+  ]
+ },
+ {
+  "name": "the recorder never runs PresentMon",
+  "file": "scripts/overhead/recorder.py",
+  "old": "hotkey=None, frames=frames,",
+  "new": "hotkey=None, frames=False,",
+  "tests": [
+   "tests/test_overhead_bench.py::test_the_recorder_runs_lag_doctors_own_collectors"
+  ]
+ },
+ {
+  "name": "the recorder keeps every collector",
+  "file": "scripts/overhead/recorder.py",
+  "old": "        collectors = [c for c in collectors if c.name in keep]",
+  "new": "        collectors = list(collectors)",
+  "tests": [
+   "tests/test_overhead_bench.py::test_the_recorder_runs_lag_doctors_own_collectors"
+  ]
+ },
+ {
+  "name": "the parse timing stores no frames",
+  "file": "scripts/overhead/pm_parse_bench.py",
+  "old": "        src._add(row)",
+  "new": "        pass",
+  "tests": [
+   "tests/test_overhead_bench.py::test_the_parse_timing_runs_lag_doctors_reader_over_every_row"
+  ]
+ },
+ {
+  "name": "the null keeps the real alignment",
+  "file": "scripts/overhead/phase_lock.py",
+  "old": "    return [t + delta - span for t in a[s:]] + [t + delta for t in a[:s]]",
+  "new": "    return a",
+  "tests": [
+   "tests/test_overhead_phase_lock.py::test_a_cost_planted_at_the_sampler_ticks_is_found",
+   "tests/test_overhead_phase_lock.py::test_a_shift_moves_every_event_and_wraps_the_ones_past_the_end"
+  ]
+ },
+ {
+  "name": "a smaller real effect ranks as more extreme",
+  "file": "scripts/overhead/phase_lock.py",
+  "old": "abs(x) >= abs(d0) - 1e-12)) / (1 + len(dn))",
+  "new": "abs(x) <= abs(d0) + 1e-12)) / (1 + len(dn))",
+  "tests": [
+   "tests/test_overhead_phase_lock.py::test_a_cost_planted_at_the_sampler_ticks_is_found"
+  ]
+ },
+ {
+  "name": "every statistic counts as significant",
+  "file": "scripts/overhead/phase_lock.py",
+  "old": "if p is not None and p < each]",
+  "new": "if p is not None]",
+  "tests": [
+   "tests/test_overhead_phase_lock.py::test_the_same_series_with_no_cost_reads_as_none"
+  ]
+ },
+ {
+  "name": "a held-up row is put on the next grid point",
+  "file": "scripts/overhead/phase_lock.py",
+  "old": "GRID_TOL = 0.15",
+  "new": "GRID_TOL = 0.9",
+  "tests": [
+   "tests/test_overhead_phase_lock.py::test_the_schedule_fit_puts_held_up_rows_back_on_their_grid"
+  ]
+ },
+ {
+  "name": "decoys may sit at the real period",
+  "file": "scripts/overhead/phase_lock.py",
+  "old": "        if abs(r - 1.0) >= DECOY_GAP:",
+  "new": "        if True:",
+  "tests": [
+   "tests/test_overhead_phase_lock.py::test_decoy_trains_keep_away_from_the_samplers_own_period"
+  ]
+ },
+ {
+  "name": "LagLab's planted hitches are kept",
+  "file": "scripts/overhead/phase_lock.py",
+  "old": "    if windows and not keep_hitches:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_overhead_phase_lock.py::test_laglabs_planted_hitches_are_left_out_unless_kept"
+  ]
+ },
+ {
+  "name": "a LagLab log is not cut to its capture",
+  "file": "scripts/overhead/phase_lock.py",
+  "old": "    ends, ms = ends[keep[0]:keep[-1] + 1], ms[keep[0]:keep[-1] + 1]",
+  "new": "    ends, ms = ends, ms",
+  "tests": [
+   "tests/test_overhead_phase_lock.py::test_a_laglab_log_is_cut_to_the_capture_and_refused_when_it_misses_it"
+  ]
+ },
+ {
+  "name": "a LagLab log covering under half the capture is accepted",
+  "file": "scripts/overhead/phase_lock.py",
+  "old": "    if len(keep) < MIN_LAGLAB_FRAMES or covered < 0.5 * duration_s:",
+  "new": "    if len(keep) < MIN_LAGLAB_FRAMES:",
+  "tests": [
+   "tests/test_overhead_phase_lock.py::test_a_laglab_log_is_cut_to_the_capture_and_refused_when_it_misses_it"
+  ]
+ },
+ {
+  "name": "a capture's frames are all dropped",
+  "file": "scripts/overhead/phase_lock.py",
+  "old": "        if t is None or d is None or not d > 0:",
+  "new": "        if True:",
+  "tests": [
+   "tests/test_overhead_phase_lock.py::test_the_command_reads_a_saved_capture_and_writes_its_aggregates"
+  ]
+ }
+]

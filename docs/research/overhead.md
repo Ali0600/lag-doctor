@@ -7,8 +7,9 @@ Method: five code readers (one per collector, plus the session), two outside-res
 owner's two real recordings, an attach/detach benchmark on LagLab, offline timings of the frame path, and an
 adversarial pass in which two independent skeptics re-read every outside source (verification log at the end).
 Measured on this laptop: Windows 11 build 26200, 16 logical CPUs, RTX 3070 Laptop plus Intel UHD, NVIDIA driver
-591.86, Python 3.13.3, main at 1e0ff72. `<scratch>` in a source tag is this research's working folder under %TEMP%;
-its scripts and outputs are not in the repo.
+591.86, Python 3.13.3, main at 1e0ff72. `<scratch>` in a source tag is this research's working folder under %TEMP%,
+whose outputs are not in the repo. The benchmark, the frame-path timing and the phase-lock test have been in
+`scripts/overhead/` since 2026-11-09 (section 8 says how to rerun them); the other scripts a tag names are not.
 
 **Tags.**
 - `[measured: …]`: run or counted in this research; the source says where.
@@ -128,7 +129,7 @@ NVML runs only in the NVIDIA rows: it stays off for a game on the Intel GPU. The
 that first pass the CPU-bound workload, with 13-15 CPUs busy with other work in 8 of its 10 attached windows, read
 10.1 % (the sampler 8.5 %). Private memory at the end of a window: 30 MB without NVML, 44 MB with it (about 14 MB
 more with NVML loaded [inferred: the NVIDIA run's 44.1 MB against 29.9-30.4 MB on the Intel runs]). [measured:
-`<scratch>\bench\bench.py`, `recorder.py`]
+`scripts/overhead/bench.py` and `recorder.py`]
 
 ### 3.3 Where the sampler's time goes
 
@@ -153,7 +154,7 @@ During the real game ticks took 13.6-15.6 ms median, with a maximum of 184-284 m
   CPUs busy (three runs), through the real parser and `_add` (per-operation CPU time roughly doubles under that load:
   shared cores and lower clocks); through a real pipe paced like PresentMon's it took 78-100 µs per row, load not
   logged. That is 0.2-0.6 % of one CPU at 60 FPS and 0.5-1.4 % at 144 FPS. [measured:
-  `<scratch>\bench\pm_parse_bench.py` on rows PresentMon wrote with lag-doctor's flags from its gold capture
+  `scripts/overhead/pm_parse_bench.py` on rows PresentMon wrote with lag-doctor's flags from its gold capture
   test_case_5; `<scratch>\presentmon-cost\ld_parse_cost.py` for the pipe] Since M3 this parsing runs in the relay,
   whose rows then cross a pipe to the recorder in 0.1 s batches; that leg was not measured.
 - **The watcher**: a whole-system snapshot every second, 7.4 ms each, about 0.7 % of one CPU. [measured]
@@ -258,7 +259,7 @@ statistic with all events moved together by one random offset (which keeps the g
 long frame overlaps more moments). Its calibrated p ranks the real phase among all phases of the period; 100-400
 decoy event trains at other periods measured its false-positive rate on this recording, and planted effects its
 sensitivity.
-[measured: `<scratch>\phaselock\phase_lock.py` on the 13-minute recording, 44,560 frames]
+[measured: `scripts/overhead/phase_lock.py` on the 13-minute recording, 44,560 frames]
 
 - **Sampler ticks (4 Hz)**: the frames overlapping a tick ran 0.31 ms longer than chance would give (calibrated
   p 0.02-0.06, above the bar of 0.017 for one of a source's 3 statistics, and of about 0.008 over all 6 tests), the
@@ -409,9 +410,11 @@ Microsoft's D3DDDI_ESCAPEFLAGS page; whether NVML's escapes are flagged so is un
 
 ## 7. Not measured
 
-- **PresentMon live**: its exact CPU and any frame-time effect need ETW rights, which the agent's shell lacks. The
-  scratch benchmark can also alternate none, PresentMon alone and everything, run from an administrator terminal.
-  LagLab is OpenGL and not PCL-instrumented, so even that would not test section 5.1.
+- **PresentMon live**: its exact CPU and any frame-time effect need ETW rights, which the agent's shell lacks.
+  `scripts/overhead/bench.py` can also alternate none, PresentMon alone and everything (its `pm-` suites), run from
+  an administrator terminal; it runs PresentMon inside its own recorder, as recordings did before M3, so the relay's
+  own process would still be unmeasured. LagLab is OpenGL and not PCL-instrumented, so even that would not test
+  section 5.1.
 - **The tracker live**, the tracker's event rate during a download, and the console window's drawing cost.
 - **Power**: package watts and C-state residency need a driver or an administrator.
 - **Other games and frame rates**: the real-recording figures are one game at about 56 FPS with VSync on 91 % of
@@ -438,6 +441,23 @@ Microsoft's D3DDDI_ESCAPEFLAGS page; whether NVML's escapes are flagged so is un
   busy, so CPU costs here are ranges.
 - **Handle-free accounting.** Every CPU figure for LagLab and the recorder comes from NtQuerySystemInformation
   snapshots; no process was opened.
+- **Rerunning it.** `bench.py`'s defaults are this note's runs (380 s of LagLab, a 60 s warm-up, 10 s windows, about
+  6.5 minutes a suite). Run it on a quiet PC, from the checkout:
+
+  ```powershell
+  uv run python scripts/overhead/bench.py cycles --suite intel-cpu --suite intel-smooth --suite nvidia-144 --out <dir>
+  uv run python scripts/overhead/bench.py summarize-cycles --out <dir>
+  uv run python scripts/overhead/phase_lock.py <capture>.ldcap.json.gz --decoys 100
+  uv run python scripts/overhead/pm_parse_bench.py
+  ```
+
+  Moving the scripts into the repo changed three things. The summary also leaves out an attached window whose
+  recorder failed or never began recording; none of this note's 55 did, and re-summarizing both runs gives the same
+  figures. The phase-lock test keeps the part of a LagLab log that its capture covers, so one benchmark window's
+  capture can be tested. And the frame-path timing keeps its input in memory across both of its readings: the first
+  version freed it in between and read 425-485 B a frame, against section 3.6's 0.7 KB (it now reads 713 B).
+  `tests/test_overhead_bench.py` and `tests/test_overhead_phase_lock.py` check their logic on inputs whose answer is
+  known.
 
 ## Verification log (2026-11-08)
 

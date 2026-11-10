@@ -26,6 +26,8 @@ uv run pytest -q tests/test_app_recording.py             # M4: the recorder the 
 uv run python -m tests.app_demo <home> [--pictures]      # a demo library of made-up games, under <home>\sessions
 uv run python -m tests.app_harness <home> <out.json> [<shots>]   # drive the window on it; LAGDOCTOR_HOME=<home>
 uv run python scripts/make_icon.py                       # rewrite lag-doctor's icon, lagdoctor/app/lag-doctor.ico
+uv run python scripts/overhead/bench.py cycles --suite <name> --out <dir>   # lag-doctor's own cost on LagLab, ~6.5 min a suite
+uv run python scripts/overhead/phase_lock.py <capture>.ldcap.json.gz      # do frames at its sampling moments run long?
 ```
 
 CI (`.github/workflows/ci.yml`) runs the suite on `windows-2025` for Python 3.13 on every pull request and on every
@@ -200,6 +202,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   test's own, in the relay's. An `App` a test builds passes its own `recorder` and `launcher`: the defaults start
   `watch --control stdio --elevate` and raise the real UAC prompt (`tests/test_app_recording.py` also makes
   `launch_elevated` refuse, so a slip fails instead of prompting).
+- **The overhead benchmark** (`scripts/overhead/bench.py`, `docs/research/overhead.md`) opens a LagLab window for
+  about 6.5 minutes a suite, and its recorder holds lag-doctor's capture lock while it records, so the owner's own
+  `watch` refuses meanwhile (exit 4): run it when the owner is not mid-game, and only on a quiet PC (its CPU
+  figures nearly double under load). Its `pm-` suites need ETW rights, so they are the owner's, from an
+  administrator terminal; without rights they exit 2 and start nothing.
 - **The app's page puts outside text on screen as text only.** Game, process and window names, evidence,
   reasons and the player's note (`watch --note`, cleaned by `model.clean_note` in every writer and reader) reach the
   page as JSON and go into the DOM through `el()` in `lagdoctor/app/assets/app.js`, which makes
