@@ -145,7 +145,80 @@ the spot and quit. It ranks the results with their noise."
 - **B: unattended**, A plus menu keys and a close request sent by lag-doctor: deferred, worth trying (Backlog).
 - **C: not now**: not chosen.
 
-The build's own choices are recorded below as it lands.
+The implementing session's choices for `lagdoctor sweep` (DESIGN, The settings sweep); the owner has not weighed in:
+- **Edits through the fix journal, as the fix `game_setting` (chosen)**, plus a byte copy of the file in the sweep's
+  folder: a crash leaves an entry that the next start heals and `lagdoctor undo` puts back, and an undo never
+  clobbers a value something else set since.
+  - **Write the whole original file back at the end**: rejected. It would undo whatever the game or the player
+    changed in the file during the sweep, and a crash would leave nothing that knows the file was changed.
+- **Only values the file already has, with a strict value grammar, in .ini files (chosen)**: a sweep never adds or
+  removes a line, so the game never meets a key its own build did not write.
+  - **Adding keys (Engine.ini's console variables)**: deferred. FINAL FANTASY VII REBIRTH reads Engine.ini only through
+    a proxy DLL (research note, section 2), which a sweep would first have to know is there. Revisit hook:
+    `inifile.set_value`, which refuses a missing key today.
+- **Each run through `cmd_watch` (chosen)**, with two new keyword seams, `remember` and `show_summary` (both False for
+  a sweep's runs), so a run is an ordinary recording: the capture lock, the PresentMon check, the relay and its
+  prompt, the save and the report.
+  - **The session alone, with the sweep's own save**: rejected. It would copy watch's checks and drift from them.
+- **The player presses Enter here once at the spot, before the recording starts (chosen)**: the UAC prompt then comes
+  up while this terminal is in front, and the player goes back to the game for the start key.
+  - **Start recording as soon as the game appears**: rejected for now. The prompt would come up behind a starting
+    game, which only blinks on the taskbar. Play's prompt before the launch (M6) makes it worth trying. Revisit hook:
+    the Enter loop in `runner._one`.
+- **The sweep's own start key, Ctrl+Alt+S, registered for each run only (chosen)**, with watch's lag key off in a
+  sweep's runs. Watch has no start key yet (M5 is building one): once it has, a run uses watch's, so one listener owns
+  the key. Revisit hook: `runner._record` (and `docs/LAUNCHER-PLAN.md`, M5).
+  - **The lag key as the start key**: rejected. A run's report would list the press as a lag the player marked.
+  - **Wait for M5 before building the sweep**: rejected. The owner asked for the sweep now, and the seam is small.
+- **A warm-up block, then counted blocks that rotate one shuffled order (chosen, after the review)**: drift spreads
+  over every setting, a setting's slower first run is not counted, every setting takes every place in a block equally
+  often, and A's runs in every block are the noise check the research asked for (A/A) without runs of their own.
+  - **A fresh shuffle for every block**: rejected in review. It does not balance places: with one `--try` and three
+    blocks, all three run in the same order one time in four.
+  - **A separate A/A block first**: rejected. It costs runs that A's repeats already give.
+- **Welch's t interval on average FPS and the 1 % low, in % of A's mean, widened for the number of settings compared
+  (Bonferroni; chosen, after the review)**: "faster" or "slower" only when the interval excludes 0, and all the
+  comparisons hold together 95 % of the time. At 2 to 10 runs a bootstrap's interval is too narrow (research note,
+  section 4). The review simulated 5 settings with no real difference at 3 runs each: 13.6 % of sweeps called one
+  faster or slower on average FPS alone without the widening.
+  - **A rank test (Mann-Whitney)**: rejected. At 3 runs a side its smallest possible p is 0.1, so it can never call a
+  difference.
+- **A run that moved does not count and is offered again (chosen)**: the checks of DESIGN's sweep section. After the
+  review they judge the whole window rather than its median (every focus sample but the edges', the share of samples
+  with another program on the GPU), and keep out a window whose GPU clock moved (still heating up). A game update, a
+  game that writes its own value back or drops the line, and an original changed between sessions end the sweep
+  (state "ended", which `--resume` only shows).
+  - **The NVIDIA power limit held within 10 % of the first good run's**: rejected in review. It moves by itself: in
+    the first real capture it fell from about 85 to 55 W mid-recording with no plan change, and ASUS's Dynamic Boost
+    moves it with CPU load, so a sweep could never finish. Armoury Crate's mode already shows as a plan change, which
+    is held. The limit is recorded.
+- **The journal says what is in the file (chosen, after the review)**: every outstanding `game_setting` entry of the
+  file is undone, pending ones settled first, each tried even when another stays. A new sweep refuses while one is
+  outstanding, every start says so, and `--resume` puts them back first whatever the sweep's state.
+  - **The sweep's own list of its journal entries**: rejected in review. An edit that reached the file just before a
+    crash was in the journal but not in the list, so nothing put it back, and the next sweep took it for the original.
+- **A value the game wrote in place of lag-doctor's is put back only when the player says so (chosen)**: the sweep
+  asks "Put 3 back? [Y/n]" once the game has closed. The project's rule is that an undo never overwrites a value
+  something else set; here the player, who knows whether they changed the menu, decides each case.
+  - **Always force the original back**: rejected. It would overwrite a change the player made on purpose.
+  - **Never force it**: rejected. The game's own rewrite (a clamp, a reset) would leave the player's setting changed.
+- **The file's other values are compared before each run (chosen)**: a change is said and the player decides whether
+  runs count with the file as it is (recorded in the sweep's notes), or stops to put it back.
+  - **End the sweep on any change**: rejected. A game may rewrite a value of its own at every exit, which would end
+    every sweep after its first run.
+- **Closing the console puts the settings back at once when the game is closed (chosen)**: a console control handler
+  for the sweep's length, one write at a time with the runner. During a recording watch's own handler comes first.
+  - **Only remind at the next start**: kept as well, for a close while the game runs and for a crash.
+- **Feel numbers, for the owner to judge after a real sweep**: the 60 s window, 3 counted runs, the 5 minutes the
+  start key may take, and Ctrl+Alt+S itself.
+
+An adversarial review from three angles (the settings file and journal, control flow and threads, measurement and
+statistics) before the pull request raised 40 findings; all were checked against the code and fixed. The adjudication
+is in the pull request.
+
+Revisit hooks: `runner._record` (the start key), `runner._one` (Enter, and where an unattended sweep would drive the
+game), `results.problems` and `results.moved` (what keeps a run out), `plan.make_slots` (the order),
+`runner.put_back_now` (what goes back, and when the player is asked).
 
 ## 2026-11-09: M4's end flashes the taskbar button and never brings the window forward
 

@@ -43,6 +43,14 @@ def sessions_dir() -> Path:
     return d
 
 
+def sweeps_dir() -> Path:
+    """One sub-folder per settings sweep: its state (sweep.json), a copy of the settings file as it was, and its runs'
+    recordings. Apart from sessions_dir, so the app's library lists only ordinary recordings."""
+    d = home() / "sweeps"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
 def folder_stem(name: object) -> str:
     """The game's part of a session folder's name, from the game's exe name: "ff7rebirth_.exe" is "ff7rebirth_".
     Letters, digits, '-', '_' and '.' are kept, anything else is '_'; the extension goes; at most 40 characters;
