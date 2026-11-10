@@ -303,18 +303,20 @@ STEADY_LEADS = {"gpu": ("gpu_limit", "gpu_throttle", "wrong_gpu", "hybrid_copy",
 NOT_STEADY_LEADS = ("not_focused",)      # a frame-rate cause, but only while the game is in the background
 
 
-def _lead(kinds: list[str], findings: list[Finding], evs: list[LagEvent],
-          steady: str | None = None) -> tuple[Finding | None, bool]:
-    """(the finding the headline names, whether it explains the lag): when the steady low frame rate is most of the
-    lag (`steady`: the bound verdict then), the best confident finding of the part that holds it; else the best-ranked
-    finding that claims the lag's own events, then one of the lag's category, else the top finding as a side note."""
-    for f in findings if steady else ():
-        if f.cause in STEADY_LEADS.get(steady, ()) and f.confidence in CONFIDENT:
-            return f, True
+def _lead(kinds: list[str], findings: list[Finding], evs: list[LagEvent], verdict: str = "unknown",
+          steady_s: float = 0.0) -> tuple[Finding | None, bool]:
+    """(the finding the headline names, whether it explains the lag): the best-ranked finding that claims the lag's
+    own events, unless the steady low-FPS time (`steady_s`) is longer than the time of the events it claims: then the
+    best confident finding of the part the bound verdict names, which holds that steady rate (A6); then one of the
+    lag's category, else the top finding as a side note."""
     ids = {e.id for e in evs for k in kinds if e.kind in LAG_EVENT_KINDS.get(k, ())}
-    for f in findings:
-        if ids & set(f.event_ids):
-            return f, True
+    claimer = next((f for f in findings if ids & set(f.event_ids)), None)
+    holder = next((f for f in findings if f.cause in STEADY_LEADS.get(verdict, ()) and f.confidence in CONFIDENT), None)
+    claimed = set(claimer.event_ids) & ids if claimer is not None else set()
+    if holder is not None and steady_s > _union([(e.t_start, e.t_end) for e in evs if e.id in claimed]):
+        return holder, True
+    if claimer is not None:
+        return claimer, True
     for f in findings:
         if LAG_OF_CATEGORY.get(f.category) in kinds:
             return f, True
@@ -332,9 +334,8 @@ def headline(lag_type: str, findings: list[Finding], stats: dict[str, Any], evs:
         kinds = [k for _, k in sorted(((v, k) for k, v in lag.items() if v > 0), reverse=True)][:2]
     else:
         kinds = []
-    steady = steady_low_s(env.bound, env.frames_measured) if "low_fps" in kinds else 0.0   # A6: more than all events
-    lead, explains = _lead(kinds, findings, evs, env.verdict if steady > sum(lag.get(k, 0.0) for k in kinds) - steady
-                           else None)
+    steady = steady_low_s(env.bound, env.frames_measured) if "low_fps" in kinds else 0.0
+    lead, explains = _lead(kinds, findings, evs, env.verdict, steady)
     severe = _severe(stats, evs) if env.frames_measured and "stutter" not in kinds else None
     if lag_type == "mixed":
         parts = [_lag_part(k, stats, evs, lag, env.duration, env.bound) for k in kinds]

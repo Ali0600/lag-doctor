@@ -154,20 +154,29 @@ def test_a_steady_low_frame_rate_is_led_by_the_part_that_holds_it_not_by_a_few_c
     limit = Finding(cause="gpu_limit", title="t", category="fps", confidence="high", score=0.9, summary="")
     stats = {"avg_fps": 58.0, "refresh_hz": 144.0, "duration_s": 750.0}
 
-    def text(verdict, steady_s, findings=(hogs, limit)):
+    def text(verdict, steady_s, findings=(hogs, limit), events=evs):
         b = {"verdict": verdict, "steady_fps": 58.0, "refresh_hz": 144.0, "steady_s": steady_s}
         env = rules._Env(cap, {"stats": {"frames": 40000}, "bound": b})
-        lag = dg.lag_time(evs, list(findings), stats, b, True)
-        return dg.headline(dg.pick_lag_type(lag, True), list(findings), stats, evs, lag, env)
+        lag = dg.lag_time(events, list(findings), stats, b, True)
+        return dg.headline(dg.pick_lag_type(lag, True), list(findings), stats, events, lag, env)
 
     assert text("gpu", 700.0) == "Low frame rate (58 FPS average on a 144 Hz screen), most likely GPU at its limit."
-    # the drops are most of the low-FPS time: the finding that claims them leads, as before
+    # the steady time is shorter than the drops the best-ranked claimer explains (8 s): the claimer leads, as before
     assert text("gpu", 5.0).endswith(", most likely background programs.")
     # waiting: no part holds the steady rate, so no steady lead
     assert text("waiting", 700.0).endswith(", most likely background programs.")
     # a part that is not the limit's never leads, even when it ranks first
     cpu = Finding(cause="cpu_throttle", title="t", category="fps", confidence="high", score=0.99, summary="")
     assert text("gpu", 700.0, (cpu, hogs, limit)).endswith(", most likely GPU at its limit.")
+    # mixed with pacing: the steady time is set against what the best-ranked claimer explains, not every event ...
+    pacing = evs + [LagEvent(7, "pacing", 0.0, 800.0, 8.0, {})]
+    paced = Finding(cause="uneven_pacing", title="t", category="pacing", confidence="medium", score=0.5, summary="",
+                    event_ids=[7])
+    assert text("gpu", 700.0, (hogs, limit, paced), pacing).endswith(", most likely GPU at its limit.")
+    # ... and a claimer that explains more than the steady time leads
+    first = Finding(cause="uneven_pacing", title="t", category="pacing", confidence="high", score=0.99, summary="",
+                    event_ids=[7])
+    assert "the game itself hands over its frames at uneven intervals" in text("gpu", 700.0, (first, limit), pacing)
     # a capped game is its own target: its steady time is never low FPS
     assert dg.steady_low_s({"verdict": "capped", "steady_fps": 58.0, "refresh_hz": 144.0, "steady_s": 700.0}, True) == 0
 

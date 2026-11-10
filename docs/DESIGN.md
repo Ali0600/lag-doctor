@@ -1061,13 +1061,13 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   and without "local" gaps, named only with ≥ 2 events or ≥ max(1 s, 1 % of the capture).
 - Lag type = the category with the most lag time, "mixed" when the runner-up has ≥ 50 % of it, "none" with
   frames measured and no lag, "unknown" without frames.
-- The headline names, in one sentence, the finding that best explains the lag (`diagnose._lead`): when the steady
-  low-FPS time is more than all the lag's events together, the best confident finding of the part the bound verdict
-  names (`diagnose.STEADY_LEADS`: for `gpu` the GPU's limit, throttling, wrong GPU, copy between GPUs or another
-  program on it; for `cpu_main` and `cpu_all` the CPU's limit or throttling); otherwise the best-ranked finding that
-  claims the lag's own events, then one of the lag's category, else the top finding as a side note ("likely: ...").
-  A GPU-bound recording at 58 FPS on a 144 Hz screen once led with the background programs that claimed 4 of its 6
-  FPS drops. Whenever the lag type is not stutter and there were
+- The headline names, in one sentence, the finding that best explains the lag (`diagnose._lead`): the best-ranked
+  finding that claims the lag's own events, unless the steady low-FPS time is longer than the time of the events it
+  claims; then the best confident finding of the part the bound verdict names leads (`diagnose.STEADY_LEADS`: for
+  `gpu` the GPU's limit, throttling, wrong GPU, copy between GPUs or another program on it; for `cpu_main` and
+  `cpu_all` the CPU's limit or throttling). Without either, one of the lag's category, else the top finding as a side
+  note ("likely: ..."). A GPU-bound recording at 58 FPS on a 144 Hz screen once led with the background programs that
+  claimed 4 of its 6 FPS drops. Whenever the lag type is not stutter and there were
   severe hitches or freezes it adds "; also N severe hitches, worst X ms"; an open gap reads "the game server
   stopped answering at 13m 22s"; with zero hitches it says "no hitches ≥ 50 ms in N frames (at most 3/N at 95 %)";
   without frames it opens "Frame timing was not measured (why), so stutter and frame rate could not be checked",
