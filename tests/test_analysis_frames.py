@@ -350,6 +350,18 @@ def test_bound_needs_300_steady_frames_and_10_s():
     assert bound_of(16.6, 16.0, n=603)["verdict"] == "gpu"         # 10.01 s
 
 
+def test_a_stretch_too_short_for_a_verdict_names_what_fell_short_and_never_rounds_up_to_the_need():
+    # A 10 s measured part sums 9.96-9.99 s of steady frames, and the note the GPU-limit evidence quotes read "only 602
+    # steady frames over 10.0 s; a verdict needs 300 frames and 10 s": plenty of frames, and the time shown as the need
+    assert bound_of(16.6, 16.0, n=602)["notes"][0] == "only 9.9 s of steady frames; a verdict needs 10 s"   # 9.99 s
+    assert bound_of(34.0, 33.0, n=299)["notes"][0] == "only 299 steady frames; a verdict needs 300"       # 10.2 s
+    assert bound_of(20.0, 19.0, n=100)["notes"][0] == ("only 100 steady frames over 2.0 s; a verdict needs 300 "
+                                                      "frames and 10 s")
+    assert fa._too_short_note(115, 2.3).startswith("only 115 steady frames over 2.3 s;")    # a whole tenth stays itself
+    assert fa._too_short_note(1, 0.02).startswith("only 1 steady frame over 0.0 s;")
+    assert fa._too_short_note(602, 10.0 - 1e-11) == "only 9.9 s of steady frames; a verdict needs 10 s"
+
+
 def test_event_frames_are_not_steady():
     # 1200 GPU-bound frames, but an FPS-drop event covers all but 299 of them
     frames = [20.0] * 1200

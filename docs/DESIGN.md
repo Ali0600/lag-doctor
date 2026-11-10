@@ -1042,7 +1042,9 @@ down to refresh/k), a frame cap (a regular present cadence: robust CoV, (IQR/1.3
 3 %, away from k·P, with r < 0.75 and an unsaturated thread), `gpu` (r >= 0.90, or r above 0.75 with FT − G <= 1 ms;
 G minus 0.5 ms when HAGS is on for the game's adapter), `cpu_main` (r <= 0.75 and busiest thread, the lead
 thread where recorded, >= 0.85 of a
-CPU over >= 1 s), `cpu_all`, `waiting`, else `mixed`. Without enough steady frames (or none), a 3D engine at >= 95 %
+CPU over >= 1 s), `cpu_all`, `waiting`, else `mixed`. A stretch too short for a verdict says what fell short, its
+seconds rounded down (`frames._too_short_note`: a 10 s measured part sums 9.96–9.99 s of steady frames, which read
+"10.0 s" beside the 10 s a verdict needs). Without enough steady frames (or none), a 3D engine at >= 95 %
 (median of 1 s windows) gives a probable `gpu` with no r, which the rules never count as frame-timing evidence
 (`rules._engine_fallback`); otherwise the verdict stays `unknown` and `gpu_probable` (`frames.probable_gpu`)
 reads the same fallback per second: the 1 s windows with the engine at >= 95 %, and the marks whose span touches

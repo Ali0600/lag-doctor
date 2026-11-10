@@ -525,6 +525,19 @@ def bound(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent]) -> dict
     return out
 
 
+def _too_short_note(n: int, seconds: float) -> str:
+    """What a steady stretch too short for a verdict fell short on, in words the rules quote to the player. Its seconds
+    round down: a 10 s measured part sums 9.96-9.99 s of steady frames, which read "10.0 s" beside "needs 10 s"."""
+    shown = math.floor(seconds * 10.0) / 10.0 if seconds < BOUND_MIN_S else seconds     # under 10 s: 9.9 at most
+    frames = f"{n} steady frame{'' if n == 1 else 's'}"
+    if n < BOUND_MIN_FRAMES and seconds < BOUND_MIN_S:
+        return (f"only {frames} over {shown:.1f} s; a verdict needs {BOUND_MIN_FRAMES} frames and "
+                f"{BOUND_MIN_S:.0f} s")
+    if n < BOUND_MIN_FRAMES:
+        return f"only {frames}; a verdict needs {BOUND_MIN_FRAMES}"
+    return f"only {shown:.1f} s of steady frames; a verdict needs {BOUND_MIN_S:.0f} s"
+
+
 def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
               tick_spans: list[tuple[float, float]]) -> dict[str, Any]:
     hz = refresh_hz(cap)
@@ -557,8 +570,7 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
     out["steady_fps"] = 1000.0 * len(shown) / math.fsum(shown) if shown else None
     if len(frame_ms) < BOUND_MIN_FRAMES or out["steady_s"] < BOUND_MIN_S:
         if frame_ms:
-            notes.append(f"only {len(frame_ms)} steady frames over {out['steady_s']:.1f} s; a verdict needs "
-                         f"{BOUND_MIN_FRAMES} frames and {BOUND_MIN_S:.0f} s")
+            notes.append(_too_short_note(len(frame_ms), out["steady_s"]))
         elif fr.get(F.T):
             notes.append("no steady frames: every frame was inside a lag event")
         else:

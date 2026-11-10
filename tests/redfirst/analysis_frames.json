@@ -1966,5 +1966,41 @@
   "tests": [
    "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_a_thread_that_needs_more_than_one_period"
   ]
+ },
+ {
+  "name": "the too-short note shows 9.99 s as the 10 s it needs",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    shown = math.floor(seconds * 10.0) / 10.0 if seconds < BOUND_MIN_S else seconds",
+  "new": "    shown = seconds",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_stretch_too_short_for_a_verdict_names_what_fell_short_and_never_rounds_up_to_the_need"
+  ]
+ },
+ {
+  "name": "the too-short note says only so many frames beside enough frames",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if n < BOUND_MIN_FRAMES and seconds < BOUND_MIN_S:",
+  "new": "    if True:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_stretch_too_short_for_a_verdict_names_what_fell_short_and_never_rounds_up_to_the_need"
+  ]
+ },
+ {
+  "name": "the too-short note names the seconds when the frames fell short",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if n < BOUND_MIN_FRAMES:\n        return f\"only {frames}; a verdict needs {BOUND_MIN_FRAMES}\"",
+  "new": "    if False:\n        return f\"only {frames}; a verdict needs {BOUND_MIN_FRAMES}\"",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_stretch_too_short_for_a_verdict_names_what_fell_short_and_never_rounds_up_to_the_need"
+  ]
+ },
+ {
+  "name": "the too-short note says 1 steady frames",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    frames = f\"{n} steady frame{'' if n == 1 else 's'}\"",
+  "new": "    frames = f\"{n} steady frames\"",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_stretch_too_short_for_a_verdict_names_what_fell_short_and_never_rounds_up_to_the_need"
+  ]
  }
 ]

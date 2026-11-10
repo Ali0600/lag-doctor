@@ -1049,3 +1049,14 @@ start back. The ping probes could be counted again exactly from their logged los
 could not, so a part drops them rather than spread a startup download over play.
 **Takeaway**: slice timed data in its own coordinates, read every length-versus-end use of its duration, and
 recount or drop each running total, never keep it.
+
+### A number shown beside its threshold rounds toward the side it fell on
+A value measured just under a limit and printed with ordinary rounding can print as the limit itself, and the
+sentence then contradicts its own verdict: round it down when it fell short of a minimum (up when it went past a
+maximum), and name only the requirement that failed.
+**Why it came up**: a 10 s measured part (the shortest M5a's crop allows) sums 9.96–9.99 s of steady frames, and the
+bound verdict's note read "only 402 steady frames over 10.0 s; a verdict needs 300 frames and 10 s": 402 frames were
+plenty, and the time shown was the need. The GPU-limit evidence quotes that note to the player; it now reads "only
+9.9 s of steady frames; a verdict needs 10 s" (`frames._too_short_note`).
+**Takeaway**: format a measurement compared against a threshold with the rounding that keeps it on its side (floor
+below a minimum, ceiling above a maximum), and say which of several requirements it missed.
