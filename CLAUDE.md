@@ -148,8 +148,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   app is an MSIX package, and the agent's shell has its `%LOCALAPPDATA%` and `%APPDATA%` writes moved into
   `...\Packages\Claude_pzs8sxrjxfjjc\LocalCache` (measured 2026-11-05; `%TEMP%` and the home folder are not
   moved), where the user's terminal and the elevated recording window never see them: a PresentMon set up from
-  the agent's shell was "not installed" for the user. `setup`, `watch`, `fix` and `undo` refuse there (exit 5,
-  `paths.private_copy`) and `scripts/e2e.py` stops before its UAC prompt (exit 3). `scripts/etw_access.py`
+  the agent's shell was "not installed" for the user. `setup`, `watch`, `fix`, `undo` and `sweep` refuse there
+  (exit 5, `paths.private_copy`) and `scripts/e2e.py` stops before its UAC prompt (exit 3). `scripts/etw_access.py`
   (E1) has no such check and raises its UAC prompt at once, so an agent never runs it either. Run them all in the
   user's Terminal panel. Tests are unaffected (their `LAGDOCTOR_HOME` is under `%TEMP%`). Nor does an agent open a
   store link (`steam://`, `com.epicgames.launcher://`), which starts a game on the owner's screen: Steam's own logs
@@ -160,7 +160,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   2026-11-09). Nor does an agent change a game's own files (its settings, saves or install folder): Documents is not
   moved, so an edit to a game's config there (FINAL FANTASY VII REBIRTH keeps its own under `Documents\My Games`)
   changes the owner's real game, while one under `%LOCALAPPDATA%` lands in the private copy yet reads back as applied
-  (`docs/research/settings-sweeps.md`, section 6). Reading them is fine.
+  (`docs/research/settings-sweeps.md`, section 6). Reading them is fine. `lagdoctor sweep` does change a game's
+  settings file, and records each run, so only the owner runs it, in their terminal; its tests keep the settings file
+  under the test's own `tmp_path` (`tests/sweep_world.py`), and the one that drives `cmd_watch` uses stand-in
+  collectors.
 - **`scripts/stage2` creates throwaway Windows services** (the capture-service experiments, `docs/INSTALLER-PLAN.md`
   Stage 2). It runs only on GitHub's hosted runners, from `.github/workflows/experiments.yml` (started by hand, or by
   a pull request that changes it, `scripts/stage2` or a module the experiments import, which its `paths:` lists and

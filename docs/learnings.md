@@ -980,3 +980,15 @@ but not in the relay's check, so the two sides disagreed on the same game.
 **Takeaway**: before testing whether a process runs from a folder, resolve the folder (`os.path.realpath`) and write
 the image's short names out long (GetLongPathNameW, which opens no file), and do both inside the one function every
 side calls.
+
+### Edit one value of a text file without knowing its encoding, and leave every other byte as it was
+A program that changes one setting in someone else's file must not rewrite the rest: a different line ending, a lost
+byte-order mark or a re-encoded accented letter is a change the file's owner never asked for. Python can do it
+without knowing the encoding: detect a byte-order mark (UTF-8, UTF-16 LE or BE) and decode with that codec; decode a
+file without one as UTF-8 with `errors="surrogateescape"`, which turns every byte that is not UTF-8 into a placeholder
+that encodes back to the same byte; split lines on `\r\n|\n|\r` keeping each ending; change only the value's
+characters; and before writing anything, check that encoding the unchanged text gives the original bytes.
+**Why it came up**: `lagdoctor sweep` writes each setting it tries into a game's `GameUserSettings.ini` and puts the
+original back, and its tests prove the file comes back byte for byte in four encodings and with an ANSI byte in it.
+**Takeaway**: for an in-place edit of a file you do not own, round-trip first (decode, encode, compare with the raw
+bytes) and refuse a file that does not survive it; never write text you decoded with a guessed codec.
