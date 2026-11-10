@@ -411,6 +411,11 @@ def test_the_spawn_scanner_reports_every_planted_form_with_its_line():
     assert sorted(lines) == sorted(expected), "\n".join(hits)          # each planted line exactly once
 
 
+def test_a_file_the_spawn_scan_cannot_parse_is_a_failure_not_a_pass():
+    hits, used = scan_spawns("def broken(:\n", "lagdoctor/x.py")
+    assert len(hits) == 1 and hits[0].startswith("lagdoctor/x.py:1: could not be parsed") and used == set()
+
+
 def test_the_spawn_scanner_allows_annotations_prose_and_lookalikes():
     text = (FIXTURES / "spawns_allowed.py").read_text(encoding="utf-8")
     assert scan_spawns(text, "lagdoctor/allowed.py") == ([], set())
