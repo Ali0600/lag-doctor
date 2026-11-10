@@ -137,6 +137,10 @@ uv run lagdoctor app                                    # your games, their resu
 
 - **GPU heat, clocks and throttling are NVIDIA-only** (NVML). On other GPUs the load and video memory still
   come from Windows counters.
+- **The headroom is a rough estimate**, not a benchmark: how much a faster GPU or CPU would help comes from the
+  GPU's time per frame and the game's busiest thread, which reads high when several threads are busy, and work a game
+  does per second does not grow with its frame rate, so the CPU's figure leans low. It holds for that game at those
+  settings; a second recording with lighter graphics, read beside the first in Compare, is the real check.
 - **From a checkout, `--elevate`, `scripts/e2e.py` and `scripts/etw_access.py` run its Python code as
   administrator.** A program already running as you could edit that code and ride along on the prompt you approve.
   Approve them only for a checkout you trust, or install the MSI, whose `--elevate` runs only code under Program
@@ -171,7 +175,9 @@ uv run lagdoctor app                                    # your games, their resu
   disk and network samples around it.
 - **Analysis**: finds stutters, FPS drops, pacing problems, ping spikes, packet loss and server silences;
   decides whether the GPU, one CPU thread, VSync or a frame cap limits the frame rate (Intel's GPU Busy
-  method); links each stutter to what changed at that moment (a lift test against the calm stretches); then
+  method), and how close the parts that are not the limit are to theirs ("the CPU could feed about 66-78 FPS, so
+  a GPU about 1.1-1.3x faster would make the CPU the limit"), from the GPU's time per frame and the game's thread
+  CPU time; links each stutter to what changed at that moment (a lift test against the calm stretches); then
   36 rules score causes by evidence family, so no single signal is counted twice.
 - **Layout**: `lagdoctor/winapi` (thin ctypes wrappers), `capture` (one collector per source plus the
   session), `relay` (PresentMon and the network trace with admin rights, for a recording in your own window),
@@ -293,15 +299,17 @@ connection to Microsoft, as the runtime does on its own.
   less than 0.1 % in a CPU-bound workload.
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
-  did wrong.
-- **Testing that proves itself**: 3,606 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+  did wrong; its bottleneck verdict says how far off the next limit is (the CPU, the GPU or the screen, and how
+  many times faster the limiting part must get), from thread CPU time rather than PresentMon's CPU Busy, which
+  read 16.55 ms of a 16.9 ms GPU-bound frame.
+- **Testing that proves itself**: 3,644 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 43 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 2,389 deliberate sabotages in
-  48 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 2,429 deliberate sabotages in
+  49 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
   verification, undo and crash healing, with a handle-free identity check before touching any process.
 - **Supply chain and least privilege**: a per-machine WiX MSI of 179 files built in CI from pinned inputs (Python
