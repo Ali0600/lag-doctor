@@ -8,6 +8,7 @@ cli.main in a hidden console of their own, so the events they send never reach t
 from __future__ import annotations
 
 import _winapi
+import argparse
 import copy
 import ctypes
 import gzip
@@ -1123,6 +1124,78 @@ def test_analyze_says_in_one_line_why_a_file_cannot_be_read(tmp_path, capsys, ma
     lines = capsys.readouterr().out.strip().splitlines()
     assert len(lines) == 1 and said in lines[0] and str(p) in lines[0]
     assert [d for d in paths.sessions_dir().iterdir()] == []
+
+
+@pytest.mark.parametrize("text,seconds", [
+    ("192", 192.0), ("192.5", 192.5), ("0", 0.0), ("3:12", 192.0), ("03:12.5", 192.5), ("1:03:12", 3792.0),
+    ("3m12s", 192.0), ("3m 12s", 192.0), ("45s", 45.0), ("14m", 840.0), ("1h 02m 03s", 3723.0), (" 2m ", 120.0),
+])
+def test_a_time_into_the_recording_is_read_as_the_reports_show_it(text, seconds):
+    assert cli._time_into(text) == seconds
+
+
+@pytest.mark.parametrize("text", ["", "-5", "nan", "inf", "1e9", "3:75", "1:75:00", "3m12", "abc", "12345678",
+                                  "1h 2", "3:12:", "s"])
+def test_a_time_that_is_not_one_is_refused_before_the_capture_is_read(text):
+    with pytest.raises(argparse.ArgumentTypeError):
+        cli._time_into(text)
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["analyze", "x.ldcap.json.gz", "--from", text])
+
+
+def _startup_capture(tmp_path: Path) -> Path:
+    from tests import synth
+    cap = synth.startup_then_smooth(startup_s=60.0, total_s=180.0)
+    cap.target = {"pid": 20000, "create_time": 5, "name": "Friend.exe"}
+    cap.marks = [20.0, 100.0]
+    return cap.save(tmp_path / "friend.ldcap.json.gz")
+
+
+def test_analyze_from_analyses_only_that_part_and_keeps_the_capture_whole(tmp_path, capsys):
+    p = _startup_capture(tmp_path)
+    before = p.read_bytes()
+    assert cli.main(["analyze", str(p), "--from", "1:10"]) == 0
+    assert p.read_bytes() == before
+    [made] = list(paths.sessions_dir().iterdir())
+    d = json.loads((made / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8"))
+    assert d["stats"]["span"] == {"from_s": 70.0, "to_s": 180.0, "recorded_s": 180.0, "how": "set"}
+    assert d["lag_type"] == "none" and d["stats"]["duration_s"] == 110.0
+    summary = json.loads((made / "summary.json").read_text(encoding="utf-8"))
+    assert (summary["duration_s"], summary["recorded_s"], summary["measured_from_s"]) == (110.0, 180.0, 70.0)
+    page = (made / cli.REPORT_NAME).read_text(encoding="utf-8")
+    assert 'class="band skip"' in page and "--from 70" in page and "--to" not in page
+    out = capsys.readouterr().out
+    assert "Analysing 1m 10s to 3m of the recording..." in out and "1m 50s analysed" in out
+
+
+def test_analyze_to_alone_runs_from_the_recordings_start(tmp_path):
+    p = _startup_capture(tmp_path)
+    assert cli.main(["analyze", str(p), "--to", "100"]) == 0
+    [made] = list(paths.sessions_dir().iterdir())
+    d = json.loads((made / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8"))
+    assert d["stats"]["span"] == {"from_s": 0.0, "to_s": 100.0, "recorded_s": 180.0, "how": "set"}
+    assert d["lag_type"] == "stutter"
+
+
+def test_a_part_over_the_whole_recording_is_the_whole_recording(tmp_path):
+    p = _startup_capture(tmp_path)
+    assert cli.main(["analyze", str(p), "--from", "0", "--to", "9999"]) == 0
+    [made] = list(paths.sessions_dir().iterdir())
+    assert "span" not in json.loads((made / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8"))["stats"]
+
+
+@pytest.mark.parametrize("args,said", [
+    (["--from", "175"], "at least 10 s"),
+    (["--to", "0:05"], "at least 10 s"),
+    (["--from", "200"], "the recording ended at 3m"),
+    (["--from", "100", "--to", "50"], "is not after its start"),
+])
+def test_analyze_refuses_a_part_it_cannot_cut_in_one_line(tmp_path, capsys, args, said):
+    p = _startup_capture(tmp_path)
+    assert cli.main(["analyze", str(p), *args]) == 2
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert len(lines) == 1 and lines[0].startswith(f"That part of {p} cannot be analysed: ") and said in lines[0]
+    assert list(paths.sessions_dir().iterdir()) == []
 
 
 def test_a_capture_that_breaks_the_analysis_is_called_damaged_and_kept(tmp_path, capsys, monkeypatch):

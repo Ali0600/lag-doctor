@@ -27,6 +27,10 @@ MAX_TEXT = 300                        # longest text field kept (a game's own wi
 NUMBERS = ("duration_s", "frames", "avg_fps", "low1_fps", "stutters_per_min", "worst_frame_ms", "refresh_hz")
 TEXTS = ("kind", "tool_version", "capture_tool_version", "game", "exe", "exe_name", "started_at", "lag_type",
          "headline", "top_cause", "frames_source", "power_plan", "power_mode", "launcher")
+# The measured part (analysis/crop.py), added with M5: duration_s is the length the numbers cover, recorded_s the
+# whole recording's, and measured_from_s, measured_to_s and measured_how the part analysed (all None for the whole
+# recording). Optional like the rest.
+PART_HOW_KEY = "measured_how"
 BOOLS = ("frames_measured",)
 # What the game's folders held (capture/gamefiles.py), added after the schema's first build: a summary written
 # before them has none of these keys, and reads back with each None.
@@ -127,6 +131,16 @@ def _read_exe(v: Any) -> dict[str, Any] | None:
             "modified": _text(v.get("modified"))}
 
 
+def _read_part(data: dict) -> dict[str, Any]:
+    """recorded_s and the measured part as read back: the part's three keys all None unless they make a part of the
+    recording (labels.measured_part's check), so a damaged file never shows a part that cannot be."""
+    rec = number(data.get("recorded_s"))
+    part = labels.measured_part({"span": {"from_s": data.get("measured_from_s"), "to_s": data.get("measured_to_s"),
+                                          "recorded_s": rec, "how": data.get(PART_HOW_KEY)}})
+    return {"recorded_s": rec, "measured_from_s": part["from_s"] if part else None,
+            "measured_to_s": part["to_s"] if part else None, PART_HOW_KEY: part["how"] if part else None}
+
+
 def build(d: Diagnosis, cap: Capture, kind: str) -> dict[str, Any]:
     """The summary of one analysed capture. `kind` is "watch" (a recording) or "analyze"."""
     if kind not in KINDS:
@@ -139,6 +153,7 @@ def build(d: Diagnosis, cap: Capture, kind: str) -> dict[str, Any]:
     exe = _text(target.get("exe"))
     frames_src = cap.sources.get("frames") if isinstance(cap.sources, dict) else None
     top = d.findings[0] if d.findings else None
+    part = labels.measured_part(stats)          # `cap` is the whole recording; the diagnosis may cover a part of it
     out: dict[str, Any] = {
         "schema": SCHEMA,
         "kind": kind,
@@ -148,7 +163,11 @@ def build(d: Diagnosis, cap: Capture, kind: str) -> dict[str, Any]:
         "exe": exe,
         "exe_name": _text(target.get("name")) or (_text(ntpath.basename(exe)) if exe else None),
         "started_at": _text(cap.started_at),
-        "duration_s": number(cap.duration_s),
+        "duration_s": number(part["to_s"] - part["from_s"]) if part else number(cap.duration_s),
+        "recorded_s": number(cap.duration_s),
+        "measured_from_s": part["from_s"] if part else None,
+        "measured_to_s": part["to_s"] if part else None,
+        PART_HOW_KEY: part["how"] if part else None,
         "lag_type": _text(d.lag_type),
         "headline": _text(d.headline),
         "frames": number(stats.get("frames")),
@@ -193,6 +212,7 @@ def read(folder: Path) -> dict[str, Any] | None:
         out[key] = number(data.get(key))
     for key in BOOLS:
         out[key] = data.get(key) if isinstance(data.get(key), bool) else None
+    out.update(_read_part(data))
     out["game_exe"] = _read_exe(data.get("game_exe"))
     out["drop_ins"] = _read_files(data.get("drop_ins"), (CHECKED, NOT_CHECKED))
     out["unreal_config"] = _read_files(data.get("unreal_config"), (CHECKED, NOT_CHECKED, NOT_UNREAL))

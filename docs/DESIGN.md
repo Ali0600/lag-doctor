@@ -731,6 +731,9 @@ before it loads with None; one holding another type is "damaged", as any field o
 through `clean_note`, so text a file holds is shown only as printable characters, and a note longer than `NOTE_MAX`
 (a newer build's) is cut to it, ending in "...", never refused.
 
+`span` is not in the format: only a copy cut to part of the recording has one (analysis/crop.py), `save` refuses such a
+copy, and a file holding a `span` key loads as the whole recording, the key named in the note above.
+
 ## Inventory keys (capture/inventory.py)
 
 `collect(target=None, process_names=None, *, registry=None) -> dict`. `None` means unknown. Rules and the
@@ -831,8 +834,47 @@ RULES: list[Rule]
 def run_rules(cap, ctx: dict) -> tuple[list[Finding], dict[str, str], dict[str, str]]  # findings, cleared, unchecked
 # analysis/diagnose.py
 def diagnose(cap) -> Diagnosis
+# analysis/crop.py (M5: the measured part, below)
+def check_span(cap, t0, t1) -> tuple[float, float]  # the span crop cuts; ValueError (one clause) for anything else
+def crop(cap, t0, t1, how="set") -> Capture         # `cap` cut to [t0, t1] for diagnose(); how: "key" or "set"
 ```
 `ctx` = `{"frames": main chain, "stats", "bound", "events", "event_causes": attribute()'s summary}`.
+
+### The measured part (analysis/crop.py)
+A recording starts when the game is found, so it holds the game starting up (shader preparation, menus, loading).
+`crop(cap, t0, t1)` returns a new Capture holding only what happened from t0 to t1, and the unchanged `diagnose()`
+runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-11-09).
+- **Times stay the recording's own** (seconds from its t = 0), so a cropped diagnosis's events, marks and moments land
+  on the whole recording's charts as they are, and a time a report shows is the one the status line showed.
+  `duration_s` becomes the span's length; the Capture's `span` is `{from_s, to_s, recorded_s, how}`, which diagnose
+  copies into `stats["span"]`. Code that reads `duration_s` reads a length, never an end: the rules count "from the
+  start" from `_Env.start` (shader_compile's first third), and their words name `_Env.part`, "the capture" until it
+  is cut and "the measured part" after (`tests/test_crop.py` scans rules.py and diagnose.py for text naming the
+  whole capture).
+- **The cut**: the four tables, the other programs' samples and the lag-key presses keep their rows with
+  t0 <= t <= t1, every column kept even where its cut is empty (`analysis.window`); a part that runs to the
+  recording's end keeps a press up to 1 s past it, as the recording does. Each swap chain's first frame in the span
+  is left out when its own interval (MsBetweenPresents, or how long the frame before it stayed on screen) began before
+  t0 (a start set at the end of a loading screen would make the wait its first frame), except from the recording's
+  own start. A table source with rows, but none in the span, becomes `unavailable`, "it recorded nothing in the
+  measured part".
+- **net_flows** (`crop.NET_FLOWS`, one decision per key the collectors write, which a test holds to
+  `session.NETWORK_FLOW_KEYS` and `FLOW_KEYS`): the lists of times are cut (`lost`, `wifi_scans`, `downloads`,
+  `server_rx`); each server gap is clipped to the span and one wholly outside it is gone; the server flow keeps its
+  record with its first and last packet clipped, its four packet and byte totals None, and is None itself when its
+  packets all came outside the span; `probes` are counted again (lost, the lost-probe times in the span; sent, those
+  plus the span's rows that hold that target's round trip: exact, since the network collector counts a probe as sent
+  only when it was answered or lost), None for a capture without the lost-probe times; the per-program and
+  whole-recording byte totals (`talkers`, `game_wire_bytes`) become None, since they cannot be split by time, and
+  `bandwidth_hog` then says so; a key this version does not know becomes None. None stays None (not recorded) and a
+  list whose cut is empty stays a list (recorded, nothing in the span).
+- **Refused** (`check_span`, the CLI and the app's Results through the same check): ends that are not numbers, a start
+  before 0 or at or after the recording's end, an end not after the start, a part shorter than `MIN_SPAN_S` (10 s:
+  frames.BOUND_MIN_S, shorter than any verdict on what limits the game); an end past the recording is its end.
+- **Never saved**: `Capture.save` refuses a capture whose `span` is set, `span` is not part of the file format
+  (`to_json` and `from_json` leave it out; a file holding one loads as the whole recording with a note), and the
+  capture file always stays whole. Everything else (the inventory, the target, the notes, `started_at`,
+  `clock_origin`) stays as recorded.
 
 ### Frames and stats
 - Series for stutter detection: `display_ms` over displayed frames (fallback `frame_ms` when display
@@ -869,6 +911,8 @@ ping_gw_ms, ping_inet_ms, ping_server_ms   float           medians
 jitter_ms, loss_pct                        float           internet anchor: mean consecutive difference; lost / sent
 marks                                      list            [{t, events: [ids], causes: [every signal that moved, best
                                                            first]}], one per lag-key press
+span                                       dict            {from_s, to_s, recorded_s, how}: the measured part analysed
+                                                           (analysis/crop.py); absent for the whole recording
 ```
 
 ### The bound verdict (LC 3.4)
@@ -1131,6 +1175,15 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
   CPU/GPU chart, VRAM chart, ping chart (lost pings from the collector's own record), marks on every time chart,
   finding cards, marked moments, worst moments, checked-and-fine, system snapshot, not measured. Each section
   falls back to a note on odd values instead of failing the page.
+- **A measured part** (a diagnosis whose `stats["span"]` is set, `labels.measured_part`): both reports still draw the
+  whole recording, every time a time into it. The header adds "10m 00s analysed" and one sentence
+  (`labels.part_note`: "Analysed 10m 00s, from 3m 12s to 13m 12s of the recording (the part you chose); the rest
+  is not counted, nor the 2 lag-key presses in it."). On the HTML page every time chart shades what was left out
+  (class `skip`, its own neutral colour in both themes) and draws the presses outside the part apart ("not
+  analysed"); the frame chart's scale and its "cut off at the top" note come from the part's frames, so a loading
+  screen's long frame is drawn clamped and never named the worst. The footer's command picks the part out again
+  (`--from 192 --to 792`, `html.part_args`). Without a part the reports are as before. Chart dots outside the
+  chart's range are left out, as its lines, bands and vertical lines are.
 - **The HTML never shows the Windows user name**: it is meant to be shared. `html.e()`, which every string on the
   page passes through (the footer, the game's exe in This PC, a reason quoting PresentMon's path, evidence),
   shows a folder under a user's profile by the variable that names it (`html.user_neutral`):
@@ -1150,7 +1203,7 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 ```
 lagdoctor watch [--game NAME | --pid PID | --auto] [--duration S] [--server IP] [--no-network]
                 [--elevate | --no-elevate] [--out DIR] [--hotkey KEY | --hotkey none] [--note TEXT]
-lagdoctor analyze CAPTURE            re-run the analysis on a saved capture
+lagdoctor analyze CAPTURE [--from TIME] [--to TIME]   re-run the analysis on a saved capture, or on part of it
 lagdoctor check                      settings check-up without a game running
 lagdoctor fix [ID ...] [--list]      apply fixes suggested by the last report (asks first)
 lagdoctor undo [ID | --all]          restore from the journal
@@ -1171,6 +1224,14 @@ lagdoctor app                        lag-doctor's window: recorded games and the
 - `analyze` writes into a fresh session folder (with `analyzed-capture.txt` naming its source), never beside
   the capture, and never changes what `fix` uses. A damaged, foreign or newer-format file gets one plain line. The
   capture's note comes with it into the new report and summary.
+- `analyze --from TIME --to TIME` analyses only that part of the recording (M5, "The measured part" under Analysis):
+  times into the recording as the report and the status line show them (`192`, `3:12`, `1:03:12`, `3m12s`,
+  `cli._time_into`, which refuses anything else before the capture is read). A missing end is the recording's own,
+  an end past it is its end, and a part covering the whole recording is the whole recording. `crop.check_span`
+  refuses the rest in one line, "That part of <path> cannot be analysed: <why>." (exit 2, no folder): a start
+  before 0 or at the end, an end not after the start, a part under `crop.MIN_SPAN_S` (10 s). The capture file is
+  never changed. `cli.analyze_and_report(cap, ..., span=(t0, t1, how))` crops before the diagnosis and hands the
+  writers the whole recording.
 - The relay (see The relay) writes no file; the window that started the recording saves, analyses and reports it.
   `watch` exit codes: 2 bad arguments, the game not found, or a game the relay would refuse (in another Windows
   session), 3 the game exited during the UAC prompt, 4 another recording is running, 5 its files would land in
@@ -1284,7 +1345,10 @@ owner's run.
   `cli.analyze_and_report`: `kind` (`watch` or `analyze`), `tool_version`, `capture_tool_version`, `game`, `exe`,
   `exe_name`, `started_at`, `duration_s`, `lag_type`, `headline`, `frames`, `avg_fps`, `low1_fps`, `stutters_per_min`,
   `worst_frame_ms`, `top_cause`, `frames_source`, `frames_measured`, `refresh_hz`, `power_plan`, `power_mode`,
-  `launcher`, and what lay beside the game (`summary.game_files`, from the inventory's `game`): `game_exe`
+  `launcher`; since M5 `duration_s` is the length the numbers cover (the measured part's when one was analysed), and the
+  optional `recorded_s` (the whole recording's), `measured_from_s`, `measured_to_s` and `measured_how` (the part
+  analysed, all None for the whole recording, and read back only when they make a part of it); and what lay beside
+  the game (`summary.game_files`, from the inventory's `game`): `game_exe`
   `{state, why, bytes, modified}`, `drop_ins` and `unreal_config` `{state, why, files: [[name, sha (16 hex digits or
   null), bytes, modified], ...] (at most 30), more}`, with `state` `checked`, `not_checked` (the reason in `why`) or,
   for `unreal_config`, `not_unreal`; an Unreal game's `~mods` paks are among `drop_ins`; and `note`, the capture's

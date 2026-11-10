@@ -119,6 +119,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   numbers. Tests use a made-up profile (`C:\Users\Jo Tester` in `tests/test_report.py`). The console summary keeps
   real paths on purpose (DESIGN.md, Report).
 - **Column names come from `lagdoctor/model.py`** (`F`, `S`, `G`, `N`); `SeriesBuilder` rejects unknown names.
+- **A measured part keeps the recording's own times** (`lagdoctor/analysis/crop.py`, DESIGN.md "The measured part").
+  On a cropped capture `duration_s` is the part's length, never an end time: code that counts from the start counts
+  from `_Env.start`, and text that names a share or a time of the recording names `_Env.part` ("the capture" until
+  it is cut; `tests/test_crop.py` scans rules.py and diagnose.py for "of the capture"). A new `net_flows` key needs
+  its decision in `crop.NET_FLOWS` (a test fails until it has one); a total over the whole recording becomes None in
+  a part. A cropped capture is never saved (`Capture.save` refuses it).
 - **One clock**: `lagdoctor.clock.now()` (QPC seconds). PresentMon runs with `--qpc_time`; its rows are
   timed by `TimeInQPC`, never by when they arrive (they arrive 0.1–2 s late, in bursts).
 - **PresentMon**: parse its CSV by header name; on a pipe it is Latin-1 text, not UTF-16. Stop it with

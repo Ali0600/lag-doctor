@@ -76,6 +76,7 @@ uv run lagdoctor fix --list                             # the automatic fixes th
 uv run lagdoctor fix power_plan                         # shows before -> after and asks
 uv run lagdoctor undo                                   # what lag-doctor changed; undo an ID, or --all
 uv run lagdoctor analyze CAPTURE                        # re-run the analysis on a saved capture
+uv run lagdoctor analyze CAPTURE --from 3:12            # only the part after the game started up (and --to)
 uv run lagdoctor app                                    # your games, their results and recording, in a window
 ```
 

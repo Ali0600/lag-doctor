@@ -29,7 +29,8 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   stdio`, `lagdoctor/control.py`, PR #31) and the app's "Record the game that's running"
   (`lagdoctor/app/recording.py`, PR #33). The owner recorded a game from the app in their own terminal before the
   second merged ("It works, merge it").
-- [ ] M5: measuring the right part.
+- [ ] M5: measuring the right part, in three pull requests: the analysis of a part (`crop`, `analyze --from/--to`,
+  built 2026-11-09), the start key in `watch`, then the app's half, which the owner tries before it merges.
 - [ ] M6: Play.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
@@ -541,6 +542,22 @@ The app's half was built on 2026-11-09 (DESIGN.md, The app), with these choices 
 - `crop`, plus `analyze --from/--to`.
 - The start-measuring hotkey, a second key on the existing listener, with the fixed window and the sounds.
 - Trim handles in Results.
+
+It comes in three pull requests: the analysis of a part, the start key in `watch`, and the app's half, which the
+owner tries before it merges, as with M1 and M4.
+
+The analysis half was built on 2026-11-09 (DESIGN.md, The measured part; DECISIONS 2026-11-09):
+- `crop` keeps the recording's own times and sets the length to the part's, so a part's events and moments land on the
+  whole recording's charts as they are. Only shader_compile counted from t = 0; it counts from the part's start now,
+  and the finding text says "the measured part".
+- What covers the whole recording is cut, clipped, counted again or dropped: the probe counts are counted again
+  exactly, each program's network bytes become None, and a chain's first frame that began before the part is left
+  out. A part is at least 10 s, and a cut copy is never saved.
+- `lagdoctor analyze CAPTURE --from 3:12 --to 13:12` analyses that part into a fresh folder; both reports draw the
+  whole recording with the rest shaded and say which part was analysed, and the footer's command picks it out again.
+  summary.json's length is the part's, with the recording's beside it.
+- Eight read-only readers mapped every reader of a time or a total first (analysis, rules, the capture's fields, the
+  recorder, the reports, the app, the tests).
 
 ### M6: Play
 

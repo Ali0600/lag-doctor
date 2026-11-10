@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from lagdoctor.report.charts import number
+from lagdoctor.report.charts import fmt_elapsed, number
 
 # A reason the capture's own sources carry can open with what the list already says it is about ("frame timing
 # (PresentMon): frame timing was skipped: ..."); earlier builds wrote this prefix for every frame source that was off.
@@ -267,6 +267,49 @@ def event_text(ev) -> str:
     kind = ev.kind if isinstance(ev.kind, str) else "?"
     sev = severity_text(kind, ev.severity, ev.detail)
     return EVENT_KINDS.get(kind, kind) + (f" ({sev})" if sev else "")
+
+
+# How the measured part of a recording was set (analysis/crop.py HOWS, which a test holds equal to these keys).
+PART_HOW = {"key": "measured from your start key", "set": "the part you chose"}
+PART_SLACK_S = 1e-3                     # rounding a saved diagnosis's seconds may leave
+
+
+def measured_part(stats: Any) -> dict[str, Any] | None:
+    """The measured part a diagnosis covers (Diagnosis.stats["span"], analysis/crop.py) as {from_s, to_s, recorded_s,
+    how}, every value checked; None for a diagnosis of the whole recording, or a record that does not add up (a saved
+    diagnosis can hold anything)."""
+    span = stats.get("span") if isinstance(stats, dict) else None
+    if not isinstance(span, dict):
+        return None
+    lo, hi, rec = (number(span.get(k)) for k in ("from_s", "to_s", "recorded_s"))
+    how = span.get("how")
+    if lo is None or hi is None or rec is None or not isinstance(how, str) or how not in PART_HOW \
+            or not 0.0 <= lo < hi <= rec + PART_SLACK_S:
+        return None
+    return {"from_s": lo, "to_s": hi, "recorded_s": rec, "how": how}
+
+
+def outside_marks(marks: Any, part: dict[str, Any] | None) -> list[float]:
+    """The lag-key presses (a capture's `marks`) outside the measured part, which its analysis never saw: the capture
+    keeps them all. A part that runs to the recording's end keeps the presses up to 1 s past it, as the recording
+    does (capture/session.py)."""
+    if part is None:
+        return []
+    lo, hi = part["from_s"], part["to_s"]
+    late = hi + 1.0 if hi >= part["recorded_s"] - PART_SLACK_S else hi
+    return [t for t in (number(m) for m in (marks if isinstance(marks, list) else [])) if t is not None
+            and not lo <= t <= late]
+
+
+def part_note(part: dict[str, Any], outside_marks: int = 0) -> str:
+    """What the reports say about a measured part: 'Analysed 10m 00s, from 3m 12s to 13m 12s of the recording (the
+    part you chose); the rest is not counted.'"""
+    lo, hi = part["from_s"], part["to_s"]
+    text = (f"Analysed {fmt_elapsed(hi - lo)}, from {fmt_elapsed(lo)} to {fmt_elapsed(hi)} of the recording "
+            f"({PART_HOW[part['how']]}); the rest is not counted")
+    if outside_marks > 0:
+        text += f", nor the {outside_marks} lag-key press{'es' if outside_marks != 1 else ''} in it"
+    return text + "."
 
 
 def marks(stats: dict, events: list) -> list[tuple[float, list, list[str]]]:

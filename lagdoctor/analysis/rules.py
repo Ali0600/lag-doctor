@@ -236,6 +236,14 @@ class _Env:
         self.tick_spans = fa._merged_spans(self.events, fa.FRAME_EVENT_KINDS, pad=fa.TICK_PAD_S)
         dur = fa._bounded(cap.duration_s)
         self.duration = float(dur) if dur is not None and dur > 0 else None
+        # A capture cut to the measured part (analysis/crop.py) keeps the recording's own times: a rule that counts
+        # from the start counts from `start`, and its words name `part`, never the whole recording.
+        span = getattr(cap, "span", None)
+        start = fa._bounded(span.get("from_s")) if isinstance(span, dict) else None
+        self.start = float(start) if start is not None else 0.0
+        self.cropped = isinstance(span, dict)
+        self.part_noun = "measured part" if self.cropped else "capture"
+        self.part = "the " + self.part_noun
         self.memo: dict[str, Any] = {}         # values more than one rule reads, worked out once
         self.refresh = fa.refresh_hz(cap)
         self.display = fa.game_display(cap)
@@ -570,7 +578,7 @@ def _hold_unexplained_pacing(e: _Env, findings: list[Finding], cleared: dict[str
     if share < UNEVEN_SHARE:
         return
     worst = max(loose, key=lambda ev: ev.severity)
-    why = (f"uneven pacing covered {100 * share:.0f}% of the capture (worst "
+    why = (f"uneven pacing covered {100 * share:.0f}% of {e.part} (worst "
            f"{labels.severity_text('pacing', worst.severity, worst.detail)}) and no rule explained it, so it is not "
            "ruled out")
     for cause in ("uneven_pacing", "vsync_judder", "dropped_frames"):
@@ -614,10 +622,10 @@ def _probable_gpu(e: _Env) -> tuple[bool, str] | None:
             f", though at none of the {n:.0f} moments you marked"
     if p.get("holds") is True:
         return True, (f"frame timing was not measured, but the game kept its GPU's 3D engine "
-                      f"{fa.ENGINE_GPU_PCT:.0f}% or more busy for {seconds:.0f} s ({100 * share:.0f}% of the capture)"
+                      f"{fa.ENGINE_GPU_PCT:.0f}% or more busy for {seconds:.0f} s ({100 * share:.0f}% of {e.part})"
                       f"{marks}, so the GPU probably limited the frame rate then")
     return False, (f"the game kept its GPU's 3D engine {fa.ENGINE_GPU_PCT:.0f}% or more busy for only {seconds:.0f} s "
-                   f"({100 * share:.0f}% of the capture){marks}")
+                   f"({100 * share:.0f}% of {e.part}){marks}")
 
 
 # ----------------------------------------------------------------------------- GPU and CPU ---
@@ -711,7 +719,7 @@ def _hybrid_copy(cap: Capture, ctx: dict) -> Any:
                                             "(HybridPresent = 1)")
     elif e.frames_measured:
         c.neutral("frame_timing", "PresentMon did not mark the frames as cross-adapter, but it only can when the "
-                                  "game creates its swap chain during the capture")   # PM 9
+                                  "game creates its swap chain while lag-doctor records")   # PM 9
     oem = [t for t in _dict(e.inv.get("oem")).get("tools") or [] if isinstance(t, str)]
     armoury = any("armoury" in t.lower() for t in oem)
     fixes = [_advice("Let the discrete GPU drive the screen directly",
@@ -1005,7 +1013,7 @@ def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
              _advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
              _advice("Cap the frame rate a little lower", "A capped GPU runs cooler and holds its clock.")]
     return c.conclude("The GPU slows down from heat or power limits",
-                      "The NVIDIA driver held the GPU's clock down for much of the capture, which lowers the frame "
+                      f"The NVIDIA driver held the GPU's clock down for much of {c.env.part}, which lowers the frame "
                       "rate while the GPU is the limit.", fixes)
 
 
@@ -1072,7 +1080,7 @@ def _cpu_throttle(cap: Capture, ctx: dict) -> Any:
     slow = level is not None and level <= CPU_SLOW_PCT
     if slow:          # item 2: the level itself; the limit flags and the drop below can all miss a mode set outside Windows
         c.support("cpu_limits", W_STEADY, f"the CPU ran at a median {level:.0f}% of its base clock ({CPU_SLOW_PCT:.0f}% "
-                                          "or less), below full speed for most of the capture"
+                                          f"or less), below full speed for most of {e.part}"
                   + ("" if held else ", though Windows reported no power or thermal limit"), level, "%", CPU_SLOW_PCT)
     dropped = None                        # None: too few speed samples to compare the start with the rest
     if len(perf_rows) >= 2 * PERF_MIN_SAMPLES:
@@ -1104,7 +1112,7 @@ def _cpu_throttle(cap: Capture, ctx: dict) -> Any:
              _advice("Cap the frame rate a little lower", "Less CPU work per second means less heat.")]
     if slow and not held:                 # only the level: no limit Windows saw, so no heat or power claim either
         return c.conclude("The CPU ran below its base clock",
-                          "The processor ran below its base clock for most of the capture while Windows reported no "
+                          f"The processor ran below its base clock for most of {e.part} while Windows reported no "
                           "limit; a power mode set outside Windows, such as the laptop maker's quiet mode, can hold it "
                           "there.", fixes)
     return c.conclude("The CPU slows down from heat or power limits",
@@ -1372,8 +1380,8 @@ def _power_plan(cap: Capture, ctx: dict) -> Any:
     # limit held below the GPU's default counts for it, and for it alone.
     lowered = _gpu_limit_lowered(e) if quiet_mode else None
     if lowered:
-        c.support("gpu_telemetry", W_STEADY, f"the GPU's power limit sat at {lowered[0]:.0f} W for most of the "
-                                             f"capture, below its {lowered[1]:.0f} W default", lowered[0], "W",
+        c.support("gpu_telemetry", W_STEADY, f"the GPU's power limit sat at {lowered[0]:.0f} W for most of "
+                                             f"{e.part}, below its {lowered[1]:.0f} W default", lowered[0], "W",
                   lowered[1])
     fixes: list[FixSuggestion] = []
     name = _text(p.get("scheme_name"), 80)
@@ -1554,7 +1562,7 @@ def _dropped_frames(cap: Capture, ctx: dict) -> Any:
                                             f"{DROPPED_PCT:.0f}%)", dropped, "%", DROPPED_PCT)
     else:
         c.neutral("frame_timing", f"{dropped:.0f}% of the frames were never shown, but motion jumped over less than "
-                                  f"{100 * UNEVEN_SHARE:.0f}% of the capture", dropped, "%", DROPPED_PCT)
+                                  f"{100 * UNEVEN_SHARE:.0f}% of {e.part}", dropped, "%", DROPPED_PCT)
     return c.conclude()
 
 
@@ -1574,7 +1582,7 @@ def _dropped_frames_finding(c: _Case, dj: _Dropped, cap_fps: float | None) -> An
     how = f"is capped at {cap_fps:.0f} FPS" if cap_fps is not None else f"presented about {dj.present_fps:.0f} FPS"
     c.support("frame_timing", W_STEADY, f"the game {how}, above the {hz:.0f} Hz refresh: {dj.dropped_pct:.0f}% of its "
                                         f"frames were never shown, and motion jumped (animation error up to "
-                                        f"{dj.anim_ms:.1f} ms, p95) over {100 * dj.share:.0f}% of the capture",
+                                        f"{dj.anim_ms:.1f} ms, p95) over {100 * dj.share:.0f}% of {c.env.part}",
               dj.dropped_pct, "%", DROPPED_PCT)
     fixes = [_advice(f"Cap the frame rate at {hz:.0f} FPS (the refresh rate)",
                      "In the game, the GPU driver or RTSS; then every frame made is a frame shown."),
@@ -1627,12 +1635,12 @@ def _uneven_pacing(cap: Capture, ctx: dict) -> Any:
         # A1: one frame-time pattern is a steady metric past its threshold, never a direct readout (LC 5.1)
         c.support("frame_timing", W_STEADY, f"the game's own frame times swung by {ev_mod.PACING_SWING_MS:.0f} ms or "
                                             f"more on up to {swing:.0f}% of frames (median swing {sev:.1f} ms), over "
-                                            f"{100 * share:.0f}% of the capture ({100 * UNEVEN_SHARE:.0f}% or more)",
+                                            f"{100 * share:.0f}% of {e.part} ({100 * UNEVEN_SHARE:.0f}% or more)",
                   100 * share, "%", 100 * UNEVEN_SHARE)
     else:
         judder = [ev for ev in e.events if ev.kind == "pacing" and ev not in uneven]
         c.against("frame_timing", W_STEADY,
-                  f"the game presented its frames evenly (uneven stretches: {100 * share:.0f}% of the capture)"
+                  f"the game presented its frames evenly (uneven stretches: {100 * share:.0f}% of {e.part})"
                   + ("; the uneven display comes from the screen's refresh, not the game" if judder else ""),
                   100 * share, "%", 100 * UNEVEN_SHARE)
     fixes = [_advice("Cap the frame rate a little below what the PC can hold", "In the game, the GPU driver or RTSS: "
@@ -1803,12 +1811,12 @@ def _not_focused(cap: Capture, ctx: dict) -> Any:
                                         f"{a:.0f} of the {n:.0f} {what} came while another window was in front: too "
                                         f"few to tell (at least {MIN_EVENTS} needed)")
     if share >= UNFOCUSED_SHARE and e.verdict in GATES["cpu"]:
-        c.support("foreground", W_STEADY, f"the game was not the active window for {100 * share:.0f}% of the capture "
+        c.support("foreground", W_STEADY, f"the game was not the active window for {100 * share:.0f}% of {e.part} "
                                           f"({100 * UNFOCUSED_SHARE:.0f}% or more)", 100 * share, "%", 100 * UNFOCUSED_SHARE)
     elif share >= UNFOCUSED_SHARE:
         # A9 (LC 5.1): less CPU time for a window behind others costs frames only on the CPU side; the
         # event-linked item below still counts on any side
-        c.neutral("foreground", f"the game was not the active window for {100 * share:.0f}% of the capture, but the "
+        c.neutral("foreground", f"the game was not the active window for {100 * share:.0f}% of {e.part}, but the "
                                 f"frame rate is limited by {labels.BOUND.get(e.verdict, e.verdict)}, so less CPU time "
                                 "is not what holds it back", 100 * share, "%", 100 * UNFOCUSED_SHARE)
     elif not linked and not behind:   # mostly in front is no evidence against lag that came while it was behind
@@ -2157,14 +2165,15 @@ def _shader_compile(cap: Capture, ctx: dict) -> Any:
     if e.duration is None:
         c.lack("frame_timing", W_STEADY, "the capture's length is unknown")
         return c.conclude()
-    early = sum(1 for ev in own if ev.t_start < EARLY_FRACTION * e.duration)
+    # Counted from the start of what was analysed: a measured part keeps the recording's own times (analysis/crop.py).
+    early = sum(1 for ev in own if ev.t_start - e.start < EARLY_FRACTION * e.duration)
     share = early / len(own)
     if share >= EARLY_SHARE:
         c.support("frame_timing", W_STATIC, f"{early} of {len(own)} stutters from the game's own work came in the first "
-                                            f"third of the capture ({100 * EARLY_SHARE:.0f}% or more)",
+                                            f"third of {e.part} ({100 * EARLY_SHARE:.0f}% or more)",
                   100 * share, "%", 100 * EARLY_SHARE)
     else:
-        c.against("frame_timing", W_STEADY, f"the game's own stutters were spread through the capture ({early} of "
+        c.against("frame_timing", W_STEADY, f"the game's own stutters were spread through {e.part} ({early} of "
                                             f"{len(own)} in the first third)", 100 * share, "%", 100 * EARLY_SHARE)
     fixes = [_advice("Let the game finish compiling shaders", "Many games do it in a loading step; play through "
                                                               "once and the stutter fades."),
@@ -2369,7 +2378,7 @@ def _wifi_roaming(cap: Capture, ctx: dict) -> Any:
     hops = _changes([ch for _, ch in chans])
     if roams:       # never print the access point's address: it locates the user (NE 3.6)
         c.support("wifi", W_DIRECT, f"the PC switched Wi-Fi access points {roams} time{'s' if roams != 1 else ''} "
-                                    "during the capture")
+                                    f"during {e.part}")
     elif hops:
         c.support("wifi", W_STEADY, f"the Wi-Fi channel changed {hops} time{'s' if hops != 1 else ''} "
                                     f"({chans[0][1]} to {chans[-1][1]}): most likely a switch of access point")
@@ -2418,7 +2427,7 @@ def _wifi_scan_spikes(cap: Capture, ctx: dict) -> Any:
     scans = sorted(float(x) for x in scans_raw if fa._bounded(x) is not None)
     if not scans:
         dur = f"{e.duration:.0f} s " if e.duration else ""
-        return Unchecked("wifi_scan_spikes", f"no Wi-Fi background scan happened during the {dur}capture (they come "
+        return Unchecked("wifi_scan_spikes", f"no Wi-Fi background scan happened during the {dur}{e.part_noun} (they come "
                                              "about once a minute)")
     gw = e.net(N.GW_RTT_MS)
 
@@ -2471,7 +2480,7 @@ def _bufferbloat(cap: Capture, ctx: dict) -> Any:
         return c.conclude()
     peak = max(rx_peak or 0.0, tx_peak or 0.0)
     if peak < BLOAT_MIN_BPS:
-        return Unchecked("bufferbloat", f"the connection was never busy during the capture (peak "
+        return Unchecked("bufferbloat", f"the connection was never busy during {e.part} (peak "
                                         f"{8 * peak / 1e6:.1f} Mbit/s), so ping under load could not be measured")
 
     def util(r: tuple) -> float:
@@ -2626,11 +2635,11 @@ def _server_kept_arriving(c: _Case, flow: dict, local: int) -> None:
             "pausing its own sending" if local else f"no gap of {ev_mod.GAP_MIN_MS:.0f} ms or more")
     if share >= SERVER_COVER:
         c.against("network_path", W_STEADY, f"the game server's packets kept arriving from {first:.0f} s to "
-                                            f"{end:.0f} s{until} ({100 * share:.0f}% of the capture; {gaps})",
+                                            f"{end:.0f} s{until} ({100 * share:.0f}% of {e.part}; {gaps})",
                   100 * share, "%", 100 * SERVER_COVER)
     else:
         c.neutral("network_path", f"the game server's packets were seen only from {first:.0f} s to {end:.0f} s{until} "
-                                  f"({100 * share:.0f}% of the capture), so gaps outside that were not measured",
+                                  f"({100 * share:.0f}% of {e.part}), so gaps outside that were not measured",
                   100 * share, "%", 100 * SERVER_COVER)
 
 
@@ -2681,7 +2690,7 @@ def _steady_loss(c: _Case, against: bool) -> None:
     lost, sent = counts
     pct = 100.0 * lost / sent
     if lost >= ev_mod.LOSS_MIN_PROBES and pct >= ev_mod.LOSS_PCT:
-        c.support("network_path", W_STEADY, f"{pct:.1f}% of pings to the internet were lost over the capture "
+        c.support("network_path", W_STEADY, f"{pct:.1f}% of pings to the internet were lost over {c.env.part} "
                                             f"({lost:.0f} of {sent:.0f}; {ev_mod.LOSS_PCT:.0f}% or more is bad)",
                   pct, "%", ev_mod.LOSS_PCT)
     elif not against:
@@ -2691,7 +2700,7 @@ def _steady_loss(c: _Case, against: bool) -> None:
                   ev_mod.LOSS_PCT)
     elif pct < ev_mod.LOSS_PCT:
         c.against("network_path", W_STEADY, f"only {lost:.0f} of {sent:.0f} pings to the internet "
-                                            f"{'was' if lost == 1 else 'were'} lost ({pct:.3g}% over the capture; "
+                                            f"{'was' if lost == 1 else 'were'} lost ({pct:.3g}% over {c.env.part}; "
                                             f"under {ev_mod.LOSS_PCT:.0f}%)", pct, "%", ev_mod.LOSS_PCT)
     else:                      # too few lost probes to count, however large a share of a short capture
         c.neutral("network_path", f"{lost:.0f} of {sent:.0f} pings to the internet {'was' if lost == 1 else 'were'} "
@@ -2732,7 +2741,7 @@ def _bandwidth_hog(cap: Capture, ctx: dict) -> Any:
             dl.append((float(t), _text(d.get("source"), 40) or "a download", float(mbps)))
     if dl:
         _, src, rate = max(dl, key=lambda x: x[2])
-        c.support("background", W_STEADY, f"{src} was downloading at up to {rate:.0f} Mbit/s during the capture")
+        c.support("background", W_STEADY, f"{src} was downloading at up to {rate:.0f} Mbit/s during {e.part}")
         inet = e.net(N.INET_RTT_MS)
         times = [t for t, _, _ in dl]
         during = [v for t, v in inet if v is not None and any(abs(t - x) <= DOWNLOAD_NEAR_S for x in times)]
@@ -2805,6 +2814,9 @@ def _all_traffic_quiet(e: _Env, talkers: Any) -> str | Unchecked:
                 f"together (under {TALKER_MIN_BPS / 1e6:.0f} MB/s){seen}")
     if measured:
         why = "programs outside your Windows session, Windows' own services among them, were not measured one by one"
+    elif e.cropped and e.measured("net_flows"):         # crop drops totals it cannot split by time (analysis/crop.py)
+        why = ("each program's traffic was counted over the whole recording, so it is not known for the measured "
+               "part")
     else:
         why = ("each program's traffic was not measured (" + (f"the ETW consumer stopped at {stopped:.0f} s"
                                                                if stopped is not None and isinstance(talkers, list)

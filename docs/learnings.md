@@ -904,3 +904,15 @@ the prompt thread in its snapshot (Cancel before the prompt: no prompt) and in i
 the relay is let go), each order made certain rather than likely (`tests/test_app_recording.py`, `Gate`).
 **Takeaway**: to test "X happens between A and B", stop the code at A with a gated seam, do X, then let it reach B;
 never sleep and hope.
+
+### Cut a recording at its own clock, and count totals again or drop them
+To analyse part of a timed recording, keep every timestamp as it was and make the length the part's: shifting the
+part to start at zero has to reach every time the data holds, and some sit inside text ("stopped at t=812.3 s") that
+cannot be shifted. Counters kept over the whole recording do not cut at all: count them again from the events they
+were built from when those are logged, or drop them.
+**Why it came up**: M5's `crop` (`lagdoctor/analysis/crop.py`). Keeping the clock left one change in the analysis
+(shader_compile's "first third" counted from 0) instead of about a dozen places in the reports and the app adding the
+start back. The ping probes could be counted again exactly from their logged losses; each program's network bytes
+could not, so a part drops them rather than spread a startup download over play.
+**Takeaway**: slice timed data in its own coordinates, read every length-versus-end use of its duration, and
+recount or drop each running total, never keep it.

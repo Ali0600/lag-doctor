@@ -148,7 +148,7 @@ class Chart:
         drawn = False
         for x, y in points:
             x, y = number(x), number(y)
-            if x is None or y is None:
+            if x is None or y is None or not self.x0 <= x <= self.x1:    # outside the chart, as vline and band skip
                 continue
             self._front.append(f'<circle class="dot {cls}" cx="{self.px(x):.1f}" cy="{self.py(y):.1f}" r="3.5">'
                                f'<title>{escape(label)} at {fmt_elapsed(x)}: {y:.0f}{escape(self.y_unit)}</title></circle>')

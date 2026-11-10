@@ -36,6 +36,9 @@ def diagnose(cap: Capture) -> Diagnosis:
     stats.update(bound=b["verdict"], bound_r=b["r"], gpu_busy_pct=b["gpu_busy_pct"], refresh_hz=b["refresh_hz"])
     stats.update(events.summary_stats(cap, evs))
     stats["main_chain"] = next((c for c in fr.get(F.SWAP_CHAIN) or [] if isinstance(c, str)), None)
+    span = getattr(cap, "span", None)
+    if isinstance(span, dict):              # a measured part (analysis/crop.py): diagnosis.json says which one
+        stats["span"] = dict(span)
     ctx: dict[str, Any] = {"frames": fr, "stats": stats, "bound": b, "events": evs, "event_causes": summary}
     env = rules._env(cap, ctx)
     frames_ok = env.frames_measured
@@ -252,7 +255,7 @@ def _severe(stats: dict[str, Any], evs: list[LagEvent]) -> str | None:
 
 
 def _lag_part(kind: str, stats: dict[str, Any], evs: list[LagEvent], lag: dict[str, float],
-              duration: float | None, bound: dict[str, Any] | None = None) -> str:
+              duration: float | None, bound: dict[str, Any] | None = None, part: str = "the capture") -> str:
     if kind == "low_fps":
         fps, hz = rules._fin(stats.get("avg_fps")), rules._fin(stats.get("refresh_hz"))
         inner = [f"{fps:.0f} FPS average" + (f" on a {hz:.0f} Hz screen" if hz else "")] if fps is not None else []
@@ -272,7 +275,7 @@ def _lag_part(kind: str, stats: dict[str, Any], evs: list[LagEvent], lag: dict[s
             f"worst {worst:.0f} ms)"
     if kind == "pacing":
         share = lag.get("pacing", 0.0) / duration if duration else None
-        return "Uneven frame pacing" + (f" over {100 * min(share, 1.0):.0f}% of the capture" if share else "")
+        return "Uneven frame pacing" + (f" over {100 * min(share, 1.0):.0f}% of {part}" if share else "")
     if kind == "network":
         net = network_events(evs)
         lost = [e for e in net if e.kind == "net_gap" and _detail(e).get("kind") == "open"]
@@ -318,10 +321,10 @@ def headline(lag_type: str, findings: list[Finding], stats: dict[str, Any], evs:
     lead, explains = _lead(kinds, findings, evs)
     severe = _severe(stats, evs) if env.frames_measured and "stutter" not in kinds else None
     if lag_type == "mixed":
-        parts = [_lag_part(k, stats, evs, lag, env.duration, env.bound) for k in kinds]
+        parts = [_lag_part(k, stats, evs, lag, env.duration, env.bound, env.part) for k in kinds]
         text = "Several problems: " + " and ".join([parts[0]] + [p[0].lower() + p[1:] for p in parts[1:]])
     elif kinds:
-        text = _lag_part(kinds[0], stats, evs, lag, env.duration, env.bound)
+        text = _lag_part(kinds[0], stats, evs, lag, env.duration, env.bound, env.part)
     elif lag_type == "unknown":       # a short reason: its path and command are in the Not measured list, once
         text = (f"Frame timing was not measured ({labels.short_reason(env.why('frames'))}), so stutter and frame rate "
                 "could not be checked")
