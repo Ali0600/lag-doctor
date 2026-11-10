@@ -1,0 +1,365 @@
+[
+ {
+  "name": "the CPU side is thread time, never MsCPUBusy",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        cpu = [steady * max(1.0, edge / u), steady / u]",
+  "new": "        cpu = [1000.0 / b[\"ft_ms\"] * max(1.0, edge / u), 1000.0 / b[\"ft_ms\"] / u]",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_never_reads_ms_cpu_busy"
+  ]
+ },
+ {
+  "name": "a thread counts as saturated from 0.85",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "steady * max(1.0, edge / u)",
+  "new": "steady * max(1.0, 1.0 / u)",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_scales_the_steady_rate_by_the_busiest_threads_load"
+  ]
+ },
+ {
+  "name": "the busier of one thread and every core binds",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "max(load, key=lambda x: x[0])",
+  "new": "min(load, key=lambda x: x[0])",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_takes_every_core_when_the_game_uses_them_more_than_one_thread"
+  ]
+ },
+ {
+  "name": "the CPU never feeds less than it did",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "steady * max(1.0, edge / u)",
+  "new": "steady * (edge / u)",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_of_a_cpu_bound_game_starts_at_the_rate_it_reached"
+  ]
+ },
+ {
+  "name": "even steps need 90 % of frames on whole refreshes",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "q >= 100.0 * VSYNC_SHARE else [])",
+  "new": "q >= 100.0 * VSYNC_SHARE - 2.0 else [])",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_steps_need_ninety_percent_of_frames_on_whole_refreshes"
+  ]
+ },
+ {
+  "name": "even steps go down to 20 FPS",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "STEP_MIN_FPS = 20.0 ",
+  "new": "STEP_MIN_FPS = 20.1 ",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_steps_need_ninety_percent_of_frames_on_whole_refreshes",
+   "tests/test_analysis_frames.py::test_headroom_under_a_vsync_lock_measures_the_gpu_by_its_own_time"
+  ]
+ },
+ {
+  "name": "no GPU ceiling while other programs share the GPU",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "g > 0 and shared is None else None",
+  "new": "g > 0 else None",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_leaves_the_gpu_out_while_other_programs_share_it"
+  ]
+ },
+ {
+  "name": "headroom needs the steady stretch a verdict needs",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "n < BOUND_MIN_FRAMES or secs is None or secs < BOUND_MIN_S:",
+  "new": "n < 1 or secs is None or secs < 0:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_needs_the_steady_stretch_a_verdict_needs"
+  ]
+ },
+ {
+  "name": "a VSync lock is measured by the GPU's own time",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        if b.get(\"vsync\") is True and gpu is not None:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_under_a_vsync_lock_measures_the_gpu_by_its_own_time"
+  ]
+ },
+ {
+  "name": "the screen comes next when the CPU could outrun it",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        if display is None or cpu[1] <= display:",
+  "new": "        if True:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_names_the_screen_when_the_cpu_could_outrun_it"
+  ]
+ },
+ {
+  "name": "a part is never asked to get slower",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    out[\"speedup\"] = [max(1.0, want[0] / own[1]), max(1.0, want[1] / own[0])]",
+  "new": "    out[\"speedup\"] = [want[0] / own[1], want[1] / own[0]]",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_never_asks_a_part_to_get_slower"
+  ]
+ },
+ {
+  "name": "speedup is next low over limit high, next high over limit low",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    out[\"speedup\"] = [max(1.0, want[0] / own[1]), max(1.0, want[1] / own[0])]",
+  "new": "    out[\"speedup\"] = [max(1.0, want[0] / own[0]), max(1.0, want[1] / own[1])]",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_scales_the_steady_rate_by_the_busiest_threads_load"
+  ]
+ },
+ {
+  "name": "a CPU verdict its threads did not saturate gets no speedup",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        if cpu is None or not saturated or (gpu is None and not (idle_gpu and display is not None)):",
+  "new": "        if cpu is None or (gpu is None and not (idle_gpu and display is not None)):",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_says_nothing_of_a_next_limit_it_cannot_see"
+  ]
+ },
+ {
+  "name": "a GPU inside the HAGS margin leaves the screen as the next limit",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    idle_gpu = g is not None and g <= 0 and shared is None",
+  "new": "    idle_gpu = False",
+  "tests": [
+   "tests/test_analysis_frames.py::test_headroom_of_a_cpu_bound_game_starts_at_the_rate_it_reached"
+  ]
+ },
+ {
+  "name": "idle readings are no part of the clock depth",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if fa._bounded(ti) is None or idle_named(cell) or (keep is not None and not keep(cell)):",
+  "new": "        if fa._bounded(ti) is None or (keep is not None and not keep(cell)):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_clock_depth_leaves_idle_readings_out"
+  ]
+ },
+ {
+  "name": "a GPU clock past 10 GHz is corrupt",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "NV_MAX_MHZ = 10_000.0 ",
+  "new": "NV_MAX_MHZ = 1e12 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_clock_depth_takes_the_inventorys_top_clock_and_drops_absurd_readings"
+  ]
+ },
+ {
+  "name": "a GPU power past 2 kW is corrupt",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "NV_MAX_W = 2_000.0 ",
+  "new": "NV_MAX_W = 2e12 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_clock_depth_takes_the_inventorys_top_clock_and_drops_absurd_readings"
+  ]
+ },
+ {
+  "name": "the inventory's top clock stands in for the column",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "if vals[G.CLOCK_MAX_MHZ] else listed,",
+  "new": "if vals[G.CLOCK_MAX_MHZ] else None,",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_clock_depth_takes_the_inventorys_top_clock_and_drops_absurd_readings"
+  ]
+ },
+ {
+  "name": "a speedup takes one form at both ends once it rounds to 10",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return f\"{x:.0f}\" if round(x, 1) >= 10 else f\"{x:.1f}\"",
+  "new": "    return f\"{x:.0f}\" if x >= 10 else f\"{x:.1f}\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_limit_names_the_next_limit_in_plain_words"
+  ]
+ },
+ {
+  "name": "frame rates of a thousand or more carry a thousands comma",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    a, b = f\"{lo:,.0f}\", f\"{lo if hi is None else hi:,.0f}\"",
+  "new": "    a, b = f\"{lo:.0f}\", f\"{lo if hi is None else hi:.0f}\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cpu_limit_says_how_far_off_the_gpus_limit_is"
+  ]
+ },
+ {
+  "name": "a borderline verdict never says both sides are close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "against the {steady:.0f} FPS it ran at\"), True",
+  "new": "both close to the {steady:.0f} FPS it ran at\"), True",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_borderline_verdict_gives_both_ceilings"
+  ]
+ },
+ {
+  "name": "a nearly idle GPU sends the CPU's headroom to the screen",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if gpu is None and nxt is None:",
+  "new": "        if gpu is None:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cpu_limit_says_how_far_off_the_gpus_limit_is"
+  ]
+ },
+ {
+  "name": "the headroom sentence comes second in the evidence",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    res.evidence[1:1] = [Evidence(text)]",
+  "new": "    res.evidence[len(res.evidence):] = [Evidence(text)]",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_limit_says_how_far_off_the_cpus_limit_is"
+  ]
+ },
+ {
+  "name": "the headroom note goes only with figures",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if e.memo[\"headroom\"][1]:",
+  "new": "    if True:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_without_the_other_side_the_headroom_says_it_is_unknown_and_claims_no_figures"
+  ]
+ },
+ {
+  "name": "the headroom never counts as evidence",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    title = \"The graphics card (GPU) is at its limit\" + (f\" at {fps:.0f} FPS\" if fps else \"\")",
+  "new": "    if headroom_text(e):\n        c.support(\"static\", W_STATIC, \"the headroom\")\n    title = \"The graphics card (GPU) is at its limit\" + (f\" at {fps:.0f} FPS\" if fps else \"\")",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_headroom_lines_are_context_and_never_move_the_score"
+  ]
+ },
+ {
+  "name": "cooling is named only where the held-back clock covers the speedup",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "d[\"clock_max_mhz\"] / d[\"clock_mhz\"] < speedup[1]:",
+  "new": "d[\"clock_max_mhz\"] / d[\"clock_mhz\"] < 1.0:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cooling_is_named_only_where_the_clock_held_back_covers_the_speedup_and_heat_alone_held_it"
+  ]
+ },
+ {
+  "name": "cooling is never named for the power brake",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if heat is None or heat[1] < NV_THROTTLE_PCT or attribute.held_by(e.cap) != \"heat\":",
+  "new": "    if heat is None or heat[1] < NV_THROTTLE_PCT:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cooling_is_named_only_where_the_clock_held_back_covers_the_speedup_and_heat_alone_held_it"
+  ]
+ },
+ {
+  "name": "the steps listed are every one above and the first at or below",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "[s for s in steps if s <= on][:1]",
+  "new": "[s for s in steps if s <= on][:2]",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_screen_with_frames_on_whole_refreshes_names_its_even_steps_after_the_headroom"
+  ]
+ },
+ {
+  "name": "a frame rate within 1 % of a step is on it",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "STEP_ON_FRAC = 0.01 ",
+  "new": "STEP_ON_FRAC = 0.0 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_screen_with_frames_on_whole_refreshes_names_its_even_steps_after_the_headroom"
+  ]
+ },
+ {
+  "name": "the clock depth comes second in GPU throttling",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            res.evidence.insert(1, Evidence(depth))",
+  "new": "            res.evidence.append(Evidence(depth))",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_throttling_says_how_deep_the_clock_and_the_power_went",
+   "tests/test_analysis_rules.py::test_a_gpu_at_a_lowered_power_cap_says_how_deep_it_ran_there"
+  ]
+ },
+ {
+  "name": "a GPU draws at its power limit from 95 %",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "POWER_AT_LIMIT = 0.95 ",
+  "new": "POWER_AT_LIMIT = 1.5 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_throttling_says_how_deep_the_clock_and_the_power_went",
+   "tests/test_analysis_rules.py::test_a_gpu_at_a_lowered_power_cap_says_how_deep_it_ran_there"
+  ]
+ },
+ {
+  "name": "per core only where one thread limits",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        per = \" per core\" if e.verdict == \"cpu_main\" else \"\"",
+  "new": "        per = \" per core\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cpu_limit_says_how_far_off_the_gpus_limit_is"
+  ]
+ },
+ {
+  "name": "a shared GPU is said to be why the CPU's headroom is unknown",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "if _contention(e) is not None else",
+  "new": "if False else",
+  "tests": [
+   "tests/test_analysis_rules.py::test_without_the_other_side_the_headroom_says_it_is_unknown_and_claims_no_figures"
+  ]
+ },
+ {
+  "name": "the stats carry the sentence only where a finding does",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return (text if text is not None and text in held else None,",
+  "new": "    return (text,",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_no_headroom_line_shows_where_no_finding_carries_it"
+  ]
+ },
+ {
+  "name": "the stats hold the busiest thread in percent",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "\"busiest_thread_pct\": 100.0 * busiest if busiest is not None else None,",
+  "new": "\"busiest_thread_pct\": busiest,",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headroom_reaches_the_stats_the_console_and_the_report_once_each"
+  ]
+ },
+ {
+  "name": "the console shows the headroom once, not again among the findings",
+  "file": "lagdoctor/report/console.py",
+  "old": "if not (isinstance(x.text, str) and x.text in shown_above)",
+  "new": "if True",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headroom_reaches_the_stats_the_console_and_the_report_once_each"
+  ]
+ },
+ {
+  "name": "the console shows the headroom under the stats",
+  "file": "lagdoctor/report/console.py",
+  "old": "        out.para(\"Headroom: \" + \" \".join(room), indent=\"  \", sub=\"  \")",
+  "new": "        pass",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headroom_reaches_the_stats_the_console_and_the_report_once_each"
+  ]
+ },
+ {
+  "name": "a summary's verdict reads back only as a verdict's own word",
+  "file": "lagdoctor/report/summary.py",
+  "old": "    return v if isinstance(v, str) and v in CHOICES[key] else None",
+  "new": "    return v if isinstance(v, str) else None",
+  "tests": [
+   "tests/test_app_views.py::test_a_summarys_headroom_keys_read_back_checked_and_an_older_one_without_them_as_none"
+  ]
+ },
+ {
+  "name": "Compare says what the headroom figures rest on",
+  "file": "lagdoctor/app/views.py",
+  "old": "labels.HEADROOM_NOTE if na.get(\"headroom\") or nb.get(\"headroom\") else \"\"",
+  "new": "\"\"",
+  "tests": [
+   "tests/test_app_views.py::test_compare_shows_what_limited_each_recording_and_how_close_the_next_limit_was"
+  ]
+ },
+ {
+  "name": "Compare: more FPS outside lag moments is better",
+  "file": "lagdoctor/app/views.py",
+  "old": "row(\"FPS outside lag moments\", \"steady_fps\", better=\"high\"),",
+  "new": "row(\"FPS outside lag moments\", \"steady_fps\"),",
+  "tests": [
+   "tests/test_app_views.py::test_compare_shows_what_limited_each_recording_and_how_close_the_next_limit_was"
+  ]
+ }
+]

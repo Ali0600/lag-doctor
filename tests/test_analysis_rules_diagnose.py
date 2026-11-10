@@ -297,7 +297,10 @@ def test_advice_only_causes_never_carry_a_fix_id(mode):
 STATS_KEYS = ("frames duration_s avg_fps low1_fps low01_fps p1_fps median_frame_ms p99_frame_ms worst_frame_ms "
               "stutters stutters_per_min hitches severe_hitches freezes time_beyond_50_ms hitch_rate_bound "
               "dropped_pct bound bound_r gpu_busy_pct refresh_hz present_mode runtime swap_chains main_chain "
-              "ping_gw_ms ping_inet_ms ping_server_ms jitter_ms loss_pct").split()       # DESIGN, Diagnosis.stats
+              "ping_gw_ms ping_inet_ms ping_server_ms jitter_ms loss_pct steady_fps bound_gpu_ms bound_frame_ms "
+              "busiest_thread_pct gpu_ceiling_fps cpu_ceiling_low_fps cpu_ceiling_high_fps cpu_ceiling_from "
+              "display_steps_fps next_limit speedup_low speedup_high headroom headroom_note gpu_clock_mhz "
+              "gpu_clock_max_mhz gpu_power_w gpu_power_limit_w").split()       # DESIGN, Diagnosis.stats
 
 
 def test_the_stats_hold_every_key_design_lists():
@@ -341,6 +344,68 @@ def test_the_diagnosis_survives_json_and_the_reports_render_it():
     assert "Background programs" in text and "Checked and fine" in text and "Could not check" in text
     page = html.render(d, s.cap)
     assert "Background programs" in page and "<script" not in page
+
+
+# ------------------------------------------------------------------------------------ headroom ---
+
+def heat_bound(fps_ms: float = 16.9, n: int = 3000) -> Capture:
+    """A made-up capture: GPU-bound on a fixed 144 Hz screen, frames held 2 or 3 refreshes, the busiest game thread at
+    75 % of a CPU, PresentMon's CPU Busy at nearly the whole frame (wall time), and an NVIDIA GPU held at 780 of its
+    2,100 MHz by heat while drawing 61 of its 103 W."""
+    p = 1000.0 / 144.003
+    shown = [2 * p if i % 2 == 0 else 3 * p for i in range(n)]
+    secs = 2.0 + n * fps_ms / 1000.0
+    cap = synth.capture(synth.frames_table([fps_ms] * n, gpu_ms=16.1, display_ms=shown, displayed=1, runtime="DXGI",
+                                           cpu_busy=16.55),
+                        synth.system_table(secs, game_top_thread_pct=75.0, game_cpu_pct=300.0, game_gpu_pct=98.0),
+                        hz=144.003, duration=secs,
+                        gpu=synth.gpu_table(secs, nv_util_pct=99.0, nv_clock_mhz=780, nv_clock_max_mhz=2100,
+                                            nv_power_w=61.0, nv_power_limit_w=102.8, nv_throttle_pct=97.0,
+                                            nv_power_cap_pct=0.0, nv_reasons="sw_thermal_slowdown", nv_temp_c=88.0))
+    cap.sources = synth.sources(("frames", "system", "gpu"))
+    cap.inventory["nvidia"] = {"clock_max_mhz": 2100, "temp_target_c": 87, "power_default_w": 80.0}
+    return cap
+
+
+def test_the_headroom_reaches_the_stats_the_console_and_the_report_once_each():
+    from lagdoctor.report import console, html, labels
+    cap = heat_bound()
+    d = diagnose(cap)
+    s = d.stats
+    assert s["bound"] == "gpu" and s["next_limit"] == "cpu" and s["cpu_ceiling_from"] == "thread"
+    assert s["steady_fps"] == pytest.approx(1000.0 / (2.5 * 1000.0 / 144.003))       # 2 and 3 refreshes in turn
+    assert (s["bound_gpu_ms"], s["bound_frame_ms"], s["busiest_thread_pct"]) == pytest.approx((16.1, 16.55, 75.0))
+    assert s["gpu_ceiling_fps"] == pytest.approx(1000.0 / 16.1)
+    assert (s["cpu_ceiling_low_fps"], s["cpu_ceiling_high_fps"]) == pytest.approx(
+        (s["steady_fps"] * 0.85 / 0.75, s["steady_fps"] / 0.75))
+    assert (s["gpu_clock_mhz"], s["gpu_clock_max_mhz"], s["gpu_power_w"], s["gpu_power_limit_w"]) == (
+        780.0, 2100.0, 61.0, 102.8)
+    gpu_limit = next(f for f in d.findings if f.cause == "gpu_limit")
+    assert s["headroom"] == gpu_limit.evidence[1].text and s["headroom_note"] == labels.HEADROOM_NOTE
+    assert s["headroom"].startswith("At these settings the CPU could feed about 65-77 FPS, so a GPU about 1.1-1.3x "
+                                    "faster would make the CPU the limit; heat held this one at 37%")
+    flat = " ".join(console.render(d, cap, width=100).split())
+    assert flat.count(s["headroom"]) == 1 and flat.count(labels.HEADROOM_NOTE) == 1      # under the stats, not again
+    assert f"Headroom: {s['headroom']} {labels.HEADROOM_NOTE}" in flat
+    assert flat.index("limited by GPU") < flat.index("Headroom:") < flat.index("What is causing it")
+    page = html.render(d, cap)
+    assert page.count(html.prose(s["headroom"])) == 1 and page.count(html.prose(labels.HEADROOM_NOTE)) == 1
+
+
+def test_no_headroom_line_shows_where_no_finding_carries_it():
+    # GPU-bound at 139 FPS on the 144 Hz screen: the GPU limit costs nothing there, so it is checked and fine, and the
+    # summary keeps the figures but no sentence the findings do not show
+    n = 3000
+    cap = synth.capture(synth.frames_table([7.2] * n, gpu_ms=7.0),
+                        synth.system_table(2.0 + n * 0.0072, game_top_thread_pct=30.0, game_gpu_pct=98.0),
+                        hz=144.003, duration=2.0 + n * 0.0072)
+    cap.sources = synth.sources(("frames", "system"))
+    d = diagnose(cap)
+    assert d.stats["bound"] == "gpu" and "gpu_limit" in d.cleared
+    assert d.stats["gpu_ceiling_fps"] == pytest.approx(1000.0 / 7.0) and d.stats["next_limit"] is not None
+    assert d.stats["headroom"] is None and d.stats["headroom_note"] is None
+    env = rules._env(cap, {"bound": {"verdict": "gpu", "headroom": {"steady_fps": 60.0}}})
+    assert rules.headroom_line(env, []) == (None, None)
 
 
 # ----------------------------------------------------------------- settings check, junk input ---

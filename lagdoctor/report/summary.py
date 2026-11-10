@@ -3,7 +3,8 @@
 The app's library lists every recorded game from these, so it never loads a capture to draw a tile
 (docs/LAUNCHER-PLAN.md, M1). It holds who and when (game, exe, start, tool version, kind) and the numbers the game page
 and Compare show (the verdict's figures and the conditions a recording ran under, the game's own files among them),
-and the player's note on the recording (watch --note).
+and the player's note on the recording (watch --note), and what limited its frame rate with how close the other
+parts were to theirs (the headroom figures and sentence, DESIGN Headroom).
 A session saved before summaries existed has none; the library then reads its folder's name
 (lagdoctor/app/library.py). Keys added to the schema later are optional: an older summary reads back with them None.
 """
@@ -32,6 +33,13 @@ BOOLS = ("frames_measured",)
 # before them has none of these keys, and reads back with each None.
 GAME_FILE_KEYS = ("game_exe", "drop_ins", "unreal_config")
 NOTE_KEY = "note"                     # the player's note (model.clean_note), added after the folder check: optional too
+# What limited the frame rate and how close the other sides were (Diagnosis.stats, DESIGN Headroom), added after the
+# note for Compare: optional too, each None in a summary from before them.
+HEADROOM_NUMBERS = ("steady_fps", "bound_gpu_ms", "bound_frame_ms", "busiest_thread_pct", "gpu_ceiling_fps",
+                    "cpu_ceiling_low_fps", "cpu_ceiling_high_fps", "speedup_low", "speedup_high", "gpu_clock_mhz",
+                    "gpu_clock_max_mhz", "gpu_power_w", "gpu_power_limit_w")
+CHOICES = {"bound": tuple(labels.BOUND), "next_limit": ("cpu", "gpu", "display", "cpu_or_display")}
+HEADROOM_KEY = "headroom"             # the sentence (rules.headroom_text), when a finding carried it
 CHECKED, NOT_CHECKED, NOT_UNREAL = "checked", "not_checked", "not_unreal"
 MAX_LISTED = 30                       # files a list keeps; the rest are counted
 SHA_CHARS = 16                        # of a file's SHA-256: enough to tell two copies apart
@@ -47,6 +55,19 @@ def _text(v: Any) -> str | None:
 
 def _count(v: Any) -> int:
     return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else 0
+
+
+def _choice(key: str, v: Any) -> str | None:
+    """A CHOICES field: one of its words, else None (a damaged file's other text is no verdict)."""
+    return v if isinstance(v, str) and v in CHOICES[key] else None
+
+
+def headroom_fields(stats: dict[str, Any]) -> dict[str, Any]:
+    """The summary's bound and headroom keys from Diagnosis.stats (or a summary read back), each checked."""
+    out: dict[str, Any] = {key: number(stats.get(key)) for key in HEADROOM_NUMBERS}
+    out.update({key: _choice(key, stats.get(key)) for key in CHOICES})
+    out[HEADROOM_KEY] = _text(stats.get(HEADROOM_KEY))
+    return out
 
 
 def _sha(v: Any) -> str | None:
@@ -165,6 +186,7 @@ def build(d: Diagnosis, cap: Capture, kind: str) -> dict[str, Any]:
         "launcher": _text(game.get("launcher")),
         **game_files(inv),
         NOTE_KEY: clean_note(cap.note),
+        **headroom_fields(stats),
     }
     return out
 
@@ -197,4 +219,5 @@ def read(folder: Path) -> dict[str, Any] | None:
     out["drop_ins"] = _read_files(data.get("drop_ins"), (CHECKED, NOT_CHECKED))
     out["unreal_config"] = _read_files(data.get("unreal_config"), (CHECKED, NOT_CHECKED, NOT_UNREAL))
     out[NOTE_KEY] = clean_note(data.get(NOTE_KEY))
+    out.update(headroom_fields(data))
     return out

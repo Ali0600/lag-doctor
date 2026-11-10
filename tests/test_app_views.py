@@ -70,6 +70,40 @@ def test_a_summarys_note_reads_back_as_one_clean_line_and_one_of_another_type_as
     assert summary.read(tmp_path)["note"] == read
 
 
+HEADROOM = ("At these settings the CPU could feed about 66-78 FPS, so a GPU about 1.1-1.3x faster would make the CPU "
+            "the limit.")
+ROOM_STATS = {"bound": "gpu", "steady_fps": 58.5, "bound_gpu_ms": 16.1, "bound_frame_ms": 16.9,
+              "busiest_thread_pct": 75.0, "gpu_ceiling_fps": 62.1, "cpu_ceiling_low_fps": 66.3,
+              "cpu_ceiling_high_fps": 78.0, "next_limit": "cpu", "speedup_low": 1.07, "speedup_high": 1.33,
+              "gpu_clock_mhz": 780.0, "gpu_clock_max_mhz": 2100.0, "gpu_power_w": 61.0, "gpu_power_limit_w": 102.8,
+              "headroom": HEADROOM}
+
+
+def test_a_summary_keeps_what_limited_the_frame_rate_and_how_close_the_next_limit_was(tmp_path):
+    s = synth.laglab("smooth", duration_s=30.0)
+    d = diagnose(s.cap)
+    d.stats.update(ROOM_STATS)
+    out = summary.build(d, s.cap, "watch")
+    assert {k: out[k] for k in ROOM_STATS} == ROOM_STATS
+    (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps(out), encoding="utf-8")
+    assert {k: summary.read(tmp_path)[k] for k in ROOM_STATS} == ROOM_STATS
+
+
+def test_a_summarys_headroom_keys_read_back_checked_and_an_older_one_without_them_as_none(tmp_path):
+    (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps({
+        "schema": summary.SCHEMA, "kind": "watch", "bound": "the CPU, honest", "next_limit": "display",
+        "steady_fps": "fast", "gpu_clock_mhz": 1e300, "busiest_thread_pct": True, "headroom": "a\x07b" + "x" * 400}),
+        encoding="utf-8")
+    s = summary.read(tmp_path)
+    assert s["bound"] is None and s["next_limit"] == "display"          # only a verdict's own word is a verdict
+    assert s["steady_fps"] is None and s["gpu_clock_mhz"] is None and s["busiest_thread_pct"] is None
+    assert s["headroom"].startswith("a b") and len(s["headroom"]) == summary.MAX_TEXT
+    (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps({"schema": summary.SCHEMA, "kind": "watch"}),
+                                                 encoding="utf-8")
+    old = summary.read(tmp_path)
+    assert all(old[k] is None for k in ROOM_STATS)
+
+
 @pytest.mark.parametrize("content", [b"", b"not json", b"[]", json.dumps({"schema": "other/1", "kind": "watch"}).encode(),
                                      json.dumps({"schema": summary.SCHEMA, "kind": "check-up"}).encode(),
                                      # Past the cap, even when what fits is a whole summary: the rest is never read.
@@ -269,6 +303,35 @@ def test_compare_puts_the_conditions_beside_the_numbers_and_says_which_is_better
     assert names == ["Your note", "Power plan and mode", "Refresh rate", "Frames timed", "Measured length",
                      "Game's exe file", "Drop-in files", "Unreal settings files"]
     assert v["note"] == ""
+
+
+def test_compare_shows_what_limited_each_recording_and_how_close_the_next_limit_was(demo):
+    home, _ = demo
+    a, b = (e for e in entries_of(home) if e.game == "Demo Racer")
+    cpu = dict(ROOM_STATS, bound="cpu_main", steady_fps=40.0, bound_gpu_ms=10.5, bound_frame_ms=25.0,
+               busiest_thread_pct=95.0, gpu_clock_mhz=None, headroom=None)
+    a = dataclasses.replace(a, summary=dict(a.summary, **ROOM_STATS))
+    b = dataclasses.replace(b, summary=dict(b.summary, **cpu))
+    v = views.compare_view(a, b)
+    rows = {r["name"]: r for r in v["numbers"]}
+    assert rows["FPS outside lag moments"] == {"name": "FPS outside lag moments", "a": "58", "b": "40", "better": "a"}
+    assert rows["Limited by"] == {"name": "Limited by", "a": "GPU", "b": "CPU (1 thread)", "better": None}
+    assert (rows["GPU busy per frame"]["a"], rows["GPU busy per frame"]["b"]) == ("16.1 of 16.9 ms", "10.5 of 25.0 ms")
+    assert (rows["Busiest game thread"]["a"], rows["Busiest game thread"]["b"]) == ("75% of a CPU", "95% of a CPU")
+    assert rows["Busiest game thread"]["better"] is None
+    assert (rows["NVIDIA GPU clock"]["a"], rows["NVIDIA GPU clock"]["b"]) == ("780 of 2,100 MHz", "-")
+    assert (rows["Headroom"]["a"], rows["Headroom"]["b"]) == (HEADROOM, "-")
+    assert v["note"] == labels.HEADROOM_NOTE                               # what the figures rest on, once
+    # the demo's own recordings: LagLab capped at 120 FPS on the Intel GPU, so no limiting part and no NVIDIA clock
+    plain = views.compare_view(*(e for e in entries_of(home) if e.game == "Demo Racer"))
+    rows = {r["name"]: r for r in plain["numbers"]}
+    assert rows["Limited by"]["a"] == rows["Limited by"]["b"] == "FPS cap"
+    assert rows["Headroom"]["a"] == rows["NVIDIA GPU clock"]["a"] == "-" and plain["note"] == ""
+    # a summary from before the headroom figures: dashes
+    old = dataclasses.replace(a, summary={k: v for k, v in a.summary.items() if k not in ROOM_STATS})
+    rows = {r["name"]: r for r in views.compare_view(old, b)["numbers"]}
+    assert all(rows[name]["a"] == "-" for name in ("FPS outside lag moments", "Limited by", "GPU busy per frame",
+                                                    "Busiest game thread", "NVIDIA GPU clock", "Headroom"))
 
 
 def test_compare_shows_what_changed_in_the_game_between_the_two_recordings(demo):
