@@ -487,6 +487,33 @@ def network_table(seconds: float, **cols: Any) -> dict[str, list]:
     return b.build()
 
 
+def startup_then_smooth(startup_s: float = 60.0, total_s: float = 180.0, every_s: float = 3.0,
+                        hitch_ms: float = 150.0, fps: float = 60.0, first_hitch_s: float = 5.0) -> Capture:
+    """A recording whose game starts up first (M5's case, docs/LAUNCHER-PLAN.md "Measuring the right part"): from
+    first_hitch_s until startup_s a hitch_ms frame comes every every_s, each with the game's busiest thread pegged (its
+    own work, as in shader preparation and loading), then smooth play at `fps` until total_s. Frames, the system
+    table and both sources are measured; the display runs at 60 Hz."""
+    ms, t, nxt = [], 1.0, first_hitch_s
+    while t < total_s - 0.5:
+        hitch = nxt <= t < startup_s
+        if hitch:
+            nxt += every_s
+        f = hitch_ms if hitch else 1000.0 / fps
+        ms.append(f)
+        t += f / 1000.0
+    fr = frames_table(ms, gpu_ms=0.5, display_ms=ms, displayed=1)
+    spans = [(x - f / 1000.0, x) for x, f in zip(fr[F.T], ms) if f >= 50]
+
+    def busy(x: float) -> bool:
+        return any(a - 0.1 <= x <= b + 0.1 for a, b in spans)
+
+    sys_ = system_table(total_s, game_top_thread_pct=lambda x: 100.0 if busy(x) else 30.0,
+                        game_cpu_pct=lambda x: 120.0 if busy(x) else 40.0, cpu_total_pct=12.0, game_focused=1)
+    cap = capture(fr, sys_, hz=60.0, duration=total_s)
+    cap.sources = sources(("frames", "system"))
+    return cap
+
+
 def sources(ok: Sequence[str] = (), **other: SourceStatus) -> dict[str, SourceStatus]:
     """Capture.sources: "ok" for the names in `ok`, any SourceStatus given by keyword, nothing else."""
     out: dict[str, SourceStatus] = {name: SourceStatus("ok") for name in ok}

@@ -123,10 +123,10 @@ def _section(build: Callable[[], str]) -> str:
 CSS = """
 :root{--bg:#f6f6f4;--fg:#1b1c1e;--muted:#5b6068;--card:#fff;--border:#dad9d4;--accent:#3b5bdb;
 --bad:#c92a2a;--warn:#a85400;--ok:#2b8a3e;--c1:#3b5bdb;--c2:#c2255c;--c3:#2b8a3e;--c4:#a85400;--c5:#7048e8;
---band:rgba(201,42,42,.10);--grid:#e7e6e1;color-scheme:light dark}
+--band:rgba(201,42,42,.10);--skip:rgba(91,96,104,.16);--grid:#e7e6e1;color-scheme:light dark}
 @media (prefers-color-scheme: dark){:root{--bg:#131416;--fg:#e9e9e6;--muted:#a1a5ac;--card:#1c1e21;
 --border:#2f3236;--accent:#91a7ff;--bad:#ff8787;--warn:#ffb050;--ok:#69db7c;--c1:#91a7ff;--c2:#f783ac;
---c3:#69db7c;--c4:#ffb050;--c5:#b197fc;--band:rgba(255,135,135,.14);--grid:#2a2d31}}
+--c3:#69db7c;--c4:#ffb050;--c5:#b197fc;--band:rgba(255,135,135,.14);--skip:rgba(161,165,172,.16);--grid:#2a2d31}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,"Segoe UI",sans-serif}
 main{max-width:1000px;margin:0 auto;padding:24px 16px 48px}
@@ -163,6 +163,7 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.88em;overflow-wrap:a
 .chart .vl{stroke-width:1.5;stroke-dasharray:4 3}
 .chart .hl{stroke-width:1;stroke-dasharray:6 4}
 .chart .band{fill:var(--band)}
+.chart .band.skip{fill:var(--skip)}
 .s1{stroke:var(--c1);fill:var(--c1)}.s2{stroke:var(--c2);fill:var(--c2)}.s3{stroke:var(--c3);fill:var(--c3)}
 .s4{stroke:var(--c4);fill:var(--c4)}.s5{stroke:var(--c5);fill:var(--c5)}
 .bad{stroke:var(--bad);fill:var(--bad)}.mark{stroke:var(--c5);fill:var(--c5)}.ref{stroke:var(--muted);fill:var(--muted)}
@@ -172,6 +173,7 @@ code{font-family:ui-monospace,Consolas,monospace;font-size:.88em;overflow-wrap:a
 .legend .s1 i{background:var(--c1)}.legend .s2 i{background:var(--c2)}.legend .s3 i{background:var(--c3)}
 .legend .s4 i{background:var(--c4)}.legend .s5 i{background:var(--c5)}.legend .bad i{background:var(--bad)}
 .legend .mark i{background:var(--c5)}.legend .ref i{background:var(--muted)}.legend .drop i{background:var(--band);height:10px}
+.legend .skip i{background:var(--skip);height:10px}
 .tablewrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:.92rem}
 td,th{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top}
@@ -221,9 +223,40 @@ def mark_times(d: Diagnosis, cap: Capture) -> list[float]:
     return [t for t in (number(m) for m in _list(cap.marks)) if t is not None]
 
 
-def _draw_marks(ch: Chart, marks: list[float]) -> None:
+def _draw_marks(ch: Chart, marks: list[float], outside: list[float] = ()) -> None:
     for m in marks:
         ch.vline(m, "mark", "you pressed the lag key")
+    for m in outside:
+        ch.vline(m, "ref", OUTSIDE_MARK)
+
+
+SKIP_LABEL = "not analysed"
+OUTSIDE_MARK = "you pressed the lag key (not analysed)"
+
+
+def _shade_rest(ch: Chart, part: dict | None, end: float) -> None:
+    """Shade what the measured part leaves out: the recording before its start and after its end."""
+    if part is None:
+        return
+    if part["from_s"] > 0:
+        ch.band(0.0, part["from_s"], "skip", SKIP_LABEL)
+    if part["to_s"] < end - labels.PART_SLACK_S:
+        ch.band(part["to_s"], end, "skip", SKIP_LABEL)
+
+
+def _seconds(v: float) -> str:
+    """Seconds as `analyze --from/--to` reads them back: "192", "192.25"."""
+    return f"{v:.3f}".rstrip("0").rstrip(".")
+
+
+def part_args(part: dict | None) -> str:
+    """The `analyze` arguments that pick out the measured part again (" --from 192 --to 792"), "" for none."""
+    if part is None:
+        return ""
+    out = f" --from {_seconds(part['from_s'])}" if part["from_s"] > 0 else ""
+    if part["to_s"] < part["recorded_s"] - labels.PART_SLACK_S:
+        out += f" --to {_seconds(part['to_s'])}"
+    return out
 
 
 # ------------------------------------------------------------------ sections --
@@ -261,16 +294,42 @@ def _main_frames(d: Diagnosis, cap: Capture) -> tuple[list, list]:
     return xs, ys
 
 
+def _analysed_frames(d: Diagnosis, cap: Capture, part: dict) -> list[float]:
+    """The main chain's frame times (ms) that the analysis of a measured part counted: its rows in the part, less those
+    analysis/crop.frames_inside leaves out (a frame whose own interval began before the part). So the chart's scale
+    and its note never name a frame the analysis did not count."""
+    from lagdoctor.analysis.crop import frames_inside
+    t, chains = _column(cap.frames, F.T), _column(cap.frames, F.SWAP_CHAIN)
+    chain = _dict(d.stats).get("main_chain")
+    one = bool(chain is not None and chains and len(chains) == len(t))     # as _main_frames picks the chain
+    rows = [i for i, ti in enumerate(t) if (x := number(ti)) is not None and part["from_s"] <= x <= part["to_s"]
+            and (not one or chains[i] == chain)]
+    table = {}
+    for name in (F.T, F.FRAME_MS, F.DISPLAY_MS, F.SWAP_CHAIN):
+        col = _column(cap.frames, name)
+        table[name] = [col[i] if i < len(col) else None for i in rows]
+    kept = frames_inside(table, part["from_s"])
+    return [v for v in (number(x) for x in kept[F.FRAME_MS]) if v is not None and v > 0]
+
+
 def _frame_chart(d: Diagnosis, cap: Capture) -> str:
     t, ms = _main_frames(d, cap)
-    vals = [v for v in ms if v is not None]
-    if not t or not vals:
+    every = [v for v in ms if v is not None]
+    if not t or not every:
         return _not_measured_note(cap, "frames")
+    part = labels.measured_part(d.stats)
+    # The scale and the note follow the frames the analysis counted: a loading screen's long frame is drawn, clamped at
+    # the top, and never named the worst. A part without frames of its own takes the whole recording's scale and says
+    # nothing of frames cut off.
+    vals = _analysed_frames(d, cap, part) if part else every
+    scale = vals or every
     refresh = number(_dict(d.stats).get("refresh_hz"))
     ref_ms = 1000.0 / refresh if refresh and refresh > 0 else None
-    top = min(max(vals) * 1.05, max(percentile(vals, 99.9) * 1.6, 40.0))
+    top = min(max(scale) * 1.05, max(percentile(scale, 99.9) * 1.6, 40.0))
     top = max(top, (ref_ms or 0) * 2.2, 20.0)
-    ch = Chart("Frame times: higher is slower; spikes are stutters", 0.0, _x1(cap, t), 0.0, top, " ms")
+    end = _x1(cap, t)
+    ch = Chart("Frame times: higher is slower; spikes are stutters", 0.0, end, 0.0, top, " ms")
+    _shade_rest(ch, part, end)
     for ev in d.events:
         if ev.kind == "fps_drop":
             ch.band(ev.t_start, ev.t_end, "drop", "FPS drop")
@@ -279,33 +338,36 @@ def _frame_chart(d: Diagnosis, cap: Capture) -> str:
     ch.line(t, ms, "s1", "time to make each frame", agg="max")
     stutters = [(_dict(ev.detail).get("worst_t", ev.t_start), ev.severity) for ev in d.events if ev.kind == "stutter"]
     ch.dots(stutters, "bad", "stutter")
-    _draw_marks(ch, mark_times(d, cap))
+    _draw_marks(ch, mark_times(d, cap), labels.outside_marks(cap.marks, part))
     note = ""
-    worst = max(vals)
+    worst = max(vals, default=0.0)
     if worst > top:
         clipped = sum(1 for v in vals if v > top)
-        note = (f'<p class="muted">{clipped} frame{"s" if clipped != 1 else ""} took longer than {top:.0f} ms and '
-                f'{"are" if clipped != 1 else "is"} cut off at the top; the worst took {worst:.0f} ms.</p>')
+        where = " in the analysed part" if part else ""
+        note = (f'<p class="muted">{clipped} frame{"s" if clipped != 1 else ""}{where} took longer than {top:.0f} ms '
+                f'and {"are" if clipped != 1 else "is"} cut off at the top; the worst took {worst:.0f} ms.</p>')
     return ch.svg() + _legend(ch) + note
 
 
 def _series_chart(title: str, cap: Capture, table: dict, specs: list[tuple[str, str, str]], y1: float,
                   unit: str, source: str, scale: float = 1.0, ref: tuple[float, str] | None = None,
-                  marks: list[float] = ()) -> str:
+                  marks: list[float] = (), part: dict | None = None, outside: list[float] = ()) -> str:
     lines = [(cls, label, *_points(table, col, scale)) for col, cls, label in specs]
     present = [(cls, label, xs, ys) for cls, label, xs, ys in lines if any(v is not None for v in ys)]
     if not present:
         return _not_measured_note(cap, source)
-    ch = Chart(title, 0.0, _x1(cap, [x for _, _, xs, _ in present for x in xs[-1:]]), 0.0, y1, unit)
+    end = _x1(cap, [x for _, _, xs, _ in present for x in xs[-1:]])
+    ch = Chart(title, 0.0, end, 0.0, y1, unit)
+    _shade_rest(ch, part, end)
     if ref:
         ch.hline(ref[0], "ref", ref[1])
     for cls, label, xs, ys in present:
         ch.line(xs, ys, cls, label, agg="mean")
-    _draw_marks(ch, marks)
+    _draw_marks(ch, marks, outside)
     return ch.svg() + _legend(ch)
 
 
-def _memory_chart(cap: Capture) -> str:
+def _memory_chart(cap: Capture, part: dict | None = None) -> str:
     total_mb = None
     luid = _dict(cap.target).get("adapter_luid")
     for a in _list(_dict(cap.inventory).get("adapters")):
@@ -317,10 +379,11 @@ def _memory_chart(cap: Capture) -> str:
     return _series_chart("Video memory (VRAM)", cap, cap.system,
                          [(S.VRAM_USED_MB, "s1", "VRAM in use (all programs)"),
                           (S.GAME_SHARED_MB, "s2", "game data spilled into system RAM")],
-                         top_mb / 1024, " GB", "system", scale=1 / 1024, ref=ref)
+                         top_mb / 1024, " GB", "system", scale=1 / 1024, ref=ref, part=part)
 
 
-def _network_chart(cap: Capture, marks: list[float] = ()) -> str:
+def _network_chart(cap: Capture, marks: list[float] = (), part: dict | None = None,
+                   outside: list[float] = ()) -> str:
     cols = [(N.GW_RTT_MS, "s1", "ping to your router"), (N.INET_RTT_MS, "s2", "ping to the internet"),
             (N.SERVER_RTT_MS, "s3", "ping to the game server")]
     lines = [(cls, label, *_points(cap.network, col)) for col, cls, label in cols]
@@ -329,7 +392,9 @@ def _network_chart(cap: Capture, marks: list[float] = ()) -> str:
         return _not_measured_note(cap, "network")
     top = max(50.0, percentile(vals, 99) * 1.4)
     t, inet = _points(cap.network, N.INET_RTT_MS)
-    ch = Chart("Network round-trip time", 0.0, _x1(cap, t[-1:]), 0.0, top, " ms")
+    end = _x1(cap, t[-1:])
+    ch = Chart("Network round-trip time", 0.0, end, 0.0, top, " ms")
+    _shade_rest(ch, part, end)
     for cls, label, xs, ys in lines:
         if any(v is not None for v in ys):
             ch.line(xs, ys, cls, label, agg="max")
@@ -343,7 +408,7 @@ def _network_chart(cap: Capture, marks: list[float] = ()) -> str:
     else:
         lost = []
     ch.dots(lost, "bad", "lost ping (internet)")
-    _draw_marks(ch, marks)
+    _draw_marks(ch, marks, outside)
     return ch.svg() + _legend(ch)
 
 
@@ -551,11 +616,12 @@ def _not_measured(d: Diagnosis, cap: Capture) -> str:
 
 
 def _cpu_gpu_chart(d: Diagnosis, cap: Capture) -> str:
+    part = labels.measured_part(d.stats)
     return _series_chart(
         "CPU and GPU load", cap, cap.system,
         [(S.GAME_GPU_PCT, "s1", "GPU used by the game"), (S.GAME_TOP_THREAD_PCT, "s2", "game's busiest thread"),
          (S.CPU_TOTAL_PCT, "s3", "whole CPU"), (S.GPU_OTHER_PCT, "s4", "GPU used by other programs")],
-        100.0, "%", "system", marks=mark_times(d, cap))
+        100.0, "%", "system", marks=mark_times(d, cap), part=part, outside=labels.outside_marks(cap.marks, part))
 
 
 def _head(d: Diagnosis, cap: Capture, game: str) -> str:
@@ -569,18 +635,28 @@ def _head(d: Diagnosis, cap: Capture, game: str) -> str:
     # The player's own words (watch --note), through e() like every string: a note can name a folder of theirs.
     note = clean_note(cap.note)
     note = f'<p class="note"><strong>Your note:</strong> {e(note)}</p>' if note else ""
+    part = labels.measured_part(d.stats)
+    analysed = f"{labels.part_length(part)} analysed &middot; " if part else ""
+    if part:
+        note += (f'<p class="note">{e(labels.part_note(part, len(labels.outside_marks(cap.marks, part))))} '
+                 "It is shaded on the charts.</p>")
     return (f"<header><h1>Lag report: {e(game)}</h1><p class=\"meta\">{exe}{e(when)} &middot; "
-            f"{fmt_elapsed(cap.duration_s)} recorded &middot; {e(_frames_text(d))}</p>{note}</header>"
+            f"{fmt_elapsed(cap.duration_s)} recorded &middot; {analysed}{e(_frames_text(d))}</p>{note}</header>"
             f'<section class="verdict {e(d.lag_type)}"><div class="badge">{e(lag)}</div>'
             f'<p class="headline">{prose(d.headline)}</p></section>')
 
 
 def render(d: Diagnosis, cap: Capture, capture_path: Path | None = None) -> str:
+    """The page. `cap` is the whole recording: a diagnosis of a measured part (Diagnosis.stats["span"]) is drawn on
+    it, the rest shaded, with every time still a time into the recording."""
     game = labels.game_name(cap.target)
+    part = labels.measured_part(d.stats)
+    outside = labels.outside_marks(cap.marks, part)
     footer = f"lag-doctor {e(__version__)}"
     if capture_path:
         footer += (f" &middot; capture saved at <code>{e(capture_path)}</code> &middot; re-run the analysis in "
-                   f"PowerShell with <code>lagdoctor analyze {e(powershell_path(capture_path))}</code>")
+                   f"PowerShell with <code>lagdoctor analyze {e(powershell_path(capture_path))}{e(part_args(part))}"
+                   "</code>")
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -590,8 +666,8 @@ def render(d: Diagnosis, cap: Capture, capture_path: Path | None = None) -> str:
         f"<h2>Frame times</h2>{_section(lambda: _frame_chart(d, cap))}"
         f"<h2>What is causing it</h2>{_section(lambda: _findings(d))}"
         f"<h2>CPU and GPU</h2>{_section(lambda: _cpu_gpu_chart(d, cap))}"
-        f"<h2>Video memory</h2>{_section(lambda: _memory_chart(cap))}"
-        f"<h2>Network</h2>{_section(lambda: _network_chart(cap, mark_times(d, cap)))}"
+        f"<h2>Video memory</h2>{_section(lambda: _memory_chart(cap, part))}"
+        f"<h2>Network</h2>{_section(lambda: _network_chart(cap, mark_times(d, cap), part, outside))}"
         f"<h2>Worst moments</h2>{_section(lambda: _events(d))}"
         f"{_section(lambda: _marks(d))}"
         f"<h2>This PC</h2>{_section(lambda: _pc(cap))}"

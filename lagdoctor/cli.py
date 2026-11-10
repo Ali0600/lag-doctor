@@ -98,6 +98,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     a = sub.add_parser("analyze", help="re-run the analysis on a saved capture")
     a.add_argument("capture", type=Path)
+    a.add_argument("--from", dest="span_from", type=_time_into, metavar="TIME",
+                   help="analyse from this time into the recording (seconds, 3:12 or 3m12s), leaving out what came "
+                        "before it, such as the game starting up")
+    a.add_argument("--to", dest="span_to", type=_time_into, metavar="TIME",
+                   help="analyse up to this time into the recording (default: its end)")
     a.set_defaults(func=cmd_analyze)
 
     c = sub.add_parser("check", help="check this PC's settings without a game running")
@@ -152,6 +157,40 @@ def _positive_float(text: str) -> float:
     if not v > 0:                      # also refuses NaN
         raise argparse.ArgumentTypeError("must be more than 0")
     return v
+
+
+MAX_TIME_INTO_S = 1e7          # analysis.frames.MAX_ABS_VALUE: a time past it in a capture is corrupt
+_SECONDS = re.compile(r"\d+(?:\.\d+)?")
+_M_SS = re.compile(r"(\d+):([0-5]\d(?:\.\d+)?)")
+_H_MM_SS = re.compile(r"(\d+):([0-5]\d):([0-5]\d(?:\.\d+)?)")
+_UNITS = re.compile(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?")
+
+
+MAX_TIME_TEXT = 32            # no time the report writes is longer; a longer one is refused before it is read
+
+
+def _time_into(text: str) -> float:
+    """A time into the recording as the report and the status line show it: seconds (192.5), minutes and seconds
+    (3:12), hours too (1:03:12), or the report's own spelling (3m12s, 1h 02m 03s, 45s), kept to the millisecond as the
+    report's own `--from`/`--to` write it. Anything else is refused, a negative time and a corrupt one (past
+    MAX_TIME_INTO_S) included."""
+    s = text.strip().lower().replace(" ", "")
+    v = None
+    if len(s) > MAX_TIME_TEXT:
+        pass
+    elif _SECONDS.fullmatch(s):
+        v = float(s)
+    elif m := _H_MM_SS.fullmatch(s):
+        v = int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3])
+    elif m := _M_SS.fullmatch(s):
+        v = int(m[1]) * 60 + float(m[2])
+    elif (m := _UNITS.fullmatch(s)) and any(m.groups()):
+        v = int(m[1] or 0) * 3600 + int(m[2] or 0) * 60 + float(m[3] or 0)
+    if v is None or not v <= MAX_TIME_INTO_S:
+        shown = text if len(text) <= 40 else text[:40] + "..."
+        raise argparse.ArgumentTypeError(f"{shown!r} is not a time into the recording: give seconds (192), minutes "
+                                         "and seconds (3:12) or 3m12s")
+    return round(v, 3)
 
 
 def _ip(text: str) -> str:
@@ -646,18 +685,27 @@ def _app_tell(text: str) -> None:
 # ---------------------------------------------------------------- analyze --
 
 def analyze_and_report(cap, cap_path: Path, out_dir: Path, *, remember: bool = False, kind: str | None = None,
-                       show_summary: bool = True, say: Callable[[str], None] | None = None) -> int:
+                       show_summary: bool = True, say: Callable[[str], None] | None = None,
+                       span: tuple[float, float, str] | None = None) -> int:
     """Diagnose, write diagnosis.json and report.html into out_dir, print the summary. remember=True (a watch)
     makes this the report `fix` acts on. `kind`: summary.json's "watch" or "analyze" (default: "watch" when
     remembered). `show_summary` False: the summary is not said. `say`: where every line goes, the summary included
-    (default: printed)."""
+    (default: printed). `span` (t0, t1, how): analyse only that part of the recording (analysis/crop.py, which
+    refuses a span it cannot cut); the report still draws the whole recording, with the rest shaded."""
+    from lagdoctor.analysis.crop import crop
     from lagdoctor.analysis.diagnose import diagnose
     from lagdoctor.report import console, html
+    from lagdoctor.report.charts import fmt_elapsed
     show = say if say is not None else print          # the summary, which is plain ASCII already
     say = _teller(say)
-    say("Analysing...")
     try:
-        d = diagnose(cap)
+        part = cap if span is None else crop(cap, *span)
+        if part.span is None:
+            say("Analysing...")
+        else:
+            say(f"Analysing {fmt_elapsed(part.span['from_s'])} to {fmt_elapsed(part.span['to_s'])} of the "
+                "recording...")
+        d = diagnose(part)
     except Exception as exc:  # noqa: BLE001 - a damaged capture must end in a plain line, not a traceback
         say(f"The capture at {cap_path} looks damaged: the analysis failed on it ({type(exc).__name__}: "
             f"{str(exc)[:200]}). The file was kept as it is.")
@@ -701,10 +749,23 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     except MemoryError:
         say(f"{path} is too large to load on this PC.")
         return 2
+    span = None
+    t_from, t_to = getattr(args, "span_from", None), getattr(args, "span_to", None)
+    if t_from is not None or t_to is not None:
+        from lagdoctor.analysis import crop
+        try:          # an end not given is the recording's own; one past its end is its end
+            end = crop.recorded_s(cap)
+            whole = (t_from is None or t_from <= 0) and (t_to is None or t_to >= end)
+            if not whole:          # a span over the whole recording is the whole recording, however short
+                span = (*crop.check_span(cap, 0.0 if t_from is None else t_from, end if t_to is None else t_to),
+                        "set")
+        except ValueError as exc:
+            say(f"That part of {path} cannot be analysed: {exc}.")
+            return 2
     # A fresh folder of our own: never next to the capture (which may sit beside files of the user's own
     # with the same names), and never the report `fix` acts on (the capture may come from another PC).
     out_dir = session_dir(paths.sessions_dir(), cap.target)
-    code = analyze_and_report(cap, path, out_dir, remember=False)
+    code = analyze_and_report(cap, path, out_dir, remember=False, span=span)
     if code != 0:
         _remove_empty_dir(out_dir)
         return code

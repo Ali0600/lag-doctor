@@ -105,8 +105,60 @@
 - **The headroom from each game thread on its own**, instead of the busiest thread at each sample: the sampler would
   keep per-thread CPU over 1 s windows, so several busy threads no longer read as one busier one and the CPU's
   ceiling stops leaning low. Revisit hook: `ProcessRates.update` in `capture/sysmon.py` and `frames.headroom`'s `u`.
+- **Each program's network bytes in time bins**, so a measured part can sum its own instead of losing them: today
+  `talkers` and `game_wire_bytes` are totals over the whole recording, and a part sets them to None, so
+  `bandwidth_hog` can name a program only for a whole recording. Revisit hook: `top_talkers` and `game_wire` in
+  `lagdoctor/capture/netflows.py`, and `crop.NET_FLOWS` (DECISIONS 2026-11-09, the measured part).
+- **The power settings read again when measuring starts**, so a part is judged by the power plan and mode it ran under:
+  today the inventory is read once, before the recording starts, and the start key may come 20 minutes later; a mode
+  switched during the startup would be described for the part. Revisit hook: the start key's press in
+  `capture/session.py` (M5's second half) and `_collect_inventory` (DECISIONS 2026-11-09, the measured part).
 
 ---
+
+## 2026-11-09: A measured part keeps the recording's own times (M5's crop)
+
+M5 analyses only part of a recording: from the start key's press, or a part the player sets (`analyze --from/--to`
+first, the app's trim handles later). The plan names one seam, `crop(cap, t0, t1)` before the unchanged `diagnose()`.
+How the cut works was the implementing session's call, after eight readers mapped every place the analysis, the
+reports and the app read a time or a total (the owner has not weighed in).
+- **Keep the recording's own times (chosen)**: rows keep their t, `duration_s` becomes the part's length, and the part
+  is recorded on the cut copy (`Capture.span`), which diagnose copies into `stats["span"]`. A cropped diagnosis's
+  events, marks and moments land on the whole recording's charts as they are, and the times the reports and the app
+  show stay the ones the status line showed. Its cost is one seam: what counts "from the start" counts from the
+  part's start (`_Env.start`, shader_compile's first third), and the words name "the measured part".
+  - **Rebase every time to the part's start**: rejected. Times also sit in text (a source's "stopped at t=812.3 s",
+    a note, evidence lines) that cannot be shifted, nine kinds of nested network times would each need shifting
+    (one missed misaligns silently), and the report, the app's chart, its moment view and the trim handles would add
+    the start back at about a dozen places.
+- **Totals over the whole recording become None in a part (chosen, the plan's)**: each program's network bytes, the
+  game's own and the server flow's packet counts. A launcher's download during the startup would otherwise be named a
+  bandwidth hog in play.
+  - **Keep them**: rejected, for that reason. **Split them by time**: deferred, worth trying (Backlog: per-program
+    bins).
+- **The probe counts are counted again over the part (chosen)**: exact, from the lost probes' own times and the rows
+  that hold a round trip, so the packet-loss figure and rule cover the part.
+  - **None, like the other totals**: rejected; the loss figure and the steady-loss evidence would be lost for every
+    part.
+- **A frame whose own interval began before the part is left out (chosen)**: a start set at the end of a loading
+  screen would make the whole wait the part's worst frame. That is any row whose time since its chain's previous
+  present reaches back past the part's start, and each chain's first shown row whose display change does (the review
+  found a load whose first present was never shown, so the next, shown, frame carried the wait).
+  - **Keep it**, as the recording keeps PresentMon's first row: rejected, for the wait. It is kept only for a part
+    from the recording's own start, so such a part frames as the whole does.
+  - **Clip it to the part** (count only the time after the start): deferred, worth trying if a freeze that runs into a
+    part should show in it. Today a part whose start falls inside a 13 s freeze reads "No lag stood out"; clipped, a
+    start inside a loading screen would count the rest of the load. Revisit hook: `crop.frames_inside`.
+- **The finding text names "the measured part" (chosen)**: about 22 strings that said "of the capture" read
+  `_Env.part`. Leaving them with only a header note was rejected: a finding would claim the whole recording.
+- **summary.json's `duration_s` is the length its numbers cover (chosen)**, with `recorded_s` beside it, so Compare's
+  "Measured length" stays true; the library can show both.
+- **A part is at least 10 s (chosen)**, `frames.BOUND_MIN_S`: shorter, no verdict on what limits the game can come.
+- **The inventory stays as recorded (chosen for now)**: read once before the recording starts. **Read the power
+  settings again at the start key's press**: deferred, worth trying (Backlog), with M5's second half.
+
+Revisit hooks: `lagdoctor/analysis/crop.py` (`NET_FLOWS`, `frames_inside`, `MIN_SPAN_S`), `_Env.start` and
+`_Env.part` in `analysis/rules.py`.
 
 ## 2026-11-09: The headroom estimate comes from thread time, and is context, not evidence
 
