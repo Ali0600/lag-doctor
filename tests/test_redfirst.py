@@ -18,12 +18,15 @@ from pathlib import Path
 
 import pytest
 
+from lagdoctor.winapi import ntquery
+
 REPO = Path(__file__).resolve().parents[1]
 RUNNER = REPO / "scripts" / "redfirst.py"
 PROJECT = REPO / "tests" / "fixtures" / "redfirst" / "project"
 TASKKILL = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "taskkill.exe"
 CHECKS = "tests/check_guard.py::"
-VERDICTS = {"CAUGHT", "SURVIVED", "BROKE-LOAD", "BAD-SPEC", "BAD-BASE", "NOT-APPLIED", "UNISOLATED"}
+VERDICTS = {"CAUGHT", "SURVIVED", "BROKE-LOAD", "BAD-SPEC", "BAD-BASE", "NOT-APPLIED", "UNISOLATED", "TIMEOUT"}
+HANG_S = 6          # the runner's timeout in the hang test: one fixture check's pytest run takes about 0.4 s here
 
 sys.path.insert(0, str(REPO / "scripts"))
 
@@ -56,8 +59,9 @@ def scratch(tmp_path):
 def _start(proj: Path, temp: Path, spec: list[dict], **env: str) -> subprocess.Popen:
     path = proj.parent / "spec.json"
     path.write_text(json.dumps(spec, indent=1), encoding="utf-8")
+    inherited = {k: v for k, v in os.environ.items() if k.upper() != redfirst.TIMEOUT_ENV}   # a test sets its own
     return subprocess.Popen([sys.executable, str(proj / "scripts" / "redfirst.py"), str(path)], cwd=proj,
-                            env=dict(os.environ, TEMP=str(temp), TMP=str(temp), TMPDIR=str(temp), **env),
+                            env=dict(inherited, TEMP=str(temp), TMP=str(temp), TMPDIR=str(temp), **env),
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace")
 
 
@@ -105,6 +109,37 @@ def _remove(path: Path) -> None:
             if time.monotonic() > deadline:
                 raise
             time.sleep(0.2)
+
+
+def _under(root: int, procs: dict[int, ntquery.ProcInfo]) -> set[tuple[int, int]]:
+    """(pid, create time) of every process under root, by parent links no older than the child (pids are reused)."""
+    found: set[tuple[int, int]] = set()
+    todo = [root]
+    while todo:
+        parent = procs.get(todo.pop())
+        for p in procs.values():
+            if (parent and p.ppid == parent.pid and p.pid != parent.pid and p.create_time >= parent.create_time
+                    and (p.pid, p.create_time) not in found):
+                found.add((p.pid, p.create_time))
+                todo.append(p.pid)
+    return found
+
+
+def _alive(procs: set[tuple[int, int]], snap: ntquery.Snapshotter) -> set[tuple[int, int]]:
+    return procs & {(p.pid, p.create_time) for p in snap.snapshot().values()}
+
+
+def _end_leftovers(procs: set[tuple[int, int]], snap: ntquery.Snapshotter) -> None:
+    # Only when a run got it wrong: end what it left running, each one checked to be the process recorded.
+    for pid, _ in _alive(procs, snap):
+        subprocess.run([str(TASKKILL), "/F", "/PID", str(pid)], capture_output=True, timeout=30)
+
+
+def _wait_for(marker: Path, proc: subprocess.Popen, seconds: float = 120) -> None:
+    deadline = time.monotonic() + seconds
+    while not marker.exists() and proc.poll() is None and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert marker.exists(), f"the hanging process never said it had started (exit code {proc.poll()})"
 
 
 def test_a_hard_kill_mid_mutation_leaves_the_real_file_byte_identical(scratch, tmp_path):
@@ -236,6 +271,91 @@ def test_a_run_that_ends_without_the_probe_report_is_unisolated(scratch):
     code, out = _run(proj, temp, spec)
     verdict, info = _verdicts(out)["exits hard"]
     assert verdict == "UNISOLATED" and "report" in info and code == 1, out
+
+
+def test_a_hang_is_a_timeout_whose_processes_all_end_and_the_run_goes_on(scratch, tmp_path):
+    proj, temp = scratch
+    before = _tree(proj)
+    marker = tmp_path / "hang.json"
+    spec = [{"name": "hangs", **DROP_GUARD, "tests": [CHECKS + "test_hangs_while_sabotaged"]},
+            {"name": "hangs at baseline", **BUMP_UNUSED, "tests": [CHECKS + "test_always_hangs"]},
+            # The file the hang ran on: this baseline is green only if the copy was put back after the hang.
+            {"name": "after the hang", **DROP_GUARD, "tests": [CHECKS + "test_pid_zero_is_refused"]}]
+    snap, started, left = ntquery.Snapshotter(), set(), set()
+    proc = _start(proj, temp, spec, REDFIRST_TIMEOUT_S=str(HANG_S), REDFIRST_FIXTURE_MARKER=str(marker))
+    try:
+        _wait_for(marker, proc)
+        hung = json.loads(marker.read_text(encoding="utf-8"))
+        started = _under(proc.pid, snap.snapshot())       # all the runner had started, the hang's processes too
+        out, _ = proc.communicate(timeout=300)
+        left = _alive(started, snap)
+    finally:
+        if proc.poll() is None:
+            _kill_tree(proc)
+        _end_leftovers(started, snap)
+    # The snapshot saw the hanging check and the process it started while they ran...
+    assert {hung["check"], hung["child"]} <= {pid for pid, _ in started}, (hung, started, out)
+    # ... and none of them, nor anything else the runner started, outlived the run.
+    assert not left, f"still running after the runner ended: {sorted(left)}\n{out}"
+    rows = _verdicts(out)
+    assert {name: v for name, (v, _) in rows.items()} == {
+        "hangs": "TIMEOUT", "hangs at baseline": "BAD-BASE", "after the hang": "CAUGHT"}, out
+    assert proc.returncode == 1, out                     # a hang is not a red, so the run is not all caught
+    assert f"did not finish within {HANG_S} s" in rows["hangs"][1], out
+    assert f"not green before sabotage: pytest did not finish within {HANG_S} s" in rows["hangs at baseline"][1], out
+    assert out.index("[1/3] TIMEOUT hangs") < out.index("[3/3] CAUGHT after the hang"), out
+    assert _tree(proj) == before, out
+    copy = _copy_dir(out)
+    assert not copy.exists() and not list(temp.glob("redfirst-*")), "the working copy was not deleted"
+
+
+# Started through redfirst._Job in pytest's place: it starts a process, which says both ids, and both wait.
+TREE_CHILD = """\
+import json, os, pathlib, sys, time
+marker = pathlib.Path(sys.argv[1])
+part = marker.with_name(marker.name + ".part")
+part.write_text(json.dumps({"parent": int(sys.argv[2]), "child": os.getpid()}), encoding="utf-8")
+os.replace(part, marker)
+time.sleep(300)
+"""
+TREE_PARENT = """\
+import os, subprocess, sys, time
+subprocess.Popen([sys.executable, "-c", sys.argv[2], sys.argv[1], str(os.getpid())], stdin=subprocess.DEVNULL,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+time.sleep(300)
+"""
+
+
+def test_the_job_counts_every_process_under_pytest_and_ending_it_ends_them_all(tmp_path):
+    marker = tmp_path / "tree.json"
+    snap, tree = ntquery.Snapshotter(), set()
+    job = redfirst._Job([sys.executable, "-c", TREE_PARENT, str(marker), TREE_CHILD], stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        _wait_for(marker, job.proc, 60)
+        ids = json.loads(marker.read_text(encoding="utf-8"))
+        procs = snap.snapshot()
+        tree = {(job.proc.pid, procs[job.proc.pid].create_time)} | _under(job.proc.pid, procs)
+        assert {ids["parent"], ids["child"]} <= {pid for pid, _ in tree}, (ids, tree)
+        # The venv's python.exe is a launcher, so the child is a launcher's grandchild: the job holds it all the same.
+        assert job.active() == len(tree), (job.active(), tree)
+        job.end()
+        assert job.active() == 0
+        assert not _alive(tree, snap), sorted(_alive(tree, snap))
+    finally:
+        _end_leftovers(tree, snap)
+        job.close()
+
+
+def test_a_timeout_that_is_not_a_positive_number_of_seconds_is_refused(scratch):
+    proj, temp = scratch
+    spec = [{"name": "guard dropped", **DROP_GUARD, "tests": [CHECKS + "test_pid_zero_is_refused"]}]
+    for raw in ("nan", "inf", "0", "-5", "ten"):
+        code, out = _run(proj, temp, spec, REDFIRST_TIMEOUT_S=raw)
+        assert code == 2 and redfirst.TIMEOUT_ENV in out, (raw, out)
+        assert not list(temp.glob("redfirst-*")), (raw, out)        # refused before anything was copied
+    code, out = _run(proj, temp, spec, REDFIRST_TIMEOUT_S=" 1.5e1 ")   # the control: a number of seconds is taken
+    assert code == 0 and _verdicts(out)["guard dropped"][0] == "CAUGHT", out
 
 
 def test_a_check_that_writes_into_its_tree_stops_the_run(scratch):
