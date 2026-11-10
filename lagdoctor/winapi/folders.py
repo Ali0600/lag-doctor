@@ -14,6 +14,7 @@ from ctypes import wintypes
 
 FOLDERID_DOCUMENTS = "{FDD39AD0-238F-46AF-ADB4-6C85480369C7}"
 FOLDERID_LOCAL_APP_DATA = "{F1B32785-6FBA-4FCF-9D55-7B8E7F157091}"
+FOLDERID_PROGRAM_DATA = "{62AB5D82-FDC1-4DC3-A9DD-070D1D495D97}"     # where Epic's launcher keeps its manifests
 KF_FLAG_DEFAULT = 0
 
 
@@ -82,3 +83,7 @@ def documents() -> str:
 
 def local_app_data() -> str:
     return known_folder(FOLDERID_LOCAL_APP_DATA)
+
+
+def program_data() -> str:
+    return known_folder(FOLDERID_PROGRAM_DATA)

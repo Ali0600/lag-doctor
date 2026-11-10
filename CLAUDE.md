@@ -94,9 +94,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   mutates a temp copy of the tree, never the working tree; so tests must not read the real repo by an
   absolute path (reported UNISOLATED) or write into their own tree (stops the run). It copies the tree when each run
   starts, so keep the checkout still until a queued run has begun. Editing a line that an existing mutation's `old`
-  quotes makes that mutation BAD-SPEC, and no test notices: after an edit, check every `old` in
-  `tests/redfirst/*.json` still occurs exactly once in its file, and re-point the ones that moved (same sabotage, new
-  text). Most specs (`report.json`, `user_text.json` and `session.json` among them) are laid out by hand: change their
+  quotes, or adding a line that repeats one, makes that mutation BAD-SPEC, and no test notices (M6b's spawn scan
+  copied the handle scan's parse-failure line, 2026-11-10): after any edit to a file a spec names, check every `old`
+  in `tests/redfirst/*.json` still occurs exactly once in its file, and re-point the ones that moved (same sabotage,
+  new text). Most specs (`report.json`, `user_text.json` and `session.json` among them) are laid out by hand: change their
   values in place, never by rewriting the file through `json.dumps`. A script may rewrite a spec only after checking
   it is byte for byte `json.dumps(indent=1)` plus a newline (`first_capture.json` and `power_plan.json` are), and with
   `write_bytes`: Python's `write_text` writes CRLF on Windows. The copy holds `lagdoctor/`, `laglab/`, `tests/`,
@@ -114,6 +115,15 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   makes OneDrive download it). A file size is `labels.byte_count`, never `charts.number`, which refuses anything past
   1e7 as corrupt: an 81 MB exe read as "not read" until a demo used a real size. A DLL name joins `PROXY_DLLS` only
   from a primary source, and never one on KnownDLLs (`tests/test_gamefiles.py` reads both lists).
+- **The store readers (`lagdoctor/stores/`) reach files only through `stores`' own file access** (`scandir`, `stat`,
+  `is_folder`, `exists`, `read_text`), which asks `target.local_problem` first: it reads each junction and link on the
+  way instead of following it, so nothing on a network share, or kept online only, is opened. `tests/test_stores.py`
+  scans every module of `lagdoctor/stores` but `__init__.py` for any other way in (aliases, `ntpath`, the raw
+  seams), and proves it on planted lines. Their tests never read this PC's own Steam or Epic files: the
+  Steam tests' `registry` fixture (a fake behind `steam._open_key` and `_query_value`) is autouse, and the Epic tests'
+  `no_real_folders` fails any default place a test did not move. A link onto a share needs admin rights to make, so a
+  test makes a real junction and fakes what `target._readlink` gives for it. A Steam tool id joins `steam.NOT_GAMES`
+  only from a source that names it (`docs/research/desktop-app.md`, section 15), never from recall.
 - **Text a player reads is plain words.** Research citations (`WT 8`, `LC 4.9`, `NE 7 row 9`) and review ids
   (`CC-5`) go in comments, never in a string the report, console or a fix shows; `tests/test_user_text.py`
   scans every module but `winapi/`. Name sources with `labels.source_text`, never by their ids.
@@ -398,6 +408,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `tests/test_sysmon_sampler.py::test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild` failed once in a
   full local run (2026-11-08: the grandchild's first reading was 0.0, so its mean was 72 % against the 88 % expected,
   outside the 10-point bound) and passed alone; rerun it alone before blaming a change.
+  `tests/test_sweep_runner.py::test_input_that_ends_is_said_as_such` failed once in a full local run (2026-11-09, on
+  M6c's branch, which touches nothing the sweep imports: exit 2, so the settings were not all put back), then passed
+  3 of 3 alone and twice in its file. Its fake world's journal waits 0.3 s for its lock, which a loaded PC may
+  outrun (not measured); rerun it alone before blaming a change.
   Never run two pytest processes here at once (a review agent's tests beside the suite): they share
   `%TEMP%\pytest-of-<user>` and its keep-three cleanup, and on 2026-11-08
   `tests/test_downloads.py::test_fetch_gold_takes_the_pinned_commits_gold_folder_byte_for_byte` failed twice that way

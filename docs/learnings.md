@@ -1074,3 +1074,18 @@ every 4 s; sweeping where the moves fall against the sampler's ticks in 0.125 s 
 **Takeaway**: feed a probe's made-up data through the consumer's own function, sweep what the real data varies
 (phase, alignment, seed), and quote what it returns; re-running a measurement checks its arithmetic, not whether it
 measures what the code reads.
+
+### Look at a path's links without following them, one part at a time
+On Windows a folder path can pass through a junction or a symbolic link at any part, and opening it follows them, so
+a check of the drive letter alone can still end on a network share. `os.lstat` opens each part itself (no link is
+followed), and `os.readlink` reads where a link points without opening the target; walking a path from its drive down
+this way, and reading each link's target before going on there, finds a share before anything waits on it. A junction
+can only point to a folder on a local volume, while a symbolic link can point to a share but needs admin rights or
+Developer Mode to make; a volume mounted in a folder is a junction onto a `\\?\Volume{...}\` path, which
+`GetDriveTypeW` also answers for.
+**Why it came up**: M6c's library readers (`target.local_problem`, `lagdoctor/stores/`). The first version checked
+only the drive letter, and a review showed that a library behind a link onto a sleeping network drive would hang the
+app's game list for the drive's whole timeout. Libraries moved with a junction still had to keep working, so the walk
+reads links rather than refusing them.
+**Takeaway**: when a path must not leave the local disks, walk it part by part with lstat and readlink, judging each
+link's target, never open it to find out.

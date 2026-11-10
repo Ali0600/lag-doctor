@@ -543,6 +543,115 @@ stay out of this note.
 
 What this means for Play is in the plan's M6 ([../LAUNCHER-PLAN.md](../LAUNCHER-PLAN.md)).
 
+## 15. The library files Play reads, fact-checked (2026-11-09)
+
+What `lagdoctor/stores/steam.py` and `epic.py` read, from primary sources: Valve's Source SDK 2013 `KeyValues.cpp` and
+developer wiki, and the code of Playnite, Lutris, legendary, Heroic, steamlocate, SKIF, Steam ROM Manager, BoilR and
+dlss-swapper, each at a named commit. The files on the owner's PC were read for structure only: field names, nesting,
+shapes and counts, never a value. One workflow of 6 agents: 3 gathered, and a separate agent re-derived each of their
+139 claims (98 held; 41 were corrected, and the corrections are what this section states). The Epic files measured
+were the legacy launcher's; the Preview's are described from its readers' code. A review on 2026-11-09 checked the
+outside claims behind its fixes against primary sources again (the log's last row); its corrections are folded in.
+
+- **Every source is writable by any local account** [verified: on the owner's PC]: the Steam folder grants
+  BUILTIN\Users full control, which `steamapps` and both copies of `libraryfolders.vdf` inherit, and both HKLM views of
+  `Valve\Steam` grant BUILTIN\Users `KEY_ALL_ACCESS` (`A;;KA;;;BU`), so `InstallPath` is no more trusted than the files.
+  Epic's manifest folders grant the same (section 5). The Preview's journal sits in the player's own
+  `%LOCALAPPDATA%`, which other accounts cannot write, but any program the player runs can append to it, and the
+  Preview adopts what is appended.
+- **Steam's folder**: HKCU `Software\Valve\Steam` `SteamPath` holds it lower-cased, with forward slashes; HKLM
+  `SOFTWARE\WOW6432Node\Valve\Steam` `InstallPath` holds it in its real case [verified: the registry; Playnite and
+  RPCS3 normalise the first, steamlocate reads the second].
+- **`steamapps\libraryfolders.vdf`**, KeyValues text, in two formats [verified]:
+  - current: root `libraryfolders`, numbered blocks with `path` (backslashes doubled), `label`, `contentid`,
+    `totalsize`, `apps` and others, the Steam folder as entry `0`; some writers add a `mounted` key (Lutris skips an
+    entry whose value is not `1`);
+  - before 2021: root `LibraryFolders` with `TimeNextStatsReport` and `ContentStatsID`, then `"1"`, `"2"`... whose
+    values are the paths themselves, without the Steam folder.
+
+  Readers take a numbered child that is a string as a path and a block's `path`, skip the rest, add the Steam folder
+  themselves and drop duplicates after folding case and slashes. Steam keeps an identical copy in `config\`. A line
+  ending may be CRLF.
+- **`appmanifest_<appid>.acf`**, one `AppState` block [verified: Valve's upload docs; every manifest read was named
+  by its own `appid`]:
+  - Key case drifts between Steam versions (`Universe` and `universe`, `appID`), so keys compare case-insensitively.
+  - `StateFlags` is a decimal bitmask: 4 is FullyInstalled, and 2 UpdateRequired. 64 and 8192 are named differently
+    by different sources, so neither is read as "running".
+  - `installdir` is one folder name under `steamapps\common`, or `steamapps\music` for a soundtrack.
+  - No manifest says what kind of app it is: launchers skip tools by id, and every one skips 228980, Steamworks Common
+    Redistributables. A library shared with a Linux install can also hold Linux tools: the Steam Linux Runtimes
+    1.0 to 4.0 (1070560, 1391110, 1628350, 4183110; Valve's steam-runtime README at 8cb6d88) and the Proton versions,
+    by the app ids Steam's own compat log registers them under (a log a player pasted into Valve's Proton tracker,
+    issue 3831; Proton 11.0 from a client log in Valve's steam-for-linux tracker, issue 13248). Each public record on
+    api.steamcmd.net names it a Tool [verified 2026-11-09; five Proton records there are not public].
+- **KeyValues** (Valve's SDK and wiki) [verified]:
+  - Tokens are quoted or unquoted, and `{`, `}` and `"` are the control characters. `//` starts a comment.
+  - Escapes are off by default; Steam's files need them on, and an escape that is not one turns into a NUL, which cuts
+    the string short.
+  - Conditionals (`[$WIN32]`) and `#include` and `#base` (top level only) exist. The first of two equal keys wins in
+    lookups, and keys compare case-insensitively.
+  - Tokens are limited to 4096 bytes, and nesting to 100.
+
+  Steam's own library files use none of the optional features: every token quoted, the doubled backslash the only
+  escape, no comment, conditional, include or repeated key [verified: the owner's files, structure only]. So
+  `stores/keyvalues.py` refuses the rest.
+- **The legacy Epic launcher** writes one JSON object per `<InstallationGuid>.item` in
+  `%ProgramData%\Epic\EpicGamesLauncher\Data\Manifests` [verified]:
+  - Its key set changes with the launcher's version (39 to 52 keys across sources), so every key is optional, and its
+    paths use either slash.
+  - The ids are not always 32 hex digits: Fortnite's are `fn`, hex and `Fortnite`, and the engine's `ue` and
+    `UE_5.4`.
+  - Readers disagree on what a playable base game is. legendary and Heroic need `MainGameAppName` equal to `AppName`,
+    Playnite reads `AppCategories`, and DLSS Swapper and steamsync need `games` among them; only steamsync skips
+    `bIsIncompleteInstall`.
+  - Correction (2026-11-09): since mid-2026 the launcher writes `""` in `MainGameAppName` (and in
+    `MainGameCatalogItemId` and `MainGameCatalogNamespace`) for a base game, so the first rule above drops every
+    current base game [verified: Lutris's issue 6899, launcher 20.3.1, fixed by its pull request 6953 at aea3e84 with
+    the rule `MainGameAppName in ("", AppName)`; DLSS Swapper's issue 894, whose fix 903 then turned the check off at
+    51e7ad9; RetroBat at d8c49a0; a launcher-written fixture in rai-pal at 5d2c16e]. And Fortnite's own manifest
+    names its editor (`Fortnite_Studio`) there once the editor is installed (Playnite's PlayniteExtensions issue
+    521), which is why Playnite tells an add-on by `AppCategories` alone: `addons`, and not `addons/launchable`
+    (40941bb). lag-doctor follows Playnite, and reads `MainGameAppName` only in a manifest without `AppCategories`.
+    No launcher-written add-on (game DLC) manifest was found in public; a plugin names the engine there (`UE_5.6`,
+    on Epic's own forum).
+  - `%ProgramData%\Epic\UnrealEngineLauncher\LauncherInstalled.dat` lists installs too; legendary never reads it.
+- **The Preview launcher** keeps `%LOCALAPPDATA%\com.epicgames.eglv2\installations.jsonl` [verified: readers' code at
+  named commits, and one file the launcher wrote, measured for structure; research: one binary analysis of build
+  0.95.1]. Epic documents none of it.
+  - Line 1 is a header, `{version: 1, writtenAt, entries}`, and holds no `installationId`. Its `entries` is not the
+    number of lines or of installs.
+  - Every later line is either a whole record for one `installationId` (`complete`, `dir`, `namespace`, `itemId`,
+    `artifactId` (the legacy `AppName`), `version` or `pendingVersion`, `launchExecutable`, and more) or a tombstone
+    `{installationId, deleted: true}`.
+  - The file is a journal. Read it top to bottom, keep the last record per install, and let a tombstone remove it.
+    Never sort by `writtenAt`, which has one-second resolution and ties.
+  - A half-written last line happens. `complete: false` is a first download, an update in progress or an uninstall in
+    progress.
+  - Add-ons carry `parentInstallationId` and the base game's `dir`.
+  - The file holds no title. The Preview keeps titles in `cache\prod\catalog-cache.json` beside it, an object whose
+    `items` maps each catalog item id to `{item: {id, title, ...}}` [verified: SKIF at 3e21cc9 and ludusavi at
+    2b8798a read it so, and ludusavi's maintainer found the same in a real file]. Its install folders sometimes end in
+    a random suffix [research: Epic-Unlocker's format notes at d3fa303; one user's file].
+  - Blank lines are nothing: SKIF skips them, and Epic-Unlocker's notes say a trailing line break is common.
+  - `installationId` is 32 upper-case hexadecimal digits [verified: Unofficial-EGL-Documentation at dcdee23,
+    `Launcher/LocalData.md`; Epic-Unlocker]; an install imported from the legacy launcher keeps its installation GUID.
+  - The launcher treats three namespaces as Unreal Engine's: `ue` and two more, which no source names a product for
+    [research: Unofficial-EGL-Documentation's reading of build 0.95.1, `Flows/GameLaunch.md`].
+  - Other programs may append complete records, which the launcher adopts.
+- **Links on the way to a folder** (learn.microsoft.com) [verified 2026-11-09]: a junction points only at a folder on
+  a local volume (a mapped network drive is refused); a symbolic link can point at a share, but making one needs the
+  Create symbolic links right (Administrators by default) or Developer Mode; and Windows follows a local link to a
+  remote target by default (an archived Microsoft blog; no reference page gives the defaults). An lstat opens a link
+  itself (`FILE_FLAG_OPEN_REPARSE_POINT`), and Python's `os.readlink` reads its target without following it. A volume
+  mounted in a folder is a junction onto `\\?\Volume{...}\`, and `GetDriveTypeW` answers for that root (measured:
+  3, a fixed disk, for this PC's system volume; no Microsoft page says so).
+- **The Preview's link handling** [research]: it registers `com.epicgames.launcher` through Tauri's deep-link plugin.
+  A link arrives as a new process's only argument and is forwarded to a running launcher, and that process's exit code
+  says nothing about delivery. Epic's documented three-part link is the one form every report accepts. The link also
+  takes `arg=` and `env.<name>=` query keys, so it is built only from ids that pass a grammar.
+
+What this means for Play is in the plan's M6 list ([../LAUNCHER-PLAN.md](../LAUNCHER-PLAN.md)).
+
 ## Verification log (2026-11-08)
 
 | Claim | Result | Source read |
@@ -573,3 +682,5 @@ What this means for Play is in the plan's M6 ([../LAUNCHER-PLAN.md](../LAUNCHER-
 | Valve's argument dialog (2013-07-08), the Unity block (2025-10-03) and the shortcut fix (2026-10-13) | confirmed, with one correction: the same update's Stop-button fix for games another tool started is listed under Linux only | Valve's pages and the Steam news API |
 | Epic's three-part link is its documented form; Playnite and Lutris moved to it; the Preview removes `%ProgramData%\Epic\EpicGamesLauncher` | confirmed | Epic's PDF; the two commits; Epic's Preview pages; dlss-swapper's pull request 978 |
 | The Steam copy has no Denuvo and no anti-cheat | confirmed | PCGamingWiki's API; the store page; press reports of 2025-01-25 and 2025-03-04 |
+| Section 15's library formats: Steam's registry values, `libraryfolders.vdf`'s two formats, `appmanifest`'s fields and bits, the KeyValues grammar, the legacy `.item` files and the Preview's `installations.jsonl` | 139 claims re-derived by a second agent: 98 held, 41 corrected (section 15 states the corrections) | Valve's SDK at e1f1fd4 and wiki; the readers' code at named commits; the owner's files, structure only |
+| The review's outside claims (2026-11-09): `MainGameAppName` `""` for base games and Fortnite's editor case; the Preview's blank lines, `installationId`, catalog cache and Unreal namespaces; the Linux tool ids; the link rules | confirmed, but for which products two Unreal namespaces are (no source) and `GetDriveTypeW` on a volume path (undocumented; measured) | Lutris aea3e84, DLSS Swapper e7a6dbc and 51e7ad9, RetroBat d8c49a0, rai-pal 5d2c16e, Playnite 40941bb; SKIF 3e21cc9, ludusavi 2b8798a, Unofficial-EGL-Documentation dcdee23, Epic-Unlocker d3fa303; api.steamcmd.net, Valve's steam-runtime 8cb6d88 and Steam compat logs in Valve's trackers; learn.microsoft.com |

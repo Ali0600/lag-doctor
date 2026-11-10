@@ -280,6 +280,7 @@ lagdoctor/
             webview2.py                                 WebView2 from ctypes, through the runtime's own export (the app)
             launch.py                                   Explorer opens a link, as from a click (Play's store launch)
   stores/   launch.py                                   Play's store links, built from fixed templates (M6)
+            __init__.py steam.py epic.py keyvalues.py   the games each store has installed, from its own files (M6)
   relay/    protocol.py server.py client.py __main__.py   frame timing and the network trace with admin rights
             process.py                                  priority of other processes (fixes/priority)
   capture/  base.py (done) target.py sysmon.py gpumon.py netmon.py netflows.py presentmon.py inventory.py
@@ -1508,6 +1509,82 @@ def play(link: str) -> dict                       # winapi/launch.py's dict plus
   and only after its fields pass the grammar; Steam's carries no arguments, so Steam shows no prompt for it.
 - `play` hands the link to `winapi.launch.open_through_explorer` and nothing else: when Explorer's desktop cannot
   be reached it fails, and the link is never opened another way.
+
+## Play's library readers (lagdoctor/stores/)
+
+Play lists the games the player's stores have installed (LAUNCHER-PLAN M6), read from the stores' own files, without
+starting a store or a game. Where each store keeps its list, and the other readers whose rules these follow, is the
+research note desktop-app.md, section 15.
+
+```python
+@dataclass(frozen=True)
+class Game: store, id, title, folder, link    # id: Steam's app id, or Epic's "<namespace>:<catalog item>:<app name>";
+                                              # folder in target.check_folder's form, existing when read;
+                                              # link: launch.steam_link's or launch.epic_link's
+@dataclass
+class Library: games, problems                # problems: plain words (Problems, below)
+class Problems(source)                        # .add(text), .lines(): the first 20 a source names, each one line of
+                                              # at most 1,000 characters (plain), then "N more problem(s) with the
+                                              # files of <source>, not listed here"
+def shown(value) -> str                       # a refused value as a problem quotes it: "missing", "true", "a list",
+                                              # "a block", else its repr, cut to 60 characters
+def name(value) -> str | None                 # a store's name for a game: model.clean_note at 200 characters
+def title(value, fallback) -> str             # name(value), else name(fallback) (its folder's), else "Unnamed game"
+def scandir(path), stat(path), is_folder(path), exists(path)   # the readers' only file access: each asks
+def read_text(path, max_bytes) -> str         # target.local_problem first and raises NotLocal (an OSError) when it
+                                              # objects; read_text also refuses past the cap (by the stat, then by a
+                                              # read one byte past it), bytes that are not UTF-8, and drops one BOM
+def target.local_problem(path) -> str | None  # why a path leads off the local disks (below), or None
+def keyvalues.parse(text) -> dict             # Valve's KeyValues text, read strictly (below)
+def steam.find_steam_folder() -> str | None
+def steam.read(steam_folder=None) -> Library  # find_steam_folder's when None
+def epic.read(manifests=None, installations=None) -> Library   # by default under %ProgramData% and %LOCALAPPDATA%
+```
+- **Untrusted files.** Every local account can write Steam's folder, its HKLM keys and the legacy Epic launcher's
+  manifests, and any program the player runs can write the Preview's journal, which the Preview then adopts. So each
+  reader takes only what its store writes: every size and count capped, every field checked (the ids by the store
+  launch's own grammar, the folder by `target.check_folder`), and what fails is skipped and named in `problems`. One
+  bad entry never hides the others in its file; a file that cannot be read as a whole (a `libraryfolders.vdf` that is
+  not KeyValues as Steam writes it, a journal without its header) is named, and none of its entries is taken. Nothing
+  reads an Epic game's command line, where an Epic launch carries a sign-in code.
+- **No network, no download.** The readers look at files and folders only through stores' file access
+  (`tests/test_stores.py` scans every module of `lagdoctor/stores` but `__init__.py` for any other way, aliases,
+  `ntpath` and the raw seams included), so `target.local_problem` sees every path first: the path's drive or volume
+  must be a local fixed or removable disk (a drive with nothing connected is named as such), and each part of the path is looked at in turn without
+  following it (an lstat). A junction or symbolic link is read (readlink), never opened, and the walk goes on at its
+  target, which must be on such a disk too; at most 8 links. A part kept online only is refused (opening it would
+  download it). A folder on a network share, or reached through a link to one, is never opened: a sleeping server
+  holds a call for its whole timeout. `target.folder_forms` asks the same function, so the folder wait opens nothing
+  there either.
+- **Steam**: the folder from HKCU's SteamPath, else HKLM's InstallPath (the 32-bit view first), spelled as the
+  InstallPath has it when both name it (Steam writes SteamPath lower-cased); the libraries in
+  `steamapps\libraryfolders.vdf`, in its 2021 and its older format, after Steam's own folder, a duplicate dropped
+  after folding case and slashes and one whose "mounted" is "0" skipped; in each, every `appmanifest_<appid>.acf`
+  whose StateFlags has FullyInstalled (the value 4) and whose `steamapps\common\<installdir>` is a folder. Games are
+  listed by library in that order, by app id within each. Soundtracks and Steam's own tools (`steam.NOT_GAMES`: the
+  redistributables, the Steam Linux Runtimes and the Proton versions a library shared with Linux can hold) are passed
+  over. Caps: the library file 1 MB, a manifest 256 KB, 64 libraries, 4,096 manifests, 20,000 entries a `steamapps`
+  folder.
+- **Epic**: the legacy launcher's `.item` manifests, by file name, and the Preview's `installations.jsonl`, replayed
+  in file order (the last record of an installationId wins, a tombstone removes it, a blank line is nothing, a
+  half-written last line is the launcher still writing). An add-on is told by its AppCategories ("addons" and not
+  "addons/launchable", Playnite's rule), and only in a manifest without AppCategories by a MainGameAppName that names
+  another app: today's launcher writes "" there for a base game, and Fortnite's own manifest names its editor there.
+  Unfinished installs, a manifest whose AppCategories holds no "games", and Unreal Engine itself are passed over. A
+  game the Preview has a record of is taken as the Preview has it. The Preview's games come first, in the order of
+  their last lines, then the legacy launcher's; its problems come first too. A Preview game's title is its catalog
+  cache's (`cache\prod\catalog-cache.json` beside the journal, `{"items": {<catalog item id>: {"item": {"title"}}}}`,
+  read once, when the first record of a game comes to its title), else the legacy manifest's DisplayName, else the
+  folder's name. Each legacy manifest is judged as soon as it is read and then let go, so no more than one is held
+  (another account's folder of small JSON objects would otherwise take gigabytes). The JSON
+  is read strictly (no NaN or Infinity, no key twice). Caps: 16,384 entries and 4,096 manifests in the folder, 1 MB a
+  manifest and 64 MB together, the journal 8 MB and 100,000 lines, the catalog cache 16 MB and 100,000 items.
+- **KeyValues** (`keyvalues.parse`): quoted tokens, braces, whitespace and `//` comments, and the escapes `\\`, `\"`,
+  `\n` and `\t` (any other is refused: Valve's own reader turns it into a NUL that cuts the text short); no
+  conditionals and no top-level key that starts with `#` (Valve's reader takes `#include` and `#base` there as
+  directives); a quoted brace is text. Keys fold case and the first of two equal keys wins, as in Valve's lookup.
+  Caps: 4,096 characters a token (Valve's own limit is 4,096 bytes), 16 levels, 100,000 keys. A byte order mark is
+  `read_text`'s to drop.
 
 ## The app (lagdoctor/app)
 
