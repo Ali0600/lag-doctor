@@ -550,9 +550,14 @@ The app's half was built on 2026-11-09 (DESIGN.md, The app), with these choices 
 ### M6: Play
 
 - The library readers and the art.
-- The store launch: a policy module that builds each URI from its fixed template and refuses when elevated, over a
-  thin `winapi/launch.py` that only hands the link to Explorer's `IShellDispatch2::ShellExecute` (DESIGN.md keeps
-  policy out of `winapi/`). The `test_no_handles` extension ships with it.
+- [x] The store launch: a policy module that builds each URI from its fixed template and refuses when elevated, over
+  a thin `winapi/launch.py` that only hands the link to Explorer's `IShellDispatch2::ShellExecute` (DESIGN.md keeps
+  policy out of `winapi/`). The `test_no_handles` extension ships with it. Built: `lagdoctor/stores/launch.py`
+  (DESIGN.md, "Play's store launch"), `winapi/launch.py`, whose six slots and seven IIDs are read back from the
+  Windows SDK's C headers, and the spawn scan in `tests/test_no_handles.py`, which lists every place that starts a
+  program by file and function. On this PC (2026-11-09) Explorer started a helper program it was handed as its own
+  child within 64 ms of the call; a test does the same with a windowless helper. Whether a game's window comes to
+  the front this way is still the owner's run to show (research note, section 10).
 - [x] The folder wait: `in_folder` and `wait_for_target` in `target.py`, and the folder rule in `accept_target`, with
   `find_target` untouched (DESIGN.md, "Play's folder wait"). Both judge a program by one function,
   `program_reason`, against the folder's forms (`folder_forms`: the folder and its real path through a junction or
