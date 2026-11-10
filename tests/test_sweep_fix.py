@@ -16,7 +16,7 @@ from lagdoctor.fixes.game_setting import GameSettingFix
 from lagdoctor.fixes.journal import Journal
 
 ROOT = Path(__file__).resolve().parents[1]
-RAW = (b"[ScalabilityGroups]\r\nsg.ShadowQuality=0\r\nsg.StaticMeshQuality=3\r\n\r\n"
+RAW = (b"[ScalabilityGroups]\r\nsg.ShadowQuality=2\r\nsg.StaticMeshQuality=3\r\n\r\n"
        b"[/Script/Engine.GameUserSettings]\r\nbUseVSync=False\r\n")
 
 
@@ -108,7 +108,7 @@ def test_a_read_only_file_is_left_alone(ini, journal):
 
 def test_a_file_onedrive_keeps_online_only_is_never_opened(ini, monkeypatch):
     real = os.stat(ini)
-    placeholder = SimpleNamespace(st_mode=real.st_mode, st_size=real.st_size,
+    placeholder = SimpleNamespace(st_mode=real.st_mode, st_size=real.st_size, st_nlink=1,
                                   st_file_attributes=gamefiles.FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS)
     monkeypatch.setattr(game_setting, "_file_stat", lambda path: placeholder)     # never os.stat: every module's
 
@@ -127,7 +127,8 @@ def test_a_key_the_file_does_not_have_is_refused_at_the_plan(ini):
 @pytest.mark.parametrize("change", [
     {"extra": 1}, {"file": r"\\server\share\GameUserSettings.ini"}, {"file": r"\\?\C:\x\GameUserSettings.ini"},
     {"file": "GameUserSettings.ini"}, {"file": r"C:\x\settings.txt"}, {"value": "1;2"}, {"value": "1\r\n[X]"},
-    {"key": "sg X"}, {"section": "A]B"}, {"game": r"C:\Games\Game.exe"}, {"game": "Game"},
+    {"key": "sg X"}, {"section": "A]B"}, {"game": r"C:\Games\Game.exe"}, {"game": "Game"}, {"game": "-x.exe"},
+    {"file": r"C:\x\a:b.ini"}, {"key": ".Paths"},
 ])
 def test_params_the_fix_did_not_make_are_refused(ini, change):
     params = {**_params(ini), **change}
@@ -183,6 +184,82 @@ def test_lagdoctor_undo_puts_a_sweeps_edit_back(ini, capsys):
     assert cli.main(["undo", "--all"]) == 0
     assert ini.read_bytes() == RAW
     assert "Restored" in capsys.readouterr().out
+
+
+def test_a_file_with_other_names_is_refused(ini, tmp_path):
+    os.link(ini, tmp_path / "another-name.ini")
+    with pytest.raises(ValueError, match="hard links"):
+        GameSettingFix(running=Running()).read(_params(ini))
+
+
+def test_a_link_to_another_file_is_refused(ini, tmp_path):
+    link = tmp_path / "link.ini"
+    try:
+        os.symlink(ini, link)
+    except OSError as exc:                                 # needs Developer Mode or admin rights on Windows
+        pytest.skip(f"this account cannot make a symbolic link ({exc})")
+    with pytest.raises(ValueError, match="link to another file"):
+        GameSettingFix(running=Running()).read(_params(link))
+
+
+def test_a_file_on_a_network_drive_is_refused(ini, monkeypatch):
+    monkeypatch.setattr(game_setting, "_drive_type", lambda file: 4)       # DRIVE_REMOTE
+    with pytest.raises(ValueError, match="not on one of this PC's own disks"):
+        GameSettingFix(running=Running()).read(_params(ini))
+
+
+def test_the_move_is_tried_again_until_its_deadline_not_a_count(ini, monkeypatch):
+    now = {"t": 0.0}
+    tries = []
+
+    def refused(src, dst):
+        tries.append(now["t"])
+        raise PermissionError(13, "in use")
+
+    def sleep(seconds):
+        now["t"] += seconds
+    monkeypatch.setattr(game_setting, "_move", refused)
+    with pytest.raises(PermissionError):
+        game_setting.replace_bytes(str(ini), b"[S]\r\n", sleep=sleep, clock=lambda: now["t"])
+    assert tries[-1] >= game_setting.REPLACE_DEADLINE_S and len(tries) > 5
+    assert ini.read_bytes() == RAW
+
+
+def test_the_games_own_spelling_of_lag_doctors_value_is_still_lag_doctors(ini, journal):
+    fix = GameSettingFix(running=Running())
+    entry_id = fix.apply(fix.plan(_params(ini, value="1")), journal).entry_id
+    ini.write_bytes(ini.read_bytes().replace(b"sg.StaticMeshQuality=1", b"sg.StaticMeshQuality=1.000000"))
+    assert fix.undo(journal.get(entry_id), journal).ok and ini.read_bytes() == RAW
+
+
+def test_the_original_in_the_games_own_spelling_counts_as_put_back(ini, journal):
+    fix = GameSettingFix(running=Running())
+    entry_id = fix.apply(fix.plan(_params(ini, value="1")), journal).entry_id
+    respelt = RAW.replace(b"sg.StaticMeshQuality=3", b"sg.StaticMeshQuality=3.000000")
+    ini.write_bytes(respelt)
+    res = fix.undo(journal.get(entry_id), journal)
+    assert res.ok and journal.get(entry_id).state == "undone" and ini.read_bytes() == respelt   # nothing written
+
+
+def test_a_line_the_game_dropped_comes_back_only_by_a_forced_undo(ini, journal):
+    fix = GameSettingFix(running=Running())
+    entry_id = fix.apply(fix.plan(_params(ini, value="1")), journal).entry_id
+    ini.write_bytes(ini.read_bytes().replace(b"sg.StaticMeshQuality=1\r\n", b""))
+    res = fix.undo(journal.get(entry_id), journal)
+    assert not res.ok and "could not be read" in res.message and b"StaticMeshQuality" not in ini.read_bytes()
+    assert fix.undo(journal.get(entry_id), journal, force=True).ok and ini.read_bytes() == RAW
+    with pytest.raises(LookupError):                       # the plan of a missing key still never adds one
+        fix.plan(_params(ini, key="sg.Missing"))
+
+
+def test_lagdoctor_undo_by_the_fix_id_touches_only_the_sweeps_edits(ini, capsys):
+    fix = GameSettingFix(running=Running())
+    journal = Journal()
+    assert fix.apply(fix.plan(_params(ini)), journal).ok
+    other = journal.begin("power_plan", "the power plan", {"scheme": "x"}, "a", "b")
+    journal.set_state(other.id, "applied")
+    assert cli.main(["undo", "game_setting"]) == 0
+    assert ini.read_bytes() == RAW and journal.get(other.id).state == "applied"
 
 
 def test_no_report_ever_offers_it():

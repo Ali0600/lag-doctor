@@ -21,7 +21,7 @@ from lagdoctor.model import NOTE_MAX
 from lagdoctor.sweep import command, plan, runner
 from lagdoctor.winapi import elevation, power
 
-RAW = b"[ScalabilityGroups]\r\nsg.ShadowQuality=0\r\nsg.StaticMeshQuality=3\r\n"
+RAW = b"[ScalabilityGroups]\r\nsg.ShadowQuality=2\r\nsg.StaticMeshQuality=3\r\n"
 GAME = {"pid": 4242, "create_time": 133000000000000001, "name": "Game.exe", "exe": r"C:\Games\Game.exe",
         "window_title": "Game", "monitor_device": None, "adapter_luid": None, "how": "name", "candidates": []}
 
@@ -85,10 +85,20 @@ def sweeps() -> list[Path]:
 # ----------------------------------------------------------------- parser --
 
 @pytest.mark.parametrize("extra", [["--runs", "1"], ["--runs", "11"], ["--runs", "two"], ["--window", "29"],
-                                   ["--window", "nan"], ["--window", "601"], ["--start-key", "ctrl+alt+?"]])
+                                   ["--window", "nan"], ["--window", "601"], ["--start-key", "ctrl+alt+?"],
+                                   ["--start-key", "none"], ["--start-key", "s"], ["--start-key", "shift+s"]])
 def test_the_parser_refuses_what_a_sweep_cannot_use(extra):
     with pytest.raises(SystemExit):
         args(*extra)
+
+
+def test_input_that_ends_at_the_question_is_a_no(monkeypatch):
+    def ended(prompt):
+        raise EOFError
+    monkeypatch.setattr("builtins.input", ended)
+    assert command._yes("Begin the sweep? [Y/n] ", default=True) is False
+    monkeypatch.setattr("builtins.input", lambda prompt: "")
+    assert command._yes("Begin the sweep? [Y/n] ", default=True) is True
 
 
 def test_the_parser_takes_a_sweep_and_a_resume():
@@ -221,7 +231,7 @@ def test_resume_of_a_finished_sweep_shows_its_results(ini, ran):
     folder = _saved(ini, "20261109-200000-Game", "finished")
     lines: list[str] = []
     assert _main(args("--resume", str(folder)), lines) == 0 and not ran.calls
-    assert lines[0].startswith("Results:") and "finished" in lines[-1]
+    assert lines[0].startswith("Results, in order of average FPS") and "finished" in lines[-1]
 
 
 def test_resume_takes_no_new_plan_and_needs_a_sweep(ini, ran):
@@ -244,8 +254,9 @@ def test_cli_main_runs_a_sweep_behind_the_private_copy_gate_and_settles_the_jour
         gates.append(policy)
         return real(policy, *a, **kw)
     monkeypatch.setattr(cli, "_private_copy_gate", gate)
-    monkeypatch.setattr(cli, "_ask", lambda prompt, default=False: True)
+    monkeypatch.setattr(command, "_yes", lambda prompt, default=False: True)
     monkeypatch.setattr(command, "real_seams", lambda: None)
+    monkeypatch.setattr(cli, "PENDING_GRACE_S", 0.0)          # the entry below is old enough to settle
     # A sweep that died mid-write left its entry pending: the next sweep settles it before it plans anything.
     params = {"file": str(ini), "section": "ScalabilityGroups", "key": "sg.StaticMeshQuality", "value": "1",
               "game": "Game.exe"}
@@ -330,3 +341,82 @@ def test_a_sweep_run_records_through_watch_without_repointing_fix_or_saying_the_
     said = "\n".join(lines)
     assert "Analysing..." in said and cli.REPORT_NAME not in said     # the summary, which names the report, is not said
     assert all(line.startswith("    ") for line in lines)
+
+
+# ------------------------------------------------------ an earlier sweep's leftovers --
+
+def _leftover(ini: Path):
+    """What a sweep that died mid-run leaves: its setting in the file, applied in the journal (the test's home)."""
+    from lagdoctor.fixes.journal import Journal
+    fix = game_setting.GameSettingFix(running=lambda game: False)
+    params = {"file": str(ini), "section": "ScalabilityGroups", "key": "sg.StaticMeshQuality", "value": "1",
+              "game": "Game.exe"}
+    res = fix.apply(fix.plan(params), Journal())
+    assert res.ok
+    return res.entry_id
+
+
+def test_a_new_sweep_refuses_while_an_earlier_sweeps_change_is_still_in_the_file(ini, ran):
+    _leftover(ini)
+    lines: list[str] = []
+    assert _main(args("--game", "Game.exe", "--settings", str(ini), "--try", "sg.ShadowQuality=1"), lines) == 2
+    said = "\n".join(lines)
+    assert "sg.StaticMeshQuality=1 (was 3)" in said and "lagdoctor undo game_setting" in said
+    assert sweeps() == [] and not ran.calls and b"sg.StaticMeshQuality=1" in ini.read_bytes()
+
+
+def test_resume_puts_an_earlier_change_back_first_even_for_a_finished_sweep(ini, ran, tmp_path):
+    from tests.sweep_world import World
+    folder = _saved(ini, "20261109-200000-Game", "finished")
+    _leftover(ini)
+    sweep = plan.load(folder)
+    world = World(tmp_path, sweep, {})
+    world.journal = __import__("lagdoctor.fixes.journal", fromlist=["Journal"]).Journal()
+    lines: list[str] = []
+    assert command.main(args("--resume", str(folder)), seams=world.seams, say=lines.append,
+                        ask=lambda prompt, default=False: True) == 0
+    assert ini.read_bytes() == RAW and not ran.calls
+    said = "\n".join(lines + world.said)
+    assert "putting it back first" in said and "back as it was" in said and "finished" in lines[-1]
+
+
+def test_one_sweep_of_a_settings_file_at_a_time(ini, ran):
+    other = command.SweepLock(str(ini))
+    assert other.acquire()
+    try:
+        assert not command.SweepLock(str(ini).upper()).acquire()       # the same file, however it is spelt
+        lines: list[str] = []
+        assert _main(new_args(ini), lines) == 2 and "Another lag-doctor window" in lines[-1]
+        assert not ran.calls
+    finally:
+        other.release()
+    assert command.SweepLock(str(ini)).acquire()
+
+
+def test_closing_the_console_puts_the_settings_back_when_the_game_is_closed(ini, tmp_path):
+    from tests.sweep_world import World
+    folder = _saved(ini, "20261109-200000-Game", "running")
+    sweep = plan.load(folder)
+    world = World(tmp_path, sweep, {})
+    world.journal = __import__("lagdoctor.fixes.journal", fromlist=["Journal"]).Journal()
+    _leftover(ini)
+    cleanup = command.CloseCleanup(sweep, folder, world.seams())
+    # The cleanup's own look must keep it off the file while the game runs: the fix's write check (which would also
+    # refuse) does not see the game here, so it cannot stand in for it.
+    world.running_check = lambda game: True
+    assert cleanup.handle(cli.CTRL_CLOSE_EVENT) is False and b"sg.StaticMeshQuality=1" in ini.read_bytes()
+    world.running_check = None
+    assert cleanup.handle(cli.CTRL_C_EVENT) is False and b"sg.StaticMeshQuality=1" in ini.read_bytes()
+    assert cleanup.handle(cli.CTRL_CLOSE_EVENT) is False and ini.read_bytes() == RAW
+
+
+def test_every_start_says_when_a_sweeps_change_is_still_in_a_file_and_leaves_a_fresh_one_alone(ini, capsys):
+    from lagdoctor.fixes.journal import Journal
+    _leftover(ini)
+    params = {"file": str(ini), "section": "ScalabilityGroups", "key": "sg.ShadowQuality", "value": "1",
+              "game": "Game.exe"}
+    fresh = Journal().begin("game_setting", "a change another window is making", params, "2", "1")
+    cli._settle_journal()
+    out = capsys.readouterr().out
+    assert "A settings sweep left a change in a game's settings file: sg.StaticMeshQuality=1 (was 3)" in out
+    assert Journal().get(fresh.id).state == "pending"           # under a minute old: maybe still being made

@@ -7,8 +7,9 @@ the order of lines, the spacing around "=", the line endings, the byte-order mar
 and a file whose bytes would not come back the same when written again is refused rather than rewritten.
 
 Lines of Unreal's array syntax (`+Key=`, `-Key=`, `.Key=`, `!Key`) never match a plain key, so they are never changed.
-Keys and sections match without regard to case, as Unreal's do. Pure: bytes and text in, bytes and text out; the fix
-that writes the file is lagdoctor/fixes/game_setting.py.
+Keys and sections match without regard to case, as Unreal's do, but only plain ASCII names: a name with another
+letter that folds to one of them (the Kelvin sign) never matches. A section is the header's text as written, spaces
+included. Pure: bytes and text in, bytes and text out; the fix that writes the file is lagdoctor/fixes/game_setting.py.
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 MAX_BYTES = 1 << 20      # an ini is a few KB (the one read on the owner's PC, under 2 KB): refuse anything absurd
 LINE_MAX = 4096          # a value put back may be the file's own original, so it is checked only for line safety
 
-KEY = re.compile(r"[A-Za-z0-9_.]{1,128}")                 # sg.StaticMeshQuality, bUseVSync, r.VSync
+KEY = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.]{0,127}")     # sg.StaticMeshQuality, bUseVSync, r.VSync; never .Key
 SECTION = re.compile(r"[A-Za-z0-9_./:-]{1,128}")          # ScalabilityGroups, /Script/Engine.GameUserSettings
 VALUE = re.compile(r"[A-Za-z0-9_.+-]{1,64}")              # what a sweep may write: 0, 3, 1.000000, True, -1
 _NEWLINE = re.compile(r"\r\n|\n|\r")
@@ -105,16 +106,17 @@ def _hits(lines: list[tuple[str, str]], key: str) -> list[Hit]:
             # A header with anything after its "]" (a comment, say) names no section this module can be sure of, so
             # the keys under it belong to none until the next plain header.
             head = _HEADER.fullmatch(content)
-            section = head.group(1).strip() if head is not None else None
+            section = head.group(1) if head is not None else None     # never the section before
             continue
         if section is None or not body or body[0] in ";#" or "=" not in body:
             continue
-        name, rest = content.split("=", 1)
-        if name.strip().casefold() != want:
+        raw_name, rest = content.split("=", 1)
+        name = raw_name.strip()
+        if not name.isascii() or name.casefold() != want:
             continue
         value = rest.strip(_BLANK)
         if value:
-            start = len(name) + 1 + len(rest) - len(rest.lstrip(_BLANK))
+            start = len(raw_name) + 1 + len(rest) - len(rest.lstrip(_BLANK))
             end = start + len(value)
         else:
             start = end = len(content)        # an empty value: a new one goes at the line's end
@@ -123,8 +125,8 @@ def _hits(lines: list[tuple[str, str]], key: str) -> list[Hit]:
 
 
 def _in_section(hits: list[Hit], section: str) -> list[Hit]:
-    want = section.strip().casefold()
-    return [h for h in hits if h.section.casefold() == want]
+    want = section.casefold()
+    return [h for h in hits if h.section.isascii() and h.section.casefold() == want]
 
 
 def get_value(text: str, section: str, key: str) -> str | None:
@@ -152,12 +154,78 @@ def set_value(text: str, section: str, key: str, value: str) -> str:
     return "".join(c + e for c, e in lines)
 
 
+def insert_value(text: str, section: str, key: str, value: str) -> str:
+    """The text with a `key=value` line added at the end of the section (its last copy, when Unreal's file holds it
+    twice), after its last non-blank line, ending as the file's lines end. Only for putting back an original line that
+    the game dropped since lag-doctor wrote it: ValueError when the section is not there, when the key is set in it
+    already, or when the value would break its line."""
+    if not line_safe(value) or not KEY.fullmatch(key):
+        raise ValueError(f"{key}={value!r} cannot be written as a line")
+    lines = _lines(text)
+    if _in_section(_hits(lines, key), section):
+        raise ValueError(f"{key} is set in [{section}] already")
+    want, current, last = section.casefold(), None, None
+    for i, (content, _end) in enumerate(lines):
+        body = content.lstrip(_BLANK)
+        if body.startswith("["):
+            head = _HEADER.fullmatch(content)
+            current = head.group(1) if head is not None else None
+            if current is not None and current.isascii() and current.casefold() == want:
+                last = i
+            continue
+        if current is not None and current.isascii() and current.casefold() == want and body:
+            last = i
+    if last is None:
+        raise ValueError(f"[{section}] is not in the settings file")
+    ending = next((e for _c, e in lines if e), "\r\n")
+    content, end = lines[last]
+    lines[last] = (content, end or ending)
+    lines.insert(last + 1, (f"{key}={value}", end or ""))
+    return "".join(c + e for c, e in lines)
+
+
+def pairs(text: str) -> list[tuple[str, str, str]]:
+    """Every plain `Key=Value` line in a section, as (section, key, value) in file order: what a sweep compares from run
+    to run besides the values it changes."""
+    lines = _lines(text)
+    out = []
+    section: str | None = None
+    for content, _end in lines:
+        body = content.lstrip(_BLANK)
+        if body.startswith("["):
+            head = _HEADER.fullmatch(content)
+            section = head.group(1) if head is not None else None
+            continue
+        if section is None or not body or body[0] in ";#" or "=" not in body:
+            continue
+        name, rest = content.split("=", 1)
+        name = name.strip()
+        if name.isascii() and KEY.fullmatch(name):
+            out.append((section, name, rest.strip(_BLANK)))
+    return out
+
+
+def same_value(a: object, b: object) -> bool:
+    """True when two values mean the same to a game: the same text, the same plain decimal number written another way
+    (Unreal saves 75 as 75.000000), or the same true or false in any case (it saves True and False)."""
+    if not isinstance(a, str) or not isinstance(b, str):
+        return False
+    if a == b:
+        return True
+    if _NUMBER.fullmatch(a) and _NUMBER.fullmatch(b):
+        return float(a) == float(b)
+    return a.casefold() in ("true", "false") and a.casefold() == b.casefold()
+
+
+_NUMBER = re.compile(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)")
+
+
 def sections_with(text: str, key: str) -> list[str]:
     """Every section that sets the key, each as the file first spells it, in file order."""
     seen: set[str] = set()
     out = []
     for h in _hits(_lines(text), key):
-        if h.section.casefold() not in seen:
+        if h.section.isascii() and h.section.casefold() not in seen:
             seen.add(h.section.casefold())
             out.append(h.section)
     return out

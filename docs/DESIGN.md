@@ -1230,7 +1230,7 @@ lagdoctor undo [ID | --all]          restore from the journal
 lagdoctor setup                      fetch + verify PresentMon, explain how to get ETW rights
 lagdoctor app                        lag-doctor's window: recorded games and their results (see The app)
 lagdoctor sweep --game NAME --settings FILE --try KEY=VALUE [--try ...] [--runs N] [--window S] [--no-warm-up]
-                [--start-key KEY]    try settings run by run and rank them (see The settings sweep)
+                [--start-key KEY]    try settings run by run and compare them (see The settings sweep)
 lagdoctor sweep --resume [FOLDER]    go on with an unfinished sweep; a finished one shows its results
 ```
 
@@ -1412,51 +1412,79 @@ def window(cap, t0, t1, frames=None) -> dict      # {t0, t1, frames, system, gpu
 
 ## The settings sweep (lagdoctor/sweep/)
 
-`lagdoctor sweep` tries a game's settings one after another and ranks them, the assisted sweep the owner chose
+`lagdoctor sweep` tries a game's settings one after another and compares them, the assisted sweep the owner chose
 (DECISIONS 2026-11-09; research in `docs/research/settings-sweeps.md`). lag-doctor writes each setting into the game's
 settings file while the game is closed; the player starts the game, loads a save, goes to a spot and plays each run;
 each run is an ordinary recording measured over a fixed window from a key the player presses at the spot. Nothing is
 typed on the player's PC, and the game is never started, stopped or opened by lag-doctor.
 
 - **What it may change** (`fixes/game_setting.py` over `sweep/inifile.py`): values the settings file already has, in
-  a plain `.ini` on a drive letter, one `Key=Value` line each, written as `inifile.VALUE` allows (letters, digits,
-  `.`, `_`, `+`, `-`). Only the value's characters change; comments, line order, spacing, line endings, the byte-order
-  mark and the encoding stay byte for byte (UTF-8 read with surrogateescape, UTF-16 by its mark), and the new file
-  replaces the old one whole. A key set twice in its section, a header with anything after its `]`, a file over 1 MB,
-  one OneDrive keeps online only (never opened), one marked read-only, and one in a folder whose new files land in
-  another app's private copy are all refused. Every write goes through the journal (`game_setting`), refused while a
-  process with the game's image name runs.
+  a plain `.ini` on a local disk (a drive letter, no stream name, not a link or a file with other names), one
+  `Key=Value` line each, written as `inifile.VALUE` allows (letters, digits, `.`, `_`, `+`, `-`). Only the value's
+  characters change; comments, line order, spacing, line endings, the byte-order mark and the encoding stay byte for
+  byte (UTF-8 read with surrogateescape, UTF-16 by its mark), and the new file replaces the old one whole (a move
+  refused by OneDrive or a scanner is tried again for 10 s). Names match as ASCII only (`.Key` and `+Key` lines never),
+  a section is its header's text as written, and a key set twice in its section, a header with anything after its
+  `]`, a file over 1 MB, one OneDrive keeps online only (never opened), one marked read-only, and one in a folder whose
+  new files land in another app's private copy are all refused. Every write goes through the journal (`game_setting`),
+  refused while a process with the game's image name runs. A value the game writes back in its own spelling (75.000000
+  for 75, True for true: `inifile.same_value`) is the same value everywhere: lag-doctor's own (`also_ours`), the
+  original, the file's other values. The one line it adds is an original the game dropped, and only an undo adds it.
+- **The journal is the record of what is in the file** (`runner.outstanding`: the `game_setting` entries for that file
+  that are pending, applied or in conflict), not the sweep's state: an edit that reached the file just before a crash
+  is put back like any other. A new sweep refuses while one is outstanding for its file (it would take it for the file
+  as it was), and every lag-doctor start says when one is (`cli._settle_journal`), naming `lagdoctor sweep --resume`
+  and `lagdoctor undo game_setting` (undo by fix id, which leaves other fixes alone). A pending one under a minute old
+  is left alone at start: a sweep in another window may be making it. One sweep of a file at a time: a named mutex
+  after the file's normalised path (`command.SweepLock`).
 - **The plan** (`sweep/plan.py`, saved as `sweep.json` under `paths.sweeps_dir()`, apart from the sessions, with a
   byte copy of the file as it was): A is the file as it was, B onwards one `--try` each (at most 5, each changing at
-  most 4 values); the runs come in blocks, each holding every setting once in an order from a seeded shuffle; the
-  first block warms up and is not counted (`--no-warm-up` counts it); then `--runs` counted blocks (default 3, 2 to
-  10). The state is written whole after every step, so a stopped or killed sweep goes on with `--resume`.
-- **A run** (`sweep/runner.py`): wait for the game to have closed; undo this sweep's edits, check the file holds the
-  originals (a value changed since the sweep began stops it), write the setting's values and read every one back;
-  the player starts the game, goes to the spot and presses Enter; `watch` records (`--game`, `--no-network`,
-  `--hotkey none`, `--elevate` unless `can_trace`, `--out` the sweep's `runs` folder, a note naming the run; through
-  `cmd_watch` with `remember` and `show_summary` False); the sweep registers its start key (Ctrl+Alt+S by default)
-  for the run only and takes the first press after `recording`: a rising chime, `--window` seconds (default 60, 30 to
-  600), a closing chime, and `request_stop`. No press within 5 minutes, a recording without frame timing (the prompt
-  declined), watch failing (exit 1, 2, 3) or Ctrl+C end the run; exit 4, 5 and 6 stop the sweep. Once the game has
-  closed, the file is read again: a value the game put back (its own, or the original) stops the sweep, since what
-  the run used cannot be told.
-- **What counts** (`sweep/results.py`): the window `[press, press + window]` of the main swap chain, through
-  `analysis.window` and `frames.frame_stats`, so a run's average FPS and 1 % low are the report's own. A run does not
-  count (and is offered again, or skipped) unless frame timing ran, the recording lasted the window, the window holds
-  1,000 frames or more and its frames span 90 % of it, the game was in front for 95 % of its samples, and other
-  programs took under 10 % of the game's GPU (the report's own threshold); nor unless the power plan, Windows' power
-  mode, mains power, the refresh rate and the NVIDIA power limit (within 10 %) match the first good run's. An exe of
-  another size or date than that run's stops the sweep: an update.
-- **The ranking**: average FPS and the 1 % low of each setting's counted good runs with 95 % t intervals, each B
-  onwards compared with A by Welch's interval in % of A's mean: "faster" or "slower" only when the interval excludes 0,
-  else "no measurable difference"; A's own run-to-run spread is said. Picture quality is left to the player.
-- **Ending**: when the sweep finishes or stops (Ctrl+C, q, a problem, an error nobody expected), it waits for the game
-  to close and undoes every edit, then says what the file holds, read back. A second Ctrl+C during that wait leaves
-  the edits in the journal for `--resume` or `undo --all`; a value something else changed since is left alone, as
-  every fix's undo does (`--force` puts the original back).
+  most 4 values); a warm-up block in a seeded shuffled order, not counted (`--no-warm-up` leaves it out); then
+  `--runs` counted blocks (default 3, 2 to 10) that rotate one seeded order by one place each (a Latin square), so
+  every setting takes every place equally often. The file's other values are kept with it (`others`). The state is
+  written whole after every step; a stopped or killed sweep goes on with `--resume`. States: running, stopped (can go
+  on), finished, ended (cannot go on: `why_ended`).
+- **A run** (`sweep/runner.py`): wait for the game to have closed; undo every outstanding edit; check the file holds
+  its originals (a value changed since the sweep began ends it) and its other values as the runs so far had them (a
+  change is said, and the player decides whether runs count with the file as it is, which `notes` records); write the
+  setting's values and read every one back; register the start key (Ctrl+Alt+S by default; `--start-key` needs Ctrl,
+  Alt or Win), so a key another program holds is found before the player starts the game; the player starts the game,
+  goes to the spot and presses Enter; `watch` records (`--game`, `--no-network`, `--hotkey none`, `--elevate` unless
+  `can_trace`, `--out` the sweep's `runs` folder, a note naming the run; through `cmd_watch` with `remember` and
+  `show_summary` False); the first press after `recording` and before `stopping` starts the window: a rising chime,
+  `--window` seconds (default 60, 30 to 600), a closing chime 3 s later (`TAIL_S`, for PresentMon's late rows) and
+  `request_stop`. A run saved is judged whatever watch's exit code or error after the save (its report failing, a
+  Ctrl+C during the analysis); one that saved nothing fails (exit 1, 2, 3) or stops the sweep (4, 5, 6). No press
+  within 5 minutes or frame timing off (the prompt declined) fail it. Once the game has closed, the file is read
+  again: a value the game put back, or a line it dropped, ends the sweep, since what the run used cannot be told.
+  Sounds that cannot play are said after the run.
+- **What counts** (`sweep/results.py`): the window `[press, press + window]` of the main swap chain, cut exactly
+  (`clipped_frames`: the frame across each edge counts only its part inside), through `frames.frame_stats`, so a
+  run's average FPS and 1 % low are the report's own. A run counts (else it is offered again, or skipped) only when
+  frame timing ran, the recording lasted the window, the window holds 1,000 frames or more and its frames come within
+  1 s of both ends, the game was in front in every sample but those within 0.5 s of the ends, other programs took 10 %
+  or more of the game's GPU in at most 5 % of the samples, and the NVIDIA clock's 90th percentile was within 15 % of
+  its 10th (a GPU that has not heated up yet runs about twice as fast on the owner's laptop); and only when the power
+  plan, Windows' power mode, mains power and the refresh rate match the first good run's. The NVIDIA power limit is
+  recorded, not held: Dynamic Boost moves it by itself, and the laptop's own mode shows as a plan change. What could
+  not be read is listed as not checked. An exe of another size or date than that run's ends the sweep: an update.
+- **The comparison**: settings in order of average FPS, each with its counted good runs' average FPS and 1 % low and
+  their 95 % t intervals; B onwards compared with A by Welch's interval in % of A's mean, widened for the number of
+  settings compared (Bonferroni), so that all the comparisons hold together 95 % of the time: "faster" or "slower" only
+  when the interval excludes 0, else "no measurable difference"; no spread at all is said as "in every run". The last
+  lines say A's run-to-run spread and the difference the sweep could see 80 % of the time ((t + t at 80 %) x sd x
+  sqrt(2/n)). Picture quality is left to the player.
+- **Ending**: when the sweep finishes or stops (Ctrl+C, q, the end of input, a problem, an error nobody expected), it
+  waits for the game to close and undoes every outstanding edit, each tried even when another stays, then says what
+  the file holds, read back. A value the game wrote in place of lag-doctor's (or a line it dropped) is put back only
+  when the player says so. The sweep's Ctrl+C guard (`runner.Interrupts`, also Ctrl+Break) raises only the first
+  press; once the sweep is stopping, presses are counted, and a press during the wait for the game leaves the edits
+  for `--resume` or `lagdoctor undo game_setting`. `--resume` puts outstanding edits back first, whatever the sweep's
+  state, before anything else. Closing the console window puts them back at once when the game is closed
+  (`command.CloseCleanup`, one write at a time with the runner through `runner.WRITE_LOCK`).
 - **Not built**: a sweep screen in the app; an unattended sweep (DECISIONS backlog); settings kept outside an ini
-  (the registry, binary saves); mods set aside and put back. The sweep's start key is its own until watch has one
+  (the registry, binary saves); mods set aside and put back; a check of processes other than the game's image name
+  (a launcher of another name that writes the settings). The sweep's start key is its own until watch has one
   (`docs/LAUNCHER-PLAN.md`, M5): then a run uses watch's, and `runner._record` is where it plugs in.
 
 ## Testing

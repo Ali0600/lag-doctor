@@ -1,10 +1,11 @@
-"""The settings sweep: try a game's settings one after another and rank them (`lagdoctor sweep`).
+"""The settings sweep: try a game's settings one after another and compare them (`lagdoctor sweep`).
 
 The owner chose the assisted sweep (docs/DECISIONS.md, 2026-11-09; research in docs/research/settings-sweeps.md).
 lag-doctor writes each setting into the game's own settings file while the game is closed, through the fix journal
 (lagdoctor/fixes/game_setting.py), and puts the original back at the end. The player starts the game, loads a save,
 presses the start key at a chosen spot and quits; each run is an ordinary recording (`watch`), measured over a fixed
-window from the key, and the settings are ranked against their own run-to-run spread.
+window from the key, and the settings are compared against their own run-to-run spread. Which edits are in the file
+is the fix journal's to say; closing the window or a crash leaves them for `--resume` or `lagdoctor undo game_setting`.
 
 - inifile.py: one value of an ini file read or changed, every other byte kept (pure);
 - plan.py: the settings tried, the order of the runs and the sweep's state file (pure);

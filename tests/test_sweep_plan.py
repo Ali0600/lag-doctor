@@ -9,7 +9,7 @@ import pytest
 from lagdoctor.sweep import plan
 from lagdoctor.sweep.plan import Edit, Run, SweepError
 
-TEXT = ("[ScalabilityGroups]\r\nsg.ShadowQuality=0\r\nsg.StaticMeshQuality=3\r\n"
+TEXT = ("[ScalabilityGroups]\r\nsg.ShadowQuality=4\r\nsg.StaticMeshQuality=3\r\n"
         "[/Script/Engine.GameUserSettings]\r\nbUseVSync=False\r\n[Other]\r\nsg.ShadowQuality=2\r\n")
 
 
@@ -65,19 +65,19 @@ def test_every_original_is_kept_once_whichever_try_names_it_first():
     tries = ["sg.StaticMeshQuality=1", "[ScalabilityGroups]sg.ShadowQuality=1, sg.StaticMeshQuality=2"]
     resolved, original = plan.resolve(TEXT, [plan.parse_try(t) for t in tries])
     assert original == (Edit("ScalabilityGroups", "sg.StaticMeshQuality", "3"),
-                        Edit("ScalabilityGroups", "sg.ShadowQuality", "0"))
+                        Edit("ScalabilityGroups", "sg.ShadowQuality", "4"))
     variants = plan.make_variants(resolved, original)
     assert [(v.id, v.label) for v in variants] == [
-        ("A", "as it was (sg.StaticMeshQuality=3, sg.ShadowQuality=0)"), ("B", "sg.StaticMeshQuality=1"),
+        ("A", "as it was (sg.StaticMeshQuality=3, sg.ShadowQuality=4)"), ("B", "sg.StaticMeshQuality=1"),
         ("C", "sg.ShadowQuality=1, sg.StaticMeshQuality=2")]
 
 
 def test_the_file_holds_each_settings_values_and_the_originals_for_the_rest():
     s = make(tries=("sg.StaticMeshQuality=1", "[ScalabilityGroups]sg.ShadowQuality=2"))
     assert plan.values_for(s, "A") == [Edit("ScalabilityGroups", "sg.StaticMeshQuality", "3"),
-                                       Edit("ScalabilityGroups", "sg.ShadowQuality", "0")]
+                                       Edit("ScalabilityGroups", "sg.ShadowQuality", "4")]
     assert plan.values_for(s, "B") == [Edit("ScalabilityGroups", "sg.StaticMeshQuality", "1"),
-                                       Edit("ScalabilityGroups", "sg.ShadowQuality", "0")]
+                                       Edit("ScalabilityGroups", "sg.ShadowQuality", "4")]
     assert plan.values_for(s, "C") == [Edit("ScalabilityGroups", "sg.StaticMeshQuality", "3"),
                                        Edit("ScalabilityGroups", "sg.ShadowQuality", "2")]
 
@@ -114,6 +114,43 @@ def test_the_order_is_shuffled_and_the_same_seed_gives_the_same_order():
         plan.make_slots(["A", "B"], plan.RUNS_MAX + 1, True, random.Random(1))
 
 
+@pytest.mark.parametrize("seed", range(6))
+def test_the_counted_blocks_rotate_one_order_so_every_setting_takes_every_place(seed):
+    # Independent shuffles would leave one order in every block 1 time in 4 with two settings and three blocks;
+    # rotating one order (A B C, then B C A, then C A B) balances the places by construction.
+    ids = list("ABC")
+    slots = plan.make_slots(ids, 3, True, random.Random(seed))
+    blocks = [[s.variant for s in slots if s.block == b] for b in (1, 2, 3)]
+    assert blocks[1] == blocks[0][1:] + blocks[0][:1] and blocks[2] == blocks[1][1:] + blocks[1][:1]
+    for place in range(3):
+        assert sorted(b[place] for b in blocks) == ids
+    two = plan.make_slots(["A", "B"], 2, False, random.Random(seed))
+    assert [s.variant for s in two][:2] != [s.variant for s in two][2:]
+
+
+def test_the_files_other_values_are_kept_and_their_changes_said():
+    resolved, original = plan.resolve(TEXT, [plan.parse_try("sg.StaticMeshQuality=1")])
+    others = plan.other_values(TEXT, original)
+    assert others == (Edit("ScalabilityGroups", "sg.ShadowQuality", "4"),
+                      Edit("/Script/Engine.GameUserSettings", "bUseVSync", "False"),
+                      Edit("Other", "sg.ShadowQuality", "2"))
+    later = plan.other_values(TEXT.replace("bUseVSync=False", "bUseVSync=FALSE").replace("ShadowQuality=4", "ShadowQuality=1")
+                              + "NewKey=7\r\n", original)
+    # bUseVSync=FALSE means the same as False; the key in two sections is named with its section.
+    assert plan.others_changed(others, later) == ["[ScalabilityGroups]sg.ShadowQuality 4 -> 1", "NewKey=7 is new"]
+    assert plan.others_changed(others, others) == []
+    gone = plan.other_values(TEXT.replace("bUseVSync=False\r\n", ""), original)
+    assert plan.others_changed(others, gone) == ["bUseVSync is gone (it was False)"]
+
+
+def test_an_original_that_could_not_be_written_back_is_refused_and_an_equal_number_is_already_set():
+    long = TEXT.replace("sg.StaticMeshQuality=3", "sg.StaticMeshQuality=" + "9" * 5000)
+    with pytest.raises(SweepError, match="could not be written back"):
+        plan.resolve(long, [plan.parse_try("sg.StaticMeshQuality=1")])
+    with pytest.raises(SweepError, match="already 3"):
+        plan.resolve(TEXT, [plan.parse_try("sg.StaticMeshQuality=3.000000")])
+
+
 def test_a_good_run_or_a_skip_settles_a_slot_and_a_failed_or_rejected_one_does_not():
     s = make()
     first = s.slots[0]
@@ -141,11 +178,22 @@ def test_the_state_file_round_trips(tmp_path):
     s.runs.append(Run(1, s.slots[0].variant, "good", "", "20261109-200000-game", 12.5,
                       {"avg_fps": 60.0, "focused": None, "hitches": 0}, {"on_battery": False, "power_plan": "x"},
                       "2026-11-09T20:05:00+01:00"))
-    s.entries.append("0123456789ab")
     s.reference = {"on_battery": False}
+    s.others = (Edit("ScalabilityGroups", "sg.TextureQuality", "2"), Edit("Other", "Empty", ""))
+    s.notes.append("from run 2 on, the runs counted these changed values: sg.TextureQuality 3 -> 2")
+    s.state, s.why_ended = "ended", "the game was updated"
     plan.save(s, tmp_path)
     assert plan.load(tmp_path) == s
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_a_long_reason_and_label_still_load_back(tmp_path):
+    # What the sweep saves must always load: a run's reasons joined, a label of four long values.
+    s = make()
+    s.variants[1] = plan.Variant("B", "k" * 4 * 200, s.variants[1].edits)
+    s.runs.append(Run(1, s.slots[0].variant, "rejected", "; ".join(["a reason of some length " * 3] * 30)[:3000]))
+    plan.save(s, tmp_path)
+    assert plan.load(tmp_path) == s
 
 
 def _broken(tmp_path, change) -> None:
@@ -166,7 +214,10 @@ def _broken(tmp_path, change) -> None:
     lambda d: d.update(runs_per_variant=1),
     lambda d: d.update(window_s=5),
     lambda d: d.update(state="done"),
-    lambda d: d.update(entries=["../journal"]),
+    lambda d: d.update(others=[{"section": "S", "key": "k", "value": "1\r\n[Evil]"}]),
+    lambda d: d.update(notes="not a list"),
+    lambda d: d.update(game="-x.exe"),
+    lambda d: d.update(state="done"),
     lambda d: d["runs"].append({"slot": 1, "variant": d["slots"][0]["variant"], "state": "good", "why": "",
                                 "session": "..", "start_t": None, "metrics": {}, "conditions": {}, "at": ""}),
     lambda d: d["runs"].append({"slot": 1, "variant": d["slots"][0]["variant"], "state": "great", "why": "",

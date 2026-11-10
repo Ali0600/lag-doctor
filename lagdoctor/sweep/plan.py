@@ -2,10 +2,14 @@
 
 A sweep is fixed when it starts: the settings file, the settings tried (A is the file as it was, B onwards one `--try`
 each), how many counted runs each gets, the window measured from the start key, and the order of every run. The order
-comes in blocks, each holding every setting once in a shuffled order, so a steady drift (heat, caches) spreads over all
-of them instead of landing on one (docs/research/settings-sweeps.md, section 4: back-to-back trials once showed a false
-38 % difference between identical systems). The first block warms up and is not counted: a setting's first run can be
-slower (shader caches), and the laptop is still heating up.
+comes in blocks, each holding every setting once, so a steady drift (heat, caches) spreads over all of them instead of
+landing on one (docs/research/settings-sweeps.md, section 4: back-to-back trials once showed a false 38 % difference
+between identical systems). The first block warms up in a shuffled order and is not counted: a setting's first run can
+be slower (shader caches), and the laptop is still heating up. The counted blocks rotate one shuffled order (A B C,
+then B C A, then C A B), so every setting takes every place in a block equally often.
+
+Which edits are in the file now is the fix journal's to say, not this file's (runner.outstanding): an edit that reached
+the file just before a crash is in the journal even when this file never heard of it.
 
 The state file is written whole after every step (a temp file, flushed, then replaced), so a sweep stopped or killed at
 any point can go on with `lagdoctor sweep --resume`. Everything here is pure except save() and load().
@@ -37,8 +41,12 @@ EDITS_MAX = 4                         # values one --try changes
 # judged yet. A sweep registers it only while its runs record; watch's own start key (M5) does not exist yet.
 START_KEY = "ctrl+alt+s"
 VARIANT_IDS = "ABCDEF"
-SWEEP_STATES = ("running", "stopped", "finished")
+# stopped: it can go on (--resume); ended: it cannot (the game was updated, or does not keep the file's setting, or the
+# file's own values changed under it), and --resume only puts its edits back and shows what it found.
+SWEEP_STATES = ("running", "stopped", "finished", "ended")
 RUN_STATES = ("good", "rejected", "failed", "skipped")
+OTHERS_MAX = 2000                     # the file's other Key=Value lines that a sweep keeps to compare
+RUNS_KEPT_MAX = 2000
 _TRY_PART = re.compile(r"(?:\[([^\]]*)\])?[ \t]*([^=\s]+)[ \t]*=[ \t]*(\S+)")
 
 
@@ -100,10 +108,14 @@ class Sweep:
     slots: list[Slot]
     runs: list[Run] = field(default_factory=list)
     state: str = "running"
-    entries: list[str] = field(default_factory=list)    # the journal entries of the edits in place now
     reference: dict[str, Any] | None = None             # the first good run's conditions
     created_at: str = ""
     tool_version: str = ""
+    # The file's other Key=Value lines, as the runs count them: as the sweep began, or as the player last accepted
+    # them (notes says when and what changed).
+    others: tuple[Edit, ...] = ()
+    notes: list[str] = field(default_factory=list)
+    why_ended: str = ""                                 # for state "ended": why it cannot go on
 
     def variant(self, vid: str) -> Variant:
         for v in self.variants:
@@ -171,12 +183,15 @@ def resolve(text: str, tries: list[list[tuple[str | None, str, str]]]) -> tuple[
                 raise SweepError(str(exc)) from None
             if now is None:
                 raise SweepError(f"{key} is not set in [{section}] of the settings file")
+            if not inifile.line_safe(now):
+                raise SweepError(f"{key}'s value in the settings file could not be written back as it is, so a sweep "
+                                 "leaves it alone")
             spelled = next((s for s in inifile.sections_with(text, key) if s.casefold() == section.casefold()),
                            section)
             slot = (spelled.casefold(), key.casefold())
             original.setdefault(slot, Edit(spelled, key, now))
-            if now == value:
-                raise SweepError(f"{key} is already {value} in the settings file, so trying {key}={value} changes "
+            if inifile.same_value(now, value):
+                raise SweepError(f"{key} is already {now} in the settings file, so trying {key}={value} changes "
                                  "nothing")
             edits.append(Edit(original[slot].section, original[slot].key, value))
         resolved.append(edits)
@@ -203,18 +218,60 @@ def make_variants(tries: list[list[Edit]], original: tuple[Edit, ...]) -> list[V
 
 
 def make_slots(variant_ids: list[str], runs: int, warm_up: bool, rng: random.Random) -> list[Slot]:
-    """The order of every run: blocks, each holding every setting once in a shuffled order; the warm-up block
-    (block 0) first when there is one. Its runs are not counted."""
+    """The order of every run: blocks, each holding every setting once. The warm-up block (block 0, not counted) first
+    when there is one, in a shuffled order; then the counted blocks, which rotate one shuffled order by one place each
+    (a Latin square), so every setting takes every place equally often over len(variant_ids) blocks."""
     if not RUNS_MIN <= runs <= RUNS_MAX:
         raise SweepError(f"runs must be from {RUNS_MIN} to {RUNS_MAX}")
-    blocks = ([0] if warm_up else []) + list(range(1, runs + 1))
     slots: list[Slot] = []
-    for block in blocks:
+    if warm_up:
         order = list(variant_ids)
         rng.shuffle(order)
-        for vid in order:
-            slots.append(Slot(len(slots) + 1, block, vid, counted=block > 0))
+        slots += [Slot(len(slots) + i + 1, 0, vid, counted=False) for i, vid in enumerate(order)]
+    base = list(variant_ids)
+    rng.shuffle(base)
+    for block in range(1, runs + 1):
+        k = (block - 1) % len(base)
+        for vid in base[k:] + base[:k]:
+            slots.append(Slot(len(slots) + 1, block, vid, counted=True))
     return slots
+
+
+def other_values(text: str, sweep_keys: tuple[Edit, ...]) -> tuple[Edit, ...]:
+    """The file's Key=Value lines other than the ones a sweep changes, each as found, in file order: what must stay as
+    it is from run to run. SweepError past OTHERS_MAX lines, or for a value that could not be kept."""
+    skip = {(e.section.casefold(), e.key.casefold()) for e in sweep_keys}
+    out = tuple(Edit(s, k, v) for s, k, v in inifile.pairs(text)
+                if (s.casefold(), k.casefold()) not in skip and inifile.SECTION.fullmatch(s) and inifile.line_safe(v))
+    if len(out) > OTHERS_MAX:
+        raise SweepError(f"the settings file holds more than {OTHERS_MAX:,} values, more than a settings file would")
+    return out
+
+
+def others_changed(was: tuple[Edit, ...], now: tuple[Edit, ...]) -> list[str]:
+    """What differs between two lists of the file's other values, in words ("sg.TextureQuality 3 -> 2", "X is gone",
+    "Y=1 is new"); values that mean the same (75 and 75.000000) do not count."""
+    def by_key(edits: tuple[Edit, ...]) -> dict[tuple[str, str], list[str]]:
+        out: dict[tuple[str, str], list[str]] = {}
+        for e in edits:
+            out.setdefault((e.section.casefold(), e.key.casefold()), []).append(e.value)
+        return out
+    sections: dict[str, set[str]] = {}
+    for e in was + now:
+        sections.setdefault(e.key.casefold(), set()).add(e.section.casefold())
+    names = {(e.section.casefold(), e.key.casefold()):
+             (f"[{e.section}]{e.key}" if len(sections[e.key.casefold()]) > 1 else e.key) for e in was + now}
+    a, b = by_key(was), by_key(now)
+    out = []
+    for key in list(a) + [k for k in b if k not in a]:
+        old, new = a.get(key), b.get(key)
+        if old is None:
+            out.append(f"{names[key]}={', '.join(new or [])} is new")
+        elif new is None:
+            out.append(f"{names[key]} is gone (it was {', '.join(old)})")
+        elif len(old) != len(new) or not all(inifile.same_value(x, y) for x, y in zip(old, new)):
+            out.append(f"{names[key]} {', '.join(old)} -> {', '.join(new)}")
+    return out
 
 
 def values_for(sweep: Sweep, vid: str) -> list[Edit]:
@@ -251,7 +308,8 @@ def to_json(s: Sweep) -> dict[str, Any]:
         "slots": [{"n": x.n, "block": x.block, "variant": x.variant, "counted": x.counted} for x in s.slots],
         "runs": [{"slot": r.slot, "variant": r.variant, "state": r.state, "why": r.why, "session": r.session,
                   "start_t": r.start_t, "metrics": r.metrics, "conditions": r.conditions, "at": r.at} for r in s.runs],
-        "entries": list(s.entries), "reference": s.reference,
+        "reference": s.reference, "others": [_edit_json(e) for e in s.others], "notes": list(s.notes),
+        "why_ended": s.why_ended,
     }
 
 
@@ -288,13 +346,20 @@ def _plain(v: Any, what: str) -> dict[str, Any]:
     _need(isinstance(v, dict) and len(v) <= 64, what)
     for k, x in v.items():
         _need(isinstance(k, str) and len(k) <= 64, what)
-        _need(_number(x) or isinstance(x, bool) or (isinstance(x, str) and len(x) <= 300), what)
+        _need(_number(x) or isinstance(x, bool) or (isinstance(x, str) and len(x) <= TEXT_MAX), what)
     return dict(v)
+
+
+# Limits on what a state file may hold, far above what a sweep writes (a label of 4 long values, a run's reasons
+# joined), so a state the sweep saved always loads back; STATE_MAX bounds the whole file.
+LABEL_MAX = 20_000
+TEXT_MAX = 4_000
 
 
 def from_json(d: Any) -> Sweep:
     """A Sweep from its state file's JSON, every field checked. SweepError for anything another lag-doctor or a
     damaged file left there."""
+    from lagdoctor.fixes.game_setting import check_game
     if not isinstance(d, dict) or d.get("schema") != SCHEMA:
         raise SweepError("this is not a sweep's state file lag-doctor can read (another schema)")
     try:
@@ -304,7 +369,7 @@ def from_json(d: Any) -> Sweep:
             _need(v["id"] == VARIANT_IDS[i], "a setting's id")
             edits = tuple(_edit(e, "a setting's value") for e in v["edits"])
             _need(bool(edits) == (i > 0) and len(edits) <= EDITS_MAX, "a setting's values")
-            variants.append(Variant(v["id"], _text(v["label"], "a setting's label"), edits))
+            variants.append(Variant(v["id"], _text(v["label"], "a setting's label", LABEL_MAX), edits))
         _need(2 <= len(variants) <= TRIES_MAX + 1, "the settings")
         ids = [v.id for v in variants]
         original = tuple(_edit(e, "an original value", original=True) for e in d["original"])
@@ -339,26 +404,31 @@ def from_json(d: Any) -> Sweep:
             _need(session is None or (isinstance(session, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", session)
                                       is not None and session not in (".", "..")), "a run's folder")
             _need(_number(r["start_t"]), "a run's start")
-            runs.append(Run(r["slot"], r["variant"], r["state"], _text(r["why"], "a run's reason", 600), session,
+            runs.append(Run(r["slot"], r["variant"], r["state"], _text(r["why"], "a run's reason", TEXT_MAX), session,
                             r["start_t"], _plain(r["metrics"], "a run's numbers"),
                             _plain(r["conditions"], "a run's conditions"), _text(r["at"], "a run's time", 40)))
-        _need(len(runs) <= 4 * len(slots) + 20, "the runs")
-        entries = d["entries"]
-        _need(isinstance(entries, list) and len(entries) <= 64
-              and all(isinstance(e, str) and re.fullmatch(r"[0-9a-f]{12}", e) for e in entries), "the journal entries")
+        _need(len(runs) <= RUNS_KEPT_MAX, "the runs")
         reference = d["reference"]
         _need(reference is None or isinstance(reference, dict), "the reference conditions")
         state = d["state"]
         _need(state in SWEEP_STATES, "the sweep's state")
-        game = d["game"]
-        _need(isinstance(game, str) and 0 < len(game) <= 260, "the game")
+        try:
+            game = check_game(d["game"])
+        except ValueError:
+            raise SweepError("the sweep's state file is damaged (the game)") from None
+        others = tuple(_edit(e, "another value of the file", original=True) for e in d["others"])
+        _need(len(others) <= OTHERS_MAX, "the file's other values")
+        notes = d["notes"]
+        _need(isinstance(notes, list) and len(notes) <= 200, "the sweep's notes")
         return Sweep(game=game, settings_file=_text(d["settings_file"], "the settings file", 1024),
                      window_s=float(window), runs_per_variant=runs_per, warm_up=d["warm_up"],
                      start_key=_text(d["start_key"], "the start key", 40), seed=seed, variants=variants,
-                     original=original, slots=slots, runs=runs, state=state, entries=list(entries),
+                     original=original, slots=slots, runs=runs, state=state,
                      reference=None if reference is None else _plain(reference, "the reference conditions"),
                      created_at=_text(d["created_at"], "the start time", 40),
-                     tool_version=_text(d["tool_version"], "the version", 40))
+                     tool_version=_text(d["tool_version"], "the version", 40), others=others,
+                     notes=[_text(n, "a note", TEXT_MAX) for n in notes],
+                     why_ended=_text(d["why_ended"], "why it ended", TEXT_MAX))
     except (KeyError, TypeError) as exc:
         raise SweepError(f"the sweep's state file is damaged (missing or wrong: {exc})") from None
 

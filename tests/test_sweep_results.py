@@ -68,6 +68,29 @@ def test_a_comparison_says_more_less_or_no_measurable_difference():
     assert flat["verdict"] == "more" and flat["lo"] == flat["hi"] == pytest.approx(100 * 2 / 58)
 
 
+def test_comparing_several_settings_widens_each_interval_so_they_hold_together():
+    a, b = [60.1, 60.5, 59.8], [58.0, 58.4, 57.9]
+    one, five = results.welch(a, b, 1), results.welch(a, b, 5)
+    assert five["hi"] - five["lo"] > one["hi"] - one["lo"]
+    half = results.t_quantile(1 - 0.05 / 10, five["df"]) * math.sqrt(statistics.variance(a) / 3
+                                                                       + statistics.variance(b) / 3)
+    assert (five["hi"] - five["lo"]) / 2 == pytest.approx(half)
+
+
+def test_no_spread_at_all_is_said_as_every_run_not_as_an_interval():
+    c = results.compare([72.0, 72.0], [60.0, 60.0])
+    assert c["flat"] and results._verdict(c, "faster", "slower") == "+20.0 % in every run, faster"
+
+
+def test_the_detectable_difference_follows_the_spread_and_the_runs():
+    base = [58.0, 59.0, 60.0]
+    see = results.detectable(base, 3)
+    sd, m = statistics.stdev(base), statistics.mean(base)
+    t = results.t_quantile(0.975, 4) + results.t_quantile(0.80, 4)
+    assert see == pytest.approx(100 * t * sd * math.sqrt(2 / 3) / m)
+    assert results.detectable(base, 10) < see and results.detectable([58.0], 3) is None
+
+
 def test_an_interval_needs_two_runs():
     assert results.interval([60.0])["half"] is None and results.interval([]) is None
     two = results.interval([59.0, 61.0])
@@ -81,7 +104,7 @@ def test_the_window_is_measured_from_the_start_key():
     m = results.window_metrics(cap, PRESS_T, WINDOW)
     assert m["avg_fps"] == pytest.approx(60.0, rel=1e-3) and m["low1_fps"] == pytest.approx(60.0, rel=1e-3)
     assert m["frames"] == pytest.approx(60 * WINDOW, abs=2)
-    assert m["covered_s"] == pytest.approx(WINDOW, abs=0.1) and m["focused"] == 1.0
+    assert m["first_frame_s"] < 0.05 and m["last_gap_s"] == 0.0 and m["behind_s"] == 0.0 and m["focus_samples"] > 200
     assert (m["gpu_power_limit_w"], m["gpu_clock_mhz"], m["gpu_temp_c"]) == (103.0, 780.0, 87.0)
     assert results.problems(cap, m, PRESS_T, WINDOW) == []
 
@@ -96,28 +119,53 @@ def test_only_the_window_counts_not_the_startup_before_the_key():
     assert results.window_metrics(cap, PRESS_T, WINDOW)["avg_fps"] == pytest.approx(60.0, rel=1e-3)
 
 
+def _problems(cap):
+    return results.problems(cap, results.window_metrics(cap, PRESS_T, WINDOW), PRESS_T, WINDOW)
+
+
 @pytest.mark.parametrize("knobs,why", [
     ({"frames_state": "failed"}, "frame timing was not recorded"),
     ({"duration": 50.0}, "the recording ended 30 s into"),
-    ({"draws_until": 50.0}, "drew frames for only"),
+    ({"draws_until": 50.0}, "the game drew no frame for the window's last 30 s"),
     ({"focused": lambda t: 0 if 40 <= t < 50 else 1}, "behind another window for about 10 s"),
-    ({"other_pct": 35.0}, "another program used 35 % of the game's GPU"),
+    ({"focused": lambda t: 0 if 40 <= t < 41 else 1}, "behind another window for about 1 s"),
+    ({"focused": None}, "whether the game was in front could not be read"),
+    ({"other_pct": 35.0}, "another program used 10 % or more of the game's GPU for about 60 s"),
+    ({"other_pct": lambda t: 35.0 if t < 45 else 0.0}, "for about 25 s of the window"),
+    ({"clock_mhz": lambda t: 1700.0 if t < 50 else 780.0}, "moved between 780 and 1700 MHz"),
 ])
 def test_a_run_that_moved_does_not_count(knobs, why):
-    cap = capture_at(60.0, **knobs)
-    problems = results.problems(cap, results.window_metrics(cap, PRESS_T, WINDOW), PRESS_T, WINDOW)
+    problems = _problems(capture_at(60.0, **knobs))
     assert any(why in p for p in problems), problems
 
 
 def test_too_few_frames_for_a_1_percent_low_does_not_count():
     cap = capture_at(15.0)                      # 900 frames in the window, under the 1,000 a 1 % low needs
-    problems = results.problems(cap, results.window_metrics(cap, PRESS_T, WINDOW), PRESS_T, WINDOW)
-    assert any("too few for a 1 % low" in p for p in problems)
+    assert any("too few for a 1 % low" in p for p in _problems(cap))
 
 
-def test_a_short_wobble_behind_another_window_still_counts():
-    cap = capture_at(60.0, focused=lambda t: 0 if 40 <= t < 41 else 1)     # one second: under 5 %
-    assert results.problems(cap, results.window_metrics(cap, PRESS_T, WINDOW), PRESS_T, WINDOW) == []
+def test_slow_frames_behind_another_window_keep_the_run_out_as_the_1_percent_low_would_show():
+    # A game behind another window may draw at 5 FPS: even 1 s of it ruins the 1 % low, so no such second counts.
+    slow = dict(focused=lambda t: 0 if 40 <= t < 41 else 1, frame_ms=lambda t: 200.0 if 40 <= t < 41 else 1000 / 60)
+    cap = capture_at(60.0, **slow)
+    m = results.window_metrics(cap, PRESS_T, WINDOW)
+    assert m["low1_fps"] < 30 and results.problems(cap, m, PRESS_T, WINDOW)
+
+
+def test_a_sample_at_the_windows_very_edges_may_still_show_the_game_coming_to_the_front():
+    cap = capture_at(60.0, focused=lambda t: 0 if t <= PRESS_T + 0.25 or t >= PRESS_T + WINDOW - 0.25 else 1)
+    assert _problems(cap) == []
+
+
+def test_a_freeze_across_the_windows_end_is_seen_and_one_before_it_counts_only_its_part_inside():
+    # 1 s without a new frame, starting 0.5 s before the end (or the start) of the window.
+    end = capture_at(60.0, frame_ms=lambda t: 1000.0 if PRESS_T + WINDOW - 0.6 < t < PRESS_T + WINDOW - 0.4
+                     else 1000 / 60)
+    m = results.window_metrics(end, PRESS_T, WINDOW)
+    assert 400 <= m["worst_frame_ms"] <= 600 and m["avg_fps"] == pytest.approx(60, abs=1.0)
+    start = capture_at(60.0, frame_ms=lambda t: 1000.0 if PRESS_T - 0.6 < t < PRESS_T - 0.4 else 1000 / 60)
+    m = results.window_metrics(start, PRESS_T, WINDOW)
+    assert 400 <= m["worst_frame_ms"] <= 600
 
 
 def _conditions(**knobs):
@@ -128,13 +176,23 @@ def _conditions(**knobs):
 def test_what_the_sweep_holds_fixed_is_compared_with_the_first_good_run():
     ref = _conditions()
     assert results.moved(None, ref) == [] and results.moved(ref, _conditions()) == []
-    assert results.moved(ref, _conditions(power_limit_w=98.0)) == []                # within 10 %
-    for knobs, why in (({"power_limit_w": 55.0}, "power limit changed from 103 W to 55 W"),
-                       ({"plan_guid": "bbbb", "plan_name": "Silent"}, "from Turbo to Silent"),
+    # The GPU's power limit moves by itself (Dynamic Boost): recorded, not held.
+    assert results.moved(ref, _conditions(power_limit_w=55.0)) == [] and _conditions(power_limit_w=55.0)[
+        "gpu_power_limit_w"] == 55.0
+    for knobs, why in (({"plan_guid": "bbbb", "plan_name": "Silent"}, "from Turbo to Silent"),
                        ({"hz": 60.0}, "from 144 Hz to 60 Hz"),
                        ({"on_battery": True}, "on battery")):
         assert any(why in m for m in results.moved(ref, _conditions(**knobs))), knobs
     assert any("on battery" in m for m in results.moved(None, _conditions(on_battery=True)))
+    best, quiet = dict(ref, power_mode="best_performance"), dict(ref, power_mode="balanced")
+    assert results.moved(best, quiet) == ["Windows' power mode changed from best performance to balanced"]
+
+
+def test_what_could_not_be_read_is_listed_as_not_checked():
+    cap = capture_at(60.0, nvidia=False, on_battery=None)
+    m = results.window_metrics(cap, PRESS_T, WINDOW)
+    assert results.problems(cap, m, PRESS_T, WINDOW) == []
+    assert results.unchecked(m, results.conditions(cap, m)) == ["the GPU's clock (no NVIDIA readings)", "mains power"]
 
 
 def test_an_updated_game_is_told_apart():
@@ -174,6 +232,15 @@ def test_the_ranking_puts_the_fastest_first_and_compares_each_with_the_file_as_i
     text = "\n".join(lines)
     assert text.isascii()
     assert "faster" in text and "no measurable difference" in text and "Picture quality is yours" in text
+    assert lines[0].startswith("Results, in order of average FPS") and "the 2 comparisons hold together" in text
+    assert "this sweep sees a difference of about" in text
+
+
+def test_conditions_not_checked_in_good_runs_are_said_with_the_results():
+    s = _sweep_with({"A": [58.0, 58.4, 57.9], "B": [63.0, 63.4, 62.7], "C": [58.2, 58.9, 57.4]})
+    s.runs[-1].conditions = {"unchecked": "the GPU's clock (no NVIDIA readings); mains power"}
+    text = "\n".join(results.text_lines(s))
+    assert "Not checked in some runs (lag-doctor could not read them): mains power, the GPU's clock" in text
 
 
 def test_a_setting_without_good_runs_ranks_last_and_says_why():

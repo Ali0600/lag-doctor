@@ -123,9 +123,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.set_defaults(func=cmd_app)
 
     from lagdoctor.sweep import plan as sweep_plan
-    sw = sub.add_parser("sweep", help="try a game's settings one after another and rank them (you play each run)",
+    sw = sub.add_parser("sweep", help="try a game's settings one after another and compare them (you play each run)",
                         description="lag-doctor writes each setting into the game's settings file while the game is "
-                        "closed, you play each run from the same spot, and it ranks the settings against their own "
+                        "closed, you play each run from the same spot, and it compares the settings against their own "
                         "run-to-run spread. Your settings file is put back as it was at the end.")
     sw.add_argument("--game", metavar="NAME", type=_exe_name, help="the game's exe name, e.g. ff7rebirth_.exe")
     sw.add_argument("--settings", metavar="FILE", help="the game's settings file (.ini), e.g. its GameUserSettings.ini")
@@ -138,8 +138,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help=f"seconds measured from the start key in each run (default {sweep_plan.WINDOW_DEFAULT_S:.0f})")
     sw.add_argument("--no-warm-up", action="store_true",
                     help="count every run, even each setting's first (by default the first round only warms up)")
-    sw.add_argument("--start-key", type=_hotkey, metavar="KEY",
-                    help=f"the key you press in the game at your spot (default {sweep_plan.START_KEY})")
+    sw.add_argument("--start-key", type=_start_key, metavar="KEY",
+                    help=f"the key you press in the game at your spot, with Ctrl, Alt or Win (default "
+                         f"{sweep_plan.START_KEY})")
     sw.add_argument("--resume", nargs="?", const="", metavar="FOLDER",
                     help="go on with the last unfinished sweep, or the one in FOLDER; a finished one shows its results")
     sw.set_defaults(func=cmd_sweep)
@@ -190,6 +191,19 @@ def _hotkey(text: str) -> str:
         parse_hotkey(key)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from None
+    return key
+
+
+def _start_key(text: str) -> str:
+    """A settings sweep's start key: one Windows can register, held with Ctrl, Alt or Win. A key on its own (or with
+    Shift alone) would be taken from the game for the whole run, and a sweep cannot do without one."""
+    key = _hotkey(text)
+    if key == "none":
+        raise argparse.ArgumentTypeError("a sweep needs a start key (e.g. ctrl+alt+s)")
+    mods = {p.strip() for p in key.split("+")[:-1]}
+    if not mods & {"ctrl", "control", "alt", "win"}:
+        raise argparse.ArgumentTypeError(f"{text!r} would take that key from the game: hold it with ctrl, alt or win "
+                                         "(e.g. ctrl+alt+s)")
     return key
 
 
@@ -880,11 +894,18 @@ def _settle_journal(say: Callable[[str], None] | None = None) -> None:
             say(f"The fix journal could not be read; it was copied to {exc.parked} and left in place. Fixes and "
                 f"undo are paused until it can be read again (`lagdoctor undo` says more).")
             return
+        sweep_left = []
         for e in entries:
             try:
                 if e.state == "pending":
+                    if e.fix_id == "game_setting" and _just_begun(e.created_at):
+                        continue                  # a sweep in another window may be making this change right now
                     res = catalog.get(e.fix_id).heal(e, journal)
                     say(f"Settled a change that was interrupted last time: {res.message}")
+                    if e.fix_id == "game_setting" and res.state == "applied":
+                        sweep_left.append(e)
+                elif e.state in ("applied", "conflict") and e.fix_id == "game_setting":
+                    sweep_left.append(e)
                 elif e.state == "applied" and e.session_only:
                     # Decided without read(): a journaled PID may belong to the game by now, and read() opens it.
                     if catalog.get(e.fix_id).ended(e.params):
@@ -893,8 +914,30 @@ def _settle_journal(say: Callable[[str], None] | None = None) -> None:
                 raise
             except Exception as exc:  # noqa: BLE001 - one bad entry is left as it is, and the rest still settle
                 say(f"(Could not check the change {e.id} ({e.fix_id}) in the fix journal: {exc})")
+        if sweep_left:
+            # A sweep that ended without putting its setting back (its window was closed, the PC restarted): the
+            # player plays with that setting until something puts it back, so every start says so.
+            values = ", ".join(f"{e.params.get('key')}={e.after} (was {e.before})" for e in sweep_left
+                               if isinstance(e.params, dict))
+            say(f"A settings sweep left a change in a game's settings file: {values}. `lagdoctor sweep --resume` puts "
+                "it back (and goes on with the sweep), and so does `lagdoctor undo game_setting`.")
     except Exception as exc:  # noqa: BLE001 - a journal problem must not block the tool
         say(f"(Could not check the fix journal: {exc})")
+
+
+PENDING_GRACE_S = 60.0         # a pending entry younger than this may be a change another window is making now
+
+
+def _just_begun(created_at: object) -> bool:
+    """True for a journal entry created under PENDING_GRACE_S ago: healing it now could read the value before the other
+    window's write lands, and settle a change that then happens as one that never did."""
+    try:
+        made = datetime.fromisoformat(str(created_at))
+    except ValueError:
+        return False
+    if made.tzinfo is None:
+        return False
+    return (datetime.now(made.tzinfo) - made).total_seconds() < PENDING_GRACE_S
 
 
 # ------------------------------------------------------------------ setup --

@@ -9,7 +9,7 @@ from lagdoctor.sweep import inifile
 # sections, CRLF endings, no byte-order mark. The values are made up.
 FILE = ("[ScalabilityGroups]\r\n"
         "sg.ResolutionQuality=100\r\n"
-        "sg.ShadowQuality=0\r\n"
+        "sg.ShadowQuality=2\r\n"
         "sg.StaticMeshQuality=3\r\n"
         "\r\n"
         "[/Script/Engine.GameUserSettings]\r\n"
@@ -30,10 +30,10 @@ def test_every_encoding_and_line_ending_comes_back_byte_for_byte(bom, codec, new
     raw = bom + FILE.replace("\r\n", newline).encode(codec)
     text, enc = inifile.decode(raw)
     assert enc == inifile.Encoding(codec, bom)
-    changed = inifile.encode(inifile.set_value(text, "ScalabilityGroups", "sg.ShadowQuality", "2"), enc)
+    changed = inifile.encode(inifile.set_value(text, "ScalabilityGroups", "sg.ShadowQuality", "1"), enc)
     assert changed.startswith(bom) and changed != raw
     back, _ = inifile.decode(changed)
-    assert inifile.encode(inifile.set_value(back, "ScalabilityGroups", "sg.ShadowQuality", "0"), enc) == raw
+    assert inifile.encode(inifile.set_value(back, "ScalabilityGroups", "sg.ShadowQuality", "2"), enc) == raw
 
 
 def test_bytes_that_are_not_utf8_come_back_as_they_were():
@@ -125,8 +125,50 @@ def test_files_that_are_no_settings_file_are_refused():
         inifile.decode("[S]")
 
 
+def test_a_name_that_only_folds_to_the_key_never_matches():
+    # The Kelvin sign folds to a plain k: a file key spelt with it is another key, never the one asked for.
+    kelvin = chr(0x212A)
+    text = f"[S]\n{kelvin}ey=1\n[T{kelvin}]\nKey=2\n"
+    assert inifile.get_value(text, "S", "Key") is None and inifile.get_value(text, "Tk", "Key") is None
+    assert inifile.sections_with(text, "Key") == []
+
+
+def test_a_header_keeps_its_spaces_so_its_keys_are_not_another_sections():
+    text = "[ ScalabilityGroups ]\nsg.X=1\n"
+    assert inifile.get_value(text, "ScalabilityGroups", "sg.X") is None
+    assert inifile.sections_with(text, "sg.X") == [" ScalabilityGroups "]
+
+
+def test_a_dropped_line_is_put_back_at_the_end_of_its_section():
+    dropped = FILE.replace("sg.StaticMeshQuality=3\r\n", "")
+    assert inifile.insert_value(dropped, "ScalabilityGroups", "sg.StaticMeshQuality", "3") == FILE
+    last = "[S]\nsg.X=1"                                  # the section's line is the file's last, with no ending
+    assert inifile.insert_value(last, "S", "sg.Y", "2") == "[S]\nsg.X=1\nsg.Y=2"
+    twice = "[S]\nsg.X=1\n[T]\nk=1\n[S]\nsg.Z=1\n\n"
+    assert inifile.insert_value(twice, "S", "sg.Y", "2") == "[S]\nsg.X=1\n[T]\nk=1\n[S]\nsg.Z=1\nsg.Y=2\n\n"
+    for section, key, value in (("Missing", "sg.Y", "1"), ("ScalabilityGroups", "sg.ShadowQuality", "1"),
+                                ("ScalabilityGroups", "sg.Y", "1\n[X]"), ("ScalabilityGroups", ".Paths", "1")):
+        with pytest.raises(ValueError):
+            inifile.insert_value(FILE, section, key, value)
+
+
+def test_every_plain_value_is_listed_for_comparing_runs():
+    assert inifile.pairs(FILE + ";c=1\r\n+Arr=1\r\n") == [
+        ("ScalabilityGroups", "sg.ResolutionQuality", "100"), ("ScalabilityGroups", "sg.ShadowQuality", "2"),
+        ("ScalabilityGroups", "sg.StaticMeshQuality", "3"), ("/Script/Engine.GameUserSettings", "bUseVSync", "False"),
+        ("/Script/Engine.GameUserSettings", "FrameRateLimit", "0.000000")]
+
+
+@pytest.mark.parametrize("a,b,same", [("75", "75.000000", True), ("1", "1.0", True), ("True", "true", True),
+                                      ("False", "FALSE", True), ("3", "3", True), ("75", "75.1", False),
+                                      ("True", "1", False), ("abc", "ABC", False), ("1e3", "1000", False),
+                                      ("nan", "nan", True), ("", "0", False), (3, "3", False)])
+def test_values_that_mean_the_same_to_a_game(a, b, same):
+    assert inifile.same_value(a, b) is same
+
+
 @pytest.mark.parametrize("pattern,good,bad", [
-    (inifile.KEY, ["sg.StaticMeshQuality", "bUseVSync", "r.VSync"], ["", "sg X", "a=b", "x" * 129]),
+    (inifile.KEY, ["sg.StaticMeshQuality", "bUseVSync", "r.VSync"], ["", "sg X", "a=b", "x" * 129, ".Paths"]),
     (inifile.SECTION, ["ScalabilityGroups", "/Script/Engine.GameUserSettings"], ["", "S]", "A B", "x" * 129]),
     (inifile.VALUE, ["0", "3", "1.000000", "True", "-1", "+2"], ["", "1 2", "1;", "(X=1)", "x" * 65]),
 ])

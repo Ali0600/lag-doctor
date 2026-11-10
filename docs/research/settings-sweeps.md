@@ -385,9 +385,18 @@ github.com/phoronix-test-suite/test-profiles]:
 
 ## 7. What a sweep would have to do [inferred from sections 2 to 6]
 
-Built on 2026-11-09 as `lagdoctor sweep`, the assisted sweep (DESIGN, The settings sweep): items 2, 6, 7 and 8 as
-written; item 1 without the driver version; item 3 with the player starting the game; item 4 by the player at a spot
-pressing the start key; item 5 without waiting for the GPU to level off (the warm-up round instead).
+Built on 2026-11-09 as `lagdoctor sweep`, the assisted sweep (DESIGN, The settings sweep), with these differences:
+- item 1 without the driver version;
+- item 2 compares every value of the file before each run rather than its hash, so a value the game rewrites in its
+  own spelling does not count, and the player decides about a real change;
+- item 3 with the player starting the game, and item 4 by the player pressing the start key at a spot;
+- item 5 without waiting for the GPU to level off: a warm-up round first, and a window whose GPU clock moved does not
+  count;
+- item 6 with the counted rounds rotating one order (a Latin square), and A's repeats in every round as the A/A check
+  instead of a block of its own;
+- item 7 with throttling judged by the clock's spread within the window (the owner's GPU is heat-held throughout, so
+  "throttled" alone would refuse every run);
+- item 8 with the intervals widened for the number of settings compared.
 
 1. Refuse without a fixed power mode and mains power, and record the driver and game versions; a change in either
    ends the sweep's baseline.
