@@ -473,12 +473,17 @@ def test_vsync_at_two_refreshes_names_the_gpu_that_needs_more_than_one():
 def test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one():
     assert vsync_halved(gpu_ms=5.0, thread=90.0)["verdict"] == "cpu_main"      # the busiest thread saturated
     assert vsync_halved(gpu_ms=5.0, thread=80.0)["verdict"] == "vsync"
-    # MsCPUBusy says it where MsCPUWait is measured (DXGI): 20 ms of work > 16.7 ms, 13.3 ms waiting in Present
+
+
+def test_cpu_busy_never_calls_a_game_vsync_holds_cpu_bound():
+    # PM 3.2: MsCPUBusy runs from the last Present() return to the next call, so a game waiting outside Present()
+    # (a waitable swap chain, a limiter's sleep) reads busy for most of the frame, even on DXGI where MsCPUWait is
+    # measured. 20 ms of it once called a game VSync held at 30 FPS, its threads at 40 %, CPU-bound.
     p2 = 2 * 1000.0 / 60.0
-    assert vsync_halved(gpu_ms=5.0, cpu_busy=20.0, cpu_wait=p2 - 20.0, runtime="DXGI")["verdict"] == "cpu_main"
-    assert vsync_halved(gpu_ms=5.0, cpu_busy=16.0, cpu_wait=p2 - 16.0, runtime="DXGI")["verdict"] == "vsync"
-    # runtime "Other" (OpenGL, Vulkan) puts the wait into MsCPUBusy, so it says nothing (PM 8.2)
-    assert vsync_halved(gpu_ms=5.0, cpu_busy=20.0, cpu_wait=p2 - 20.0, runtime="Other")["verdict"] == "vsync"
+    for runtime in ("DXGI", "Other"):
+        b = vsync_halved(gpu_ms=5.0, cpu_busy=20.0, cpu_wait=p2 - 20.0, runtime=runtime)
+        assert b["verdict"] == "vsync" and b["vsync"] is True, runtime
+        assert not any("CPU works" in x for x in b["notes"])
 
 
 def test_hags_comes_from_the_games_own_adapter_first():

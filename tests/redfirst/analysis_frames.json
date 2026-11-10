@@ -771,24 +771,6 @@
   ]
  },
  {
-  "name": "MsCPUBusy ignored under VSync",
-  "file": "lagdoctor/analysis/frames.py",
-  "old": "    if cpu is not None and cpu > one:",
-  "new": "    if False:",
-  "tests": [
-   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
-  ]
- },
- {
-  "name": "MsCPUBusy read for runtime Other",
-  "file": "lagdoctor/analysis/frames.py",
-  "old": "    if not runtimes or runtimes.most_common(1)[0][0] == \"Other\":",
-  "new": "    if not runtimes:",
-  "tests": [
-   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
-  ]
- },
- {
   "name": "times not bounded",
   "file": "lagdoctor/analysis/frames.py",
   "old": "    return n if n is not None and abs(n) <= MAX_ABS_VALUE else None",
@@ -1874,6 +1856,15 @@
   "tests": [
    "tests/test_analysis_frames.py::test_the_steady_frame_rate_is_the_displayed_rate_outside_lag_events",
    "tests/test_analysis_rules_diagnose.py::test_freezes_never_make_a_steady_frame_rate_low"
+  ]
+ },
+ {
+  "name": "CPU Busy past k - 1 periods calls a game VSync holds CPU-bound",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return \"vsync\", \"high\"\n\n\ndef _sync_off(",
+  "new": "    if (_num(_at(fr.get(F.CPU_BUSY_MS), rows[0])) or 0.0) > one:\n        return \"cpu_main\", \"high\"\n    return \"vsync\", \"high\"\n\n\ndef _sync_off(",
+  "tests": [
+   "tests/test_analysis_frames.py::test_cpu_busy_never_calls_a_game_vsync_holds_cpu_bound"
   ]
  }
 ]

@@ -657,8 +657,9 @@ def _vsync_limit(fr: dict[str, list], rows: list[int], ft: float, hz: float, raw
                  busiest: float | None, notes: list[str]) -> tuple[str, str]:
     """(verdict, confidence) for a game locked to k refreshes a frame (A6). From k = 2, VSync rounds the rate
     down to refresh / k, so whatever needs more than k - 1 periods is what holds it there: the GPU when its
-    raw busy time does, the CPU when the busiest thread is saturated or MsCPUBusy (where it is the CPU's own
-    work) does. Only when neither does is the display itself the limit."""
+    raw busy time does, the CPU when the busiest thread is saturated. Never MsCPUBusy: it counts the game's waits
+    outside Present() (a waitable swap chain, a limiter's sleep), so a game VSync holds reads busy for the whole
+    frame (PM 3.2). Only when neither does is the display itself the limit."""
     period = 1000.0 / hz
     k = round(ft / period)
     if k < 2:
@@ -672,23 +673,7 @@ def _vsync_limit(fr: dict[str, list], rows: list[int], ft: float, hz: float, raw
     if busiest is not None and busiest >= THREAD_BOUND:
         notes.append(f"{rounds}: the busiest game thread runs {100 * busiest:.0f}% of a CPU")
         return "cpu_main", ("medium" if busiest - THREAD_BOUND < CONF_MARGIN else "high")
-    cpu = _cpu_busy_ms(fr, rows)
-    if cpu is not None and cpu > one:
-        notes.append(f"{rounds}: the CPU works {cpu:.1f} ms a frame, more than {k - 1} refresh period(s) "
-                     f"({one:.1f} ms)")
-        return "cpu_main", ("medium" if cpu / one - 1.0 < CONF_MARGIN else "high")
     return "vsync", "high"
-
-
-def _cpu_busy_ms(fr: dict[str, list], rows: list[int]) -> float | None:
-    """Median MsCPUBusy over the rows where it is the CPU's own work: MsCPUWait measured on most of them
-    (PM 2.2), and a runtime other than "Other", whose MsCPUBusy holds the wait as well (PM 8.2)."""
-    runtimes = Counter(v for v in (_at(fr.get(F.RUNTIME), i) for i in rows) if isinstance(v, str))
-    if not runtimes or runtimes.most_common(1)[0][0] == "Other":
-        return None
-    cb, cw = fr.get(F.CPU_BUSY_MS) or [], fr.get(F.CPU_WAIT_MS) or []
-    busy = [float(cb[i]) for i in rows if _pos(_at(cb, i)) and _bounded(_at(cw, i)) is not None]
-    return st.median(busy) if busy and len(busy) * 2 >= len(rows) else None
 
 
 def _sync_off(fr: dict[str, list], rows: list[int]) -> bool:

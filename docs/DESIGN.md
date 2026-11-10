@@ -875,8 +875,8 @@ marks                                      list            [{t, events: [ids], c
 `bound()` judges steady stretches only (frames outside stutters and FPS drops, at least 10 s and 300 app
 frames), in order: VSync (displayed intervals quantised on whole refresh periods, SyncInterval not 0 and
 AllowsTearing not 1; with k = round(FT/P) >= 2 the hardware is tested against one period: GPU busy past
-(k-1)·P gives `gpu`, a saturated busiest thread `cpu_main`, with a note that VSync rounds the rate down to
-refresh/k), a frame cap (a regular present cadence: robust CoV, (IQR/1.349)/median per 5 s window, under 3 %,
+(k-1)·P gives `gpu`, a saturated busiest thread `cpu_main`, never `MsCPUBusy`, which counts the game's waits
+outside `Present()` (PM 3.2), with a note that VSync rounds the rate down to refresh/k), a frame cap (a regular present cadence: robust CoV, (IQR/1.349)/median per 5 s window, under 3 %,
 away from k·P, with r < 0.75 and an unsaturated thread), `gpu` (r >= 0.90, or r above 0.75 with FT − G <= 1 ms;
 G minus 0.5 ms when HAGS is on for the game's adapter), `cpu_main` (r <= 0.75 and busiest thread >= 0.85 of a
 CPU over >= 1 s), `cpu_all`, `waiting`, else `mixed`. Without frames, a 3D engine at >= 95 % (median of 1 s
