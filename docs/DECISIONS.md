@@ -124,7 +124,47 @@ the spot and quit. It ranks the results with their noise."
 - **B: unattended**, A plus menu keys and a close request sent by lag-doctor: deferred, worth trying (Backlog).
 - **C: not now**: not chosen.
 
-The build's own choices are recorded below as it lands.
+The implementing session's choices for `lagdoctor sweep` (DESIGN, The settings sweep); the owner has not weighed in:
+- **Edits through the fix journal, as the fix `game_setting` (chosen)**, plus a byte copy of the file in the sweep's
+  folder: a crash leaves an entry that the next start heals and `lagdoctor undo` puts back, and an undo never
+  clobbers a value something else set since.
+  - **Write the whole original file back at the end**: rejected. It would undo whatever the game or the player
+    changed in the file during the sweep, and a crash would leave nothing that knows the file was changed.
+- **Only values the file already has, with a strict value grammar, in .ini files (chosen)**: a sweep never adds or
+  removes a line, so the game never meets a key its own build did not write.
+  - **Adding keys (Engine.ini's console variables)**: deferred. FINAL FANTASY VII REBIRTH reads Engine.ini only through
+    a proxy DLL (research note, section 2), which a sweep would first have to know is there. Revisit hook:
+    `inifile.set_value`, which refuses a missing key today.
+- **Each run through `cmd_watch` (chosen)**, with two new keyword seams, `remember` and `show_summary` (both False for
+  a sweep's runs), so a run is an ordinary recording: the capture lock, the PresentMon check, the relay and its
+  prompt, the save and the report.
+  - **The session alone, with the sweep's own save**: rejected. It would copy watch's checks and drift from them.
+- **The player presses Enter here once at the spot, before the recording starts (chosen)**: the UAC prompt then comes
+  up while this terminal is in front, and the player goes back to the game for the start key.
+  - **Start recording as soon as the game appears**: rejected for now. The prompt would come up behind a starting
+    game, which only blinks on the taskbar. Play's prompt before the launch (M6) makes it worth trying. Revisit hook:
+    the Enter loop in `runner._one`.
+- **The sweep's own start key, Ctrl+Alt+S, registered for each run only (chosen)**, with watch's lag key off in a
+  sweep's runs. Watch has no start key yet (M5 is building one): once it has, a run uses watch's, so one listener owns
+  the key. Revisit hook: `runner._record` (and `docs/LAUNCHER-PLAN.md`, M5).
+  - **The lag key as the start key**: rejected. A run's report would list the press as a lag the player marked.
+  - **Wait for M5 before building the sweep**: rejected. The owner asked for the sweep now, and the seam is small.
+- **A warm-up block, then blocks with every setting once in a shuffled order (chosen)**: drift spreads over every
+  setting, a setting's slower first run is not counted, and A's runs in every block are the noise check the research
+  asked for (A/A) without runs of their own.
+  - **A separate A/A block first**: rejected. It costs runs that A's repeats already give.
+- **Welch's t interval on average FPS and the 1 % low, in % of A's mean (chosen)**: "faster" or "slower" only when
+  the interval excludes 0. At 2 to 10 runs a bootstrap's interval is too narrow (research note, section 4).
+  - **A rank test (Mann-Whitney)**: rejected. At 3 runs a side its smallest possible p is 0.1, so it can never call a
+  difference.
+- **A run that moved does not count and is offered again (chosen)**: the checks of DESIGN's sweep section, with the
+  NVIDIA power limit standing in for the laptop's own power mode (on the owner's laptop Silent and Turbo set 55 and
+  103 W). A game update, or a game that writes its own value back, stops the whole sweep.
+- **Feel numbers, for the owner to judge after a real sweep**: the 60 s window, 3 counted runs, the 5 minutes the
+  start key may take, and Ctrl+Alt+S itself.
+
+Revisit hooks: `runner._record` (the start key), `runner._one` (Enter, and where an unattended sweep would drive the
+game), `results.problems` and `results.moved` (what keeps a run out), `plan.make_slots` (the order).
 
 ## 2026-11-09: M4's end flashes the taskbar button and never brings the window forward
 

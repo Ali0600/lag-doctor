@@ -31,6 +31,10 @@ generated, the analysis and the page are the real ones.*
   background programs. Each change is journaled first, verified by reading it back, and undone with
   `lagdoctor undo`. It never turns off a security feature, never kills or suspends a process, and never
   touches the game.
+- **Tries a game's settings for you, run by run** (`lagdoctor sweep`): it writes each setting into the game's
+  settings file while the game is closed, you play each run from the same spot, and it ranks the settings by
+  average FPS and 1 % low against their own run-to-run spread, saying "no measurable difference" when that is the
+  answer. Your settings file is put back as it was at the end.
 
 ## Install
 
@@ -77,7 +81,22 @@ uv run lagdoctor fix power_plan                         # shows before -> after 
 uv run lagdoctor undo                                   # what lag-doctor changed; undo an ID, or --all
 uv run lagdoctor analyze CAPTURE                        # re-run the analysis on a saved capture
 uv run lagdoctor app                                    # your games, their results and recording, in a window
+uv run lagdoctor sweep --game mygame.exe --settings "<its GameUserSettings.ini>" --try sg.ShadowQuality=1
+uv run lagdoctor sweep --resume                         # go on with a sweep you stopped; a finished one's results
 ```
+
+- **A settings sweep** tries settings kept in an ini file (an Unreal game's `GameUserSettings.ini`, say), one `--try`
+  each (`--try sg.ShadowQuality=1`, or several values at once with commas between), against the file as it is. Close
+  the game first, plug the laptop in, and pick a save and a spot you can reach the same way each time. For each run
+  lag-doctor writes the setting into the file; you start the game, load the save, go to the spot and press Enter in
+  the terminal; then, back in the game, press **Ctrl+Alt+S** at the spot: a chime starts 60 s of measuring
+  (`--window`) and another ends it, and you quit the game. The runs come in rounds, every setting once a round in a
+  shuffled order; the first round only warms up, then 3 rounds count (`--runs`). A run with the game behind another
+  window, another program on the GPU, or a changed power mode does not count and is offered again. Each run asks for
+  one UAC prompt. It changes only values the file already has; if the game puts its own value back when it closes, the
+  sweep stops and says so, because then the game does not take that setting from the file. Ctrl+C stops it at any
+  point, the file goes back as it was once the game has closed, and `--resume` goes on later. It ranks speed only:
+  picture quality is yours to judge.
 
 - **`lagdoctor app` opens lag-doctor's own window** (or **lag-doctor** in the Start menu, once installed): every game
   you have recorded, each game's recordings, and Results to explore (the verdict and causes, zoomable frame-time,
@@ -294,16 +313,18 @@ connection to Microsoft, as the runtime does on its own.
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
   did wrong.
-- **Testing that proves itself**: 3,606 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 3,782 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 43 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 2,389 deliberate sabotages in
-  48 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
-- **Safe automation of system changes**: 7 opt-in fixes behind a write-ahead journal, readback
-  verification, undo and crash healing, with a handle-free identity check before touching any process.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 2,419 deliberate sabotages in
+  49 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+- **Safe automation of system changes**: 7 opt-in fixes, and a settings sweep that edits a game's settings file
+  between runs and puts it back byte for byte, all behind a write-ahead journal, readback verification, undo and
+  crash healing, with a handle-free identity check before touching any process; the sweep ranks settings by Welch's
+  t interval over warmed-up, interleaved runs, and its 21 whole-sweep tests stop, resume and fail it on purpose.
 - **Supply chain and least privilege**: a per-machine WiX MSI of 179 files built in CI from pinned inputs (Python
   runtime and PresentMon by SHA-256, WiX by SHA-512), installed, run from a fresh shell and uninstalled on a
   throwaway runner with nothing left behind, its Start-menu shortcut and app ID read back from the installed

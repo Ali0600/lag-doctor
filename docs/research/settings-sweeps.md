@@ -385,6 +385,10 @@ github.com/phoronix-test-suite/test-profiles]:
 
 ## 7. What a sweep would have to do [inferred from sections 2 to 6]
 
+Built on 2026-11-09 as `lagdoctor sweep`, the assisted sweep (DESIGN, The settings sweep): items 2, 6, 7 and 8 as
+written; item 1 without the driver version; item 3 with the player starting the game; item 4 by the player at a spot
+pressing the start key; item 5 without waiting for the GPU to level off (the warm-up round instead).
+
 1. Refuse without a fixed power mode and mains power, and record the driver and game versions; a change in either
    ends the sweep's baseline.
 2. Apply each variant through the journal with the game closed; check the files' hashes before each run; undo

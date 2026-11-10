@@ -928,3 +928,15 @@ game the GPU drew about 61 W and sat at 780 MHz and 87-89 °C; only the first se
 hot, showed the 1,700 MHz it can run. No analysis code read the clock, so the report never said so.
 **Takeaway**: before tuning power modes, read the GPU's clock against its temperature and its throttle reason; when
 heat binds, the fixes are cooling or less work per frame (a lower render resolution, a frame cap), not more watts.
+
+### Edit one value of a text file without knowing its encoding, and leave every other byte as it was
+A program that changes one setting in someone else's file must not rewrite the rest: a different line ending, a lost
+byte-order mark or a re-encoded accented letter is a change the file's owner never asked for. Python can do it
+without knowing the encoding: detect a byte-order mark (UTF-8, UTF-16 LE or BE) and decode with that codec; decode a
+file without one as UTF-8 with `errors="surrogateescape"`, which turns every byte that is not UTF-8 into a placeholder
+that encodes back to the same byte; split lines on `\r\n|\n|\r` keeping each ending; change only the value's
+characters; and before writing anything, check that encoding the unchanged text gives the original bytes.
+**Why it came up**: `lagdoctor sweep` writes each setting it tries into a game's `GameUserSettings.ini` and puts the
+original back, and its tests prove the file comes back byte for byte in four encodings and with an ANSI byte in it.
+**Takeaway**: for an in-place edit of a file you do not own, round-trip first (decode, encode, compare with the raw
+bytes) and refuse a file that does not survive it; never write text you decoded with a guessed codec.

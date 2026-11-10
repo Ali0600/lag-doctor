@@ -194,11 +194,12 @@ def test_without_a_private_copy_every_command_runs_as_before(monkeypatch, capsys
 
 
 def test_every_command_has_a_policy_and_only_those_that_save_refuse():
-    # app saves its log and WebView2's data folder under lag-doctor's home, and from M4 on it records.
+    # app saves its log and WebView2's data folder under lag-doctor's home, and from M4 on it records; sweep keeps its
+    # state and journal there and records each run.
     sub = next(a for a in cli.build_parser()._actions if isinstance(a, argparse._SubParsersAction))
     assert set(sub.choices) == set(cli.PRIVATE_COPY_POLICY)
     assert {c for c, p in cli.PRIVATE_COPY_POLICY.items() if p == "refuse"} == {"setup", "watch", "fix", "undo",
-                                                                                 "app"}
+                                                                                 "app", "sweep"}
     assert {c for c, p in cli.PRIVATE_COPY_POLICY.items() if p == "note"} == {"check", "analyze"}
 
 

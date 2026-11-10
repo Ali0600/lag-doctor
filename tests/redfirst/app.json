@@ -216,7 +216,7 @@
    "tests": ["tests/test_app_views.py::test_a_summary_that_cannot_be_written_is_said_and_the_analysis_still_ends_well"]},
   {"name": "an analysis writes no summary",
    "file": "lagdoctor/cli.py",
-   "old": "    _write_summary(d, cap, out_dir, \"watch\" if remember else \"analyze\", say=say)\n",
+   "old": "    _write_summary(d, cap, out_dir, kind or (\"watch\" if remember else \"analyze\"), say=say)\n",
    "new": "",
    "tests": ["tests/test_app_views.py::test_a_watch_writes_its_summary_and_an_analyze_names_its_kind"]},
   {"name": "a window outside the capture",

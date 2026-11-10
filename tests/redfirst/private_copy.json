@@ -137,8 +137,8 @@
  {
   "name": "the journal healed in a private copy",
   "file": "lagdoctor/cli.py",
-  "old": "    if args.cmd in (\"watch\", \"fix\", \"undo\", \"check\") and not private:",
-  "new": "    if args.cmd in (\"watch\", \"fix\", \"undo\", \"check\"):",
+  "old": "    if args.cmd in (\"watch\", \"fix\", \"undo\", \"check\", \"sweep\") and not private:",
+  "new": "    if args.cmd in (\"watch\", \"fix\", \"undo\", \"check\", \"sweep\"):",
   "tests": [
    "tests/test_private_copy.py::test_commands_that_only_read_say_where_their_files_go_and_carry_on"
   ]
@@ -173,8 +173,8 @@
  {
   "name": "analyze refuses as a saver",
   "file": "lagdoctor/cli.py",
-  "old": "                       \"check\": \"note\", \"analyze\": \"note\"}",
-  "new": "                       \"check\": \"note\", \"analyze\": \"refuse\"}",
+  "old": "\"check\": \"note\", \"analyze\": \"note\"}",
+  "new": "\"check\": \"note\", \"analyze\": \"refuse\"}",
   "tests": [
    "tests/test_private_copy.py::test_every_command_has_a_policy_and_only_those_that_save_refuse"
   ]

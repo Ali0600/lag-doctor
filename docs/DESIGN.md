@@ -244,8 +244,9 @@ up from there was "not installed" for the user's terminal and the elevated recor
   form, which RAM disks without a Mount Manager entry still give), never whether the process has a package
   identity; `paths.redirected()` is the pure reading of that path.
 - `cli.main` runs it once, before anything is written (the journal healing writes), per
-  `cli.PRIVATE_COPY_POLICY`: `setup`, `watch`, `fix`, `undo` and `app` (its log and WebView2's data folder; from M4
-  its recordings) save files other windows must find and refuse
+  `cli.PRIVATE_COPY_POLICY`: `setup`, `watch`, `fix`, `undo`, `app` (its log and WebView2's data folder; from M4
+  its recordings) and `sweep` (its state, the journal and its runs; it also probes the settings file's own folder)
+  save files other windows must find and refuse
   (exit 5, saying where the files would go and to open PowerShell from the Start menu); `check` and `analyze`
   only read the PC and print a one-line note, and the journal is not healed under a private copy. A probe that
   cannot be made refuses the savers too. The relay saves nothing, so it needs no probe. When lag-doctor's own
@@ -276,7 +277,8 @@ lagdoctor/
   analysis/ stats.py (done) frames.py events.py attribute.py rules.py diagnose.py
             window.py                                   the samples around a moment (the app's Results)
   fixes/    base.py journal.py registry.py catalog.py (done) + power.py refresh_rate.py gpu_preference.py
-            gamebar.py windowed.py priority.py
+            gamebar.py windowed.py priority.py game_setting.py (the settings sweep's edits; no report offers it)
+  sweep/    inifile.py plan.py results.py runner.py command.py   `lagdoctor sweep`: settings tried run by run
   report/   charts.py labels.py console.py html.py (done) summary.py (summary.json, for the app's library)
   app/      main.py window.py bridge.py library.py views.py assets/ lag-doctor.ico     the desktop app (M1)
   setup.py  fetch + verify PresentMon
@@ -1081,6 +1083,7 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 | `game_mode_on` | `{}` | `HKCU\Software\Microsoft\GameBar\AutoGameModeEnabled` = 1 | registry; `effective_mode()` = game_mode while playing | no |
 | `windowed_optimizations_on` | `{}` | `DirectXUserGlobalSettings` field `SwapEffectUpgradeEnable=1;`, other fields kept | registry | game |
 | `background_priority` | `{"pid": int, "create_time": int, "class": "below_normal", "exclude": [pids], "name": str, "game_name": str \| None}` | priority class of one of the user's own non-game processes, for this session only | `priority_class()` | no |
+| `game_setting` | `{"file": ini path, "section": str, "key": str, "value": str, "game": exe name}` | one value in a game's own settings file, only for a settings sweep (below); refused while a process with the game's image name runs | the file read again | game |
 
 - Registry value semantics marked *unverified* in WT 8 are community-sourced; each such fix says so in its
   description and plan notes. The string-field fixes journal and restore only their own `key=value;` field.
@@ -1100,6 +1103,10 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 - Advice only (never automated): hardware GPU scheduling, Memory Integrity / VBS (information only), the MUX
   / "Ultimate" GPU mode and the OEM fan/power mode (Armoury Crate), drivers, in-game settings, frame caps,
   cooling, Wi-Fi band and placement, pausing downloads, closing apps, the Wi-Fi background-scan setting.
+  The one exception, which the owner asked for (DECISIONS 2026-11-09): a settings sweep writes the in-game settings
+  it tries into the game's settings file through `game_setting`, for the sweep's length only, and puts the
+  originals back at its end. No report suggests `game_setting`, so `fix` never offers it; `undo` and the start-up
+  heal treat its entries as any other's.
 - Never offered: disabling security features, killing or suspending processes, HKLM or policy changes,
   anything that touches the game process (including its priority: that needs a handle, WT 9.2).
 
@@ -1156,6 +1163,9 @@ lagdoctor fix [ID ...] [--list]      apply fixes suggested by the last report (a
 lagdoctor undo [ID | --all]          restore from the journal
 lagdoctor setup                      fetch + verify PresentMon, explain how to get ETW rights
 lagdoctor app                        lag-doctor's window: recorded games and their results (see The app)
+lagdoctor sweep --game NAME --settings FILE --try KEY=VALUE [--try ...] [--runs N] [--window S] [--no-warm-up]
+                [--start-key KEY]    try settings run by run and rank them (see The settings sweep)
+lagdoctor sweep --resume [FOLDER]    go on with an unfinished sweep; a finished one shows its results
 ```
 
 - Each `watch` writes `capture.ldcap.json.gz`, `diagnosis.json`, `report.html` and `summary.json` into a new folder under
@@ -1202,7 +1212,9 @@ lagdoctor app                        lag-doctor's window: recorded games and the
   `launcher` starts the relay elevated (default `elevation.launch_elevated`, through `relay/client.launch`);
   `cancel`, set before the recording begins, ends watch with nothing recorded (exit 130, `EXIT_CANCELLED`; see The
   control channel); `tool_alone` and `tool_roots` go to `SessionOptions` (the app's window and its WebView2
-  processes). `watch --control stdio` is all of these, driven by the app (The control channel).
+  processes); `remember` False leaves `last-session.txt` alone, so `fix` keeps acting on the last ordinary watch,
+  while summary.json still says `watch`, and `show_summary` False leaves the analysis' console summary out (both for
+  a settings sweep's runs). `watch --control stdio` is all of these, driven by the app (The control channel).
 - `fix` applies only offered fixes, with the offered params, after showing the plan and its notes; it refuses
   to run elevated. A plan-time refusal is reported, never a traceback. Every command except `setup` first
   settles journal entries a crash left `pending`, and marks session-only changes whose process has ended as
@@ -1325,6 +1337,55 @@ def window(cap, t0, t1, frames=None) -> dict      # {t0, t1, frames, system, gpu
                                                   # ValueError unless t0 and t1 are finite and in order
 ```
 
+## The settings sweep (lagdoctor/sweep/)
+
+`lagdoctor sweep` tries a game's settings one after another and ranks them, the assisted sweep the owner chose
+(DECISIONS 2026-11-09; research in `docs/research/settings-sweeps.md`). lag-doctor writes each setting into the game's
+settings file while the game is closed; the player starts the game, loads a save, goes to a spot and plays each run;
+each run is an ordinary recording measured over a fixed window from a key the player presses at the spot. Nothing is
+typed on the player's PC, and the game is never started, stopped or opened by lag-doctor.
+
+- **What it may change** (`fixes/game_setting.py` over `sweep/inifile.py`): values the settings file already has, in
+  a plain `.ini` on a drive letter, one `Key=Value` line each, written as `inifile.VALUE` allows (letters, digits,
+  `.`, `_`, `+`, `-`). Only the value's characters change; comments, line order, spacing, line endings, the byte-order
+  mark and the encoding stay byte for byte (UTF-8 read with surrogateescape, UTF-16 by its mark), and the new file
+  replaces the old one whole. A key set twice in its section, a header with anything after its `]`, a file over 1 MB,
+  one OneDrive keeps online only (never opened), one marked read-only, and one in a folder whose new files land in
+  another app's private copy are all refused. Every write goes through the journal (`game_setting`), refused while a
+  process with the game's image name runs.
+- **The plan** (`sweep/plan.py`, saved as `sweep.json` under `paths.sweeps_dir()`, apart from the sessions, with a
+  byte copy of the file as it was): A is the file as it was, B onwards one `--try` each (at most 5, each changing at
+  most 4 values); the runs come in blocks, each holding every setting once in an order from a seeded shuffle; the
+  first block warms up and is not counted (`--no-warm-up` counts it); then `--runs` counted blocks (default 3, 2 to
+  10). The state is written whole after every step, so a stopped or killed sweep goes on with `--resume`.
+- **A run** (`sweep/runner.py`): wait for the game to have closed; undo this sweep's edits, check the file holds the
+  originals (a value changed since the sweep began stops it), write the setting's values and read every one back;
+  the player starts the game, goes to the spot and presses Enter; `watch` records (`--game`, `--no-network`,
+  `--hotkey none`, `--elevate` unless `can_trace`, `--out` the sweep's `runs` folder, a note naming the run; through
+  `cmd_watch` with `remember` and `show_summary` False); the sweep registers its start key (Ctrl+Alt+S by default)
+  for the run only and takes the first press after `recording`: a rising chime, `--window` seconds (default 60, 30 to
+  600), a closing chime, and `request_stop`. No press within 5 minutes, a recording without frame timing (the prompt
+  declined), watch failing (exit 1, 2, 3) or Ctrl+C end the run; exit 4, 5 and 6 stop the sweep. Once the game has
+  closed, the file is read again: a value the game put back (its own, or the original) stops the sweep, since what
+  the run used cannot be told.
+- **What counts** (`sweep/results.py`): the window `[press, press + window]` of the main swap chain, through
+  `analysis.window` and `frames.frame_stats`, so a run's average FPS and 1 % low are the report's own. A run does not
+  count (and is offered again, or skipped) unless frame timing ran, the recording lasted the window, the window holds
+  1,000 frames or more and its frames span 90 % of it, the game was in front for 95 % of its samples, and other
+  programs took under 10 % of the game's GPU (the report's own threshold); nor unless the power plan, Windows' power
+  mode, mains power, the refresh rate and the NVIDIA power limit (within 10 %) match the first good run's. An exe of
+  another size or date than that run's stops the sweep: an update.
+- **The ranking**: average FPS and the 1 % low of each setting's counted good runs with 95 % t intervals, each B
+  onwards compared with A by Welch's interval in % of A's mean: "faster" or "slower" only when the interval excludes 0,
+  else "no measurable difference"; A's own run-to-run spread is said. Picture quality is left to the player.
+- **Ending**: when the sweep finishes or stops (Ctrl+C, q, a problem, an error nobody expected), it waits for the game
+  to close and undoes every edit, then says what the file holds, read back. A second Ctrl+C during that wait leaves
+  the edits in the journal for `--resume` or `undo --all`; a value something else changed since is left alone, as
+  every fix's undo does (`--force` puts the original back).
+- **Not built**: a sweep screen in the app; an unattended sweep (DECISIONS backlog); settings kept outside an ini
+  (the registry, binary saves); mods set aside and put back. The sweep's start key is its own until watch has one
+  (`docs/LAUNCHER-PLAN.md`, M5): then a run uses watch's, and `runner._record` is where it plugs in.
+
 ## Testing
 
 - **Unit**: pure functions on literal sample points; parsers against fixture text taken from real tool output
@@ -1335,6 +1396,10 @@ def window(cap, t0, t1, frames=None) -> dict      # {t0, t1, frames, system, gpu
   `nvidia-smi`, `Get-NetRoute`).
 - **ETW without rights**: a private in-process session (allowed for standard users) proves the consumer
   path (NE 5.6); PresentMon's `--etl_file` replay proves the frames path.
+- **The settings sweep**: whole sweeps in `tests/test_sweep_runner.py` through a stand-in world
+  (`tests/sweep_world.py`): a settings file under the test's own folder, a game process that is only a flag, the
+  player's answers, a start key and timers the test fires, and captures built at a set frame rate; one test drives the
+  real `cmd_watch` seam with quick collectors. No test edits a real game's file or registers a real start key.
 - **The app's recording**: `tests/test_app_recording.py`, with `tests/fake_recorder.py` in the recorder's place (the
   recorder's side of the real control channel, through `control.Channel`, recording nothing) and a harmless process
   of the test's own in the relay's (`fake_recorder.stand_in_prompt`, handed over as the real one is); no test can reach
