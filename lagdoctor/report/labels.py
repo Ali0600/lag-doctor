@@ -144,8 +144,9 @@ BOUND = {
     "unknown": "not measured",
 }
 # What the headroom sentence (rules.headroom_text) rests on, said wherever it is shown. The busiest-thread figure is
-# the busiest of the game's threads at each sample, so several busy threads read as one busier one, and work a game
-# does per second does not grow with the frame rate: both make the CPU's figure lean low (DESIGN, Headroom).
+# the lead thread's; in a capture saved before that column, the busiest of the game's threads at each sample, which
+# reads high when several are busy. Work a game does per second does not grow with the frame rate either: both make
+# the CPU's figure lean low (DESIGN, Headroom).
 HEADROOM_NOTE = ("A rough estimate for this game at these settings, from its busiest thread and the GPU's time per "
                  "frame, not a benchmark: record again with lighter graphics and compare the two to check it.")
 
@@ -183,8 +184,8 @@ COLUMNS = {
     "dpc_pct": ("driver work (DPC), busiest core", "%"),
     "interrupt_pct": ("interrupts, busiest core", "%"),
     "game_cpu_pct": ("the game's CPU use (100 = one core)", "%"),
-    "game_top_thread_pct": ("the game's busiest thread (100 = one core)", "%"),
-    "game_lead_thread_pct": ("the game's busiest thread over the last second (100 = one core)", "%"),
+    "game_top_thread_pct": ("the game's busiest thread at each sample (100 = one core)", "%"),
+    "game_lead_thread_pct": ("the game's lead thread, the busiest of the second before (100 = one core)", "%"),
     "game_threads": ("the game's threads", ""),
     "game_ws_mb": ("the game's memory in use", "MB"),
     "game_private_mb": ("the game's private memory", "MB"),

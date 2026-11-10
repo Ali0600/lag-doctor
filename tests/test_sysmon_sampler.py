@@ -269,6 +269,37 @@ def test_the_lead_thread_is_read_at_its_own_share_when_several_threads_are_as_bu
     assert cols[S.GAME_LEAD_THREAD_PCT] is None and cols[S.GAME_TOP_THREAD_PCT] == 75.0
 
 
+def test_the_lead_is_the_thread_busiest_over_the_second_before_and_moves_on_when_it_ends():
+    # The busy thread (87.5 %) has the higher id, and the other one spikes to 100 % for one tick: the lead stays on the
+    # busy thread through the spike (each tick's busiest does not), and moves to the one left, never a KeyError, when
+    # the busy thread ends. Unreadable threads start the history over.
+    tick = 156_250
+
+    def snap(threads):
+        return {100: p(100, sum(t[2] for t in threads), threads=[th(tid, ct, tot) for tid, ct, tot in threads])}
+
+    r = ProcessRates(100, 1100)
+    busy = other = 0
+    lead, top = [], []
+    for k in range(10):
+        if k:
+            busy += 14 * tick                          # 87.5 %
+            other += (16 if k == 7 else 2) * tick      # 12.5 %, one tick at 100 %
+        cols, _ = r.update(snap([(9, 50, busy), (2, 60, other)]), k * DT_NS)
+        if k:
+            lead.append(cols[S.GAME_LEAD_THREAD_PCT])
+            top.append(cols[S.GAME_TOP_THREAD_PCT])
+    assert lead == [None] + [87.5] * 8                 # the busy thread at every tick once one tick of history is in
+    assert top[6] == 100.0                             # the spike is that tick's busiest
+    other += 2 * tick
+    cols, _ = r.update(snap([(2, 60, other)]), 10 * DT_NS)      # the busy thread has ended
+    assert cols[S.GAME_LEAD_THREAD_PCT] == 12.5
+    r.update({100: p(100, other, threads=None)}, 11 * DT_NS)     # its threads could not be read this tick
+    r.update(snap([(2, 60, other + 2 * tick)]), 12 * DT_NS)      # a baseline for the threads again
+    cols, _ = r.update(snap([(2, 60, other + 4 * tick)]), 13 * DT_NS)
+    assert cols[S.GAME_TOP_THREAD_PCT] == 12.5 and cols[S.GAME_LEAD_THREAD_PCT] is None   # no history yet
+
+
 def test_a_gone_or_replaced_game_has_no_game_columns():
     r = ProcessRates(100, 1100)
     r.update({100: p(100, 0, threads=[th(1, 5, 0)])}, 0)

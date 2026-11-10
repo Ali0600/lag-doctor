@@ -745,8 +745,8 @@
  {
   "name": "VSync never rounds down",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "        verdict, conf = _vsync_limit(fr, rows, ft, hz, raw, busiest, notes)",
-  "new": "        verdict, conf = \"vsync\", \"high\"",
+  "old": "        verdict, conf = _vsync_limit(fr, rows, ft, hz, raw, busiest, notes,\n",
+  "new": "        verdict, conf = \"vsync\", \"high\"\n        _ = dict(fr=fr, rows=rows, ft=ft, hz=hz, raw=raw, busiest=busiest, notes=notes,\n",
   "tests": [
    "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_gpu_that_needs_more_than_one",
    "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
@@ -764,7 +764,7 @@
  {
   "name": "busiest thread ignored under VSync",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "    if busiest is not None and (busiest >= THREAD_BOUND or work > one):",
+  "old": "    if busiest is not None and (busiest >= THREAD_BOUND or (work is not None and work > one)):",
   "new": "    if False:",
   "tests": [
    "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
@@ -1943,8 +1943,17 @@
  {
   "name": "a thread VSync holds counts only when saturated",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "    if busiest is not None and (busiest >= THREAD_BOUND or work > one):",
+  "old": "    if busiest is not None and (busiest >= THREAD_BOUND or (work is not None and work > one)):",
   "new": "    if busiest is not None and busiest >= THREAD_BOUND:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_a_thread_that_needs_more_than_one_period"
+  ]
+ },
+ {
+  "name": "the VSync work test reads an old capture's per-tick upper bound",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    work = busiest * ft if busiest is not None and lead else None",
+  "new": "    work = busiest * ft if busiest is not None else None",
   "tests": [
    "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_a_thread_that_needs_more_than_one_period"
   ]

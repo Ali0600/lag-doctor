@@ -325,15 +325,15 @@ def _lead(kinds: list[str], findings: list[Finding], evs: list[LagEvent], verdic
     """(the finding the headline names, whether it explains the lag, a side note): the best-ranked finding that claims
     the lag's own events, unless the steady low-FPS time (`steady_s`) is longer than the time of the events it claims:
     then the best confident finding of the part the bound verdict names, which holds that steady rate (A6). With both,
-    the other is the side note, so a mixed lag names the cause of each part and the headline never leaves out the one
-    the app shows as its Top cause; then one of the lag's category, else the top finding as a side note."""
+    the other is the side note, so a mixed lag names the cause of each part and the claimer the headline used to name
+    stays in it; never one finding twice. Then one of the lag's category, else the top finding as a side note."""
     ids = {e.id for e in evs for k in kinds if e.kind in LAG_EVENT_KINDS.get(k, ())}
     claimer = next((f for f in findings if ids & set(f.event_ids)), None)
     holder = (next((f for f in findings if f.cause in STEADY_LEADS.get(verdict, ()) and f.confidence in CONFIDENT), None)
               if steady_s > 0 else None)
     claimed = set(claimer.event_ids) & ids if claimer is not None else set()
     if holder is not None and steady_s > _union([(e.t_start, e.t_end) for e in evs if e.id in claimed]):
-        return holder, True, claimer
+        return holder, True, claimer if claimer is not holder else None
     if claimer is not None:
         return claimer, True, holder if holder is not claimer else None
     for f in findings:

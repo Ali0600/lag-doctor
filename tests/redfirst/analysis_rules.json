@@ -166,8 +166,8 @@
  {
   "name": "gated unknown verdict reads as cleared",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if v == \"unknown\":\n        notes = [n for n in env.bound",
-  "new": "    if False:\n        notes = [n for n in env.bound",
+  "old": "    if v == \"unknown\" or fallback:\n        notes = [n for n in env.bound",
+  "new": "    if fallback:\n        notes = [n for n in env.bound",
   "tests": [
    "tests/test_analysis_rules.py::test_a_gpu_side_finding_passes_only_a_gpu_or_mixed_verdict"
   ]
@@ -1136,7 +1136,7 @@
  {
   "name": "grey zone held under a GPU verdict",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if cause == \"cpu_limit\" and e.verdict != \"gpu\":",
+  "old": "    if cause == \"cpu_limit\" and (e.verdict != \"gpu\" or _engine_fallback(e)):",
   "new": "    if cause == \"cpu_limit\":",
   "tests": [
    "tests/test_analysis_rules.py::test_the_grey_zone_holds_neither_a_gpu_bound_verdict_nor_a_frame_rate_at_the_display"
@@ -1767,8 +1767,8 @@
  {
   "name": "a game held one refresh exempted from its own uneven presents",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    return usual >= 2 and (held[lo]",
-  "new": "    return usual >= 1 and (held[lo]",
+  "old": "    return (usual >= 2 and (held[lo]",
+  "new": "    return (usual >= 1 and (held[lo]",
   "tests": [
    "tests/test_analysis_rules.py::test_vsync_judder_leaves_caps_and_a_games_own_uneven_presents_to_their_own_rules"
   ]
@@ -1786,8 +1786,8 @@
  {
   "name": "judder counted on one side of the usual hold only",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "(h > usual if other > usual else h < usual)",
-  "new": "(h > usual)",
+  "old": "    share = (n - held[usual]) / n\n",
+  "new": "    share = sum(v for h, v in held.items() if h > usual) / n\n",
   "tests": [
    "tests/test_analysis_rules.py::test_vsync_judder_is_judged_between_any_two_adjacent_whole_numbers_of_refreshes"
   ]
@@ -1795,8 +1795,8 @@
  {
   "name": "judder share counts the usual hold",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    share = sum(v for h, v in held.items() if (h > usual if other > usual else h < usual)) / n",
-  "new": "    share = held[usual] / n",
+  "old": "    share = (n - held[usual]) / n\n",
+  "new": "    share = held[usual] / n\n",
   "tests": [
    "tests/test_analysis_rules.py::test_a_steady_lock_at_two_refreshes_is_no_judder"
   ]
@@ -1827,6 +1827,87 @@
   "new": "f\"more on up to {swing:.0f}% of frames (median swing {max(float(ev.severity) for ev in uneven):.1f} ms), over \"",
   "tests": [
    "tests/test_analysis_rules.py::test_uneven_pacing_never_gives_the_screens_swing_as_the_games_own"
+  ]
+ },
+ {
+  "name": "the engine fallback clears the CPU at the gate",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    fallback = _engine_fallback(env) if rule.gate == \"cpu\" else None",
+  "new": "    fallback = None",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_engine_fallback_never_rules_the_cpu_out"
+  ]
+ },
+ {
+  "name": "the engine fallback closes the CPU's grey zone",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "(e.verdict != \"gpu\" or _engine_fallback(e))",
+  "new": "e.verdict != \"gpu\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_engine_fallback_never_rules_the_cpu_out"
+  ]
+ },
+ {
+  "name": "VSync's thread verdict counted against cpu_limit",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif held:         # a thread VSync holds waits for the refresh: its own time a frame is the measure",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsyncs_verdict_on_an_unsaturated_thread_is_supported_not_contradicted"
+  ]
+ },
+ {
+  "name": "cpu_limit counts its own verdict against itself without the GPU's split",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif v in (\"cpu_main\", \"cpu_all\"):   # the bound named the CPU without the GPU's split: never counted against it",
+  "new": "    elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsyncs_verdict_on_an_unsaturated_thread_is_supported_not_contradicted"
+  ]
+ },
+ {
+  "name": "an unsaturated VSync thread titled as maxing out the CPU",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "(\"One game thread is too slow for every refresh\" if unsaturated else",
+  "new": "(\"One game thread maxes out the CPU\" if unsaturated else",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsyncs_verdict_on_an_unsaturated_thread_is_supported_not_contradicted"
+  ]
+ },
+ {
+  "name": "cpu_throttle's 70 % line under VSync's thread verdict",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": " and e.verdict != \"cpu_main\":   # VSync's thread verdict",
+  "new": ":   # VSync's thread verdict",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsyncs_verdict_on_an_unsaturated_thread_is_supported_not_contradicted"
+  ]
+ },
+ {
+  "name": "the headroom gives a false reason for an unsaturated CPU verdict",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if nxt is None and e.verdict == \"cpu_main\" and u is not None and u < fa.THREAD_BOUND:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsyncs_verdict_on_an_unsaturated_thread_is_supported_not_contradicted"
+  ]
+ },
+ {
+  "name": "uneven pacing silenced where vsync_judder finds no judder",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "\n            and share >= JUDDER_SHARE)\n",
+  "new": ")\n",
+  "tests": [
+   "tests/test_analysis_rules.py::test_holds_off_the_usual_count_on_both_sides_are_judder_and_never_silence_uneven_pacing"
+  ]
+ },
+ {
+  "name": "the judder summary calls 80 FPS a little slower than the screen",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "           \"as others, which looks jerky.\" if usual == 1 else\n",
+  "new": "           \"as others, which looks jerky.\" if lo == 1 else\n",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_judder_summary_says_how_far_below_the_refresh_the_game_runs"
   ]
  }
 ]

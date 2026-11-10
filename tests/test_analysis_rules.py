@@ -527,6 +527,40 @@ def test_a_gpu_verdict_from_too_few_steady_frames_never_claims_frame_timing():
     assert not any("is what limits the frame rate" in e.text for e in wrong.evidence)
 
 
+def test_the_engine_fallback_never_rules_the_cpu_out():
+    # The gate and LC 3.2's grey zone read the fallback's "gpu" as a verdict frame timing never gave: a 95 % thread was
+    # "Cleared: the CPU is not what limits the frame rate: it is limited by the graphics card (GPU)"
+    note = "only 240 steady frames over 8.0 s; a verdict needs 300 frames and 10 s"
+    bound = {"verdict": "gpu", "r": None, "notes": [note], "busiest_thread": 0.95}
+    res = run("cpu_limit", make(system=engine(99.0)), stats={"avg_fps": 30.0}, bound=bound)
+    assert isinstance(res, rules.Unchecked)
+    assert res.text == f"whether the CPU limits the frame rate could not be judged ({note})"
+    res = run("cpu_limit", make(system=engine(99.0)), stats={"avg_fps": 30.0}, bound=dict(bound, busiest_thread=0.70))
+    assert isinstance(res, rules.Unchecked) and "so it is not ruled out" in res.text        # the grey zone stays open
+
+
+def test_vsyncs_verdict_on_an_unsaturated_thread_is_supported_not_contradicted():
+    # A6: under VSync a thread whose own time a frame passes k - 1 refreshes is the limit though it is never saturated
+    # (it waits for the refresh the rest of the frame); cpu_limit then read "only 60 % of a CPU" against its own
+    # verdict, and cpu_throttle "so CPU speed is not what holds it back"
+    held = ("VSync rounds the frame rate down to 30 FPS (refresh / 2): the busiest game thread runs 60% of a CPU, "
+            "20.0 ms a frame, more than 1 refresh period(s) (16.7 ms)")
+    bound = {"verdict": "cpu_main", "vsync": True, "r": 0.15, "busiest_thread": 0.60, "notes": [held]}
+    res = run("cpu_limit", make(system=cpu_sys(busiest=60.0), duration=60.0), stats={"avg_fps": 30.0}, bound=bound)
+    assert is_finding(res, "high") and res.title == "One game thread is too slow for every refresh at 30 FPS"
+    assert f"{held}." in [e.text for e in res.evidence] and not any("ran only" in e.text for e in res.evidence)
+    # without the GPU's busy time the verdict is never counted against itself
+    res = run("cpu_limit", make(system=cpu_sys(busiest=60.0), duration=60.0), stats={"avg_fps": 30.0},
+              bound=dict(bound, r=None))
+    assert is_finding(res, "medium") and not any("limited by" in e.text for e in res.evidence)
+    res = run("cpu_throttle", make(system=cpu_sys(limit=80.0, busiest=60.0), duration=60.0), bound=bound)
+    assert is_finding(res, "medium") and not any("is not what holds it back" in e.text for e in res.evidence)
+    # and the headroom says nothing, never "the GPU's own time per frame was not measured"
+    room = {"steady_fps": 30.0, "gpu_fps": None, "cpu_fps": [42.5, 50.0], "display_fps": 60.0, "limit": "cpu",
+            "next": None, "speedup": None}
+    assert rules.headroom_text(rules._Env(make(), {"bound": dict(bound, headroom=room)})) is None
+
+
 def test_gpu_limit_on_a_borderline_split_is_only_worth_checking():
     res = run("gpu_limit", make(system=engine(70.0)), stats={"avg_fps": 40.0}, bound={"verdict": "mixed", "r": 0.82})
     assert is_finding(res, "low") and "borderline" in res.evidence[0].text.lower()
@@ -1552,14 +1586,38 @@ def test_presents_that_swing_with_two_and_three_refreshes_are_vsync_judder_not_t
     res = run("vsync_judder", make(), frames=frames, bound=bound, events=[SWUNG])
     assert is_finding(res, "medium") and res.event_ids == [1]
     assert res.title == "VSync judder: frames alternate between two and three refreshes"
-    assert res.evidence[0].text == ("46% of frames stayed on screen for 3 or more refreshes (20.8 ms) while 50% took "
-                                    "two (13.9 ms): judder (10% or more).")
+    assert res.evidence[0].text == ("50% of frames stayed on screen for more or fewer refreshes than the usual two "
+                                    "(13.9 ms): judder (10% or more).")
     assert "Or cap the frame rate at 48 FPS (a third of the refresh)" in [f.title for f in res.fixes]
     assert run("uneven_pacing", make(), frames=frames, bound=bound, events=[SWUNG]) is None    # never "fine" either
     # control: the game's own swings spread its holds over three counts; that stays uneven pacing, as before
     own = holds_frames(OWN)
     assert run("vsync_judder", make(), frames=own, bound=bound, events=[SWUNG]) is None
     assert is_finding(run("uneven_pacing", make(), frames=own, bound=bound, events=[SWUNG]), "medium")
+
+
+def test_holds_off_the_usual_count_on_both_sides_are_judder_and_never_silence_uneven_pacing():
+    # 8 % on two and 8 % on four refreshes around a usual three: each side alone is under 10 %, so one side's share read
+    # "no judder" while the holds' shape silenced uneven_pacing, and the pacing lag vanished from the report
+    bound = {"verdict": "gpu", "quantised_pct": 100.0}
+    res = run("vsync_judder", make(), frames=holds_frames(([3] * 84 + [2] * 8 + [4] * 8) * 10), bound=bound)
+    assert is_finding(res, "medium")
+    assert res.evidence[0].text == ("16% of frames stayed on screen for more or fewer refreshes than the usual three "
+                                    "(20.8 ms): judder (10% or more).")
+    # 2 % on each side is no judder, so the swinging presents stay uneven_pacing's: never silenced where judder says none
+    calm = holds_frames(([3] * 96 + [2] * 2 + [4] * 2) * 10)
+    assert run("vsync_judder", make(), frames=calm, bound=bound, events=[SWUNG]) is None
+    assert is_finding(run("uneven_pacing", make(), frames=calm, bound=bound, events=[SWUNG]), "medium")
+
+
+def test_the_judder_summary_says_how_far_below_the_refresh_the_game_runs():
+    # most frames held two refreshes (about 80 FPS on 144 Hz) is no "little slower than the screen refreshes"
+    res = run("vsync_judder", make(), frames=holds_frames(spread(one=20, two=80)),
+              bound={"verdict": "gpu", "quantised_pct": 100.0})
+    assert res.summary == ("The game runs between 72 and 144 FPS on a 144 Hz screen, so with VSync some frames stay up "
+                           "one refresh longer than others, which looks jerky.")
+    res = run("vsync_judder", make(), frames=judder_frames(80, 20), bound={"verdict": "gpu", "quantised_pct": 100.0})
+    assert res.summary.startswith("The game runs a little slower than the screen refreshes")
 
 
 @pytest.mark.parametrize("off, judder", [(100, True), (101, False)])     # 900 or 899 of 1,000 holds on two and three

@@ -46,8 +46,9 @@ def test_every_laglab_scenario_passes_the_end_to_end_judge(mode, seed, hiccups):
     assert not [w for w in d.unchecked.values() if w.startswith("the check failed")]
 
 
-# gpu and cpu: changed on purpose. Their frames stay up 3 or 4 of the 144 Hz refreshes (40 FPS), which is VSync judder
-# vsync_judder used to miss once most frames took 2 or more, so they are low FPS and uneven pacing: "mixed".
+# gpu and cpu: changed on purpose. Their frames stay up 3 or 4 of the 144 Hz refreshes (40 FPS), judder that
+# vsync_judder used to miss once most frames took 2 or more, so they are low FPS and uneven pacing: "mixed" (LagLab
+# presents with VSync off: Windows' composition holds its frames on whole refreshes).
 @pytest.mark.parametrize("mode, lag, lead", [("smooth", "none", None), ("gpu", "mixed", "wrong_gpu"),
                                              ("cpu", "mixed", "cpu_limit"), ("hitch", "stutter", "game_cpu_spike"),
                                              ("hitch-io", "stutter", "asset_streaming"),
@@ -157,11 +158,12 @@ def test_a_steady_low_frame_rate_is_led_by_the_part_that_holds_it_not_by_a_few_c
     limit = Finding(cause="gpu_limit", title="t", category="fps", confidence="high", score=0.9, summary="")
     stats = {"avg_fps": 58.0, "refresh_hz": 144.0, "duration_s": 750.0}
 
-    def text(verdict, steady_s, findings=(hogs, limit), events=evs):
-        b = {"verdict": verdict, "steady_fps": 58.0, "refresh_hz": 144.0, "steady_s": steady_s}
+    def text(verdict, steady_s, findings=(hogs, limit), events=evs, fps=58.0):
+        b = {"verdict": verdict, "steady_fps": fps, "refresh_hz": 144.0, "steady_s": steady_s}
         env = rules._Env(cap, {"stats": {"frames": 40000}, "bound": b})
-        lag = dg.lag_time(events, list(findings), stats, b, True)
-        return dg.headline(dg.pick_lag_type(lag, True), list(findings), stats, events, lag, env)
+        st = dict(stats, avg_fps=fps)
+        lag = dg.lag_time(events, list(findings), st, b, True)
+        return dg.headline(dg.pick_lag_type(lag, True), list(findings), st, events, lag, env)
 
     # the claimer the headline used to name stays in it, as a side note
     assert text("gpu", 700.0) == ("Low frame rate (58 FPS average on a 144 Hz screen), most likely GPU at its limit; "
@@ -187,8 +189,19 @@ def test_a_steady_low_frame_rate_is_led_by_the_part_that_holds_it_not_by_a_few_c
                     event_ids=[7])
     assert text("gpu", 700.0, (first, limit), pacing).endswith(
         ": the game itself hands over its frames at uneven intervals; likely: GPU at its limit.")
-    # no steady low frame rate (a cap is its own target): no limit to name beside the claimer
+    # no steady low frame rate (a cap is its own target, and 130 FPS on 144 Hz is no low FPS): no limit to name
     assert text("capped", 700.0).endswith(", most likely background programs.")
+    assert text("gpu", 700.0, fps=130.0).endswith(", most likely background programs.")
+    # a lag that is mostly stutter: the steady time is no part of it, so no limit beside the stutters' claimer
+    long = [LagEvent(10 + i, "stutter", 200.0 + 3.0 * i, 202.5 + 3.0 * i, 150.0, {}) for i in range(40)]
+    stutters = Finding(cause="background_hogs", title="t", category="stutter", confidence="high", score=0.95,
+                       summary="", event_ids=[e.id for e in long])
+    assert text("gpu", 30.0, (stutters, limit), long).endswith(", most likely background programs.")
+    # a limit that claims the drops itself is never its own side note, whichever way the time falls
+    both = Finding(cause="gpu_limit", title="t", category="fps", confidence="high", score=0.9, summary="",
+                   event_ids=[1, 2])
+    assert text("gpu", 700.0, (both,)).endswith(", most likely GPU at its limit.")
+    assert text("gpu", 1.0, (both,)).endswith(", most likely GPU at its limit.")
     # a capped game is its own target: its steady time is never low FPS
     assert dg.steady_low_s({"verdict": "capped", "steady_fps": 58.0, "refresh_hz": 144.0, "steady_s": 700.0}, True) == 0
 

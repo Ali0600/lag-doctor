@@ -462,12 +462,15 @@ def test_vsync_needs_the_game_to_ask_for_it():
     assert verdict(1, 1)["verdict"] != "vsync"
 
 
-def vsync_halved(gpu_ms=None, thread=40.0, cpu_busy=None, cpu_wait=0.0, runtime="Other", k=2, hz=60.0, n=900):
-    """A game held by VSync at k refreshes a frame (FT = k P, every frame shown k periods)."""
+def vsync_halved(gpu_ms=None, thread=40.0, cpu_busy=None, cpu_wait=0.0, runtime="Other", k=2, hz=60.0, n=900,
+                 lead=None):
+    """A game held by VSync at k refreshes a frame (FT = k P, every frame shown k periods); `lead`: the capture's
+    lead-thread column, which a capture saved before it lacks."""
     p = 1000.0 / hz
     fr = make_frames([k * p] * n, gpu_ms=gpu_ms, display_ms=k * p, displayed=1, cpu_busy=cpu_busy, runtime=runtime)
     fr[F.CPU_WAIT_MS] = [cpu_wait] * n
-    cap = make_cap(fr, make_system(2.0 + n * k * p / 1000.0, game_top_thread_pct=thread), hz=hz)
+    cols = {"game_top_thread_pct": thread} | ({"game_lead_thread_pct": lead} if lead is not None else {})
+    cap = make_cap(fr, make_system(2.0 + n * k * p / 1000.0, **cols), hz=hz)
     return fa.bound(cap, fa.main_chain(cap), [])
 
 
@@ -488,12 +491,15 @@ def test_vsync_at_two_refreshes_names_a_thread_that_needs_more_than_one_period()
     # A thread VSync holds at 30 FPS waits for the refresh the rest of each frame, so it is never saturated: at 60 %
     # of a CPU it works 20.0 ms a 33.3 ms frame, more than one 16.7 ms period, and that is what holds the game at 30.
     # Once read from MsCPUBusy (which counts waits too); with that branch gone the game read "VSync".
-    b = vsync_halved(gpu_ms=5.0, thread=60.0)
+    b = vsync_halved(gpu_ms=5.0, thread=60.0, lead=60.0)
     assert b["verdict"] == "cpu_main"
     assert any(x.endswith("of a CPU, 20.0 ms a frame, more than 1 refresh period(s) (16.7 ms)") for x in b["notes"])
-    assert vsync_halved(gpu_ms=5.0, thread=51.0)["verdict"] == "cpu_main"     # 17.0 ms
-    assert vsync_halved(gpu_ms=5.0, thread=49.0)["verdict"] == "vsync"        # 16.3 ms fits in one period
-    assert vsync_halved(gpu_ms=5.0, thread=80.0, k=1)["verdict"] == "vsync"   # k = 1 is the refresh rate itself
+    assert vsync_halved(gpu_ms=5.0, thread=51.0, lead=51.0)["verdict"] == "cpu_main"     # 17.0 ms
+    assert vsync_halved(gpu_ms=5.0, thread=49.0, lead=49.0)["verdict"] == "vsync"        # 16.3 ms fits in one period
+    assert vsync_halved(gpu_ms=5.0, thread=80.0, lead=80.0, k=1)["verdict"] == "vsync"   # k = 1: the refresh rate
+    # a capture saved before the lead column: each tick's busiest thread is an upper bound (four threads at 40 %
+    # read 53 %), so it counts only when saturated, as before
+    assert vsync_halved(gpu_ms=5.0, thread=60.0)["verdict"] == "vsync"
 
 
 def test_cpu_busy_never_calls_a_game_vsync_holds_cpu_bound():
@@ -671,7 +677,7 @@ def test_headroom_says_nothing_of_a_next_limit_it_cannot_see():
     # VSync at 30 on 60 Hz names the CPU from its busiest thread's own work a frame (60 % of a CPU, 20.0 ms, more than
     # one 16.7 ms period), though the thread is not saturated: the saturation edge cannot say how much faster it must
     # get, so it says nothing (this case once came from MsCPUBusy, which no longer names the CPU)
-    b = vsync_halved(gpu_ms=5.0, thread=60.0)
+    b = vsync_halved(gpu_ms=5.0, thread=60.0, lead=60.0)
     assert b["verdict"] == "cpu_main" and b["headroom"]["limit"] == "cpu"
     assert b["headroom"]["next"] is None and b["headroom"]["speedup"] is None
 

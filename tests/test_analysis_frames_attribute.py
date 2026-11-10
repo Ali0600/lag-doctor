@@ -15,7 +15,7 @@ BASE = {S.GAME_TOP_THREAD_PCT: 25.0, S.GAME_CPU_PCT: 30.0, S.CPU_TOTAL_PCT: 10.0
         S.CPU_PERF_LIMIT_PCT: 100.0, S.GAME_FOCUSED: 1, S.VRAM_USED_MB: 3000.0, S.GAME_SHARED_MB: 100.0,
         S.DISK_READ_BPS: 0.07e6}
 READS = {S.GAME_IO_READ_BPS: 30e6, S.DISK_READ_BPS: 30e6}      # the game read from disk, and the disks read it
-OTHERS =[[7777, "python.exe", 100.0, 0.0, 100.0], [2656, "dwm.exe", 3.0, 0.0, 3.0], [1844, "MsMpEng.exe", 1.0, 1e4, 0.0]]
+OTHERS = [[7777, "python.exe", 100.0, 0.0, 100.0], [2656, "dwm.exe", 3.0, 0.0, 3.0], [1844, "MsMpEng.exe", 1.0, 1e4, 0.0]]
 
 
 def lag_cap(times=TIMES, *, stutter_ms=160.0, gpu_ms=0.5, stutter_gpu_ms=None, base=None, during=None,

@@ -301,7 +301,7 @@ def _cpu_total(p: ProcInfo) -> int:
 
 def _lead_thread(hist: Iterable[dict[tuple[int, int], int]],
                  deltas: dict[tuple[int, int], int]) -> tuple[int, int] | None:
-    """The thread with the most CPU over the previous intervals (`hist`, up to 1 s) that also ran in this one, chosen
+    """The thread with the most CPU over the previous intervals (`hist`, up to 1 s) that is still running, chosen
     before this interval is read, so its share here is a fair reading of it. Each interval's busiest thread is not:
     of several threads about as busy it is whichever the 15.625 ms clock ticks favoured (WT 3.5), so four threads at
     75 % read 86 %. Ties go to the lowest (tid, create time)."""

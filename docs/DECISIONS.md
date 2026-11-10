@@ -104,6 +104,10 @@
   `sysmon.ProcessRates.update`, `frames.busiest_column` (same entry).
 - **Take uneven presents for VSync's judder where most frames hold one refresh too**. Revisit hook: `usual >= 2` in
   `rules._vsync_shaped` (same entry).
+- **Name judder from Windows' composition for what it is**: a game presenting with VSync off (SyncInterval 0) or
+  unknown (-1, OpenGL) in a composed window still has its frames held on whole refreshes, and `vsync_judder` calls
+  it VSync judder and offers "turn VSync off". Revisit hook: the title, summary and fixes of `rules._vsync_judder`,
+  with `frames._sync_off` and the present mode (same entry).
 - **The game's own packets as the arbiter of ICMP loss** on its server, which would cover rate-limited servers.
   Revisit hook: `diagnose._ignored_losses` with `rules._packet_loss` (same entry).
 - **An unattended settings sweep** (B of 2026-11-09's sweep fork): the assisted sweep plus key presses lag-doctor sends
@@ -120,8 +124,8 @@
 The audit of "which part of a PC limits a game" found eleven analysis bugs; the owner said "Fix all eleven". Where a
 fix forked, the implementing session chose; the owner has not weighed in.
 - **The headline's lead (chosen)**: the steady limit leads when the steady low-FPS time is longer than the events the
-  best-ranked claimer claims, and that claimer stays as a side note, so the headline never contradicts the app's Top
-  cause.
+  best-ranked claimer claims, and that claimer stays as a side note (the limit, when the claimer leads), so a mixed
+  lag names the cause of each part.
   - **Keep the claimer, document that the headline and Top cause can differ**: rejected; a GPU-bound recording's
     headline blamed background programs for 4 FPS drops.
   - **Lead with whichever finding explains the most lag time**: deferred, worth trying; it reorders stutter headlines
@@ -142,7 +146,8 @@ fix forked, the implementing session chose; the owner has not weighed in.
 - **VSync judder at any k (chosen)**, judged on the two adjacent hold counts with the most frames, with uneven
   presents taken for VSync's when 90 % of the holds sit on those two counts (`VSYNC_SHARE`; a real recording: 92 %).
   - **Only up to two and three refreshes**: rejected; an invented bound. LagLab's gpu and cpu modes (3 or 4 refreshes)
-    now read low FPS and uneven pacing.
+    now read low FPS and uneven pacing. LagLab presents with VSync off, Windows' composition holding its frames on
+    whole refreshes, so the finding's VSync wording and its "turn VSync off" advice are wrong there: a backlog item.
   - **The same exemption where most frames take one refresh**: deferred, worth trying. Revisit hook: `usual >= 2` in
     `rules._vsync_shaped`.
 - **A game server or router that never answered a ping has no loss events (chosen)**; the internet anchor keeps them

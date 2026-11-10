@@ -935,7 +935,7 @@ frames (none with fewer than 300 of them or 10 s), and so roughly how much a fas
   range running from `steady_fps` to its ceiling (its ceiling alone under a VSync lock, which rounds `steady_fps`
   down). A GPU busy no longer than the HAGS margin (G = 0) has no ceiling to give but is never the next limit: the
   screen is. None where the other side was not measured, or where a CPU verdict did not come from saturated threads
-  (VSync's `MsCPUBusy` branch).
+  (VSync's verdict on a thread whose own time a frame passes k - 1 refreshes, and the rules then give no sentence).
 
 The rules say it in one sentence (`rules.headroom_text`), second in the evidence of `gpu_limit` and `cpu_limit`
 after their frame-timing line, with the screen's even steps after it (`rules._steps_text`) and `labels.HEADROOM_NOTE`
@@ -946,11 +946,11 @@ frame rate rises less than the clock, hence "may"). The lines are added after sc
 score. Where the other side was not measured the sentence says the gain is unknown, and why, without the note.
 
 What the estimate cannot see, said by the note ("a rough estimate for this game at these settings ... not a
-benchmark") and here: the busiest-thread figure is the mean of per-tick maxima over all the game's threads
-(`capture/sysmon.py`), so several busy threads read as one busier one, more so as thread time moves in 15.625 ms
-steps (WT 3.5, about 6 % of a 250 ms tick), whose noise a per-tick maximum picks up; and work a game does per second
-rather than per frame does not grow with the frame rate. All three make the CPU's figure lean low, as does a game
-that spins while it waits for the GPU. It holds for this game at these settings only: the real check is a second
+benchmark") and here: the busiest-thread figure is the lead thread's (`game_lead_thread_pct`, picked on the second
+before each tick), but in a capture saved before that column it is the mean of per-tick maxima over all the
+game's threads, so several busy threads read as one busier one, more so as thread time moves in 15.625 ms steps
+(WT 3.5, about 6 % of a 250 ms tick); and work a game does per second rather than per frame does not grow with the
+frame rate. Both make the CPU's figure lean low, as does a game that spins while it waits for the GPU. It holds for this game at these settings only: the real check is a second
 recording with lighter graphics, read in Compare.
 
 For an NVIDIA GPU held down by heat or power, `gpu_throttle` says how deep, second in its evidence: its median
@@ -1151,7 +1151,8 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   claims; then the best confident finding of the part the bound verdict names leads (`diagnose.STEADY_LEADS`: for
   `gpu` the GPU's limit, throttling, wrong GPU, copy between GPUs or another program on it; for `cpu_main` and
   `cpu_all` the CPU's limit or throttling). With both, the other is a side note ("; likely: ..."), so a mixed lag
-  names the cause of each part and the headline never leaves out the app's Top cause. Without either, one of the
+  names the cause of each part, and the claimer the headline used to name is never dropped from it. Without either,
+  one of the
   lag's category, else the top finding as a side note. A GPU-bound recording at 58 FPS on a 144 Hz screen once led
   with the background programs that claimed 4 of its 6 FPS drops. Whenever the lag type is not stutter and there were
   severe hitches or freezes it adds "; also N severe hitches, worst X ms"; an open gap reads "the game server
