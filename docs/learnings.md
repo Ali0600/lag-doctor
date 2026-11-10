@@ -827,6 +827,31 @@ turns, showed no change beyond the noise between two detached windows (+1.0 %, 9
 window, and log the machine's busy CPUs in every window, so background load, your own jobs included, can be told
 apart from your change.
 
+### Several comparisons at 95 % each: widen every interval for the number compared
+A 95 % interval misses 5 % of the time, so comparing five variants with one baseline gives five chances for one to
+read "faster" or "slower" by luck: up to 23 % when the comparisons are independent (1 - 0.95^5). Bonferroni's
+correction gives each of k comparisons 5 % / k (each interval at 99 % for five), so all of them hold together at
+least 95 % of the time, however they depend on each other; the wider intervals cost runs.
+**Why it came up**: `lagdoctor sweep` compares up to five settings with the settings file as it was. Its review
+simulated five settings that changed nothing, at 3 runs each: 13.6 % of sweeps called one faster or slower on average
+FPS alone (`docs/DECISIONS.md`, 2026-11-09). The sweep's intervals are now widened for the number of settings compared.
+**Takeaway**: when one experiment makes several comparisons, choose the false-alarm rate for the whole set, divide it
+among the comparisons, and add runs to pay for the wider intervals.
+
+### "No measurable difference" says little until it says what difference the test could see
+A comparison that finds nothing has two readings: the variants are alike, or the runs were too few or too noisy to
+see what separates them. The smallest difference the test finds most of the time tells them apart: for two samples
+of n runs each with spread sd, (t at the test's level + t at 80 %) x sd x sqrt(2/n) is found 80 % of the time (the
+test's power). The extreme is a test that cannot find anything: at 3 runs a side a rank test (Mann-Whitney) has 20
+equally likely orderings, so its smallest two-sided p is 0.1, and it says "no difference" before a single run.
+**Why it came up**: at its default 3 counted runs a setting, `lagdoctor sweep` can see only a difference about three
+times A's run-to-run spread (more once widened for several settings), so "no measurable difference" may only mean
+"too small for this sweep". Its last lines give that spread and the difference the sweep could see 80 % of the time
+(`results.detectable`). A rank test was weighed for the comparison and rejected for the reason above
+(`docs/DECISIONS.md`, 2026-11-09).
+**Takeaway**: give every null result its detectable difference, and check that a test can reject at all at your
+sample size before choosing it.
+
 ### Turning on a game's ETW provider can change what the game does
 An ETW provider gets an enable callback, so a program can act when a trace session starts listening to it. NVIDIA's PC
 Latency (Reflex) stats code in a game starts a ping thread at launch that idles until a session enables its provider;
