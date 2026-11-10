@@ -272,7 +272,9 @@ def _severe(stats: dict[str, Any], evs: list[LagEvent]) -> str | None:
 
 
 def _lag_part(kind: str, stats: dict[str, Any], evs: list[LagEvent], lag: dict[str, float],
-              duration: float | None, bound: dict[str, Any] | None = None, part: str = "the capture") -> str:
+              duration: float | None, bound: dict[str, Any] | None, part: str) -> str:
+    """One lag type's words for the headline. `part` names what was analysed (rules._Env.part): every caller passes
+    it, so a measured part's share is never called the whole capture's."""
     if kind == "low_fps":
         fps, hz = rules._fin(stats.get("avg_fps")), rules._fin(stats.get("refresh_hz"))
         inner = [f"{fps:.0f} FPS average" + (f" on a {hz:.0f} Hz screen" if hz else "")] if fps is not None else []
@@ -301,7 +303,11 @@ def _lag_part(kind: str, stats: dict[str, Any], evs: list[LagEvent], lag: dict[s
                   (sum(1 for e in net if e.kind == "net_gap") - len(lost), "server gap")]
         parts = [_plural(n, w) for n, w in counts if n]
         if lost:                                 # an "open" gap runs to the end: the connection was lost
-            parts.append(f"the game server stopped answering at {fmt_elapsed(min(e.t_start for e in lost))}")
+            first = min(lost, key=lambda e: e.t_start)
+            since = rules._fin(_detail(first).get("since"))   # it began before a measured part (analysis/crop.py)
+            parts.append(f"the game server had stopped answering before the measured part, at {fmt_elapsed(since)}"
+                         if since is not None else
+                         f"the game server stopped answering at {fmt_elapsed(first.t_start)}")
         return "Network lag" + (f" ({', '.join(parts)})" if parts else "")
     return ""
 

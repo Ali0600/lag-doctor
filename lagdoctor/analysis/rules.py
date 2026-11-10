@@ -22,7 +22,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
-from lagdoctor.analysis import attribute
+from lagdoctor.analysis import attribute, crop
 from lagdoctor.analysis import events as ev_mod
 from lagdoctor.analysis import frames as fa
 from lagdoctor.analysis import stats as st
@@ -280,7 +280,10 @@ class _Env:
         return _text(getattr(s, "detail", None), 300) or str(getattr(s, "state", "not measured"))
 
     def need(self, name: str) -> str:
-        return labels.needs_source(name)     # the source's own reason is in the Not measured list, once
+        # the source's own reason is in the Not measured list, once; one that recorded only outside a measured part
+        # (analysis/crop.py) did record, so it is never said to have been "not recorded"
+        detail = getattr(self.sources.get(name), "detail", None)
+        return labels.needs_source(name, in_part=self.cropped and detail == crop.EMPTY_IN_SPAN)
 
     @property
     def frames_measured(self) -> bool:
@@ -2381,9 +2384,9 @@ def _shader_compile(cap: Capture, ctx: dict) -> Any:
              _advice("Record the same route a second time", "If the stutters drop by half or more, it was shader "
                                                             "compilation."),   # LC 4.9
              _advice("Expect it again after a game or GPU driver update", "Those clear the shader cache.")]
-    return c.conclude("Possible shader-compilation stutter early in the session",
-                      "The game's own stutters bunched up at the start, as when it compiles shaders the first time "
-                      "it draws something.", fixes, [ev.id for ev in own])
+    return c.conclude(f"Possible shader-compilation stutter early in {e.part}",
+                      f"The game's own stutters bunched up at the start of {e.part}, as when it compiles shaders the "
+                      "first time it draws something.", fixes, [ev.id for ev in own])
 
 
 # ------------------------------------------------------------------- stutter causes (LC 5.2) ---
@@ -2584,7 +2587,7 @@ def _wifi_roaming(cap: Capture, ctx: dict) -> Any:
         c.support("wifi", W_STEADY, f"the Wi-Fi channel changed {hops} time{'s' if hops != 1 else ''} "
                                     f"({chans[0][1]} to {chans[-1][1]}): most likely a switch of access point")
     elif chans:
-        c.against("wifi", W_STEADY, f"the PC stayed on Wi-Fi channel {chans[0][1]} throughout"
+        c.against("wifi", W_STEADY, f"the PC stayed on Wi-Fi channel {chans[0][1]} throughout {e.part}"
                   + ("" if any(bssid) else " (the access point itself is only visible with location permission)"))
     else:
         c.lack("wifi", W_STEADY, "the Wi-Fi channel was not read")
@@ -2744,6 +2747,16 @@ def _isp_latency(cap: Capture, ctx: dict) -> Any:
                                                                  "before it even gets to the game server.", fixes)
 
 
+OUTSIDE_THE_PART = "the game server's packets all came outside the measured part"
+
+
+def _gone_at(ev: LagEvent) -> str:
+    """When an open gap began, for the words: a gap a measured part clipped to its start keeps its real start
+    ("since", analysis/crop.py), so the part's start is never named as the moment the server went quiet."""
+    since = _fin(_dict(ev.detail).get("since"))
+    return f"before the measured part, at {since:.0f} s" if since is not None else f"at {ev.t_start:.0f} s"
+
+
 def _server_lag(cap: Capture, ctx: dict) -> Any:
     c = _Case(cap, ctx, "server_lag")
     e = c.env
@@ -2757,6 +2770,9 @@ def _server_lag(cap: Capture, ctx: dict) -> Any:
     if flows_ok and flow is None and not server:
         # CC-1: the tracker follows UDP only, so a TCP-only or offline game never has a server flow to judge
         return Unchecked("server_lag", "no game-server UDP traffic was seen: a TCP-only or offline game?")
+    elsewhere = flow is not None and flow.get("in_part") is False     # analysis/crop.py: seen, but not in this part
+    if flows_ok and elsewhere and not server:
+        return Unchecked("server_lag", OUTSIDE_THE_PART)
     inet = e.net_values(N.INET_RTT_MS)
     inet_med = st.median(inet) if inet else None
     inet_spikes = [ev for ev in e.events if ev.kind == "net_spike" and _dict(ev.detail).get("target") == "internet"]
@@ -2772,6 +2788,8 @@ def _server_lag(cap: Capture, ctx: dict) -> Any:
     ids = [g.id for g in flat + gone]
     if flows_ok and flow is None:
         c.neutral("network_path", "no game-server UDP traffic was seen in the game's own traffic (a TCP-only game?)")
+    elif flows_ok and elsewhere:
+        c.neutral("network_path", OUTSIDE_THE_PART)
     elif flows_ok:
         if len(flat) >= SERVER_GAPS_MIN:
             c.support("network_path", W_STEADY, f"the game server went quiet {len(flat)} times (longest "
@@ -2782,11 +2800,11 @@ def _server_lag(cap: Capture, ctx: dict) -> Any:
                                                 f"{'s' if len(flat) != 1 else ''} (longest "
                                                 f"{max(g.severity for g in flat):.0f} ms)", len(flat), "", SERVER_GAPS_MIN)
         if gone:       # CC-1: an "open" gap is the server falling silent for good while the game kept sending to it
-            c.support("network_path", W_STEADY, f"the game server stopped answering for good at {gone[0].t_start:.0f} s "
+            c.support("network_path", W_STEADY, f"the game server stopped answering for good {_gone_at(gone[0])} "
                                                 "while the game kept sending to it and the internet answered: the "
                                                 "connection to the server was lost")
         elif lost:
-            c.neutral("network_path", f"the game server stopped answering for good at {lost[0].t_start:.0f} s, but "
+            c.neutral("network_path", f"the game server stopped answering for good {_gone_at(lost[0])}, but "
                                       "pings to the internet were lost too: the PC's own connection dropped")
         if unsure:
             c.neutral("network_path", f"{len(unsure)} gap{'s' if len(unsure) != 1 else ''} in the server's packets "
@@ -3016,8 +3034,9 @@ def _all_traffic_quiet(e: _Env, talkers: Any) -> str | Unchecked:
     if measured:
         why = "programs outside your Windows session, Windows' own services among them, were not measured one by one"
     elif e.cropped and e.measured("net_flows"):         # crop drops totals it cannot split by time (analysis/crop.py)
-        why = ("each program's traffic was counted over the whole recording, so it is not known for the measured "
-               "part")
+        counted = (f"only until the ETW consumer stopped at {stopped:.0f} s" if stopped is not None
+                   else "over the whole recording")
+        why = f"each program's traffic was counted {counted}, so it is not known for the measured part"
     else:
         why = ("each program's traffic was not measured (" + (f"the ETW consumer stopped at {stopped:.0f} s"
                                                                if stopped is not None and isinstance(talkers, list)

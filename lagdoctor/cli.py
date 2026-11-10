@@ -143,13 +143,19 @@ _H_MM_SS = re.compile(r"(\d+):([0-5]\d):([0-5]\d(?:\.\d+)?)")
 _UNITS = re.compile(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?")
 
 
+MAX_TIME_TEXT = 32            # no time the report writes is longer; a longer one is refused before it is read
+
+
 def _time_into(text: str) -> float:
     """A time into the recording as the report and the status line show it: seconds (192.5), minutes and seconds
-    (3:12), hours too (1:03:12), or the report's own spelling (3m12s, 1h 02m 03s, 45s). Anything else is refused,
-    a negative time and a corrupt one (past MAX_TIME_INTO_S) included."""
+    (3:12), hours too (1:03:12), or the report's own spelling (3m12s, 1h 02m 03s, 45s), kept to the millisecond as the
+    report's own `--from`/`--to` write it. Anything else is refused, a negative time and a corrupt one (past
+    MAX_TIME_INTO_S) included."""
     s = text.strip().lower().replace(" ", "")
     v = None
-    if _SECONDS.fullmatch(s):
+    if len(s) > MAX_TIME_TEXT:
+        pass
+    elif _SECONDS.fullmatch(s):
         v = float(s)
     elif m := _H_MM_SS.fullmatch(s):
         v = int(m[1]) * 3600 + int(m[2]) * 60 + float(m[3])
@@ -158,9 +164,10 @@ def _time_into(text: str) -> float:
     elif (m := _UNITS.fullmatch(s)) and any(m.groups()):
         v = int(m[1] or 0) * 3600 + int(m[2] or 0) * 60 + float(m[3] or 0)
     if v is None or not v <= MAX_TIME_INTO_S:
-        raise argparse.ArgumentTypeError(f"{text!r} is not a time into the recording: give seconds (192), minutes "
+        shown = text if len(text) <= 40 else text[:40] + "..."
+        raise argparse.ArgumentTypeError(f"{shown!r} is not a time into the recording: give seconds (192), minutes "
                                          "and seconds (3:12) or 3m12s")
-    return v
+    return round(v, 3)
 
 
 def _ip(text: str) -> str:
@@ -617,12 +624,13 @@ def analyze_and_report(cap, cap_path: Path, out_dir: Path, *, remember: bool = F
     from lagdoctor.report.charts import fmt_elapsed
     show = say if say is not None else print          # the summary, which is plain ASCII already
     say = _teller(say)
-    part = cap if span is None else crop(cap, *span)
-    if part.span is None:
-        say("Analysing...")
-    else:
-        say(f"Analysing {fmt_elapsed(part.span['from_s'])} to {fmt_elapsed(part.span['to_s'])} of the recording...")
     try:
+        part = cap if span is None else crop(cap, *span)
+        if part.span is None:
+            say("Analysing...")
+        else:
+            say(f"Analysing {fmt_elapsed(part.span['from_s'])} to {fmt_elapsed(part.span['to_s'])} of the "
+                "recording...")
         d = diagnose(part)
     except Exception as exc:  # noqa: BLE001 - a damaged capture must end in a plain line, not a traceback
         say(f"The capture at {cap_path} looks damaged: the analysis failed on it ({type(exc).__name__}: "
@@ -672,12 +680,13 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         from lagdoctor.analysis import crop
         try:          # an end not given is the recording's own; one past its end is its end
             end = crop.recorded_s(cap)
-            t0, t1 = crop.check_span(cap, 0.0 if t_from is None else t_from, end if t_to is None else t_to)
+            whole = (t_from is None or t_from <= 0) and (t_to is None or t_to >= end)
+            if not whole:          # a span over the whole recording is the whole recording, however short
+                span = (*crop.check_span(cap, 0.0 if t_from is None else t_from, end if t_to is None else t_to),
+                        "set")
         except ValueError as exc:
             say(f"That part of {path} cannot be analysed: {exc}.")
             return 2
-        if t0 > 0 or t1 < end:            # a span over the whole recording is the whole recording
-            span = (t0, t1, "set")
     # A fresh folder of our own: never next to the capture (which may sit beside files of the user's own
     # with the same names), and never the report `fix` acts on (the capture may come from another PC).
     out_dir = session_dir(paths.sessions_dir(), cap.target)

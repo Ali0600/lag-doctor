@@ -85,7 +85,7 @@ def _header(out: _Out, d: Diagnosis, cap: Capture, checkup: bool) -> None:
         out.add()
         return
     part = labels.measured_part(d.stats)
-    analysed = f"{fmt_elapsed(part['to_s'] - part['from_s'])} analysed, " if part else ""
+    analysed = f"{labels.part_length(part)} analysed, " if part else ""
     out.para(f"lag-doctor report: {labels.game_name(cap.target)} ({fmt_elapsed(cap.duration_s)} recorded, "
              f"{analysed}started {when})")
     if part:

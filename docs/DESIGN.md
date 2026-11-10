@@ -856,28 +856,41 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
   `duration_s` becomes the span's length; the Capture's `span` is `{from_s, to_s, recorded_s, how}`, which diagnose
   copies into `stats["span"]`. Code that reads `duration_s` reads a length, never an end: the rules count "from the
   start" from `_Env.start` (shader_compile's first third), and their words name `_Env.part`, "the capture" until it
-  is cut and "the measured part" after (`tests/test_crop.py` scans rules.py and diagnose.py for text naming the
-  whole capture).
+  is cut and "the measured part" after. `tests/test_crop.py` scans every string rules.py and diagnose.py can show
+  (each f-string whole) for "in", "of", "during", "over", "through", "throughout", "across" or "for" the capture, the
+  recording or the session, and checks a cut diagnosis's shown texts, its headline among them.
 - **The cut**: the four tables, the other programs' samples and the lag-key presses keep their rows with
   t0 <= t <= t1, every column kept even where its cut is empty (`analysis.window`); a part that runs to the
-  recording's end keeps a press up to 1 s past it, as the recording does. Each swap chain's first frame in the span
-  is left out when its own interval (MsBetweenPresents, or how long the frame before it stayed on screen) began before
-  t0 (a start set at the end of a loading screen would make the wait its first frame), except from the recording's
-  own start. A table source with rows, but none in the span, becomes `unavailable`, "it recorded nothing in the
-  measured part".
+  recording's end keeps a press up to 1 s past it, as the recording does. A frame whose own interval began before t0
+  is left out (`crop.frames_inside`): any row whose MsBetweenPresents reaches back past t0, and each chain's first
+  shown row whose MsBetweenDisplayChange does (it counts from the frame shown before, so after a load whose first
+  present was never shown, the next one carries the wait); later rows cannot reach that far. A start set at the end of
+  a loading screen would otherwise make the wait a frame of the part. From the recording's own start every row is
+  kept, as the whole recording's analysis keeps PresentMon's first. The HTML frame chart counts the part's frames
+  through the same function. A table source with rows, but none in the span, becomes `unavailable`, "it recorded
+  nothing in the measured part", and the rules' "needs X" reasons then say it "recorded nothing in the measured part"
+  rather than "was not recorded"; a source that failed keeps its own reason.
 - **net_flows** (`crop.NET_FLOWS`, one decision per key the collectors write, which a test holds to
   `session.NETWORK_FLOW_KEYS` and `FLOW_KEYS`): the lists of times are cut (`lost`, `wifi_scans`, `downloads`,
-  `server_rx`); each server gap is clipped to the span and one wholly outside it is gone; the server flow keeps its
-  record with its first and last packet clipped, its four packet and byte totals None, and is None itself when its
-  packets all came outside the span; `probes` are counted again (lost, the lost-probe times in the span; sent, those
+  `server_rx`); each server gap is clipped to the span and one wholly outside it is gone, a gap that began before
+  the span keeping when it began as a fourth field, which events.py reads as `detail["since"]` (so the headline says
+  the server "had stopped answering before the measured part, at 1m", never the part's start); the server flow keeps
+  its record with its four packet and byte totals None and its first and last packet clipped, and when the flow
+  recorded (the server for the most seconds) came wholly outside the span, the span's own packet bins say when packets
+  came; with none of those and no server gap in the span, `in_part` is False, and `server_lag` says "the game
+  server's packets all came outside the measured part" instead of guessing a TCP-only game; `probes` are counted
+  again (lost, the lost-probe times in the span; sent, those
   plus the span's rows that hold that target's round trip: exact, since the network collector counts a probe as sent
   only when it was answered or lost), None for a capture without the lost-probe times; the per-program and
   whole-recording byte totals (`talkers`, `game_wire_bytes`) become None, since they cannot be split by time, and
-  `bandwidth_hog` then says so; a key this version does not know becomes None. None stays None (not recorded) and a
+  `bandwidth_hog` then says so (or that counting stopped with the ETW consumer); a key this version does not know
+  becomes None. None stays None (not recorded) and a
   list whose cut is empty stays a list (recorded, nothing in the span).
-- **Refused** (`check_span`, the CLI and the app's Results through the same check): ends that are not numbers, a start
-  before 0 or at or after the recording's end, an end not after the start, a part shorter than `MIN_SPAN_S` (10 s:
-  frames.BOUND_MIN_S, shorter than any verdict on what limits the game); an end past the recording is its end.
+- **Refused** (`check_span`; `analyze --from/--to` checks through it, and the app's trim handles, M5's app half, are
+  to use it too): ends that are not numbers (an integer too large for a float included), a start before 0 or at or
+  after the recording's end, an end not after the start, a part shorter than `MIN_SPAN_S` (10 s, to the millisecond:
+  frames.BOUND_MIN_S, shorter than any verdict on what limits the game; a refused length is rounded down), and a
+  capture that is a part already (its `duration_s` is the part's length); an end past the recording is its end.
 - **Never saved**: `Capture.save` refuses a capture whose `span` is set, `span` is not part of the file format
   (`to_json` and `from_json` leave it out; a file holding one loads as the whole recording with a note), and the
   capture file always stays whole. Everything else (the inventory, the target, the notes, `started_at`,
@@ -1242,14 +1255,17 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
   finding cards, marked moments, worst moments, checked-and-fine, system snapshot, not measured. Each section
   falls back to a note on odd values instead of failing the page.
 - **A measured part** (a diagnosis whose `stats["span"]` is set, `labels.measured_part`): both reports still draw the
-  whole recording, every time a time into it. The header adds "10m 00s analysed" and one sentence
-  (`labels.part_note`: "Analysed 10m 00s, from 3m 12s to 13m 12s of the recording (the part you chose); the rest
-  is not counted, nor the 2 lag-key presses in it."). On the HTML page every time chart shades what was left out
-  (class `skip`, its own neutral colour in both themes) and draws the presses outside the part apart ("not
-  analysed"); the frame chart's scale and its "cut off at the top" note come from the part's frames, so a loading
-  screen's long frame is drawn clamped and never named the worst. The footer's command picks the part out again
-  (`--from 192 --to 792`, `html.part_args`). Without a part the reports are as before. Chart dots outside the
-  chart's range are left out, as its lines, bands and vertical lines are.
+  whole recording, every time a time into it. The header adds "10m analysed" and one sentence (`labels.part_note`:
+  "Analysed 10m, from 3m 12s to 13m 12s of the recording (the part you chose); the rest is not counted, nor the 2
+  lag-key presses in it."), the length being the difference of the two ends as shown (`labels.part_length`), so
+  they always add up. On the HTML page every time chart shades what was left out (class `skip`, its own neutral
+  colour in both themes) and draws the presses outside the part apart ("not analysed"); the frame chart's scale and
+  its "cut off at the top" note come from the frames the analysis counted (`crop.frames_inside`), so a loading
+  screen's long frame is drawn clamped and never named the worst, and a part without frames of its own takes the
+  whole recording's scale and no such note. The footer's command picks the part out again (`--from 192 --to 792`,
+  `html.part_args`, to the millisecond, as `--from` and `--to` are read). summary.json's `frames_measured` for a part
+  is the diagnosis's (PresentMon may have recorded only outside it). Without a part the reports are as before. Chart
+  dots outside the chart's range are left out, as its lines, bands and vertical lines are.
 - **The HTML never shows the Windows user name**: it is meant to be shared. `html.e()`, which every string on the
   page passes through (the footer, the game's exe in This PC, a reason quoting PresentMon's path, evidence),
   shows a folder under a user's profile by the variable that names it (`html.user_neutral`):
@@ -1292,8 +1308,9 @@ lagdoctor app                        lag-doctor's window: recorded games and the
   capture's note comes with it into the new report and summary.
 - `analyze --from TIME --to TIME` analyses only that part of the recording (M5, "The measured part" under Analysis):
   times into the recording as the report and the status line show them (`192`, `3:12`, `1:03:12`, `3m12s`,
-  `cli._time_into`, which refuses anything else before the capture is read). A missing end is the recording's own,
-  an end past it is its end, and a part covering the whole recording is the whole recording. `crop.check_span`
+  `cli._time_into`, which keeps them to the millisecond and refuses anything else, past 32 characters included,
+  before the capture is read). A missing end is the recording's own, an end past it is its end, and a part covering
+  the whole recording is the whole recording, however short. `crop.check_span`
   refuses the rest in one line, "That part of <path> cannot be analysed: <why>." (exit 2, no folder): a start
   before 0 or at the end, an end not after the start, a part under `crop.MIN_SPAN_S` (10 s). The capture file is
   never changed. `cli.analyze_and_report(cap, ..., span=(t0, t1, how))` crops before the diagnosis and hands the

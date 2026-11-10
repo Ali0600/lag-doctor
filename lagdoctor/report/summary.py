@@ -198,7 +198,10 @@ def build(d: Diagnosis, cap: Capture, kind: str) -> dict[str, Any]:
         "worst_frame_ms": number(stats.get("worst_frame_ms")),
         "top_cause": _text(top.cause) if top else None,
         "frames_source": _text(stats.get("frames_source")),
-        "frames_measured": getattr(frames_src, "state", None) in ("ok", "partial"),
+        # A part's frame timing is the diagnosis's to say: PresentMon may have recorded only outside it.
+        "frames_measured": (str((d.measured if isinstance(d.measured, dict) else {}).get("frames", "")).startswith(
+                                ("ok", "partial")) if part else
+                            getattr(frames_src, "state", None) in ("ok", "partial")),
         "refresh_hz": number(stats.get("refresh_hz")),
         "power_plan": _text(power.get("scheme_name")),
         "power_mode": _text(labels.power_mode(power)),

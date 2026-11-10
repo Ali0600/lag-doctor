@@ -1184,8 +1184,49 @@ def test_a_part_over_the_whole_recording_is_the_whole_recording(tmp_path):
     assert "span" not in json.loads((made / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8"))["stats"]
 
 
+def test_the_whole_of_a_recording_shorter_than_a_part_is_still_analysed(tmp_path):
+    """--from 0 (or --to past the end) on an 8 s recording asks for the whole of it, which no part minimum refuses."""
+    from tests import synth
+    cap = synth.startup_then_smooth(startup_s=4.0, total_s=8.0, first_hitch_s=2.0)
+    p = cap.save(tmp_path / "short.ldcap.json.gz")
+    assert cli.main(["analyze", str(p), "--from", "0"]) == 0
+    assert cli.main(["analyze", str(p), "--to", "9999"]) == 0
+    for made in paths.sessions_dir().iterdir():
+        assert "span" not in json.loads((made / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8"))["stats"]
+
+
+def test_a_time_is_kept_to_the_millisecond_so_the_footer_picks_out_the_same_part(tmp_path):
+    """The report's footer writes a part's ends to the millisecond; a time typed with more digits is read to the
+    millisecond too, so the footer's command analyses exactly that part again."""
+    assert cli._time_into("12.3456") == 12.346
+    p = _startup_capture(tmp_path)
+    assert cli.main(["analyze", str(p), "--from", "12.3456", "--to", "47.0004"]) == 0
+    [made] = list(paths.sessions_dir().iterdir())
+    span = json.loads((made / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8"))["stats"]["span"]
+    assert (span["from_s"], span["to_s"]) == (12.346, 47.0)
+    assert "--from 12.346 --to 47</code>" in (made / cli.REPORT_NAME).read_text(encoding="utf-8")
+
+
+def test_a_part_the_cut_refuses_ends_in_one_line_not_a_traceback(tmp_path, capsys):
+    """analyze checks a part before it cuts; a caller that hands analyze_and_report a part it cannot cut still gets
+    the damaged-capture line, never an exception (the cut runs inside the analysis's own guard)."""
+    p = _startup_capture(tmp_path)
+    from lagdoctor.model import Capture as _Capture
+    out = tmp_path / "out"
+    out.mkdir()
+    assert cli.analyze_and_report(_Capture.load(p), p, out, span=(500.0, 600.0, "set")) == 1
+    assert "looks damaged" in capsys.readouterr().out and list(out.iterdir()) == []
+
+
+def test_an_absurdly_long_time_is_refused_in_a_short_line():
+    with pytest.raises(argparse.ArgumentTypeError) as caught:
+        cli._time_into("9" * 5000 + "h")
+    assert len(str(caught.value)) < 200
+
+
 @pytest.mark.parametrize("args,said", [
     (["--from", "175"], "at least 10 s"),
+    (["--from", "170.04"], "it would be 9.9 s long"),
     (["--to", "0:05"], "at least 10 s"),
     (["--from", "200"], "the recording ended at 3m"),
     (["--from", "100", "--to", "50"], "is not after its start"),

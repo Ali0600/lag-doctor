@@ -306,11 +306,17 @@ def outside_marks(marks: Any, part: dict[str, Any] | None) -> list[float]:
             and not lo <= t <= late]
 
 
+def part_length(part: dict[str, Any]) -> str:
+    """A measured part's length as the reports show it: the difference of its two ends as they are shown (each
+    rounded to the second), so "from 13s to 47s" never reads as 35 s long."""
+    return fmt_elapsed(round(part["to_s"]) - round(part["from_s"]))
+
+
 def part_note(part: dict[str, Any], outside_marks: int = 0) -> str:
-    """What the reports say about a measured part: 'Analysed 10m 00s, from 3m 12s to 13m 12s of the recording (the
-    part you chose); the rest is not counted.'"""
+    """What the reports say about a measured part: 'Analysed 10m, from 3m 12s to 13m 12s of the recording (the part you
+    chose); the rest is not counted.'"""
     lo, hi = part["from_s"], part["to_s"]
-    text = (f"Analysed {fmt_elapsed(hi - lo)}, from {fmt_elapsed(lo)} to {fmt_elapsed(hi)} of the recording "
+    text = (f"Analysed {part_length(part)}, from {fmt_elapsed(lo)} to {fmt_elapsed(hi)} of the recording "
             f"({PART_HOW[part['how']]}); the rest is not counted")
     if outside_marks > 0:
         text += f", nor the {outside_marks} lag-key press{'es' if outside_marks != 1 else ''} in it"
@@ -472,10 +478,12 @@ def sorted_topics(causes: Any) -> list[str]:
 NEEDS = "needs "                      # how a reason that a missing source blocked begins (rules._Env.need)
 
 
-def needs_source(source: str) -> str:
+def needs_source(source: str, in_part: bool = False) -> str:
     """Why a cause could not be checked when a source it needs was not measured. The source's own reason, path and
     command included, is in the Not measured list, once; repeating it here chained colons ("needs X, which was not
-    measured: frame timing was skipped: ...")."""
+    measured: frame timing was skipped: ..."). `in_part`: the source recorded, but nothing in the measured part."""
+    if in_part:
+        return f"{NEEDS}{source_text(source)}, which recorded nothing in the measured part (see Not measured)"
     return f"{NEEDS}{source_text(source)}, which was not recorded (see Not measured)"
 
 

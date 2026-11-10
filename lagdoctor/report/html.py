@@ -294,18 +294,38 @@ def _main_frames(d: Diagnosis, cap: Capture) -> tuple[list, list]:
     return xs, ys
 
 
+def _analysed_frames(d: Diagnosis, cap: Capture, part: dict) -> list[float]:
+    """The main chain's frame times (ms) that the analysis of a measured part counted: its rows in the part, less those
+    analysis/crop.frames_inside leaves out (a frame whose own interval began before the part). So the chart's scale
+    and its note never name a frame the analysis did not count."""
+    from lagdoctor.analysis.crop import frames_inside
+    t, chains = _column(cap.frames, F.T), _column(cap.frames, F.SWAP_CHAIN)
+    chain = _dict(d.stats).get("main_chain")
+    one = bool(chain is not None and chains and len(chains) == len(t))     # as _main_frames picks the chain
+    rows = [i for i, ti in enumerate(t) if (x := number(ti)) is not None and part["from_s"] <= x <= part["to_s"]
+            and (not one or chains[i] == chain)]
+    table = {}
+    for name in (F.T, F.FRAME_MS, F.DISPLAY_MS, F.SWAP_CHAIN):
+        col = _column(cap.frames, name)
+        table[name] = [col[i] if i < len(col) else None for i in rows]
+    kept = frames_inside(table, part["from_s"])
+    return [v for v in (number(x) for x in kept[F.FRAME_MS]) if v is not None and v > 0]
+
+
 def _frame_chart(d: Diagnosis, cap: Capture) -> str:
     t, ms = _main_frames(d, cap)
     every = [v for v in ms if v is not None]
     if not t or not every:
         return _not_measured_note(cap, "frames")
     part = labels.measured_part(d.stats)
-    # The scale and the note follow the frames analysed: a loading screen's long frames are drawn, clamped at the top.
-    vals = [v for x, v in zip(t, ms) if v is not None and part["from_s"] <= x <= part["to_s"]] if part else every
-    vals = vals or every
+    # The scale and the note follow the frames the analysis counted: a loading screen's long frame is drawn, clamped at
+    # the top, and never named the worst. A part without frames of its own takes the whole recording's scale and says
+    # nothing of frames cut off.
+    vals = _analysed_frames(d, cap, part) if part else every
+    scale = vals or every
     refresh = number(_dict(d.stats).get("refresh_hz"))
     ref_ms = 1000.0 / refresh if refresh and refresh > 0 else None
-    top = min(max(vals) * 1.05, max(percentile(vals, 99.9) * 1.6, 40.0))
+    top = min(max(scale) * 1.05, max(percentile(scale, 99.9) * 1.6, 40.0))
     top = max(top, (ref_ms or 0) * 2.2, 20.0)
     end = _x1(cap, t)
     ch = Chart("Frame times: higher is slower; spikes are stutters", 0.0, end, 0.0, top, " ms")
@@ -320,7 +340,7 @@ def _frame_chart(d: Diagnosis, cap: Capture) -> str:
     ch.dots(stutters, "bad", "stutter")
     _draw_marks(ch, mark_times(d, cap), labels.outside_marks(cap.marks, part))
     note = ""
-    worst = max(vals)
+    worst = max(vals, default=0.0)
     if worst > top:
         clipped = sum(1 for v in vals if v > top)
         where = " in the analysed part" if part else ""
@@ -616,7 +636,7 @@ def _head(d: Diagnosis, cap: Capture, game: str) -> str:
     note = clean_note(cap.note)
     note = f'<p class="note"><strong>Your note:</strong> {e(note)}</p>' if note else ""
     part = labels.measured_part(d.stats)
-    analysed = f"{fmt_elapsed(part['to_s'] - part['from_s'])} analysed &middot; " if part else ""
+    analysed = f"{labels.part_length(part)} analysed &middot; " if part else ""
     if part:
         note += (f'<p class="note">{e(labels.part_note(part, len(labels.outside_marks(cap.marks, part))))} '
                  "It is shaded on the charts.</p>")

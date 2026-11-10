@@ -9,12 +9,15 @@ on the status line. What the cut does:
 
 - the four tables (frames, system, gpu, network), the other programs' samples and the lag-key presses keep their rows
   with t0 <= t <= t1, every column kept even where its cut is empty (analysis.window);
-- a chain's first frame in the span is left out when its own interval began before t0, since it measured time outside
-  the span (a start set at the end of a loading screen would make the whole wait its first frame);
+- a frame whose own interval began before t0 is left out, since it measured time outside the span (a start set at the
+  end of a loading screen would make the whole wait a frame of the part): frames_inside, which the report's frame
+  chart counts through too;
 - duration_s becomes the span's length, and `span` records the span, the recording's length and how it was set;
 - net_flows: every list of times is cut to the span (lost probes, Wi-Fi scans, downloads, the server's packet bins),
-  each silence of the game server is clipped to it, the probes are counted again over it, and the byte totals per
-  program and over the whole recording become None, since they cannot be split by time (NET_FLOWS says which is which);
+  each silence of the game server is clipped to it (one that began before it keeping when it began), the server's
+  flow says when its packets came in the span (or that none of a server came, `in_part` False), the probes are
+  counted again over it, and the byte totals per program and over the whole recording become None, since they cannot
+  be split by time (NET_FLOWS says which is which);
 - a table source that recorded rows, but none in the span, is marked as having recorded nothing in the measured part.
 
 Everything else (the inventory, the target, the notes, the start time and the clock origin) stays as recorded. Pure:
@@ -56,11 +59,13 @@ NET_FLOWS = {
 
 
 def _time(v: Any) -> float | None:
-    """A time from the capture when it is a real, finite number of seconds within frames' bounds."""
-    if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v):
+    """A time from the capture when it is a real, finite number of seconds within frames' bounds. An int is bounded
+    before it becomes a float: a file can hold one too large for a float, which math.isfinite would raise on."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
-    v = float(v)
-    return v if abs(v) <= fa.MAX_ABS_VALUE else None
+    if isinstance(v, int):
+        return float(v) if abs(v) <= fa.MAX_ABS_VALUE else None
+    return v if math.isfinite(v) and abs(v) <= fa.MAX_ABS_VALUE else None
 
 
 def recorded_s(cap: Capture) -> float:
@@ -75,7 +80,10 @@ def check_span(cap: Capture, t0: Any, t1: Any) -> tuple[float, float]:
     """The span [t0, t1] of `cap` that crop cuts, as seconds into the recording: an end past the recording's comes
     back as its end. ValueError, as one clause that reads after "cannot be analysed: ", for anything that is not a
     span of it: ends that are not numbers, a start before 0 or after the end, an end not after the start, or a part
-    shorter than MIN_SPAN_S. The CLI and the app's Results check a span through this, so both refuse the same ones."""
+    shorter than MIN_SPAN_S, and a capture that is a part already. `analyze --from/--to` checks a span through this;
+    the app's trim handles (M5's app half) are to use it too, so both refuse the same ones."""
+    if getattr(cap, "span", None) is not None:      # its duration_s is a part's length, not the recording's end
+        raise ValueError("it is a part of a recording already: cut the whole recording instead")
     recorded = recorded_s(cap)
     lo, hi = _time(t0), _time(t1)
     if lo is None or hi is None:
@@ -87,8 +95,9 @@ def check_span(cap: Capture, t0: Any, t1: Any) -> tuple[float, float]:
     if hi <= lo:
         raise ValueError(f"its end ({fmt_elapsed(hi)}) is not after its start ({fmt_elapsed(lo)})")
     hi = min(hi, recorded)
-    if hi - lo < MIN_SPAN_S:
-        raise ValueError(f"it would be {hi - lo:.1f} s long, and a part needs at least {MIN_SPAN_S:.0f} s")
+    if round(hi - lo, 3) < MIN_SPAN_S:              # to the millisecond: 16.4 - 6.4 is 9.999999999999998
+        raise ValueError(f"it would be {math.floor((hi - lo) * 10) / 10:.1f} s long, and a part needs at least "
+                         f"{MIN_SPAN_S:.0f} s")
     return lo, hi
 
 
@@ -101,7 +110,7 @@ def crop(cap: Capture, t0: Any, t1: Any, how: str = "set") -> Capture:
     lo, hi = check_span(cap, t0, t1)
     recorded = recorded_s(cap)
     w = window.window(cap, lo, hi)
-    frames = _without_early_firsts(w["frames"], lo)
+    frames = frames_inside(w["frames"], lo)
     late = hi + MARK_LATE_S if hi >= recorded else hi
     marks = [m for m in _list(cap.marks) if (v := _time(m)) is not None and lo <= v <= late]
     others = [row for row in _list(cap.others)
@@ -132,27 +141,32 @@ def _rows(table: Any) -> int:
     return sum(1 for t in _list(table.get("t")) if _time(t) is not None) if isinstance(table, dict) else 0
 
 
-def _without_early_firsts(fr: dict[str, list], lo: float) -> dict[str, list]:
-    """The cut frame table less each chain's first row whose own interval began before `lo`: MsBetweenPresents (time
-    since the chain's previous present) or MsBetweenDisplayChange (how long the frame before it stayed on screen). From
-    the recording's own start (lo = 0) every row is kept, as the whole recording's analysis keeps PresentMon's first."""
+def frames_inside(fr: dict[str, list], lo: float) -> dict[str, list]:
+    """A frame table (rows from `lo` on) less every row whose own interval began before `lo`, which measured time
+    outside the part: a row whose MsBetweenPresents (the time since its chain's previous present) reaches back past it,
+    and a chain's first shown row whose MsBetweenDisplayChange (how long the frame shown before it stayed on screen,
+    measured from the previous shown frame) does. A start set at the end of a loading screen would otherwise make the
+    wait a frame of the part, also when the first present after it was never shown and the next one carried the wait.
+    Later rows cannot reach back that far: their previous present, and their previous shown frame, are in the part.
+    From the recording's own start (lo = 0) every row is kept, as the whole recording's analysis keeps PresentMon's
+    first. The report's frame chart counts its frames through this too (report/html.py), so the two never differ."""
     ts = fr.get(F.T)
     if lo <= 0 or not isinstance(ts, list):
         return fr
-    first: dict[Any, tuple[float, int]] = {}
-    for i, t in enumerate(ts):
-        v = _time(t)
-        if v is None:
+    shown: set = set()                   # the chains whose first shown row has been looked at
+    drop = set()
+    for v, i in sorted((v, i) for i, t in enumerate(ts) if (v := _time(t)) is not None):   # rows interleave chains
+        present = _time(_at(fr, F.FRAME_MS, i))
+        if present is not None and present > 0 and v - present / 1000.0 < lo:
+            drop.add(i)
+        display = _time(_at(fr, F.DISPLAY_MS, i))
+        if display is None or display <= 0:                 # not shown: PresentMon gives no display change
             continue
         key = fa._chain_key(_at(fr, F.SWAP_CHAIN, i))
-        if key not in first or v < first[key][0]:
-            first[key] = (v, i)
-    drop = set()
-    for v, i in first.values():
-        reach = max((x for x in (_time(_at(fr, F.FRAME_MS, i)), _time(_at(fr, F.DISPLAY_MS, i)))
-                     if x is not None and x > 0), default=0.0)
-        if v - reach / 1000.0 < lo:
-            drop.add(i)
+        if key not in shown:
+            shown.add(key)
+            if v - display / 1000.0 < lo:
+                drop.add(i)
     if not drop:
         return fr
     return {name: [x for i, x in enumerate(col) if i not in drop] for name, col in fr.items()}
@@ -179,6 +193,7 @@ def _net_flows(nf: Any, lo: float, hi: float, network: dict[str, list]) -> dict[
     cut is empty stays a list (it was recorded, and nothing fell in the span)."""
     nf = nf if isinstance(nf, dict) else {}
     out: dict[str, Any] = {}
+    bins, gaps = _bins(nf.get("server_rx"), lo, hi), _gaps(nf.get("gaps"), lo, hi)    # the server's flow reads both
     for key, value in nf.items():
         what = NET_FLOWS.get(key)
         if what == "kept":
@@ -192,13 +207,11 @@ def _net_flows(nf: Any, lo: float, hi: float, network: dict[str, list]) -> dict[
                 dict(d) for d in value if isinstance(d, dict) and (t := _time(d.get("t"))) is not None
                 and lo <= t <= hi]
         elif key == "server_rx":
-            out[key] = None if not isinstance(value, list) else [
-                list(r) for r in value if isinstance(r, (list, tuple)) and len(r) >= 2
-                and (t := _time(r[0])) is not None and t > lo and t - SERVER_BIN_S < hi]
+            out[key] = bins
         elif key == "gaps":
-            out[key] = _gaps(value, lo, hi)
+            out[key] = gaps
         elif key == "server":
-            out[key] = _server(value, lo, hi)
+            out[key] = _server(value, lo, hi, bins, gaps)
         elif key == "probes":
             out[key] = _probes(value, nf.get("lost"), nf.get("targets"), lo, hi, network)
         else:                            # "dropped", and any key this version does not know
@@ -212,9 +225,19 @@ def _times(v: Any, lo: float, hi: float) -> list | None:
     return [x for x in v if (t := _time(x)) is not None and lo <= t <= hi]
 
 
+def _bins(v: Any, lo: float, hi: float) -> list | None:
+    """The server's packet bins ([t, packets] for the second that ends at t) that overlap the span."""
+    if not isinstance(v, list):
+        return None
+    return [list(r) for r in v if isinstance(r, (list, tuple)) and len(r) >= 2
+            and (t := _time(r[0])) is not None and t > lo and t - SERVER_BIN_S < hi]
+
+
 def _gaps(v: Any, lo: float, hi: float) -> list | None:
     """Each silence of the game server ([t, ms, kind]: t the last packet before it) clipped to the span: one that
-    began before it starts at its start, one that outlasts it ends at its end, and one wholly outside it is gone."""
+    outlasts it ends at its end, one wholly outside it is gone, and one that began before it starts at its start, with
+    when it really began kept as a fourth field (events.py reads it as the gap's "since"), so the words never name the
+    part's start as the moment the server went quiet."""
     if not isinstance(v, list):
         return None
     out = []
@@ -226,23 +249,32 @@ def _gaps(v: Any, lo: float, hi: float) -> list | None:
             continue
         a, b = max(t, lo), min(t + ms / 1000.0, hi)
         if b > a:
-            out.append([round(a, 6), round((b - a) * 1000.0, 3), *list(g[2:3])])
+            rec = [round(a, 6), round((b - a) * 1000.0, 3), g[2] if len(g) > 2 else None]
+            out.append(rec + [round(t, 6)] if t < lo else rec)
     return out
 
 
-def _server(v: Any, lo: float, hi: float) -> dict | None:
-    """The game server's flow for the span: its packet and byte counts, which cover the whole recording, become None,
-    and when its packets came is clipped to the span. A flow whose packets all came outside the span was not seen in
-    it, which is what None says."""
+def _server(v: Any, lo: float, hi: float, bins: list | None, gaps: list | None) -> dict | None:
+    """The game server's flow for the span. Its packet and byte counts cover the whole recording, so they become None,
+    and when its packets came is clipped to the span. The flow recorded is the one that was the server for the most
+    seconds; when its packets all came outside the span, the span's own packet bins (any server's) say when packets
+    came. With none of those and no server silence in the span either, `in_part` is False: the recording saw a game
+    server, but nothing of one came in this part, which a reader must not take for a game that has none."""
     if not isinstance(v, dict):
         return None
     out = {k: copy.deepcopy(x) for k, x in v.items() if k not in SERVER_TOTALS}
     out.update(dict.fromkeys(SERVER_TOTALS))
     first, last = _time(v.get("first_rx_t")), _time(v.get("last_rx_t"))
-    if first is not None and last is not None:
-        if last < lo or first > hi:
-            return None
+    if first is None or last is None:
+        return out
+    if not (last < lo or first > hi):
         out["first_rx_t"], out["last_rx_t"] = max(first, lo), min(last, hi)
+        return out
+    seen = [t for r in bins or [] if (t := _time(r[0])) is not None and (n := _time(r[1])) is not None and n > 0]
+    out["first_rx_t"] = max(min(seen) - SERVER_BIN_S, lo) if seen else None
+    out["last_rx_t"] = min(max(seen), hi) if seen else None
+    if not seen and not gaps:
+        out["in_part"] = False
     return out
 
 

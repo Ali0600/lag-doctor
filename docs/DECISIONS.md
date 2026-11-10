@@ -140,10 +140,15 @@ reports and the app read a time or a total (the owner has not weighed in).
   that hold a round trip, so the packet-loss figure and rule cover the part.
   - **None, like the other totals**: rejected; the loss figure and the steady-loss evidence would be lost for every
     part.
-- **A chain's first frame in the part is left out when its interval began before the part (chosen)**: a start set at
-  the end of a loading screen would make the whole wait the part's worst frame.
+- **A frame whose own interval began before the part is left out (chosen)**: a start set at the end of a loading
+  screen would make the whole wait the part's worst frame. That is any row whose time since its chain's previous
+  present reaches back past the part's start, and each chain's first shown row whose display change does (the review
+  found a load whose first present was never shown, so the next, shown, frame carried the wait).
   - **Keep it**, as the recording keeps PresentMon's first row: rejected, for the wait. It is kept only for a part
     from the recording's own start, so such a part frames as the whole does.
+  - **Clip it to the part** (count only the time after the start): deferred, worth trying if a freeze that runs into a
+    part should show in it. Today a part whose start falls inside a 13 s freeze reads "No lag stood out"; clipped, a
+    start inside a loading screen would count the rest of the load. Revisit hook: `crop.frames_inside`.
 - **The finding text names "the measured part" (chosen)**: about 22 strings that said "of the capture" read
   `_Env.part`. Leaving them with only a header note was rejected: a finding would claim the whole recording.
 - **summary.json's `duration_s` is the length its numbers cover (chosen)**, with `recorded_s` beside it, so Compare's
@@ -152,7 +157,7 @@ reports and the app read a time or a total (the owner has not weighed in).
 - **The inventory stays as recorded (chosen for now)**: read once before the recording starts. **Read the power
   settings again at the start key's press**: deferred, worth trying (Backlog), with M5's second half.
 
-Revisit hooks: `lagdoctor/analysis/crop.py` (`NET_FLOWS`, `_without_early_firsts`, `MIN_SPAN_S`), `_Env.start` and
+Revisit hooks: `lagdoctor/analysis/crop.py` (`NET_FLOWS`, `frames_inside`, `MIN_SPAN_S`), `_Env.start` and
 `_Env.part` in `analysis/rules.py`.
 
 ## 2026-11-09: The headroom estimate comes from thread time, and is context, not evidence
