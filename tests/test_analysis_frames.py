@@ -668,10 +668,10 @@ def test_headroom_says_nothing_of_a_next_limit_it_cannot_see():
     # a capped game has ceilings but no limiting part to speed up
     h = bound_of(_wobble(1500, 8.333, 0.0290 / 1.4826), 0.5, thread=30.0, hz=144.003)["headroom"]
     assert h["limit"] is None and h["gpu_fps"] == pytest.approx(2000.0) and h["speedup"] is None
-    # VSync at 30 on 60 Hz named the CPU from MsCPUBusy (20 ms of its own work, DXGI), but its busiest thread ran 40 %:
-    # thread time cannot say how much faster it must get, so it says nothing
-    p2 = 2 * 1000.0 / 60.0
-    b = vsync_halved(gpu_ms=5.0, cpu_busy=20.0, cpu_wait=p2 - 20.0, runtime="DXGI")
+    # VSync at 30 on 60 Hz names the CPU from its busiest thread's own work a frame (60 % of a CPU, 20.0 ms, more than
+    # one 16.7 ms period), though the thread is not saturated: the saturation edge cannot say how much faster it must
+    # get, so it says nothing (this case once came from MsCPUBusy, which no longer names the CPU)
+    b = vsync_halved(gpu_ms=5.0, thread=60.0)
     assert b["verdict"] == "cpu_main" and b["headroom"]["limit"] == "cpu"
     assert b["headroom"]["next"] is None and b["headroom"]["speedup"] is None
 
