@@ -19,6 +19,7 @@ import bisect
 import math
 import ntpath
 import re
+from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
@@ -556,13 +557,29 @@ def _holds_open(cause: str, e: _Env) -> str | None:
         if m is not None:      # A7: the game's GPU time was shared, so "the GPU is not the limit" cannot be told
             return (f"other programs kept the game's GPU {m:.0f}% busy (median of 1 s windows), so whether the "
                     "game's own GPU work is the limit could not be told")
-    if cause == "cpu_limit" and e.verdict != "gpu":
-        busiest = _fin(e.bound.get("busiest_thread"))
-        if busiest is not None and THREAD_WAITING <= busiest < fa.THREAD_BOUND:      # A6, LC 3.2
-            return (f"the game's busiest thread ran {100 * busiest:.0f}% of a CPU, between "
-                    f"{100 * THREAD_WAITING:.0f}% (waiting) and {100 * fa.THREAD_BOUND:.0f}% (CPU-bound): the CPU "
-                    "may be close to its limit, so it is not ruled out")
+    if cause == "cpu_limit":
+        return _cpu_not_ruled_out(e)
     return None
+
+
+def _cpu_not_ruled_out(e: _Env) -> str | None:
+    """Why the CPU cannot be ruled out in this capture, whatever a cause's own evidence says, or None: LC 3.2's grey
+    zone (A6), a saturated thread under VSync at one refresh a frame (which never tests the thread), and an older
+    capture's per-tick thread past VSync's work edge. Never under frame timing's GPU, nor at the display's rate,
+    where a CPU limit costs nothing the player sees (LIMIT_FPS_FRAC). One predicate for cpu_limit's held-open reason,
+    the cpu gate, not_focused's CPU side and cpu_throttle's thread line."""
+    if (e.verdict == "gpu" and not _gpu_by_engine(e)) or _fps_reaches_display(e):
+        return None
+    busiest = _fin(e.bound.get("busiest_thread"))
+    if busiest is not None and THREAD_WAITING <= busiest < fa.THREAD_BOUND:      # A6, LC 3.2
+        return (f"the game's busiest thread ran {100 * busiest:.0f}% of a CPU, between "
+                f"{100 * THREAD_WAITING:.0f}% (waiting) and {100 * fa.THREAD_BOUND:.0f}% (CPU-bound): the CPU "
+                "may be close to its limit, so it is not ruled out")
+    if busiest is not None and busiest >= fa.THREAD_BOUND and e.verdict == "vsync":   # one refresh: no cpu_main
+        return (f"the game's busiest thread ran {100 * busiest:.0f}% of a CPU ({100 * fa.THREAD_BOUND:.0f}% or "
+                "more), and VSync at one refresh a frame does not tell whether it is what makes frames miss a "
+                "refresh, so the CPU is not ruled out")
+    return next((n for n in e.bound.get("notes") or [] if isinstance(n, str) and fa.THREAD_UPPER_NOTE in n), None)
 
 
 def _contention(e: _Env) -> float | None:
@@ -603,11 +620,16 @@ def _gated(rule: Rule, env: _Env, finding: Finding) -> Any:
     if probable is not None and probable[0]:
         finding.evidence.append(Evidence(_sentence(probable[1])))
         return finding
-    if v == "unknown":
+    fallback = rule.gate == "cpu" and _gpu_by_engine(env)        # the 3D engine named the GPU: no CPU verdict
+    if v == "unknown" or fallback:
         notes = [n for n in env.bound.get("notes") or [] if isinstance(n, str)]
         why = notes[:1] + ([probable[1]] if probable is not None else [])
+        # never a ";" inside: the lists group a reason by what comes before its first one (labels.group_unchecked)
         return Unchecked(rule.cause, f"whether {side} limits the frame rate could not be judged"
-                         + (f" ({'; '.join(why)})" if why else ""))
+                         + (f" ({', '.join(w.replace(';', ',') for w in why)})" if why else ""))
+    held = _cpu_not_ruled_out(env) if rule.gate == "cpu" else None
+    if held is not None:            # the CPU may be close to its limit: never "not what limits the frame rate"
+        return Unchecked(rule.cause, held)
     return Cleared(rule.cause, _sentence(f"{side} is not what limits the frame rate: "
                                          f"it is limited by {labels.BOUND.get(v, v)}"))
 
@@ -665,6 +687,8 @@ def _wrong_gpu(cap: Capture, ctx: dict) -> Any:
     v, fps = e.verdict, e.avg_fps
     if not e.frames_measured:
         c.lack("frame_timing", W_STEADY, e.need("frames"))
+    elif _engine_fallback(e):          # the 3D engine named the GPU, not frame timing: no second point for one reading
+        c.neutral("frame_timing", _engine_fallback(e))
     elif v == "gpu":
         c.support("frame_timing", W_STEADY, "and the integrated GPU is what limits the frame rate"
                   + (f" ({fps:.0f} FPS)" if fps else ""))
@@ -678,7 +702,9 @@ def _wrong_gpu(cap: Capture, ctx: dict) -> Any:
     fixes = [_gpu_preference_fix(e, best)]
     limited = v == "gpu"
     summary = (f"Windows ran the game on {_name(game)} instead of {_name(best)}. "
-               + ("That integrated GPU is what holds the frame rate down." if limited else
+               + ("That integrated GPU is probably what holds the frame rate down: its 3D engine stayed busy."
+                  if limited and _gpu_by_engine(e) else
+                  "That integrated GPU is what holds the frame rate down." if limited else
                   "It is not the limit at the moment, but the discrete GPU would give the game far more headroom."))
     return c.conclude(f"The game ran on the integrated GPU, not on {_name(best)}", summary, fixes)
 
@@ -743,23 +769,50 @@ def _fps_reaches_display(e: _Env) -> bool:
     return fps is not None and hz is not None and fps >= LIMIT_FPS_FRAC * hz
 
 
+def _gpu_by_engine(e: _Env) -> bool:
+    """A "gpu" verdict the 3D engine gave, never frame timing: r never computed (too few steady frames, or none). It
+    says nothing of the CPU, so no CPU-side cause is gated, cleared or ruled out by it."""
+    return e.verdict == "gpu" and _fin(e.bound.get("r")) is None
+
+
+def _engine_fallback(e: _Env) -> str | None:
+    """bound()'s fallback, a "gpu" verdict with r never computed (too few steady frames: the 3D engine at 95 % named the
+    GPU, not frame timing), in the words the rules use for it; None for any other verdict."""
+    if not e.frames_measured or e.verdict != "gpu" or _fin(e.bound.get("r")) is not None:
+        return None
+    notes = [n for n in e.bound.get("notes") or [] if isinstance(n, str)]
+    return ("frame timing could not judge the limit" + (f" ({notes[0]})" if notes else "")
+            + ", so the verdict comes from the GPU's 3D engine")
+
+
 def _gpu_limit(cap: Capture, ctx: dict) -> Any:
     c = _Case(cap, ctx, "gpu_limit")
     e = c.env
     b, v = e.bound, e.verdict
     r = _fin(b.get("r"))
+    fallback = _engine_fallback(e)
     if e.frames_measured:
         if v in ("gpu", "mixed") and _fps_reaches_display(e):
             return Cleared("gpu_limit", _sentence(f"the GPU sets the pace, but at {e.avg_fps:.0f} FPS the game "
                                                   f"already reaches the {e.refresh:.0f} Hz display"), firm=True)
         g, ft = _fin(b.get("gpu_ms")), _fin(b.get("ft_ms"))
         detail = f" (r = {r:.2f})" if r is not None else ""
+        notes = [n for n in b.get("notes") or [] if isinstance(n, str)]
+        rounds = next((n for n in notes if n.startswith("VSync rounds")), None)
         if v == "gpu" and r is not None:
             busy = (f"the GPU was busy {g:.1f} ms of each {ft:.1f} ms frame" if g is not None and ft is not None
                     else f"the GPU was busy {100 * r:.0f}% of each frame")
-            c.support("frame_timing", W_STEADY, f"{busy}{detail}; GPU-bound at {fa.R_GPU:.2f} or more", r, "", fa.R_GPU)
-        elif v == "gpu":
-            c.support("frame_timing", W_STEADY, "frame timing shows the GPU as the limit")
+            if r >= fa.R_GPU:
+                c.support("frame_timing", W_STEADY, f"{busy}{detail}; GPU-bound at {fa.R_GPU:.2f} or more", r, "",
+                          fa.R_GPU)
+            elif b.get("vsync") is True and rounds:     # A6: VSync holds it at refresh / k, the GPU past k - 1 periods;
+                c.support("frame_timing", W_STEADY, rounds)    # the note's raw GPU time (busy here is after HAGS)
+            else:         # A14: under 0.90, the frame within 1 ms of the GPU's busy time leaves the GPU the limit
+                c.support("frame_timing", W_STEADY, f"{busy}{detail}: the GPU idled {fa.GPU_GAP_MS:.0f} ms a frame or "
+                                                    "less, so it sets the pace", ft - g if g is not None and ft
+                          is not None else None, "ms", fa.GPU_GAP_MS)
+        elif fallback:        # bound's fallback: too few steady frames, so the 3D engine named the GPU, not frame timing
+            c.neutral("frame_timing", fallback)
         elif v == "mixed":
             c.support("frame_timing", W_STATIC, f"borderline: the GPU was busy for {100 * (r or 0):.0f}% of each "
                                                 f"frame (between {100 * fa.R_CPU:.0f}% and {100 * fa.R_GPU:.0f}%)",
@@ -774,7 +827,7 @@ def _gpu_limit(cap: Capture, ctx: dict) -> Any:
     engine = e.steady(S.GAME_GPU_PCT)
     if engine:
         m = st.median(engine)
-        probable = not e.frames_measured
+        probable = not e.frames_measured or fallback is not None      # the verdict's own 95 %, not 90 %
         need = ENGINE_PROBABLE_PCT if probable else ENGINE_BUSY_PCT
         if m >= need:
             c.support("gpu_engine", W_STEADY, f"the game kept its GPU's 3D engine {m:.0f}% busy ({need:.0f}% or more)"
@@ -816,17 +869,25 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
     b, v = e.bound, e.verdict
     if v in ("cpu_main", "cpu_all", "mixed", "unknown") and _fps_reaches_display(e):
         return Cleared("cpu_limit", _sentence(f"at {e.avg_fps:.0f} FPS the game already reaches the "
-                                              f"{e.refresh:.0f} Hz display"), firm=True)
+                                              f"{e.refresh:.0f} Hz display"))    # _cpu_not_ruled_out holds none here
     r, busiest = _fin(b.get("r")), _fin(b.get("busiest_thread"))
-    if v in ("cpu_main", "cpu_all") and r is not None:
+    rounds = next((n for n in b.get("notes") or [] if isinstance(n, str) and n.startswith("VSync rounds")), None)
+    held = b.get("vsync") is True and v == "cpu_main" and rounds is not None   # A6: VSync holds it at refresh / k
+    if v in ("cpu_main", "cpu_all") and r is not None and r > fa.R_CPU:    # VSync at k refreshes: up to (k - 1) / k
+        c.neutral("frame_timing", f"the GPU was busy {100 * r:.0f}% of each frame (r = {r:.2f})", r, "", fa.R_CPU)
+    elif v in ("cpu_main", "cpu_all") and r is not None:
         c.support("frame_timing", W_STEADY, f"the GPU was busy only {100 * r:.0f}% of each frame "
                                             f"(r = {r:.2f}, {fa.R_CPU:.2f} or less): it waits on the CPU",
                   r, "", fa.R_CPU)
+    elif v in ("cpu_main", "cpu_all"):   # the bound named the CPU without the GPU's split: never counted against it
+        c.neutral("frame_timing", "the GPU's busy time was not measured, so its share of each frame is unknown")
     elif v == "mixed":
         c.support("frame_timing", W_STATIC, f"borderline: the GPU was busy {100 * (r or 0):.0f}% of each frame")
     elif v == "unknown":
         notes = [n for n in b.get("notes") or [] if isinstance(n, str)]
         c.lack("frame_timing", W_STEADY, "the frame-rate limit could not be judged" + (f": {notes[0]}" if notes else ""))
+    elif _engine_fallback(e):          # the 3D engine named the GPU: frame timing never ruled the CPU out
+        c.neutral("frame_timing", _engine_fallback(e))
     else:
         c.against("frame_timing", W_STEADY, f"the frame rate is limited by {labels.BOUND.get(v, v)}")
     if busiest is not None:
@@ -834,6 +895,8 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
             c.support("cpu_threads", W_STEADY, f"the game's busiest thread ran {100 * busiest:.0f}% of a CPU "
                                                f"({100 * fa.THREAD_BOUND:.0f}% or more, 1 s windows)",
                       100 * busiest, "%", 100 * fa.THREAD_BOUND)
+        elif held:         # a thread VSync holds waits for the refresh: its own time a frame is the measure
+            c.support("cpu_threads", W_STEADY, rounds)
         elif v == "cpu_all":
             c.support("cpu_threads", W_STEADY, "the game kept every CPU core busy")
         else:          # in LC 3.2's grey zone (0.6 to 0.85) this still never clears the cause: _holds_open
@@ -850,10 +913,23 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
              _advice("Close CPU-heavy programs while playing"),
              _advice("Frame generation can smooth the picture", "Only if the base frame rate is already acceptable: "
                                                                 "the delay stays tied to the base rate.")]
-    title = ("One game thread maxes out the CPU" if one else "The CPU is maxed out on every core") + \
+    unsaturated = held and busiest is not None and busiest < fa.THREAD_BOUND
+    if unsaturated:          # VSync rounds the thread's rate down to refresh / k: without it the thread runs faster
+        fixes = [_advice("Turn on VRR (G-SYNC or FreeSync) if the screen supports it",
+                         "The thread's frames then show as soon as they are ready, not at the next refresh."),
+                 _advice("Or turn VSync off", "That trades the rounding down for tearing.")] + fixes
+    title = ("One game thread is too slow for every refresh" if unsaturated else
+             "One game thread maxes out the CPU" if one else "The CPU is maxed out on every core") + \
             (f" at {fps:.0f} FPS" if fps else "")
-    return _with_headroom(e, c.conclude(title, "The GPU sits idle for most of each frame while the game's CPU work "
-                                               "finishes, so the CPU decides the frame rate.", fixes))
+    summary = ("With VSync on, a frame that misses a refresh waits for the next one, and the game's busiest thread "
+               "needs more than a refresh's time for each frame, so the CPU decides the frame rate." if unsaturated
+               else "The GPU sits idle for most of each frame while the game's CPU work finishes, so the CPU decides "
+                    "the frame rate." if r is not None and r < 0.5
+               else "The game's CPU work takes longer than the GPU's each frame, so the CPU decides the frame rate."
+               if r is not None           # the GPU's time unmeasured: no comparison with it
+               else ("The game's busiest thread runs at its limit" if one else "The game keeps every CPU core busy")
+               + ", so the CPU decides the frame rate.")
+    return _with_headroom(e, c.conclude(title, summary, fixes))
 
 
 # ------------------------------------------------------------------------------------ headroom ---
@@ -980,6 +1056,9 @@ def _headroom(e: _Env) -> tuple[str | None, bool]:
         cool = _cooler(e, speedup) if faster and speedup else None
         return _sentence(text + (f"; {cool}" if cool else "")), True
     if limit == "cpu":
+        u = _fin(e.bound.get("busiest_thread"))
+        if nxt is None and e.verdict == "cpu_main" and u is not None and u < fa.THREAD_BOUND:
+            return None, False       # VSync's verdict on an unsaturated thread (A6): no edge to size a faster CPU
         if gpu is None and nxt is None:
             why = ("other programs shared the game's GPU, so its own time per frame says too little"
                    if _contention(e) is not None else "the GPU's own time per frame was not measured")
@@ -1206,7 +1285,12 @@ def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
         if hot >= target:
             c.support("gpu_telemetry", W_STEADY, f"the GPU reached {hot:.0f} °C, at or above its {target:.0f} °C "
                                                  "target temperature", hot, "°C", target)
-    _event_link(c, "gpu_throttle", "gpu_telemetry", "the GPU slowing down")
+    # LC 4.2: a steady cause, whose event-linked variant (FPS sagging with the clock) can only support it. LC 5.2's
+    # "contradicts" is for stutter causes: a GPU held down nearly all the time cannot rise at a stutter, and a real
+    # recording held down 97 % of the time read as contradicted and dropped out of the summary. A lift that does not
+    # support adds nothing, not even a line: "0 of 12 coincided" under "held down 97 %" read as never slowed.
+    if _dict(e.causes.get("gpu_throttle")).get("label") == "supports":
+        _event_link(c, "gpu_throttle", "gpu_telemetry", "the GPU slowing down")
     _quiet_power_hint(c, gpu=True)
     fixes = [_advice("Give the laptop more air", "Raise its back, keep the vents clear and clean."),
              _advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
@@ -1306,10 +1390,20 @@ def _cpu_throttle(cap: Capture, ctx: dict) -> Any:
             (" with no speed drop" if dropped is False else "")
         c.against("cpu_limits", W_STEADY, "Windows reported no power or thermal limit" + speed)
     busiest = _fin(e.bound.get("busiest_thread"))
-    if busiest is not None and busiest < CPU_BUSY_FOR_THROTTLE:
-        c.against("cpu_threads", W_STEADY, f"the game's busiest thread used only {100 * busiest:.0f}% of a CPU, so CPU "
-                                           "speed is not what holds it back", 100 * busiest, "%", 100 * CPU_BUSY_FOR_THROTTLE)
-    _event_link(c, "cpu_throttle", "cpu_limits", "the CPU slowing down")
+    upper = any(isinstance(n, str) and fa.THREAD_UPPER_NOTE in n for n in e.bound.get("notes") or [])
+    # A6: under the CPU verdicts (every core busy is CPU-bound too, LC 4.5) and an older capture's figure past VSync's
+    # work edge, a thread's share of a CPU is not what decides whether CPU speed matters
+    if busiest is not None and busiest < CPU_BUSY_FOR_THROTTLE and e.verdict not in ("cpu_main", "cpu_all") \
+            and not upper:
+        open_ = _cpu_not_ruled_out(e) is not None       # never "not what holds it back" beside "not ruled out"
+        used = math.floor(100 * busiest)                 # under the 70 %: never shown as 70 (learnings)
+        c.against("cpu_threads", W_STEADY,
+                  (f"the game's busiest thread used {used}% of a CPU, under the "
+                   f"{100 * CPU_BUSY_FOR_THROTTLE:.0f}% at which CPU speed starts to matter") if open_ else
+                  (f"the game's busiest thread used only {used}% of a CPU, so CPU speed is not what holds it back"),
+                  100 * busiest, "%", 100 * CPU_BUSY_FOR_THROTTLE)
+    if _dict(e.causes.get("cpu_throttle")).get("label") == "supports":       # LC 4.5: as gpu_throttle
+        _event_link(c, "cpu_throttle", "cpu_limits", "the CPU slowing down")
     _quiet_power_hint(c, gpu=False)
     fixes = [_advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
              _advice("Give the laptop more air", "Raise its back, keep the vents clear and clean."),
@@ -1419,7 +1513,9 @@ def _ram_pressure(cap: Capture, ctx: dict) -> Any:
                                           f"{COMMIT_WARN_PCT:.0f}%)", commit_top, "%", COMMIT_WARN_PCT)
     if not (avail or faults or commit):
         c.lack("memory", W_STEADY, "no memory counters were read")
-    _event_link(c, "memory_paging", "memory", "Windows paging memory to disk")
+    # attribution counts paging only while RAM is nearly full, so with RAM free it can never coincide with the events:
+    # its "contradicts" then says nothing about the page file (a real recording's 99.9 % commit charge cancelled out)
+    _event_link(c, "memory_paging", "memory", "Windows paging memory to disk", contradict=not roomy)
     if roomy:
         fixes = [_advice("Let Windows manage the page file size, or make it larger",
                          "Search the Start menu for \"View advanced system settings\", then Performance: Settings > "
@@ -1654,9 +1750,77 @@ def _refresh_rate(cap: Capture, ctx: dict) -> Any:
                       "the game makes.", fixes)
 
 
+def _refresh_holds(e: _Env) -> tuple[Counter, int] | None:
+    """(the displayed frames counted by how many whole refreshes each stayed on screen, the shorter of the two
+    adjacent counts that hold the most of them); None when the refresh rate or the displayed frame times are unknown.
+    Worked out once per capture: vsync_judder and uneven_pacing read the same holds."""
+    if "holds" not in e.memo:
+        hz = e.refresh
+        _, _, d, source = fa.display_series(e.fr)
+        if not hz or source != "display" or not d:
+            e.memo["holds"] = None
+        else:
+            period = 1000.0 / hz
+            held = Counter(max(1, round(x / period)) for x in d)
+            e.memo["holds"] = (held, max(sorted(held), key=lambda n: held[n] + held[n + 1]))
+    return e.memo["holds"]
+
+
+def _judder(e: _Env) -> tuple[Counter, int, int, int, float, float] | None:
+    """(holds, lo, the usual hold, the other count of its pair, the share of frames past the usual hold on the other
+    count's side (0 unless at least half of them sit at that count, or, around a usual hold of two or more, it holds
+    JUDDER_SHARE of all frames itself), the share held for any count but the usual one);
+    None without holds. The first is the judder the
+    rule names: frames alternating between the usual count and the one beside it. The second, both sides, only keeps
+    "no judder" from a game whose holds slip both ways (5 % one fewer and 5 % one more around a cap at refresh / 2):
+    neither the alternation the texts name nor steady."""
+    holds = _refresh_holds(e)
+    if holds is None:
+        return None
+    held, lo = holds
+    usual, other = (lo, lo + 1) if held[lo] >= held[lo + 1] else (lo + 1, lo)
+    n = sum(held.values())
+    side = sum(v for h, v in held.items() if (h > usual if other > usual else h < usual))   # k = 1: held 2+
+    # the pair named only where its other count holds at least half of that side, or (two refreshes or more) is
+    # judder on its own: frames past it are another stretch, and a lone frame there names no alternation
+    alternates = 2 * held[other] >= side or (usual >= 2 and held[other] >= JUDDER_SHARE * n)
+    share = side / n if alternates else 0.0
+    spread = (n - held[usual]) / n
+    return held, lo, usual, other, share, spread
+
+
+def _vsync_shaped(e: _Env) -> bool:
+    """The screen's refresh shapes what it shows: on a fixed refresh that quantises the display (no cap, VRR not seen,
+    QUANTISED_PCT on whole periods), VSYNC_SHARE of the displayed frames stay up for one of two adjacent whole numbers
+    of refreshes, most often two or more. Swings in the game's own presents then reach the screen as VSync judder; a
+    game whose frame times swing further spreads its holds over three counts or more (LagLab's pace mode: 64 % on
+    two). Where most frames take one refresh, uneven presents stay uneven_pacing's case, as before. One predicate for
+    vsync_judder and uneven_pacing, true only where vsync_judder then finds judder, so a pacing lag it silences is
+    never one that rule calls fine nor leaves unchecked (a shared GPU, A7)."""
+    j, q = _judder(e), _fin(e.bound.get("quantised_pct"))
+    if j is None or e.verdict == "capped" or q is None or q < QUANTISED_PCT or e.bound.get("vrr") is True:
+        return False
+    if e.verdict == "unknown" and _contention(e) is not None:     # vsync_judder's A7 branch: it decides nothing
+        return False
+    held, lo, usual, _, share, _ = j
+    return (usual >= 2 and (held[lo] + held[lo + 1]) / sum(held.values()) >= fa.VSYNC_SHARE
+            and share >= JUDDER_SHARE)
+
+
+def _count_word(n: int) -> str:
+    return ("one", "two", "three", "four", "five", "six", "seven", "eight", "nine")[n - 1] if 1 <= n <= 9 else str(n)
+
+
+def _part_of_refresh(n: int) -> str:
+    return {2: "half the refresh", 3: "a third of the refresh", 4: "a quarter of the refresh"}.get(
+        n, f"the refresh divided by {n}")
+
+
 def _vsync_judder(cap: Capture, ctx: dict) -> Any:
-    """LC 2.4, 4.14: VSync on a fixed refresh with the game a little slower than it, so frames alternate between
-    one and two refreshes. Frames dropped because the game runs faster than the screen are dropped_frames'."""
+    """LC 2.4, 4.14: VSync on a fixed refresh with the game between two whole divisors of it, so frames alternate
+    between k and k + 1 refreshes: one and two above half the refresh rate, two and three just below it (58 FPS on
+    144 Hz). A steady lock at one count (72 FPS on 144 Hz) is no judder. Frames dropped because the game runs faster
+    than the screen are dropped_frames'."""
     c = _Case(cap, ctx, "vsync_judder")
     e = c.env
     if e.verdict == "capped":
@@ -1676,37 +1840,45 @@ def _vsync_judder(cap: Capture, ctx: dict) -> Any:
                                             "VRR or VSync off", q, "%", QUANTISED_PCT)
         return c.conclude()
     period = 1000.0 / hz
-    _, _, d, source = fa.display_series(e.fr)
-    if source != "display" or not d:
+    j = _judder(e)
+    if j is None:
         c.lack("frame_timing", W_STEADY, "the displayed frame times were not measured")
         return c.conclude()
-    k = [max(1, round(x / period)) for x in d]
-    if st.median(k) != 1:
-        return None                        # under half the refresh rate: that is low FPS, not judder
-    if _uneven_presents(e):
+    held, lo, usual, other, share, spread = j
+    if _uneven_presents(e) and not _vsync_shaped(e):
         return None                        # the game's own uneven frames: the uneven_pacing rule's case
-    share = sum(1 for x in k if x >= 2) / len(k)
+    n = sum(held.values())
+    held_for = (f"{other} or more refreshes" if other > usual else
+                f"{other} or fewer refreshes" if other > 1 else "one refresh")
+    most = "most" if 2 * held[usual] > n else f"{100 * held[usual] / n:.0f}%"
     ids = [ev.id for ev in e.events if ev.kind == "pacing"]
     shared = _contention(e)
     if share >= JUDDER_SHARE and shared is not None and e.verdict == "unknown":
         # A7: a shared GPU hid whether a cap (frame_cap's case, above), VSync or the GPU itself sets the cadence
-        return Unchecked("vsync_judder", f"{100 * share:.0f}% of frames stayed on screen for 2 or more refreshes, but "
+        return Unchecked("vsync_judder", f"{100 * share:.0f}% of frames stayed on screen for {held_for}, but "
                                          f"other programs kept the game's GPU {shared:.0f}% busy, so whether VSync, a "
                                          "frame-rate cap or the shared GPU sets that cadence could not be told")
     if share >= JUDDER_SHARE:
-        c.support("frame_timing", W_STEADY, f"{100 * share:.0f}% of frames stayed on screen for 2 or more refreshes "
-                                            f"({2 * period:.1f} ms) while most took one ({period:.1f} ms): judder "
+        c.support("frame_timing", W_STEADY, f"{100 * share:.0f}% of frames stayed on screen for {held_for} "
+                                            f"({other * period:.1f} ms) while {most} took {_count_word(usual)} "
+                                            f"({usual * period:.1f} ms): judder "
                                             f"({100 * JUDDER_SHARE:.0f}% or more)", 100 * share, "%", 100 * JUDDER_SHARE)
+    elif spread >= JUDDER_SHARE:
+        return None                        # holds slip both ways: not the alternation named here, and not steady
     else:
-        c.against("frame_timing", W_STEADY, f"{100 * (1 - share):.0f}% of frames were shown for one refresh: no judder",
+        c.against("frame_timing", W_STEADY, f"{100 * held[usual] / n:.0f}% of frames were shown for "
+                                            f"{_count_word(usual)} refresh{'es' if usual > 1 else ''}: no judder",
                   100 * share, "%", 100 * JUDDER_SHARE)
     fixes = [_advice("Turn on VRR (G-SYNC or FreeSync) if the screen supports it"),
-             _advice(f"Or cap the frame rate at {hz / 2:.0f} FPS (half the refresh)", "Every frame then stays on "
-                                                                                 "screen for the same time."),
+             _advice(f"Or cap the frame rate at {hz / (lo + 1):.0f} FPS ({_part_of_refresh(lo + 1)})",
+                     "Every frame then stays on screen for the same time."),
              _advice("Or turn VSync off", "That trades judder for tearing.")]
-    return c.conclude("VSync judder: frames alternate between one and two refreshes",
-                      "The game runs a little slower than the screen refreshes, so with VSync some frames stay up "
-                      "twice as long as others, which looks jerky.", fixes, ids)
+    why = ("The game runs a little slower than the screen refreshes, so with VSync some frames stay up twice as long "
+           "as others, which looks jerky." if usual == 1 else
+           f"The game runs between {hz / (lo + 1):.0f} and {hz / lo:.0f} FPS on a {hz:.0f} Hz screen, so with VSync "
+           "some frames stay up one refresh longer than others, which looks jerky.")
+    return c.conclude(f"VSync judder: frames alternate between {_count_word(lo)} and {_count_word(lo + 1)} refreshes",
+                      why, fixes, ids)
 
 
 @dataclass
@@ -1833,12 +2005,13 @@ def _uneven_pacing(cap: Capture, ctx: dict) -> Any:
     if share is None:
         c.lack("frame_timing", W_STEADY, "the capture's length is unknown")
         return c.conclude()
+    if share >= UNEVEN_SHARE and _vsync_shaped(e):
+        return None                        # holds on two adjacent refresh counts: vsync_judder's case, never fine
     if share >= UNEVEN_SHARE:
         swing = max(_fin(ev.detail.get("present_swing_pct")) or 0.0 for ev in uneven)
-        sev = st.median([float(ev.severity) for ev in uneven])
         # A1: one frame-time pattern is a steady metric past its threshold, never a direct readout (LC 5.1)
         c.support("frame_timing", W_STEADY, f"the game's own frame times swung by {ev_mod.PACING_SWING_MS:.0f} ms or "
-                                            f"more on up to {swing:.0f}% of frames (median swing {sev:.1f} ms), over "
+                                            f"more on up to {swing:.0f}% of frames, over "
                                             f"{100 * share:.0f}% of {e.part} ({100 * UNEVEN_SHARE:.0f}% or more)",
                   100 * share, "%", 100 * UNEVEN_SHARE)
     else:
@@ -1859,7 +2032,7 @@ def _frame_cap(cap: Capture, ctx: dict) -> Any:
     c = _Case(cap, ctx, "frame_cap")
     e = c.env
     v, b = e.verdict, e.bound
-    if v == "unknown":
+    if v == "unknown" or _gpu_by_engine(e):        # the engine's "gpu": the cadence was never judged
         notes = [n for n in b.get("notes") or [] if isinstance(n, str)]
         c.lack("frame_timing", W_STEADY, "the frame-rate limit could not be judged" + (f": {notes[0]}" if notes else ""))
         return c.conclude()
@@ -2014,7 +2187,7 @@ def _not_focused(cap: Capture, ctx: dict) -> Any:
         return Unchecked("not_focused", f"the game was the active window {100 * (1 - share):.0f}% of the time, but "
                                         f"{a:.0f} of the {n:.0f} {what} came while another window was in front: too "
                                         f"few to tell (at least {MIN_EVENTS} needed)")
-    if share >= UNFOCUSED_SHARE and e.verdict in GATES["cpu"]:
+    if share >= UNFOCUSED_SHARE and (e.verdict in GATES["cpu"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e)):
         c.support("foreground", W_STEADY, f"the game was not the active window for {100 * share:.0f}% of {e.part} "
                                           f"({100 * UNFOCUSED_SHARE:.0f}% or more)", 100 * share, "%", 100 * UNFOCUSED_SHARE)
     elif share >= UNFOCUSED_SHARE:
@@ -2056,6 +2229,8 @@ def _event_link(c: _Case, cause: str, family: str, phrase: str, contradict: bool
     share = 100 * a / n
     if label == "supports":
         w = _fin(entry.get("weight")) or W_STEADY
+        if entry.get("cap") == "possible":   # DESIGN: at most possible. Its lift weight stays 1 so it ranks last when
+            w = W_STEADY * (HALF if half else 1.0)    # explaining away, but 1 point alone could never reach possible
         c.support(family, w, f"{a:.0f} of {n:.0f} {what} coincided with {phrase}"
                   + (f" (lift {lift:.1f})" if lift is not None else ""), share, "%", 100 * attribute.LIFT_MIN_SHARE)
         return True

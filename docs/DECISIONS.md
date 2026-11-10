@@ -96,15 +96,44 @@
 - **Keep the app's view showing while its window can still be seen** during a recording (a second monitor), if
   Windows' own occlusion state can tell "in sight" from "covered by the game"; today an inactive window hides its view
   and draws one still line. Revisit hook: `AppWindow.shown` (DECISIONS 2026-11-09, M4's end).
+- **Lead the headline with whichever finding explains the most lag time**, not the best-ranked claimer. Revisit hook:
+  `diagnose._lead` (DECISIONS 2026-11-09, the audit's eleven bugs).
+- **Save the game's top threads per tick** and judge the busiest thread (and so the headroom's `u`) on each one's
+  median, unbiased even for work that hops between threads. Since the audit's fixes the bound, and the headroom
+  with it, reads the lead thread, so several busy threads no longer read as one busier one. Revisit hook:
+  `sysmon.ProcessRates.update`, `frames.busiest_column` (same entry).
+- **Take uneven presents for VSync's judder where most frames hold one refresh too**. Revisit hook: `usual >= 2` in
+  `rules._vsync_shaped` (same entry).
+- **Name judder from Windows' composition for what it is**: a game presenting with VSync off (SyncInterval 0) or
+  unknown (-1, OpenGL) in a composed window still has its frames held on whole refreshes, and `vsync_judder` calls
+  it VSync judder and offers "turn VSync off". Revisit hook: the title, summary and fixes of `rules._vsync_judder`,
+  with `frames._sync_off` and the present mode (same entry).
+- **Tell a game's own one-refresh swings from VSync's**: LagLab's pace mode at 6 / 14 ms (not its 4 / 20 default)
+  holds its frames one or two refreshes, 53 % on two, and reads as VSync judder. Revisit hook: `rules._vsync_shaped`,
+  with the presents' own swing share beside the displayed one (same entry).
+- **The page file with the RAM size unknown**: when GlobalMemoryStatusEx fails, `ram_pressure` cannot tell the page
+  file from RAM, and the paging lift test still counts against a commit charge at the limit. Revisit hook: the
+  `roomy` branch of `rules._ram_pressure` with attribution's own RAM floor (same entry).
+- **Judder that slips both ways**: frames held one refresh fewer and one more around the usual hold (8 % and 6 %
+  around a usual three, LagLab's gpu mode at a 20.8 ms frame) are neither judder nor fine today, so they reach no
+  lag type or headline. Counting both sides from 10 % would flag a cap at refresh / 2 that slips 5 % each way
+  (LagLab's smooth control at a 72 FPS cap); where the line sits is a feel number for the owner. Revisit hook: the
+  `spread` branch of `rules._vsync_judder` (same entry).
+- **VSync judder judged per stretch, not over the whole capture**: a long menu at the refresh rate or a heavy stretch
+  bends the whole capture's hold counts, so judder in one part can go unnamed. Revisit hook: `rules._refresh_holds`
+  and `rules._judder` (same entry).
+- **An event's side under the 3D engine's verdict**: a stutter whose frames had no GPU timing takes the engine's
+  "gpu" for its own side, leaving the CPU causes out; reading it as unknown instead made an idle-thread stutter on
+  a pegged GPU "the game waited on itself". Revisit hook: `VERDICT_SIDE` in `attribute._side` and `_residual`
+  (same entry).
+- **The game's own packets as the arbiter of ICMP loss** on its server, which would cover rate-limited servers.
+  Revisit hook: `diagnose._ignored_losses` with `rules._packet_loss` (same entry).
 - **An unattended settings sweep** (B of 2026-11-09's sweep fork): the assisted sweep plus key presses lag-doctor sends
   to the game's menus and a close request between runs, so nobody has to sit through each run. Needs frame timing
   without a UAC prompt per launch (Performance Log Users, E2 in `docs/INSTALLER-PLAN.md`, or Stage 4's capture
   service), a game known to take injected keys (`docs/research/settings-sweeps.md`, section 8, question 4), and the
   owner lifting the rule that nothing types on the player's PC. Revisit hook: the per-run steps of the sweep runner,
   where the player now starts the game, presses the start key and quits.
-- **The headroom from each game thread on its own**, instead of the busiest thread at each sample: the sampler would
-  keep per-thread CPU over 1 s windows, so several busy threads no longer read as one busier one and the CPU's
-  ceiling stops leaning low. Revisit hook: `ProcessRates.update` in `capture/sysmon.py` and `frames.headroom`'s `u`.
 - **Each program's network bytes in time bins**, so a measured part can sum its own instead of losing them: today
   `talkers` and `game_wire_bytes` are totals over the whole recording, and a part sets them to None, so
   `bandwidth_hog` can name a program only for a whole recording. Revisit hook: `top_talkers` and `game_wire` in
@@ -113,6 +142,73 @@
   today the inventory is read once, before the recording starts, and the start key may come 20 minutes later; a mode
   switched during the startup would be described for the part. Revisit hook: the start key's press in
   `capture/session.py` (M5's second half) and `_collect_inventory` (DECISIONS 2026-11-09, the measured part).
+
+---
+
+## 2026-11-09: How the bottleneck audit's eleven analysis bugs were fixed
+
+The audit of "which part of a PC limits a game" found eleven analysis bugs; the owner said "Fix all eleven". Where a
+fix forked, the implementing session chose; the owner has not weighed in.
+- **The headline's lead (chosen)**: the steady limit leads when the steady low-FPS time is longer than the events the
+  best-ranked claimer claims, and that claimer stays as a side note (the limit, when the claimer leads), so a mixed
+  lag names the cause of each part.
+  - **Keep the claimer, document that the headline and Top cause can differ**: rejected; a GPU-bound recording's
+    headline blamed background programs for 4 FPS drops.
+  - **Lead with whichever finding explains the most lag time**: deferred, worth trying; it reorders stutter headlines
+    LC 5.4 ranks by confidence. Revisit hook: `diagnose._lead`.
+- **Throttling's lift test only supports (chosen)**, and adds no line when it does not: LC 5.2's "contradicts" is for
+  stutter causes.
+  - **Count "contradicts" only where the throttle could have risen**: rejected; throttling's claim is the steady
+    frame rate, which no stutter speaks to.
+- **The busiest thread, judged on the thread busiest over the previous second (chosen)**: a new sampler column,
+  `game_lead_thread_pct`, read at the thread's share in the current tick; unbiased for steady loads.
+  - **Each thread's 1 s mean, then the maximum**: rejected; four threads at 80 % still read 85 %.
+  - **The top threads saved per tick, each one's median, then the maximum**: deferred, worth trying; unbiased even for
+    work that hops between threads every second, at the cost of the capture format. Revisit hook:
+    `sysmon.ProcessRates.update` and `frames.busiest_column`.
+- **Under VSync at k >= 2, a thread whose own CPU time a frame passes k - 1 periods is the limit (chosen)**, in place of
+  MsCPUBusy, which counts waits outside Present().
+  - **Only a saturated thread**: rejected; a thread VSync holds waits for the refresh and is never saturated.
+- **No CPU-side rule clears a CPU that `cpu_limit` holds open (chosen)**: one predicate (`rules._cpu_not_ruled_out`)
+  for `cpu_limit`, the cpu gate, `not_focused`, `cpu_throttle`'s thread line and the headline's low-FPS words. It
+  holds LC 3.2's grey zone, a
+  saturated thread under VSync at one refresh a frame and an older capture past VSync's work edge, and never at the
+  display's rate, where a CPU limit costs nothing the player sees.
+  - **Hold only the grey zone**: rejected; under VSync at one refresh a frame a 90 % thread was then ruled out where
+    an 84 % one was held.
+  - **Leave out `cpu_throttle`'s thread line wherever the CPU is held open**: rejected; LC 4.5's silence at 0.69 needs
+    its weight, so the line stays, worded as under the 70 % at which CPU speed starts to matter.
+- **VSync judder at any k (chosen)**, judged on the two adjacent hold counts with the most frames, with uneven
+  presents taken for VSync's when 90 % of the holds sit on those two counts (`VSYNC_SHARE`; a real recording: 92 %)
+  and judder is found there, never under a shared GPU's unknown verdict. Holds that slip both ways are neither judder
+  nor fine: the texts name one side, and a cap at refresh / 2 slipping 5 % each way is no judder to fix. A pair is
+  named only when at least half of the frames on its side sit on its other count, or, around a usual hold of two or
+  more, when that count holds 10 % of all frames itself.
+  - **Any frame at that count**: rejected; one frame in a thousand at three brought back "two and three" and a 48 FPS
+    cap for frames held four refreshes around a usual two.
+  - **Half of that side only**: rejected; a light stretch alternating two and three (26 % of all frames at three)
+    went silent beside a heavier one held four and five.
+  - **Judder judged per stretch**: deferred, worth trying; around a usual one refresh the pair still needs half its
+    side, since a long menu at the refresh rate looks the same over the whole capture. Revisit hook:
+    `rules._refresh_holds`.
+  - **Count frames off the usual hold on both sides as judder**: rejected; the title, the summary's range and the cap
+    then named the wrong side (10 % held one refresh around a usual three read "three and four").
+  - **Only up to two and three refreshes**: rejected; an invented bound. LagLab's gpu and cpu modes (3 or 4 refreshes)
+    now read low FPS and uneven pacing. LagLab presents with VSync off, Windows' composition holding its frames on
+    whole refreshes, so the finding's VSync wording and its "turn VSync off" advice are wrong there: a backlog item.
+  - **The same exemption where most frames take one refresh**: deferred, worth trying. Revisit hook: `usual >= 2` in
+    `rules._vsync_shaped`.
+- **A game server or router that never answered a ping has no loss events (chosen)**; the internet anchor keeps them
+  (an outage).
+  - **The game's own packets as the arbiter of ICMP loss**: deferred, worth trying; it would also cover rate-limited
+    servers and one that answered, then stopped while its packets kept arriving. Revisit hook:
+    `diagnose._ignored_losses` with `rules._packet_loss`'s list of far losses.
+- **Disk reads capped at what the physical disks read, and none without their counter (chosen)**.
+  - **The game's reads, worded "from disk or from memory"**: rejected; the title and the SSD advice would still claim
+    disk loading.
+
+Revisit hooks: as named above, and `tests/redfirst/analysis_rules.json`, `diagnose.json`, `analysis_frames.json` and
+`sysmon.json`, which pin each choice.
 
 ---
 

@@ -238,6 +238,16 @@ def test_the_busiest_thread_is_judged_over_1_s_means_not_single_ticks():
     assert b["busiest_thread"] == pytest.approx(0.85) and b["verdict"] == "cpu_main"
 
 
+def test_the_bound_reads_the_lead_thread_where_the_capture_has_it():
+    # Each tick's busiest thread reads 93.75 % when four threads take turns at 75 %: the bound judges the lead thread
+    # (75 %), which is no CPU limit; a capture from before that column is judged on the per-tick column, as before
+    jitter = [20.0 * (1.1 if i % 2 else 0.9) for i in range(1200)]
+    b = bound_of(jitter, 10.0, thread=93.75, game_lead_thread_pct=75.0)
+    assert b["busiest_thread"] == pytest.approx(0.75) and b["verdict"] == "waiting"
+    old = bound_of(jitter, 10.0, thread=93.75)
+    assert old["busiest_thread"] == pytest.approx(0.9375) and old["verdict"] == "cpu_main"
+
+
 def _wobble(n, base, rel):
     """Frame times cycling base*(1-rel), base, base*(1+rel): median base, MAD base*rel, so the robust
     CoV is 1.4826 * rel in any window (a two-value cycle would give MAD 0 in odd-sized windows)."""
@@ -338,6 +348,18 @@ def test_bound_needs_300_steady_frames_and_10_s():
     assert bound_of(34.0, 33.0, n=300)["verdict"] == "gpu"
     assert bound_of(16.6, 16.0, n=602)["verdict"] == "unknown"     # 602 frames but 9.99 s
     assert bound_of(16.6, 16.0, n=603)["verdict"] == "gpu"         # 10.01 s
+
+
+def test_a_stretch_too_short_for_a_verdict_names_what_fell_short_and_never_rounds_up_to_the_need():
+    # A 10 s measured part sums 9.96-9.99 s of steady frames, and the note the GPU-limit evidence quotes read "only 602
+    # steady frames over 10.0 s; a verdict needs 300 frames and 10 s": plenty of frames, and the time shown as the need
+    assert bound_of(16.6, 16.0, n=602)["notes"][0] == "only 9.9 s of steady frames; a verdict needs 10 s"   # 9.99 s
+    assert bound_of(34.0, 33.0, n=299)["notes"][0] == "only 299 steady frames; a verdict needs 300"       # 10.2 s
+    assert bound_of(20.0, 19.0, n=100)["notes"][0] == ("only 100 steady frames over 2.0 s; a verdict needs 300 "
+                                                      "frames and 10 s")
+    assert fa._too_short_note(115, 2.3).startswith("only 115 steady frames over 2.3 s;")    # a whole tenth stays itself
+    assert fa._too_short_note(1, 0.02).startswith("only 1 steady frame over 0.0 s;")
+    assert fa._too_short_note(602, 10.0 - 1e-11) == "only 9.9 s of steady frames; a verdict needs 10 s"
 
 
 def test_event_frames_are_not_steady():
@@ -452,12 +474,15 @@ def test_vsync_needs_the_game_to_ask_for_it():
     assert verdict(1, 1)["verdict"] != "vsync"
 
 
-def vsync_halved(gpu_ms=None, thread=40.0, cpu_busy=None, cpu_wait=0.0, runtime="Other", k=2, hz=60.0, n=900):
-    """A game held by VSync at k refreshes a frame (FT = k P, every frame shown k periods)."""
+def vsync_halved(gpu_ms=None, thread=40.0, cpu_busy=None, cpu_wait=0.0, runtime="Other", k=2, hz=60.0, n=900,
+                 lead=None):
+    """A game held by VSync at k refreshes a frame (FT = k P, every frame shown k periods); `lead`: the capture's
+    lead-thread column, which a capture saved before it lacks."""
     p = 1000.0 / hz
     fr = make_frames([k * p] * n, gpu_ms=gpu_ms, display_ms=k * p, displayed=1, cpu_busy=cpu_busy, runtime=runtime)
     fr[F.CPU_WAIT_MS] = [cpu_wait] * n
-    cap = make_cap(fr, make_system(2.0 + n * k * p / 1000.0, game_top_thread_pct=thread), hz=hz)
+    cols = {"game_top_thread_pct": thread} | ({"game_lead_thread_pct": lead} if lead is not None else {})
+    cap = make_cap(fr, make_system(2.0 + n * k * p / 1000.0, **cols), hz=hz)
     return fa.bound(cap, fa.main_chain(cap), [])
 
 
@@ -472,13 +497,34 @@ def test_vsync_at_two_refreshes_names_the_gpu_that_needs_more_than_one():
 
 def test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one():
     assert vsync_halved(gpu_ms=5.0, thread=90.0)["verdict"] == "cpu_main"      # the busiest thread saturated
-    assert vsync_halved(gpu_ms=5.0, thread=80.0)["verdict"] == "vsync"
-    # MsCPUBusy says it where MsCPUWait is measured (DXGI): 20 ms of work > 16.7 ms, 13.3 ms waiting in Present
+
+
+def test_vsync_at_two_refreshes_names_a_thread_that_needs_more_than_one_period():
+    # A thread VSync holds at 30 FPS waits for the refresh the rest of each frame, so it is never saturated: at 60 %
+    # of a CPU it works 20.0 ms a 33.3 ms frame, more than one 16.7 ms period, and that is what holds the game at 30.
+    # Once read from MsCPUBusy (which counts waits too); with that branch gone the game read "VSync".
+    b = vsync_halved(gpu_ms=5.0, thread=60.0, lead=60.0)
+    assert b["verdict"] == "cpu_main"
+    assert any(x.endswith("of a CPU, 20.0 ms a frame, more than 1 refresh period(s) (16.7 ms)") for x in b["notes"])
+    assert vsync_halved(gpu_ms=5.0, thread=51.0, lead=51.0)["verdict"] == "cpu_main"     # 17.0 ms
+    assert vsync_halved(gpu_ms=5.0, thread=49.0, lead=49.0)["verdict"] == "vsync"        # 16.3 ms fits in one period
+    assert vsync_halved(gpu_ms=5.0, thread=80.0, lead=80.0, k=1)["verdict"] == "vsync"   # k = 1: the refresh rate
+    # a capture saved before the lead column: each tick's busiest thread is an upper bound (four threads at 40 %
+    # read 53 %), so it counts only when saturated, as before, and past the edge it says it could not tell
+    old = vsync_halved(gpu_ms=5.0, thread=60.0)
+    assert old["verdict"] == "vsync" and any(fa.THREAD_UPPER_NOTE in x for x in old["notes"])
+    assert not any(fa.THREAD_UPPER_NOTE in x for x in vsync_halved(gpu_ms=5.0, thread=45.0)["notes"])  # 15.0 ms
+
+
+def test_cpu_busy_never_calls_a_game_vsync_holds_cpu_bound():
+    # PM 3.2: MsCPUBusy runs from the last Present() return to the next call, so a game waiting outside Present()
+    # (a waitable swap chain, a limiter's sleep) reads busy for most of the frame, even on DXGI where MsCPUWait is
+    # measured. 20 ms of it once called a game VSync held at 30 FPS, its threads at 40 %, CPU-bound.
     p2 = 2 * 1000.0 / 60.0
-    assert vsync_halved(gpu_ms=5.0, cpu_busy=20.0, cpu_wait=p2 - 20.0, runtime="DXGI")["verdict"] == "cpu_main"
-    assert vsync_halved(gpu_ms=5.0, cpu_busy=16.0, cpu_wait=p2 - 16.0, runtime="DXGI")["verdict"] == "vsync"
-    # runtime "Other" (OpenGL, Vulkan) puts the wait into MsCPUBusy, so it says nothing (PM 8.2)
-    assert vsync_halved(gpu_ms=5.0, cpu_busy=20.0, cpu_wait=p2 - 20.0, runtime="Other")["verdict"] == "vsync"
+    for runtime in ("DXGI", "Other"):
+        b = vsync_halved(gpu_ms=5.0, cpu_busy=20.0, cpu_wait=p2 - 20.0, runtime=runtime)
+        assert b["verdict"] == "vsync" and b["vsync"] is True, runtime
+        assert not any("CPU works" in x for x in b["notes"])
 
 
 def test_hags_comes_from_the_games_own_adapter_first():
@@ -642,10 +688,10 @@ def test_headroom_says_nothing_of_a_next_limit_it_cannot_see():
     # a capped game has ceilings but no limiting part to speed up
     h = bound_of(_wobble(1500, 8.333, 0.0290 / 1.4826), 0.5, thread=30.0, hz=144.003)["headroom"]
     assert h["limit"] is None and h["gpu_fps"] == pytest.approx(2000.0) and h["speedup"] is None
-    # VSync at 30 on 60 Hz named the CPU from MsCPUBusy (20 ms of its own work, DXGI), but its busiest thread ran 40 %:
-    # thread time cannot say how much faster it must get, so it says nothing
-    p2 = 2 * 1000.0 / 60.0
-    b = vsync_halved(gpu_ms=5.0, cpu_busy=20.0, cpu_wait=p2 - 20.0, runtime="DXGI")
+    # VSync at 30 on 60 Hz names the CPU from its busiest thread's own work a frame (60 % of a CPU, 20.0 ms, more than
+    # one 16.7 ms period), though the thread is not saturated: the saturation edge cannot say how much faster it must
+    # get, so it says nothing (this case once came from MsCPUBusy, which no longer names the CPU)
+    b = vsync_halved(gpu_ms=5.0, thread=60.0, lead=60.0)
     assert b["verdict"] == "cpu_main" and b["headroom"]["limit"] == "cpu"
     assert b["headroom"]["next"] is None and b["headroom"]["speedup"] is None
 

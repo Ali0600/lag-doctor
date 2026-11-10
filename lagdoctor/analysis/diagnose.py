@@ -216,11 +216,18 @@ def lag_time(evs: list[LagEvent], findings: list[Finding], stats: dict[str, Any]
     floor = max(NET_MIN_S, NET_MIN_SHARE * dur) if dur is not None and dur > 0 else NET_MIN_S
     if len(net) < NET_MIN_EVENTS and out["network"] < floor:
         out["network"] = 0.0
+    out["low_fps"] += steady_low_s(b, frames_ok)
+    return out
+
+
+def steady_low_s(b: dict[str, Any], frames_ok: bool) -> float:
+    """The steady seconds that count as low FPS (A6): the steady time of a game whose steady frame rate is under 80 %
+    of its target, whatever holds it there; none for a cap or a VSync lock, which is its own target."""
     fps, hz = rules._fin(b.get("steady_fps")), rules._fin(b.get("refresh_hz"))
     target = hz if hz is not None and hz > 0 else LOW_FPS_NO_REFRESH
     if frames_ok and b.get("verdict") not in OWN_TARGET and fps is not None and fps < LOW_FPS_FRAC * target:
-        out["low_fps"] += max(0.0, rules._fin(b.get("steady_s")) or 0.0)
-    return out
+        return max(0.0, rules._fin(b.get("steady_s")) or 0.0)
+    return 0.0
 
 
 def pick_lag_type(lag: dict[str, float], frames_ok: bool) -> str:
@@ -272,15 +279,16 @@ def _severe(stats: dict[str, Any], evs: list[LagEvent]) -> str | None:
 
 
 def _lag_part(kind: str, stats: dict[str, Any], evs: list[LagEvent], lag: dict[str, float],
-              duration: float | None, bound: dict[str, Any] | None, part: str) -> str:
+              duration: float | None, bound: dict[str, Any] | None, part: str, *, cpu_open: bool) -> str:
     """One lag type's words for the headline. `part` names what was analysed (rules._Env.part): every caller passes
-    it, so a measured part's share is never called the whole capture's."""
+    it, so a measured part's share is never called the whole capture's. `cpu_open`: rules._cpu_not_ruled_out, the
+    predicate the lists hold the CPU open by, so the headline never says otherwise."""
     if kind == "low_fps":
         fps, hz = rules._fin(stats.get("avg_fps")), rules._fin(stats.get("refresh_hz"))
         inner = [f"{fps:.0f} FPS average" + (f" on a {hz:.0f} Hz screen" if hz else "")] if fps is not None else []
         if stats.get("bound") == "waiting":      # A6, LC 3.2: the game waits on something else
             busiest = rules._fin((bound or {}).get("busiest_thread"))
-            if busiest is not None and busiest >= rules.THREAD_WAITING:    # LC 3.2's grey zone: the CPU stays open
+            if cpu_open and busiest is not None:          # LC 3.2's grey zone, not at the display's rate
                 inner.append(f"the GPU is not at its limit and the CPU may be close to it, its busiest thread at "
                              f"{100 * busiest:.0f}%")
             else:
@@ -315,19 +323,33 @@ def _lag_part(kind: str, stats: dict[str, Any], evs: list[LagEvent], lag: dict[s
 LAG_EVENT_KINDS = {"stutter": ("stutter",), "low_fps": ("fps_drop",), "pacing": ("pacing",),
                    "network": ("net_spike", "net_loss", "net_gap")}
 ALSO = {"high": "likely:", "medium": "possible:", "low": "worth checking:"}
+# A6: the findings that explain a steady frame rate the bound verdict's part holds: that part at its limit, or what
+# slows it. Every "fps" rule is in one of these or in NOT_STEADY_LEADS (a test holds the split whole).
+STEADY_LEADS = {"gpu": ("gpu_limit", "gpu_throttle", "wrong_gpu", "hybrid_copy", "gpu_contention"),
+                "cpu_main": ("cpu_limit", "cpu_throttle"), "cpu_all": ("cpu_limit", "cpu_throttle")}
+NOT_STEADY_LEADS = ("not_focused",)      # a frame-rate cause, but only while the game is in the background
 
 
-def _lead(kinds: list[str], findings: list[Finding], evs: list[LagEvent]) -> tuple[Finding | None, bool]:
-    """(the finding the headline names, whether it explains the lag): first the best-ranked finding that claims
-    the lag's own events, then one of the lag's category, else the top finding as a side note."""
+def _lead(kinds: list[str], findings: list[Finding], evs: list[LagEvent], verdict: str = "unknown",
+          steady_s: float = 0.0) -> tuple[Finding | None, bool, Finding | None]:
+    """(the finding the headline names, whether it explains the lag, a side note): the best-ranked finding that claims
+    the lag's own events, unless the steady low-FPS time (`steady_s`) is longer than the time of the events it claims:
+    then the best confident finding of the part the bound verdict names, which holds that steady rate (A6). With both,
+    the other is the side note, so a mixed lag names the cause of each part and the claimer the headline used to name
+    stays in it; never one finding twice. Then one of the lag's category, else the top finding as a side note."""
     ids = {e.id for e in evs for k in kinds if e.kind in LAG_EVENT_KINDS.get(k, ())}
-    for f in findings:
-        if ids & set(f.event_ids):
-            return f, True
+    claimer = next((f for f in findings if ids & set(f.event_ids)), None)
+    holder = (next((f for f in findings if f.cause in STEADY_LEADS.get(verdict, ()) and f.confidence in CONFIDENT), None)
+              if steady_s > 0 else None)
+    claimed = set(claimer.event_ids) & ids if claimer is not None else set()
+    if holder is not None and steady_s > _union([(e.t_start, e.t_end) for e in evs if e.id in claimed]):
+        return holder, True, claimer if claimer is not holder else None
+    if claimer is not None:
+        return claimer, True, holder if holder is not claimer else None
     for f in findings:
         if LAG_OF_CATEGORY.get(f.category) in kinds:
-            return f, True
-    return (findings[0], False) if findings else (None, False)
+            return f, True, None
+    return (findings[0], False, None) if findings else (None, False, None)
 
 
 def headline(lag_type: str, findings: list[Finding], stats: dict[str, Any], evs: list[LagEvent],
@@ -341,13 +363,15 @@ def headline(lag_type: str, findings: list[Finding], stats: dict[str, Any], evs:
         kinds = [k for _, k in sorted(((v, k) for k, v in lag.items() if v > 0), reverse=True)][:2]
     else:
         kinds = []
-    lead, explains = _lead(kinds, findings, evs)
+    steady = steady_low_s(env.bound, env.frames_measured) if "low_fps" in kinds else 0.0
+    lead, explains, also = _lead(kinds, findings, evs, env.verdict, steady)
     severe = _severe(stats, evs) if env.frames_measured and "stutter" not in kinds else None
+    cpu_open = rules._cpu_not_ruled_out(env) is not None
     if lag_type == "mixed":
-        parts = [_lag_part(k, stats, evs, lag, env.duration, env.bound, env.part) for k in kinds]
+        parts = [_lag_part(k, stats, evs, lag, env.duration, env.bound, env.part, cpu_open=cpu_open) for k in kinds]
         text = "Several problems: " + " and ".join([parts[0]] + [p[0].lower() + p[1:] for p in parts[1:]])
     elif kinds:
-        text = _lag_part(kinds[0], stats, evs, lag, env.duration, env.bound, env.part)
+        text = _lag_part(kinds[0], stats, evs, lag, env.duration, env.bound, env.part, cpu_open=cpu_open)
     elif lag_type == "unknown":       # a short reason: its path and command are in the Not measured list, once
         text = (f"Frame timing was not measured ({labels.short_reason(env.why('frames'))}), so stutter and frame rate "
                 "could not be checked")
@@ -370,6 +394,8 @@ def headline(lag_type: str, findings: list[Finding], stats: dict[str, Any], evs:
             text += f", {CONNECT.get(lead.confidence, 'worth checking:')} {phrase}"
         else:
             text += f"; {ALSO.get(lead.confidence, 'worth checking:')} {phrase}"
+    if also is not None:                         # what claims the events, beside the limit that took the lead
+        text += f"; {ALSO.get(also.confidence, 'worth checking:')} {labels.cause_text(also.cause)}"
     if severe:
         text += f"; also {severe}"
     if lag_type == "network" and not env.frames_measured:

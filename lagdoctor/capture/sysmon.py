@@ -7,6 +7,9 @@ threads, and writes one row of S columns plus an `others` row (the top 8 other p
 - Process and thread CPU are the delta since the previous tick (about 250 ms), kept sharp so a short hitch
   shows in the tick that holds it. Thread times move in 15.625 ms steps (WT 3.5), so one tick is only good
   to about 6 % of a core: the analysis judges saturation over 1 s or more. Each thread is clamped to 100.
+  game_top_thread_pct is each tick's busiest thread (for lag events); game_lead_thread_pct is this tick's share of
+  the thread that had the most CPU over the previous second (for the bound), since the busiest of several threads
+  about as busy reads high in any one tick.
 - Identity is (pid, create_time) and (tid, create_time): PIDs and TIDs are reused.
 - The game_* columns are the target process only; its child processes count as others.
 - GPU Engine values stay unclamped per sample, are averaged over the trailing 1 s, and only the average is
@@ -21,7 +24,7 @@ import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from lagdoctor.capture import target as tgt
 from lagdoctor.capture.base import Collector
@@ -287,12 +290,27 @@ def gpu_memory_columns(adapter_ded: dict, proc_ded: dict, proc_shared: dict, gam
 
 # ---------------------------------------------------------------- processes ---
 
-GAME_COLUMNS = (S.GAME_CPU_PCT, S.GAME_TOP_THREAD_PCT, S.GAME_TOP_THREAD_ID, S.GAME_THREADS, S.GAME_WS_MB,
+GAME_COLUMNS = (S.GAME_CPU_PCT, S.GAME_TOP_THREAD_PCT, S.GAME_TOP_THREAD_ID, S.GAME_LEAD_THREAD_PCT, S.GAME_THREADS,
+                S.GAME_WS_MB,
                 S.GAME_PRIVATE_MB, S.GAME_PAGE_FAULTS_PS, S.GAME_IO_READ_BPS, S.GAME_IO_WRITE_BPS, S.GAME_IO_OPS_PS)
 
 
 def _cpu_total(p: ProcInfo) -> int:
     return p.user_100ns + p.kernel_100ns
+
+
+def _lead_thread(hist: Iterable[dict[tuple[int, int], int]],
+                 deltas: dict[tuple[int, int], int]) -> tuple[int, int] | None:
+    """The thread with the most CPU over the previous intervals (`hist`, up to 1 s) that is still running, chosen
+    before this interval is read, so its share here is a fair reading of it. Each interval's busiest thread is not:
+    of several threads about as busy it is whichever the 15.625 ms clock ticks favoured (WT 3.5), so four threads at
+    75 % read 86 %. Ties go to the lowest (tid, create time)."""
+    total: dict[tuple[int, int], int] = {}
+    for d in hist:
+        for k, v in d.items():
+            total[k] = total.get(k, 0) + v
+    alive = [k for k in total if k in deltas]
+    return min(alive, key=lambda k: (-total[k], k)) if alive else None
 
 
 class ProcessRates:
@@ -305,12 +323,14 @@ class ProcessRates:
         self._prev: dict[int, ProcInfo] | None = None
         self._prev_ns = 0
         self._prev_threads: dict[tuple[int, int], int] | None = None
+        self._thread_hist: deque[dict[tuple[int, int], int]] = deque(maxlen=WINDOW_SAMPLES)   # recent deltas
 
     def update(self, procs: dict[int, ProcInfo] | None, t_ns: int) -> tuple[Values, list[tuple] | None]:
         """(game_* columns, [(pid, name, cpu_pct, io_bps), ...] for every other process, or None)."""
         cols: Values = dict.fromkeys(GAME_COLUMNS)
         if procs is None:
             self._prev, self._prev_threads = None, None
+            self._thread_hist.clear()
             return cols, None
         prev, prev_ns, prev_threads = self._prev, self._prev_ns, self._prev_threads
         game = procs.get(self.pid)
@@ -319,6 +339,8 @@ class ProcessRates:
         threads_now = None
         if game is not None and game.threads is not None:
             threads_now = {(t.tid, t.create_time): t.user_100ns + t.kernel_100ns for t in game.threads}
+        if threads_now is None:
+            self._thread_hist.clear()
         self._prev, self._prev_ns, self._prev_threads = procs, t_ns, threads_now
 
         if game is not None:
@@ -348,15 +370,21 @@ class ProcessRates:
             if threads_now is not None and (old is None or prev_threads is not None):
                 base = prev_threads or {}
                 top = None
+                deltas: dict[tuple[int, int], int] = {}
                 for key, total in threads_now.items():
                     delta = total - base.get(key, 0)
                     if delta < 0:
                         continue
+                    deltas[key] = delta
                     pct = min(100.0, 100.0 * delta / dt_100ns)     # one thread cannot exceed one CPU
                     if top is None or pct > top[1]:
                         top = (key[0], pct)
                 if top is not None:
                     cols[S.GAME_TOP_THREAD_ID], cols[S.GAME_TOP_THREAD_PCT] = top
+                lead = _lead_thread(self._thread_hist, deltas)
+                if lead is not None:
+                    cols[S.GAME_LEAD_THREAD_PCT] = min(100.0, 100.0 * deltas[lead] / dt_100ns)
+                self._thread_hist.append(deltas)
 
         others = []
         for p in procs.values():

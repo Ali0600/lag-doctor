@@ -694,7 +694,11 @@ about 16 ms and 5–6 % of one CPU per tick here):
 - One `Snapshotter.snapshot(threads_for={game pid})` per tick. Per-process and per-thread CPU are the delta
   over the last tick (about 250 ms), stored sharp so a 150 ms hitch shows in the tick that holds it; clamp each
   thread to 100; key by (id, CreateTime). Thread times move in 15.625 ms steps (WT 3.5), so the analysis judges
-  saturation over ≥ 1 s (the mean of 4 ticks), never from one tick.
+  saturation over ≥ 1 s (the mean of 4 ticks), never from one tick. `game_top_thread_pct` is each tick's busiest
+  thread, kept for lag events; of several threads about as busy it is whichever the clock ticks favoured, so four
+  at 75 % read 86 %. `game_lead_thread_pct` is the share this tick of the thread that had the most CPU over the
+  ticks of the previous second, picked before this tick is read (`sysmon._lead_thread`), and the bound judges it
+  (`frames.busiest_column`); a capture saved before it has only the per-tick column, an upper bound.
 - The `game_*` columns are the target process only. Every other process, the game's own child processes
   included, counts as "other" (a child that burns CPU is still competing with the game's render thread).
 - GPU Engine: keep per-sample values unclamped, average over the trailing 1 s, clamp only the average
@@ -1031,12 +1035,19 @@ span                                       dict            {from_s, to_s, record
 `bound()` judges steady stretches only (frames outside stutters and FPS drops, at least 10 s and 300 app
 frames), in order: VSync (displayed intervals quantised on whole refresh periods, SyncInterval not 0 and
 AllowsTearing not 1; with k = round(FT/P) >= 2 the hardware is tested against one period: GPU busy past
-(k-1)·P gives `gpu`, a saturated busiest thread `cpu_main`, with a note that VSync rounds the rate down to
-refresh/k), a frame cap (a regular present cadence: robust CoV, (IQR/1.349)/median per 5 s window, under 3 %,
-away from k·P, with r < 0.75 and an unsaturated thread), `gpu` (r >= 0.90, or r above 0.75 with FT − G <= 1 ms;
-G minus 0.5 ms when HAGS is on for the game's adapter), `cpu_main` (r <= 0.75 and busiest thread >= 0.85 of a
-CPU over >= 1 s), `cpu_all`, `waiting`, else `mixed`. Without frames, a 3D engine at >= 95 % (median of 1 s
-windows) gives a probable `gpu`; otherwise the verdict stays `unknown` and `gpu_probable` (`frames.probable_gpu`)
+(k-1)·P gives `gpu`; a busiest thread that is saturated, or whose own CPU time a frame (its share times FT, on the
+lead thread only: a capture saved before it says this could not be told when its per-tick figure passes)
+passes (k-1)·P, gives `cpu_main`, since a thread VSync holds waits for the refresh and is never saturated; never
+`MsCPUBusy`, which counts the game's waits outside `Present()` (PM 3.2); with a note that VSync rounds the rate
+down to refresh/k), a frame cap (a regular present cadence: robust CoV, (IQR/1.349)/median per 5 s window, under
+3 %, away from k·P, with r < 0.75 and an unsaturated thread), `gpu` (r >= 0.90, or r above 0.75 with FT − G <= 1 ms;
+G minus 0.5 ms when HAGS is on for the game's adapter), `cpu_main` (r <= 0.75 and busiest thread, the lead
+thread where recorded, >= 0.85 of a
+CPU over >= 1 s), `cpu_all`, `waiting`, else `mixed`. A stretch too short for a verdict says what fell short, its
+seconds rounded down (`frames._too_short_note`: a 10 s measured part sums 9.96–9.99 s of steady frames, which read
+"10.0 s" beside the 10 s a verdict needs). Without enough steady frames (or none), a 3D engine at >= 95 %
+(median of 1 s windows) gives a probable `gpu` with no r, which the rules never count as frame-timing evidence
+(`rules._engine_fallback`); otherwise the verdict stays `unknown` and `gpu_probable` (`frames.probable_gpu`)
 reads the same fallback per second: the 1 s windows with the engine at >= 95 %, and the marks whose span touches
 one. It `holds` with >= 10 % of the windows and >= 10 s, or at half the marks or more; the first real capture's
 median was 71 % while the GPU was pegged in its last minutes and at every mark. While other programs keep the
@@ -1061,10 +1072,10 @@ frames (none with fewer than 300 of them or 10 s), and so roughly how much a fas
   range running from `steady_fps` to its ceiling (its ceiling alone under a VSync lock, which rounds `steady_fps`
   down). A GPU busy no longer than the HAGS margin (G = 0) has no ceiling to give but is never the next limit: the
   screen is. None where the other side was not measured, or where a CPU verdict did not come from saturated threads
-  (VSync's `MsCPUBusy` branch).
+  (VSync's verdict on a thread whose own time a frame passes k - 1 refreshes, and the rules then give no sentence).
 
 The rules say it in one sentence (`rules.headroom_text`), second in the evidence of `gpu_limit` and `cpu_limit`
-after their frame-timing line, with the screen's even steps after it (`rules._steps_text`) and `labels.HEADROOM_NOTE`
+after their first supporting line, with the screen's even steps after it (`rules._steps_text`) and `labels.HEADROOM_NOTE`
 last: "At these settings the CPU could feed about 66-78 FPS, so a GPU about 1.1-1.3x faster would make the CPU the
 limit". A GPU that heat alone held down at least 30 % of the time, whose top clock is at least the speedup's high
 end above its held clock, adds "heat held this one at 37% of its top clock, so keeping it cooler may be enough" (the
@@ -1072,12 +1083,16 @@ frame rate rises less than the clock, hence "may"). The lines are added after sc
 score. Where the other side was not measured the sentence says the gain is unknown, and why, without the note.
 
 What the estimate cannot see, said by the note ("a rough estimate for this game at these settings ... not a
-benchmark") and here: the busiest-thread figure is the mean of per-tick maxima over all the game's threads
-(`capture/sysmon.py`), so several busy threads read as one busier one, more so as thread time moves in 15.625 ms
-steps (WT 3.5, about 6 % of a 250 ms tick), whose noise a per-tick maximum picks up; and work a game does per second
-rather than per frame does not grow with the frame rate. All three make the CPU's figure lean low, as does a game
-that spins while it waits for the GPU. It holds for this game at these settings only: the real check is a second
-recording with lighter graphics, read in Compare.
+benchmark") and here: the busiest-thread figure is the lead thread's (`game_lead_thread_pct`, picked on the second
+before each tick), but in a capture saved before that column it is the mean of per-tick maxima over all the
+game's threads, so several busy threads read as one busier one, more so as thread time moves in 15.625 ms steps
+(WT 3.5, about 6 % of a 250 ms tick); and work a game does per second rather than per frame does not grow with the
+frame rate. Both make the CPU's figure lean low, as does a game that spins while it waits for the GPU; work that
+moves from one thread to another every few seconds can read low, since the lead keeps reading the old thread for
+about half a second after each move and the verdict takes the median of 1 s windows (for a thread at 87.5 %, by
+where the moves fall against the sampler's ticks and those windows: 44–66 % moving every 1.5 s, 33–88 % every
+2 s, 66–88 % every 3 or 4 s, the truth every 5 s or less often), which leans it high. It holds for this game at these
+settings only: the real check is a second recording with lighter graphics, read in Compare.
 
 For an NVIDIA GPU held down by heat or power, `gpu_throttle` says how deep, second in its evidence: its median
 clock against its top clock and the power it drew against its limit (`attribute.nvidia_depth` over the readings
@@ -1107,6 +1122,9 @@ is not idle.
   least 2 of 3 consecutive probe rounds, or one reply ≥ 100 ms over the minimum (NE 2.2's levels are 15 s window
   figures; one slow ICMP reply is often just deprioritised, NE 2.4).
 - **net_loss**: at least 2 lost probes and ≥ 1 % in a 15 s window; "burst" = at least 2 consecutive lost rounds.
+  A game server or router that answered none of its probes has no loss events (`events.SILENT_UNMEASURED`): many
+  ignore pings (NE 2.4, NE 7 row 9), so its loss was not measured; one that answered and then stopped, within the
+  part analysed, still has them, and so does an internet anchor that never answered (an outage).
 - **net_gap**: each `net_flows` gap ≥ 100 ms, spanning `[t, t + ms]` (t = the last packet before the silence),
   with its kind.
 - **mark**: each hotkey press; its window is `[mark − 3 s, mark + 0.5 s]` (LC 2.4); `detail` `{frame_events
@@ -1134,7 +1152,7 @@ cause at all when the sampler did not measure that moment.
 | side | signal that moved | cause id |
 |---|---|---|
 | CPU | game's busiest thread up | `game_cpu_spike` (the game's own work: loading, shader compiles, logic) |
-| CPU | game I/O reads up (disk busy or read latency up) | `asset_streaming` |
+| CPU | game reads up that the disks' own reads match (the game's counter also counts what the file cache served from memory, so each tick is capped at `disk_read_bps`), or disk busy or read latency up | `asset_streaming` |
 | CPU | hard page faults up, RAM low | `memory_paging` |
 | CPU | another process's CPU up (or machine-wide CPU beyond the game) | `background_cpu` |
 | any | another process's disk or GPU up | `background_disk` / `background_gpu` |
@@ -1158,12 +1176,17 @@ Each rule is a pure function `fn(cap, ctx) -> Finding | Cleared | Unchecked | No
 evidence either way, silent), declares the sources it `needs`, its family and category, and for side-specific
 causes a `gate` on the bound verdict (`gpu`: "gpu" or "mixed"; `cpu`: "cpu_main", "cpu_all", "mixed" or
 "unknown", LC 5.1; `gpu_event`: anything but CPU-bound). A gate failure turns a Finding into Cleared (a definite
-verdict) or Unchecked (verdict unknown), except that without frame timing a `gpu`-gated Finding passes where
+verdict) or Unchecked (verdict unknown, or for a CPU-side cause the 3D engine's "gpu" with no r,
+`rules._gpu_by_engine`, which says nothing of the CPU), except that without frame timing a `gpu`-gated Finding
+passes where
 `bound.gpu_probable` holds, with that reading as its last evidence line (`rules._probable_gpu`); when it does not
 hold, the Unchecked reason gives the seconds and marks. A rule whose source was not measured is `unchecked` with
 the reason.
 Some clearances are held open (`_holds_open`): `gpu_limit` while other programs share the game's GPU, and
-`cpu_limit` while the busiest thread is in LC 3.2's grey zone (0.6–0.85 of a CPU); and pacing causes stay open
+`cpu_limit` while the busiest thread is in LC 3.2's grey zone (0.6–0.85 of a CPU), is saturated under VSync at one
+refresh a frame (which never tests the thread), or, in an older capture, passed VSync's work edge on its per-tick
+figure, never at the display's rate (`rules._cpu_not_ruled_out`, which the cpu gate, `not_focused` and
+`cpu_throttle`'s thread line read too, so no CPU-side rule clears what `cpu_limit` holds open); and pacing causes stay open
 while pacing events that no finding claims cover ≥ 10 % of the capture.
 
 The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_contention`, `gpu_throttle`,
@@ -1187,16 +1210,23 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   a GPU idle in every reading is unchecked. The power-cap share counts a reading only where its reasons named
   `sw_power_cap` (`attribute.power_cap_readings`: on driver 591.86 the counter read 42 % over 169 readings that
   never named it), and the text says so when the counter moved without the reason. Its second line says how deep:
-  the median clock against the top clock and the power against its limit (Headroom).
+  the median clock against the top clock and the power against its limit (Headroom). Its lift test only supports
+  (LC 4.2's event-linked variant): throttling is a steady cause, and a GPU held down 97 % of the time cannot rise
+  at a stutter, so LC 5.2's "contradicts", meant for stutter causes, never counts against it. The same holds for
+  `cpu_throttle`.
 - `gpu_limit`, `cpu_limit`: the headroom sentence second, the screen's even steps third, its note last (Headroom).
 - `cpu_throttle`: `% Performance Limit` under 100 on >= 25 % of samples, a passive thermal limit, a drop of
   >= 20 % from the first two minutes, or the level itself: a median `% Processor Performance` at or below 80 % of
   the base clock (a quiet mode set outside Windows held it at 70 % with no limit reported). A CPU held only by the
   level is titled "ran below its base clock", and "checked and fine" says the limit and the level measured, never
-  "full speed".
+  "full speed". Its line on a busiest thread under 70 % of a CPU (LC 4.5), the share rounded down, is left out
+  under the CPU verdicts (every core busy is CPU-bound too) and an older capture past VSync's work edge, and where
+  the CPU is not ruled out it says the thread is under the 70 % at which CPU speed starts to matter, never that CPU
+  speed is not what holds it back.
 - `ram_pressure`: free RAM under 10 % (5 % or 64 MB critical), hard faults, the commit charge over 80 / 90 %. A
   commit charge over 90 % while RAM stays free is the page file running short: free RAM is no evidence against it
-  then (nor hard faults for it, being file reads), and the finding is titled for the page file.
+  then (nor hard faults for it, being file reads, nor the paging lift test, which counts paging only while RAM is
+  nearly full), and the finding is titled for the page file.
 - `power_plan`: battery, battery saver, a low power mode, or a plan whose own settings (`inventory.power.plan`)
   cap the CPU below 100 % (the performance cores too, on a hybrid CPU), turn boost off, or cool passively while
   plugged in; by its name (whole words of `QUIET_PLAN_WORDS`) only in a capture without those settings. And the
@@ -1210,7 +1240,21 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   `labels.plan_has_power_mode`), whatever slider position the capture holds.
 - `vsync_judder` (real VSync judder) and `dropped_frames` (the game presents faster than a fixed refresh and
   frames are dropped, `rules._dropped_judder`); `uneven_pacing`: pacing events with uneven *presents*
-  (present_swing_pct > 10 %) covering ≥ 10 % of the capture, weighed as a steady metric.
+  (present_swing_pct > 10 %) covering ≥ 10 % of the capture, weighed as a steady metric, its text never quoting the
+  events' severity (the displayed frames' swing) as the game's own. `vsync_judder` judges the displayed holds in
+  whole refreshes (`rules._refresh_holds`) between the two adjacent counts k and k + 1 that hold the most frames, at
+  any k: one and two above half the refresh rate, two and three for 58 FPS on 144 Hz; frames on the pair's side of
+  the usual hold ≥ 10 % is judder when at least half of them sit on the pair's other count, or, around a usual hold
+  of two or more, that count holds 10 % of all frames itself (a light stretch alternating two and three beside a
+  heavier one held four and five); frames held four refreshes around a usual two, with a lone frame at three, are
+  no alternation of two and three. One count only (72 FPS on 144 Hz) is no judder, holds that slip both ways (10 %
+  or more off the usual hold, under 10 % on the pair's side) are neither and the rule stays silent, and the cap it
+  offers is refresh / (k + 1). Uneven presents leave it to `uneven_pacing`, except where the screen shapes them
+  (`rules._vsync_shaped`, one predicate for both: no cap, frames quantised, VRR not seen, the usual hold 2 or more,
+  ≥ 90 % of the holds on the two counts, judder found, and no shared GPU under an unknown verdict, where
+  vsync_judder is unchecked): then they are VSync's judder and `uneven_pacing` stays silent. A real recording held 92 % of its
+  frames on two or three refreshes and was reported as the game's own uneven pacing. Where most frames take one
+  refresh, uneven presents stay `uneven_pacing`'s, as before.
 - `game_dvr`: background recording known off concludes against; unknown is advice only (no auto-fix);
   `game_dvr_off` is offered only when background recording is known on.
 - `not_focused`: the share of the capture behind another window (>= 10 %, on the CPU side), or the lift test.
@@ -1256,7 +1300,15 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   and without "local" gaps, named only with ≥ 2 events or ≥ max(1 s, 1 % of the capture).
 - Lag type = the category with the most lag time, "mixed" when the runner-up has ≥ 50 % of it, "none" with
   frames measured and no lag, "unknown" without frames.
-- The headline names the top finding in one sentence; whenever the lag type is not stutter and there were
+- The headline names, in one sentence, the finding that best explains the lag (`diagnose._lead`): the best-ranked
+  finding that claims the lag's own events, unless the steady low-FPS time is longer than the time of the events it
+  claims; then the best confident finding of the part the bound verdict names leads (`diagnose.STEADY_LEADS`: for
+  `gpu` the GPU's limit, throttling, wrong GPU, copy between GPUs or another program on it; for `cpu_main` and
+  `cpu_all` the CPU's limit or throttling). With both, the other is a side note ("; likely: ..."), so a mixed lag
+  names the cause of each part, and the claimer the headline used to name is never dropped from it. Without either,
+  one of the
+  lag's category, else the top finding as a side note. A GPU-bound recording at 58 FPS on a 144 Hz screen once led
+  with the background programs that claimed 4 of its 6 FPS drops. Whenever the lag type is not stutter and there were
   severe hitches or freezes it adds "; also N severe hitches, worst X ms"; an open gap reads "the game server
   stopped answering at 13m 22s"; with zero hitches it says "no hitches ≥ 50 ms in N frames (at most 3/N at 95 %)";
   without frames it opens "Frame timing was not measured (why), so stutter and frame rate could not be checked",

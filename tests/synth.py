@@ -328,6 +328,7 @@ def _system(game: _Game, k: Knobs, rng: random.Random) -> tuple[dict[str, list],
     ready = [f.gpu_ready for f in game.frames]
     b = SeriesBuilder(S.ALL)
     rows_others = []
+    hist: list[tuple[float, float]] = []      # the alive intervals' (main, aux) %: the lead pick looks back 1 s
     for i, s in enumerate(ticks):
         prev = ticks[i - 1] if i else None
         row: dict[str, Any] = {"t": s}
@@ -342,6 +343,11 @@ def _system(game: _Game, k: Knobs, rng: random.Random) -> tuple[dict[str, list],
             game_cpu = m_pct + a_pct
             row.update(game_top_thread_pct=min(100.0, max(m_pct, a_pct)),
                        game_top_thread_id=MAIN_TID if m_pct >= a_pct else AUX_TID, game_cpu_pct=game_cpu)
+            if hist:              # sysmon._lead_thread: picked on the last 1 s, read this tick; ties to the lower tid
+                back = hist[-4:]
+                lead = m_pct if sum(h[0] for h in back) >= sum(h[1] for h in back) else a_pct
+                row.update(game_lead_thread_pct=min(100.0, lead))
+            hist.append((m_pct, a_pct))
             got = sum(_overlap(prev, s, r0, r1) / (r1 - r0) * n for r0, r1, n in game.reads if r1 > r0)
             in_io = sum(_overlap(prev, s, r0, r1) for r0, r1, _ in game.reads) / dt
             noise = 4096.0 * rng.choice([0, 0, 0, 1])
@@ -352,6 +358,7 @@ def _system(game: _Game, k: Knobs, rng: random.Random) -> tuple[dict[str, list],
                        disk_read_ms=rng.uniform(0.08, 0.2), disk_queue=1.0 if in_io > 0.5 else 0.0)
         else:
             game_cpu = 0.0
+            hist.clear()
         busy_gpu = 0.0
         for f in game.frames[bisect.bisect_right(ready, s - 1.0):]:
             if f.gpu_start >= s:

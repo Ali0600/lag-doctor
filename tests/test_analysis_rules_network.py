@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from lagdoctor.analysis import rules
-from lagdoctor.model import Finding, LagEvent, SourceStatus
+from lagdoctor.model import N, Finding, LagEvent, SourceStatus
 from tests import synth
 from tests.test_analysis_rules import is_finding, make, run
 
@@ -268,6 +268,23 @@ def test_steady_ping_loss_on_the_real_path_is_never_called_no_loss():
     f = next(f for f in d.findings if f.cause == "packet_loss")
     assert f.evidence[0].text == ("2.5% of pings to the internet were lost over the capture (6 of 240; 1% or more "
                                   "is bad).")
+
+
+def test_a_game_server_that_ignores_pings_is_neither_packet_loss_nor_network_lag():
+    # NE 2.4, NE 7 row 10: pinged from the 21st round, this server answered none of its 220 pings while its own packets
+    # kept arriving. It read "Network lag (1 packet-loss episode)", 30 of 30 pings lost within 15 s
+    from lagdoctor.analysis.diagnose import diagnose
+    cap = synth.laglab("smooth", duration_s=120.0, server_gaps=[(60.0, 50.0, "delay")]).cap   # a server flow ...
+    cap.net_flows["gaps"] = []                                                                 # ... without a gap
+    t = cap.network[N.T]
+    cap.net_flows["targets"]["server"] = "203.0.113.7"
+    cap.net_flows["probes"]["server"] = {"sent": len(t) - 20, "lost": len(t) - 20, "from_t": t[20]}
+    cap.net_flows["lost"]["server"] = list(t[20:])
+    assert len(t) - 20 == 220 and all(v is None for v in cap.network[N.SERVER_RTT_MS])     # never one reply
+    d = diagnose(cap)
+    assert [e for e in d.events if e.kind == "net_loss"] == [] and d.lag_type == "none", d.headline
+    assert d.cleared["packet_loss"] == "No ping to the internet was lost (0 of 240)."
+    assert "packet_loss" not in {f.cause for f in d.findings}
 
 
 def test_vpn_route():
