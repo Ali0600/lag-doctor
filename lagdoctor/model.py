@@ -101,8 +101,11 @@ class S:
     INTERRUPT_PCT = "interrupt_pct"            # busiest CPU
     # The game process (read without opening a handle to it)
     GAME_CPU_PCT = "game_cpu_pct"              # 100 = one full logical CPU
-    GAME_TOP_THREAD_PCT = "game_top_thread_pct"  # busiest game thread, 100 = one full logical CPU
+    GAME_TOP_THREAD_PCT = "game_top_thread_pct"  # busiest game thread this tick, 100 = one full logical CPU
     GAME_TOP_THREAD_ID = "game_top_thread_id"
+    # this tick's share of the thread that was busiest over the 1 s before it: what the bound judges, since the
+    # busiest of several equally busy threads in one tick reads high (15.625 ms accounting, WT 3.5)
+    GAME_LEAD_THREAD_PCT = "game_lead_thread_pct"
     GAME_THREADS = "game_threads"
     GAME_WS_MB = "game_ws_mb"                  # working set
     GAME_PRIVATE_MB = "game_private_mb"
@@ -128,8 +131,8 @@ class S:
     DISK_QUEUE = "disk_queue"
 
     ALL = (T, CPU_TOTAL_PCT, CPU_MAX_CORE_PCT, CPU_PERF_PCT, CPU_PERF_LIMIT_PCT, THERMAL_LIMIT_PCT, DPC_PCT,
-           INTERRUPT_PCT, GAME_CPU_PCT, GAME_TOP_THREAD_PCT, GAME_TOP_THREAD_ID, GAME_THREADS, GAME_WS_MB,
-           GAME_PRIVATE_MB, GAME_PAGE_FAULTS_PS, GAME_IO_READ_BPS, GAME_IO_WRITE_BPS, GAME_IO_OPS_PS,
+           INTERRUPT_PCT, GAME_CPU_PCT, GAME_TOP_THREAD_PCT, GAME_TOP_THREAD_ID, GAME_LEAD_THREAD_PCT, GAME_THREADS,
+           GAME_WS_MB, GAME_PRIVATE_MB, GAME_PAGE_FAULTS_PS, GAME_IO_READ_BPS, GAME_IO_WRITE_BPS, GAME_IO_OPS_PS,
            GAME_FOCUSED, GAME_GPU_PCT, GPU_PCT, GPU_OTHER_PCT, VRAM_USED_MB, GAME_VRAM_MB, GAME_SHARED_MB,
            RAM_AVAIL_MB, COMMIT_PCT, HARD_FAULTS_PS, DISK_BUSY_PCT, DISK_READ_BPS, DISK_READ_MS, DISK_QUEUE)
 

@@ -407,6 +407,14 @@ def _window_bins(cap: Capture, column: str, spans: list[tuple[float, float]]) ->
     return {b: math.fsum(xs) / len(xs) for b, xs in bins.items() if b not in tainted and len(xs) >= 3}
 
 
+def busiest_column(cap: Capture) -> str:
+    """The column the busiest thread is judged on: the lead thread's (S.GAME_LEAD_THREAD_PCT), where the capture has
+    it. The per-tick busiest thread reads high whenever several threads are about as busy (four at 75 % read 86 %,
+    over THREAD_BOUND), so a capture saved before the lead column gives only an upper bound."""
+    lead = _col(cap.system, S.GAME_LEAD_THREAD_PCT)
+    return S.GAME_LEAD_THREAD_PCT if any(_num(v) is not None for v in lead) else S.GAME_TOP_THREAD_PCT
+
+
 def _window_means(cap: Capture, column: str, spans: list[tuple[float, float]]) -> list[float]:
     """Means over 1 s windows of a 4 Hz system column, skipping any window that touches an event."""
     return list(_window_bins(cap, column, spans).values())
@@ -523,7 +531,7 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
                            "notes": notes, "gpu_busy_pct": None, "quantised_pct": None, "steady_frames": 0,
                            "steady_s": 0.0, "steady_fps": None}
 
-    means = _window_means(cap, S.GAME_TOP_THREAD_PCT, tick_spans)
+    means = _window_means(cap, busiest_column(cap), tick_spans)
     busiest = st.median(means) / 100.0 if means else None
     out["busiest_thread"] = busiest
     nlp = _logical_cpus(cap)
@@ -657,7 +665,8 @@ def _vsync_limit(fr: dict[str, list], rows: list[int], ft: float, hz: float, raw
                  busiest: float | None, notes: list[str]) -> tuple[str, str]:
     """(verdict, confidence) for a game locked to k refreshes a frame (A6). From k = 2, VSync rounds the rate
     down to refresh / k, so whatever needs more than k - 1 periods is what holds it there: the GPU when its
-    raw busy time does, the CPU when the busiest thread is saturated. Never MsCPUBusy: it counts the game's waits
+    raw busy time does, the CPU when the busiest thread is saturated or its own CPU time a frame does (a thread VSync
+    holds waits for the refresh the rest of the frame, so it is never saturated). Never MsCPUBusy: it counts the waits
     outside Present() (a waitable swap chain, a limiter's sleep), so a game VSync holds reads busy for the whole
     frame (PM 3.2). Only when neither does is the display itself the limit."""
     period = 1000.0 / hz
@@ -670,9 +679,13 @@ def _vsync_limit(fr: dict[str, list], rows: list[int], ft: float, hz: float, raw
         notes.append(f"{rounds}: the GPU needs {raw_gpu:.1f} ms a frame, more than {k - 1} refresh period(s) "
                      f"({one:.1f} ms)")
         return "gpu", ("medium" if raw_gpu / one - 1.0 < CONF_MARGIN else "high")
-    if busiest is not None and busiest >= THREAD_BOUND:
-        notes.append(f"{rounds}: the busiest game thread runs {100 * busiest:.0f}% of a CPU")
-        return "cpu_main", ("medium" if busiest - THREAD_BOUND < CONF_MARGIN else "high")
+    work = busiest * ft if busiest is not None else None      # the busiest thread's own CPU time a frame
+    if busiest is not None and (busiest >= THREAD_BOUND or work > one):
+        notes.append(f"{rounds}: the busiest game thread runs {100 * busiest:.0f}% of a CPU"
+                     + ("" if busiest >= THREAD_BOUND else f", {work:.1f} ms a frame, more than {k - 1} refresh "
+                                                     f"period(s) ({one:.1f} ms)"))
+        margin = busiest - THREAD_BOUND if busiest >= THREAD_BOUND else work / one - 1.0
+        return "cpu_main", ("medium" if margin < CONF_MARGIN else "high")
     return "vsync", "high"
 
 

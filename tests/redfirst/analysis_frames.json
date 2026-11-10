@@ -764,7 +764,7 @@
  {
   "name": "busiest thread ignored under VSync",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "    if busiest is not None and busiest >= THREAD_BOUND:",
+  "old": "    if busiest is not None and (busiest >= THREAD_BOUND or work > one):",
   "new": "    if False:",
   "tests": [
    "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
@@ -1920,6 +1920,33 @@
   "new": "\"the game read {v} from disk (normally {n})\"",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_reads_the_file_cache_served_are_never_reading_from_disk"
+  ]
+ },
+ {
+  "name": "the bound never reads the lead thread",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return S.GAME_LEAD_THREAD_PCT if any(_num(v) is not None for v in lead) else S.GAME_TOP_THREAD_PCT",
+  "new": "    return S.GAME_TOP_THREAD_PCT",
+  "tests": [
+   "tests/test_analysis_frames.py::test_the_bound_reads_the_lead_thread_where_the_capture_has_it"
+  ]
+ },
+ {
+  "name": "the bound reads an empty lead column on an old capture",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return S.GAME_LEAD_THREAD_PCT if any(_num(v) is not None for v in lead) else S.GAME_TOP_THREAD_PCT",
+  "new": "    return S.GAME_LEAD_THREAD_PCT",
+  "tests": [
+   "tests/test_analysis_frames.py::test_the_bound_reads_the_lead_thread_where_the_capture_has_it"
+  ]
+ },
+ {
+  "name": "a thread VSync holds counts only when saturated",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if busiest is not None and (busiest >= THREAD_BOUND or work > one):",
+  "new": "    if busiest is not None and busiest >= THREAD_BOUND:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_a_thread_that_needs_more_than_one_period"
   ]
  }
 ]

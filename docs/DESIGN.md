@@ -667,7 +667,11 @@ about 16 ms and 5–6 % of one CPU per tick here):
 - One `Snapshotter.snapshot(threads_for={game pid})` per tick. Per-process and per-thread CPU are the delta
   over the last tick (about 250 ms), stored sharp so a 150 ms hitch shows in the tick that holds it; clamp each
   thread to 100; key by (id, CreateTime). Thread times move in 15.625 ms steps (WT 3.5), so the analysis judges
-  saturation over ≥ 1 s (the mean of 4 ticks), never from one tick.
+  saturation over ≥ 1 s (the mean of 4 ticks), never from one tick. `game_top_thread_pct` is each tick's busiest
+  thread, kept for lag events; of several threads about as busy it is whichever the clock ticks favoured, so four
+  at 75 % read 86 %. `game_lead_thread_pct` is the share this tick of the thread that had the most CPU over the
+  ticks of the previous second, picked before this tick is read (`sysmon._lead_thread`), and the bound judges it
+  (`frames.busiest_column`); a capture saved before it has only the per-tick column, an upper bound.
 - The `game_*` columns are the target process only. Every other process, the game's own child processes
   included, counts as "other" (a child that burns CPU is still competing with the game's render thread).
 - GPU Engine: keep per-sample values unclamped, average over the trailing 1 s, clamp only the average
@@ -875,10 +879,13 @@ marks                                      list            [{t, events: [ids], c
 `bound()` judges steady stretches only (frames outside stutters and FPS drops, at least 10 s and 300 app
 frames), in order: VSync (displayed intervals quantised on whole refresh periods, SyncInterval not 0 and
 AllowsTearing not 1; with k = round(FT/P) >= 2 the hardware is tested against one period: GPU busy past
-(k-1)·P gives `gpu`, a saturated busiest thread `cpu_main`, never `MsCPUBusy`, which counts the game's waits
-outside `Present()` (PM 3.2), with a note that VSync rounds the rate down to refresh/k), a frame cap (a regular present cadence: robust CoV, (IQR/1.349)/median per 5 s window, under 3 %,
-away from k·P, with r < 0.75 and an unsaturated thread), `gpu` (r >= 0.90, or r above 0.75 with FT − G <= 1 ms;
-G minus 0.5 ms when HAGS is on for the game's adapter), `cpu_main` (r <= 0.75 and busiest thread >= 0.85 of a
+(k-1)·P gives `gpu`; a busiest thread that is saturated, or whose own CPU time a frame (its share times FT)
+passes (k-1)·P, gives `cpu_main`, since a thread VSync holds waits for the refresh and is never saturated; never
+`MsCPUBusy`, which counts the game's waits outside `Present()` (PM 3.2); with a note that VSync rounds the rate
+down to refresh/k), a frame cap (a regular present cadence: robust CoV, (IQR/1.349)/median per 5 s window, under
+3 %, away from k·P, with r < 0.75 and an unsaturated thread), `gpu` (r >= 0.90, or r above 0.75 with FT − G <= 1 ms;
+G minus 0.5 ms when HAGS is on for the game's adapter), `cpu_main` (r <= 0.75 and busiest thread, the lead
+thread where recorded, >= 0.85 of a
 CPU over >= 1 s), `cpu_all`, `waiting`, else `mixed`. Without enough steady frames (or none), a 3D engine at >= 95 %
 (median of 1 s windows) gives a probable `gpu` with no r, which the rules never count as frame-timing evidence
 (`rules._engine_fallback`); otherwise the verdict stays `unknown` and `gpu_probable` (`frames.probable_gpu`)

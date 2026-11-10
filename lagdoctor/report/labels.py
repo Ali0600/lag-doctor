@@ -179,6 +179,7 @@ COLUMNS = {
     "interrupt_pct": ("interrupts, busiest core", "%"),
     "game_cpu_pct": ("the game's CPU use (100 = one core)", "%"),
     "game_top_thread_pct": ("the game's busiest thread (100 = one core)", "%"),
+    "game_lead_thread_pct": ("the game's busiest thread over the last second (100 = one core)", "%"),
     "game_threads": ("the game's threads", ""),
     "game_ws_mb": ("the game's memory in use", "MB"),
     "game_private_mb": ("the game's private memory", "MB"),

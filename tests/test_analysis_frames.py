@@ -238,6 +238,16 @@ def test_the_busiest_thread_is_judged_over_1_s_means_not_single_ticks():
     assert b["busiest_thread"] == pytest.approx(0.85) and b["verdict"] == "cpu_main"
 
 
+def test_the_bound_reads_the_lead_thread_where_the_capture_has_it():
+    # Each tick's busiest thread reads 93.75 % when four threads take turns at 75 %: the bound judges the lead thread
+    # (75 %), which is no CPU limit; a capture from before that column is judged on the per-tick column, as before
+    jitter = [20.0 * (1.1 if i % 2 else 0.9) for i in range(1200)]
+    b = bound_of(jitter, 10.0, thread=93.75, game_lead_thread_pct=75.0)
+    assert b["busiest_thread"] == pytest.approx(0.75) and b["verdict"] == "waiting"
+    old = bound_of(jitter, 10.0, thread=93.75)
+    assert old["busiest_thread"] == pytest.approx(0.9375) and old["verdict"] == "cpu_main"
+
+
 def _wobble(n, base, rel):
     """Frame times cycling base*(1-rel), base, base*(1+rel): median base, MAD base*rel, so the robust
     CoV is 1.4826 * rel in any window (a two-value cycle would give MAD 0 in odd-sized windows)."""
@@ -472,7 +482,18 @@ def test_vsync_at_two_refreshes_names_the_gpu_that_needs_more_than_one():
 
 def test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one():
     assert vsync_halved(gpu_ms=5.0, thread=90.0)["verdict"] == "cpu_main"      # the busiest thread saturated
-    assert vsync_halved(gpu_ms=5.0, thread=80.0)["verdict"] == "vsync"
+
+
+def test_vsync_at_two_refreshes_names_a_thread_that_needs_more_than_one_period():
+    # A thread VSync holds at 30 FPS waits for the refresh the rest of each frame, so it is never saturated: at 60 %
+    # of a CPU it works 20.0 ms a 33.3 ms frame, more than one 16.7 ms period, and that is what holds the game at 30.
+    # Once read from MsCPUBusy (which counts waits too); with that branch gone the game read "VSync".
+    b = vsync_halved(gpu_ms=5.0, thread=60.0)
+    assert b["verdict"] == "cpu_main"
+    assert any(x.endswith("of a CPU, 20.0 ms a frame, more than 1 refresh period(s) (16.7 ms)") for x in b["notes"])
+    assert vsync_halved(gpu_ms=5.0, thread=51.0)["verdict"] == "cpu_main"     # 17.0 ms
+    assert vsync_halved(gpu_ms=5.0, thread=49.0)["verdict"] == "vsync"        # 16.3 ms fits in one period
+    assert vsync_halved(gpu_ms=5.0, thread=80.0, k=1)["verdict"] == "vsync"   # k = 1 is the refresh rate itself
 
 
 def test_cpu_busy_never_calls_a_game_vsync_holds_cpu_bound():

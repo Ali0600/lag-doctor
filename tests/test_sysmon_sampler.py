@@ -241,6 +241,34 @@ def test_a_reused_thread_id_is_a_new_thread():
     assert cols[S.GAME_TOP_THREAD_ID] == 2 and cols[S.GAME_TOP_THREAD_PCT] == pytest.approx(60.0)
 
 
+def test_the_lead_thread_is_read_at_its_own_share_when_several_threads_are_as_busy():
+    # Four threads each charged 12 of the 16 clock ticks of every 250 ms (75 %), in turns: the one whose turn it is 15,
+    # the other three 11. Each tick's busiest thread then reads 93.75 %, though no thread runs over 75 %, and the
+    # bound took that for one thread maxing out a CPU; the lead thread, picked on the ticks before, reads 75 %.
+    tick = 156_250                                       # 15.625 ms in 100 ns units
+    r = ProcessRates(100, 1100)
+    totals = [0, 0, 0, 0]
+    top, lead = [], []
+    for k in range(13):
+        if k:
+            for i in range(4):
+                totals[i] += (15 if k % 4 == i else 11) * tick
+        cols, _ = r.update({100: p(100, sum(totals), threads=[th(1 + i, 5 + i, totals[i]) for i in range(4)])},
+                           k * DT_NS)
+        if k:
+            top.append(cols[S.GAME_TOP_THREAD_PCT])
+            lead.append(cols[S.GAME_LEAD_THREAD_PCT])
+    assert top == [93.75] * 12                           # the per-tick column stays as it was, for lag events
+    assert lead[0] is None                               # nothing to pick on yet
+    assert statistics.mean(lead[4:12]) == 75.0           # two whole turns once 1 s of history is in
+    # a failed snapshot starts the history over
+    r.update(None, 13 * DT_NS)
+    r.update({100: p(100, sum(totals), threads=[th(1 + i, 5 + i, totals[i]) for i in range(4)])}, 14 * DT_NS)
+    totals = [t + 12 * tick for t in totals]
+    cols, _ = r.update({100: p(100, sum(totals), threads=[th(1 + i, 5 + i, totals[i]) for i in range(4)])}, 15 * DT_NS)
+    assert cols[S.GAME_LEAD_THREAD_PCT] is None and cols[S.GAME_TOP_THREAD_PCT] == 75.0
+
+
 def test_a_gone_or_replaced_game_has_no_game_columns():
     r = ProcessRates(100, 1100)
     r.update({100: p(100, 0, threads=[th(1, 5, 0)])}, 0)
