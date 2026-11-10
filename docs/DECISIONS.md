@@ -114,11 +114,11 @@
 - **The page file with the RAM size unknown**: when GlobalMemoryStatusEx fails, `ram_pressure` cannot tell the page
   file from RAM, and the paging lift test still counts against a commit charge at the limit. Revisit hook: the
   `roomy` branch of `rules._ram_pressure` with attribution's own RAM floor (same entry).
-- **Judder that slips both ways**: frames held one refresh fewer and one more around the usual hold (8 % and 6 %
-  around a usual three, LagLab's gpu mode at a 20.8 ms frame) are neither judder nor fine today, so they reach no
-  lag type or headline. Counting both sides from 10 % would flag a cap at refresh / 2 that slips 5 % each way
-  (LagLab's smooth control at a 72 FPS cap); where the line sits is a feel number for the owner. Revisit hook: the
-  `spread` branch of `rules._vsync_judder` (same entry).
+- **Judder that slips both ways, counted from 20 %**: frames held one refresh fewer and one more around the usual
+  hold (8 % and 6 % around a usual three, LagLab's gpu mode at a 20.8 ms frame) stay unnamed by the owner's choice
+  (2026-11-10). Worth trying if a recording shows that judder on screen and no rule names it; from 10 % it would flag
+  a cap at refresh / 2 that slips 5 % each way (LagLab's smooth control at a 72 FPS cap). Revisit hook: the `spread`
+  branch of `rules._vsync_judder` (same entry).
 - **VSync judder judged per stretch, not over the whole capture**: a long menu at the refresh rate or a heavy stretch
   bends the whole capture's hold counts, so judder in one part can go unnamed. Revisit hook: `rules._refresh_holds`
   and `rules._judder` (same entry).
@@ -207,6 +207,9 @@ fix forked, the implementing session chose; the owner has not weighed in.
   nor fine: the texts name one side, and a cap at refresh / 2 slipping 5 % each way is no judder to fix. A pair is
   named only when at least half of the frames on its side sit on its other count, or, around a usual hold of two or
   more, when that count holds 10 % of all frames itself.
+  - **Holds that slip both ways stay unnamed (the owner's choice, 2026-11-10: "do A")**: uneven pacing still reports
+    them where the game's own presents swing. Counting both sides from 10 % was rejected, since it flags a steady
+    72 FPS cap that slips 5 % each way and looks smooth; counting them from 20 % is deferred, worth trying (Backlog).
   - **Any frame at that count**: rejected; one frame in a thousand at three brought back "two and three" and a 48 FPS
     cap for frames held four refreshes around a usual two.
   - **Half of that side only**: rejected; a light stretch alternating two and three (26 % of all frames at three)
