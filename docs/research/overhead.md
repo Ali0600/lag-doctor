@@ -451,11 +451,19 @@ Microsoft's D3DDDI_ESCAPEFLAGS page; whether NVML's escapes are flagged so is un
   uv run python scripts/overhead/pm_parse_bench.py
   ```
 
-  Moving the scripts into the repo changed three things. The summary also leaves out an attached window whose
-  recorder failed or never began recording; none of this note's 55 did, and re-summarizing both runs gives the same
-  figures. The phase-lock test keeps the part of a LagLab log that its capture covers, so one benchmark window's
-  capture can be tested. And the frame-path timing keeps its input in memory across both of its readings: the first
-  version freed it in between and read 425-485 B a frame, against section 3.6's 0.7 KB (it now reads 713 B).
+  Moving the scripts into the repo made them refuse what they used to measure wrongly, without changing a published
+  figure: re-summarizing both runs gives the same ones, and none of their 55 attached windows is left out.
+  - The summary leaves out an attached window whose recorder failed, never began recording or, in a `pm-` suite,
+    recorded no frame timing. It pairs windows within one LagLab run, and a later run into the same folder takes the
+    next run number instead of overwriting the earlier run's files.
+  - `cycles` checks every suite before it starts anything, holds lag-doctor's capture lock throughout, and exits
+    non-zero when a recorder failed; `summarize-cycles` exits non-zero when a condition has fewer than 2 pairs.
+  - The phase-lock test keeps the part of a LagLab log that its capture covers, so a benchmark window's capture can
+    be tested against LagLab's own frames (`--laglab-log`). At 10 s only the system sampler at high frame rates
+    reaches the 200 frames overlapping an event that the test needs; a longer `--win` suits the other sources.
+  - The frame-path timing keeps its input in memory across both of its readings: the first version freed it in
+    between and read 425-485 B a frame, against section 3.6's 0.7 KB (it now reads 713 B).
+
   `tests/test_overhead_bench.py` and `tests/test_overhead_phase_lock.py` check their logic on inputs whose answer is
   known.
 

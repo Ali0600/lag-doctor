@@ -14,9 +14,15 @@ process snapshots give the CPU of LagLab, of the recorder's whole process tree a
 
 The defaults are the runs behind docs/research/overhead.md, section 4.1: 380 s of LagLab, a 60 s warm-up and 10 s
 windows, about 6.5 minutes a suite. Run it on a quiet PC: the recorder's own CPU nearly doubled with 13-15 of the 16
-logical CPUs busy with other work. The pm- suites need ETW rights (an administrator terminal), and their recorder runs
-PresentMon in its own process, as recordings did before the relay, so they do not measure the relay's own cost. Each
-window goes to DIR/cycles.jsonl as it ends; summarize-cycles pairs them and writes DIR/cycles-summary.json.
+logical CPUs busy with other work. The pm- suites need an administrator terminal, and their recorder runs PresentMon in
+its own process, as recordings did before the relay, so they do not measure the relay's own cost; from such a
+terminal B runs the game-server tracker too, so the summary says whether its windows were elevated.
+
+Every suite is checked before anything starts, and the command holds lag-doctor's capture lock throughout, so no
+recording can start beside it (exit 2: a suite cannot run here; exit 4: a recording is running; exit 1: a run or a
+recorder failed). Each run's windows are appended to DIR/cycles.jsonl, a later run into the same folder taking the
+next run number; summarize-cycles pairs them within each run's cycles, writes DIR/cycles-summary.json, and exits 1
+when an attached condition has fewer than 2 pairs.
 """
 from __future__ import annotations
 
@@ -53,9 +59,11 @@ SUITES = {
 # lag-doctor itself would (setup.expected_exe), which cannot_run checks first.
 RECORDER_ARGS: dict[str, list[str] | None] = {"A": None, "B": [], "P": ["--frames", "--only", "frames"],
                                               "F": ["--frames"]}
+FRAMES_CONDS = "PF"            # the conditions that run PresentMon: their windows must hold frame timing
 # An attached window whose recording had begun less than this before it is left out with its pair: the session's own
 # start-up would fall inside it.
 MIN_ORIGIN_LEAD_S = 1.0
+RECORDER_EXIT_S = 1.5          # what a cycle budgets for a recorder to stop and save after its window
 ETW_SESSIONS = ("lagdoctor", "lag-doctor-net")     # PresentMon's session, the game-server tracker's
 METRICS = ("fps", "mean_ms", "median_ms", "p99_ms", "p999_ms", "max_ms", "stutter2x_per_min", "stutter4x_per_min",
            "over_10ms", "over_20ms")
@@ -84,6 +92,11 @@ def system_times() -> tuple[float, float, float]:
 def host_state() -> dict:
     """What else could move the numbers: mains power, the power plan, a locked desktop, the NVIDIA GPU's state."""
     out: dict = {}
+    try:
+        from lagdoctor.winapi import elevation
+        out["elevated"] = elevation.is_elevated()       # elevated, B runs the game-server tracker too
+    except OSError as exc:
+        out["elevated"] = f"? {exc}"
     ps = _PowerStatus()
     if _k32.GetSystemPowerStatus(ctypes.byref(ps)):
         out["ac"] = {0: False, 1: True}.get(ps.ACLineStatus)
@@ -188,6 +201,14 @@ def frame_metrics(frames: list[float], ws: float, we: float) -> dict:
     out["over_10ms"] = sum(1 for x in d if x > 10.0)
     out["over_20ms"] = sum(1 for x in d if x > 20.0)
     return out
+
+
+def window_metrics(frames: list[float], ws: float, we: float) -> dict:
+    """frame_metrics for a window that LagLab's frames cover from end to end, else an error: a window LagLab stopped
+    inside (a slow recorder exit can push the last one late) would pair a partial count with a whole one."""
+    if not frames or ws < frames[0] or we > frames[-1]:
+        return {"error": "the window is not inside LagLab's frames"}
+    return frame_metrics(frames, ws, we)
 
 
 def summarize_recorder(rs: dict) -> dict:
@@ -306,7 +327,7 @@ def run_cycles(suite: str, idx: int, out: Path, duration: float, warm: float, wi
             k = 0
             while True:
                 order = order_for(conds, k)
-                need = sum(win if c == "A" else startup + win + 1.5 + gap for c in order)
+                need = sum(win if c == "A" else startup + win + RECORDER_EXIT_S + gap for c in order)
                 if t + need > end:
                     break
                 for cond in order:
@@ -324,10 +345,10 @@ def run_cycles(suite: str, idx: int, out: Path, duration: float, warm: float, wi
                             live = subprocess.Popen(
                                 [PY, str(HERE / "recorder.py"), "--pid", str(game_pid), "--capture", str(cap),
                                  "--stats", str(st), "--win-start", repr(ws), "--win-end", repr(we),
-                                 "--stop-at", repr(we), *RECORDER_ARGS[cond]],
+                                 "--stop-at", repr(we), "--no-lock", *RECORDER_ARGS[cond]],
                                 stdout=rec_out, stderr=subprocess.STDOUT, creationflags=subprocess.CREATE_NO_WINDOW)
                             w["acct"] = measure(ws, we, game_pid, live.pid,
-                                                ETW_SESSIONS if cond in "PF" else ())
+                                                ETW_SESSIONS if cond in FRAMES_CONDS else ())
                             live.wait(timeout=60)
                             w["recorder_exit"] = live.returncode
                             live = None
@@ -350,45 +371,92 @@ def run_cycles(suite: str, idx: int, out: Path, duration: float, warm: float, wi
     data = json.loads(log.read_text(encoding="utf-8"))
     for w in windows:
         w["renderer"] = data.get("gl_renderer")
-        w["metrics"] = frame_metrics(data["frames"], w["ws"], w["we"])
+        w["metrics"] = window_metrics(data["frames"], w["ws"], w["we"])
         w["host0"] = host0
     return windows
 
 
 def cannot_run(suite: str) -> str | None:
-    """Why `suite` cannot run here, or None: the pm- suites need ETW rights and lag-doctor's PresentMon."""
-    if not any(c in "PF" for c in SUITES[suite]["conds"]):
+    """Why `suite` cannot run here, or None. The pm- suites run PresentMon and the game-server tracker, which need an
+    administrator's token (the tracker takes no other), and the PresentMon `watch` would run, checked as it checks
+    it (hash and signature; nothing is downloaded or changed)."""
+    if not any(c in FRAMES_CONDS for c in SUITES[suite]["conds"]):
         return None
     from lagdoctor import setup
     from lagdoctor.winapi import elevation
-    if not elevation.can_trace():
-        return "needs ETW rights (an administrator terminal)"
-    exe = setup.expected_exe()
-    if not exe.is_file():
-        return f"PresentMon not found at {exe}"
+    if not elevation.is_elevated():
+        return "needs an administrator terminal (PresentMon and the game-server tracker need its rights)"
+    try:
+        setup.ensure_presentmon(allow_download=False)
+    except setup.SetupError as exc:
+        return f"PresentMon is not ready: {exc}"
     return None
 
 
+def next_run(log: Path, suite: str) -> int:
+    """The first run number `suite` has not used in `log`: runs appended to one folder keep their own files and are
+    never paired with each other's windows."""
+    if not log.is_file():
+        return 0
+    runs = [r.get("run") for r in (json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()
+                                   if line.strip()) if r.get("suite") == suite]
+    runs = [n for n in runs if isinstance(n, int)]
+    return max(runs) + 1 if runs else 0
+
+
+def run_problems(windows: list[dict]) -> list[str]:
+    """What makes a run fail its command: no window at all, or a recorder that did not record."""
+    if not windows:
+        return ["no cycle fitted in the run: lengthen --duration"]
+    out = [w["error"] for w in windows if "error" in w]
+    out += [f"cycle {w['cycle']} {w['cond']}: the recorder exited {w.get('recorder_exit')}" for w in windows
+            if "error" not in w and w.get("cond") != "A" and w.get("recorder_exit") != 0]
+    return out
+
+
 def cmd_cycles(args: argparse.Namespace) -> int:
+    blocked = [(suite, why) for suite in dict.fromkeys(args.suite) if (why := cannot_run(suite))]
+    for suite, why in blocked:
+        print(f"{suite}: {why}; nothing was started", flush=True)
+    if blocked:
+        return 2
+    # Held for the whole command (its recorders get --no-lock), so no lag-doctor recording can start between two
+    # attached windows and run beside the benchmark.
+    from lagdoctor.capture import session as sess
+    lock = sess.CaptureLock()
+    try:
+        held = lock.acquire()
+    except OSError as exc:
+        print(f"could not check for another lag-doctor recording ({exc}); nothing was started", flush=True)
+        return 4
+    if not held:
+        print("another lag-doctor recording is running; nothing was started", flush=True)
+        return 4
+    try:
+        return run_suites(args)
+    finally:
+        lock.release()
+
+
+def run_suites(args: argparse.Namespace) -> int:
     out = args.out
     out.mkdir(parents=True, exist_ok=True)
+    log = out / "cycles.jsonl"
     rc = 0
     for suite in args.suite:
-        why = cannot_run(suite)
-        if why:
-            print(f"{suite}: {why}; skipped", flush=True)
-            rc = 2
-            continue
-        for i in range(args.runs):
-            print(f"{time.strftime('%H:%M:%S')} {suite} run {i + 1}/{args.runs} ({args.duration:.0f} s of LagLab)",
-                  flush=True)
+        first = next_run(log, suite)
+        for i in range(first, first + args.runs):
+            print(f"{time.strftime('%H:%M:%S')} {suite} run {i} ({args.duration:.0f} s of LagLab)", flush=True)
             try:
                 ws = run_cycles(suite, i, out, args.duration, args.warm, args.win, args.startup, args.gap)
             except Exception as exc:  # noqa: BLE001 - a failed run is recorded and the rest go on
                 ws = [{"suite": suite, "run": i, "error": f"{type(exc).__name__}: {exc}"}]
-                print(f"    failed: {ws[0]['error']}", flush=True)
-                rc = rc or 1
-            with open(out / "cycles.jsonl", "a", encoding="utf-8") as fh:
+            problems = run_problems(ws)
+            for p in problems:
+                print(f"    {p}", flush=True)
+            if problems:
+                rc = 1
+            with open(log, "a", encoding="utf-8") as fh:
                 for w in ws:
                     fh.write(json.dumps(w, default=str) + "\n")
             time.sleep(args.gap)
@@ -405,7 +473,7 @@ def boot_ci(xs: list[float], n: int = 10000, seed: int = 7) -> tuple[float, floa
 def why_left_out(r: dict) -> str | None:
     """Why a window cannot be used, or None. An attached window also needs its recorder to have exited cleanly and
     its recording to have begun at least MIN_ORIGIN_LEAD_S before the window: else it measured no recorder, or one
-    still starting."""
+    still starting. A PresentMon window also needs frame timing that worked, or it measured no PresentMon."""
     if "error" in r:
         return r["error"]
     if "error" in (r.get("metrics") or {}):
@@ -416,6 +484,12 @@ def why_left_out(r: dict) -> str | None:
         lead = r.get("origin_lead_s")
         if lead is None or lead < MIN_ORIGIN_LEAD_S:
             return f"origin lead {lead}"
+        if r.get("cond") in FRAMES_CONDS:
+            rec = r.get("recorder") or {}
+            state = ((rec.get("sources") or {}).get("frames") or ["absent"])[0]
+            rows = (rec.get("presentmon") or {}).get("rows") or 0
+            if state not in ("ok", "partial") or rows <= 0:
+                return f"no frame timing (frames {state}, {rows} rows)"
     return None
 
 
@@ -432,7 +506,8 @@ def summarize_cycles(recs: list[dict]) -> dict:
         by = {c: {key(r): r for r in good if r["cond"] == c} for c in conds}
         s: dict = {"windows": len(rs),
                    "excluded": [(r.get("run"), r.get("cycle"), r.get("cond"), why) for r, why in reasons if why],
-                   "renderers": sorted({r.get("renderer") or "?" for r in good})}
+                   "renderers": sorted({r.get("renderer") or "?" for r in good}),
+                   "elevated": sorted({str((r.get("host0") or {}).get("elevated")) for r in good})}
         for c in conds:
             ws_ = list(by[c].values())
             if not ws_:
@@ -442,7 +517,9 @@ def summarize_cycles(recs: list[dict]) -> dict:
             s[c]["n"] = len(ws_)
             s[c]["recorder_cpu_pct_median"] = round(statistics.median([r["acct"]["recorder_cpu_pct"] for r in ws_]), 3)
             s[c]["background_cpus"] = [round(r["acct"]["background_cpus"], 2) for r in ws_]
-            s[c]["laglab_cpu_pct_median"] = round(statistics.median([r["acct"]["laglab_cpu_pct"] or 0 for r in ws_]), 1)
+            lag = [r["acct"]["laglab_cpu_pct"] for r in ws_ if r["acct"].get("laglab_cpu_pct") is not None]
+            if lag:
+                s[c]["laglab_cpu_pct_median"] = round(statistics.median(lag), 1)
             recs_c = [r["recorder"] for r in ws_ if r.get("recorder")]
             if recs_c:
                 names = dict.fromkeys(n for x in recs_c for n in x.get("threads_cpu_pct", {}))
@@ -487,14 +564,20 @@ def summarize_cycles(recs: list[dict]) -> dict:
             bg = [b["acct"]["background_cpus"] - a["acct"]["background_cpus"] for a, b in pairs]
             d["background_cpus_change_each"] = [round(x, 2) for x in bg]
             s[f"{c}_vs_A"] = d
-        aks = sorted(base)
-        if len(aks) >= 3:
-            aa = [(base[j]["metrics"]["mean_ms"] - base[i]["metrics"]["mean_ms"]) / base[i]["metrics"]["mean_ms"] * 100
-                  for i, j in zip(aks, aks[1:])]
+        aks = sorted(base)                      # consecutive A windows of one LagLab run: the noise floor
+        aa = [(base[j]["metrics"]["mean_ms"] - base[i]["metrics"]["mean_ms"]) / base[i]["metrics"]["mean_ms"] * 100
+              for i, j in zip(aks, aks[1:]) if i[0] == j[0]]
+        if len(aa) >= 2:
             s["A_vs_next_A_mean_ms_change_pct"] = {"median_abs": round(statistics.median([abs(x) for x in aa]), 4),
                                                    "each": [round(x, 3) for x in aa]}
         report[suite] = s
     return report
+
+
+def unpaired(report: dict) -> list[str]:
+    """Each attached condition with fewer than 2 pairs against A: a summary that compares nothing."""
+    return [f"{suite}: fewer than 2 pairs of {c} and A" for suite, s in report.items()
+            for c in SUITES[suite]["conds"] if c != "A" and f"{c}_vs_A" not in s]
 
 
 def cmd_summarize_cycles(args: argparse.Namespace) -> int:
@@ -503,10 +586,14 @@ def cmd_summarize_cycles(args: argparse.Namespace) -> int:
         print(f"no cycles.jsonl in {args.out}: run cycles first", file=sys.stderr)
         return 2
     recs = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    text = json.dumps(summarize_cycles(recs), indent=1)
+    report = summarize_cycles(recs)
+    text = json.dumps(report, indent=1)
     (args.out / "cycles-summary.json").write_text(text, encoding="utf-8")
     print(text)
-    return 0
+    missing = unpaired(report)
+    for line in missing:
+        print(line, file=sys.stderr)
+    return 1 if missing else 0
 
 
 def main(argv: list[str] | None = None) -> int:

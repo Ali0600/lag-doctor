@@ -68,7 +68,7 @@
   "old": "        if lead is None or lead < MIN_ORIGIN_LEAD_S:",
   "new": "        if lead is None or lead < 0.0:",
   "tests": [
-   "tests/test_overhead_bench.py::test_the_summary_pairs_windows_by_cycle_and_leaves_out_a_recorder_that_did_not_record"
+   "tests/test_overhead_bench.py::test_the_summary_pairs_windows_within_each_run_and_leaves_out_a_recorder_that_did_not_record"
   ]
  },
  {
@@ -77,7 +77,7 @@
   "old": "        if r.get(\"recorder_exit\") != 0:",
   "new": "        if False:",
   "tests": [
-   "tests/test_overhead_bench.py::test_the_summary_pairs_windows_by_cycle_and_leaves_out_a_recorder_that_did_not_record"
+   "tests/test_overhead_bench.py::test_the_summary_pairs_windows_within_each_run_and_leaves_out_a_recorder_that_did_not_record"
   ]
  },
  {
@@ -86,25 +86,7 @@
   "old": "xs = [(b[\"metrics\"][k_] - a[\"metrics\"][k_]) / a[\"metrics\"][k_] * 100 if rel",
   "new": "xs = [(b[\"metrics\"][k_] - a[\"metrics\"][k_]) / b[\"metrics\"][k_] * 100 if rel",
   "tests": [
-   "tests/test_overhead_bench.py::test_the_summary_pairs_windows_by_cycle_and_leaves_out_a_recorder_that_did_not_record"
-  ]
- },
- {
-  "name": "a suite that cannot run is skipped with exit 0",
-  "file": "scripts/overhead/bench.py",
-  "old": "            rc = 2",
-  "new": "            rc = rc",
-  "tests": [
-   "tests/test_overhead_bench.py::test_a_suite_that_cannot_run_here_fails_the_command"
-  ]
- },
- {
-  "name": "a pm- suite starts without PresentMon",
-  "file": "scripts/overhead/bench.py",
-  "old": "    if not exe.is_file():",
-  "new": "    if False:",
-  "tests": [
-   "tests/test_overhead_bench.py::test_a_suite_that_cannot_run_here_fails_the_command"
+   "tests/test_overhead_bench.py::test_the_summary_pairs_windows_within_each_run_and_leaves_out_a_recorder_that_did_not_record"
   ]
  },
  {
@@ -140,7 +122,7 @@
   "old": "        src._add(row)",
   "new": "        pass",
   "tests": [
-   "tests/test_overhead_bench.py::test_the_parse_timing_runs_lag_doctors_reader_over_every_row"
+   "tests/test_overhead_bench.py::test_the_parse_timing_runs_lag_doctors_reader_over_every_row_and_weighs_what_it_keeps"
   ]
  },
  {
@@ -223,6 +205,123 @@
   "new": "        if True:",
   "tests": [
    "tests/test_overhead_phase_lock.py::test_the_command_reads_a_saved_capture_and_writes_its_aggregates"
+  ]
+ },
+ {
+  "name": "a pm- suite starts without an administrator's token",
+  "file": "scripts/overhead/bench.py",
+  "old": "    if not elevation.is_elevated():",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_overhead_bench.py::test_every_suite_is_checked_before_anything_starts"
+  ]
+ },
+ {
+  "name": "a pm- suite starts without a checked PresentMon",
+  "file": "scripts/overhead/bench.py",
+  "old": "        setup.ensure_presentmon(allow_download=False)",
+  "new": "        pass",
+  "tests": [
+   "tests/test_overhead_bench.py::test_every_suite_is_checked_before_anything_starts"
+  ]
+ },
+ {
+  "name": "a suite that cannot run lets the others start",
+  "file": "scripts/overhead/bench.py",
+  "old": "    if blocked:\n        return 2",
+  "new": "    if False:\n        return 2",
+  "tests": [
+   "tests/test_overhead_bench.py::test_every_suite_is_checked_before_anything_starts"
+  ]
+ },
+ {
+  "name": "the benchmark starts beside another recording",
+  "file": "scripts/overhead/bench.py",
+  "old": "    if not held:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_overhead_bench.py::test_a_recording_already_running_stops_the_benchmark_before_it_starts"
+  ]
+ },
+ {
+  "name": "the capture lock is never released",
+  "file": "scripts/overhead/bench.py",
+  "old": "        lock.release()",
+  "new": "        pass",
+  "tests": [
+   "tests/test_overhead_bench.py::test_runs_appended_to_one_folder_take_the_next_numbers_and_hold_the_lock_throughout"
+  ]
+ },
+ {
+  "name": "runs appended to one folder restart at 0",
+  "file": "scripts/overhead/bench.py",
+  "old": "    return max(runs) + 1 if runs else 0",
+  "new": "    return 0",
+  "tests": [
+   "tests/test_overhead_bench.py::test_runs_appended_to_one_folder_take_the_next_numbers_and_hold_the_lock_throughout"
+  ]
+ },
+ {
+  "name": "a recorder that did not record leaves the command green",
+  "file": "scripts/overhead/bench.py",
+  "old": "            if problems:\n                rc = 1",
+  "new": "            if False:\n                rc = 1",
+  "tests": [
+   "tests/test_overhead_bench.py::test_a_recorder_that_did_not_record_fails_the_command"
+  ]
+ },
+ {
+  "name": "a run in which no cycle fitted passes",
+  "file": "scripts/overhead/bench.py",
+  "old": "        return [\"no cycle fitted in the run: lengthen --duration\"]",
+  "new": "        return []",
+  "tests": [
+   "tests/test_overhead_bench.py::test_a_recorder_that_did_not_record_fails_the_command"
+  ]
+ },
+ {
+  "name": "a PresentMon window without frame timing is kept",
+  "file": "scripts/overhead/bench.py",
+  "old": "            if state not in (\"ok\", \"partial\") or rows <= 0:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_overhead_bench.py::test_a_presentmon_window_without_frame_timing_is_left_out"
+  ]
+ },
+ {
+  "name": "the noise floor compares A windows of two LagLab runs",
+  "file": "scripts/overhead/bench.py",
+  "old": "              for i, j in zip(aks, aks[1:]) if i[0] == j[0]]",
+  "new": "              for i, j in zip(aks, aks[1:])]",
+  "tests": [
+   "tests/test_overhead_bench.py::test_the_summary_pairs_windows_within_each_run_and_leaves_out_a_recorder_that_did_not_record"
+  ]
+ },
+ {
+  "name": "a window LagLab did not cover gets figures",
+  "file": "scripts/overhead/bench.py",
+  "old": "    if not frames or ws < frames[0] or we > frames[-1]:",
+  "new": "    if not frames:",
+  "tests": [
+   "tests/test_overhead_bench.py::test_a_window_that_laglab_did_not_cover_from_end_to_end_gets_no_figures"
+  ]
+ },
+ {
+  "name": "summarize-cycles passes with nothing paired",
+  "file": "scripts/overhead/bench.py",
+  "old": "    return 1 if missing else 0",
+  "new": "    return 0",
+  "tests": [
+   "tests/test_overhead_bench.py::test_summarize_fails_when_a_condition_has_fewer_than_two_pairs"
+  ]
+ },
+ {
+  "name": "the second memory reading is the first",
+  "file": "scripts/overhead/pm_parse_bench.py",
+  "old": "    m1 = read_mb()",
+  "new": "    m1 = m0",
+  "tests": [
+   "tests/test_overhead_bench.py::test_the_parse_timing_runs_lag_doctors_reader_over_every_row_and_weighs_what_it_keeps"
   ]
  }
 ]

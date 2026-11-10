@@ -203,10 +203,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `watch --control stdio --elevate` and raise the real UAC prompt (`tests/test_app_recording.py` also makes
   `launch_elevated` refuse, so a slip fails instead of prompting).
 - **The overhead benchmark** (`scripts/overhead/bench.py`, `docs/research/overhead.md`) opens a LagLab window for
-  about 6.5 minutes a suite, and its recorder holds lag-doctor's capture lock while it records, so the owner's own
-  `watch` refuses meanwhile (exit 4): run it when the owner is not mid-game, and only on a quiet PC (its CPU
-  figures nearly double under load). Its `pm-` suites need ETW rights, so they are the owner's, from an
-  administrator terminal; without rights they exit 2 and start nothing.
+  about 6.5 minutes a suite and holds lag-doctor's capture lock for the whole run, so the owner's own `watch` refuses
+  meanwhile (exit 4), and the benchmark refuses to start while a recording runs: run it when the owner is not
+  mid-game, and only on a quiet PC (its CPU figures nearly double under load). Its `pm-` suites need an
+  administrator terminal, so they are the owner's; without one, or without a PresentMon that passes `watch`'s check,
+  it exits 2 before starting anything.
 - **The app's page puts outside text on screen as text only.** Game, process and window names, evidence,
   reasons and the player's note (`watch --note`, cleaned by `model.clean_note` in every writer and reader) reach the
   page as JSON and go into the DOM through `el()` in `lagdoctor/app/assets/app.js`, which makes
