@@ -102,16 +102,31 @@ def _header(out: _Out, d: Diagnosis, cap: Capture, checkup: bool) -> None:
         f"loss {_num(s.get('loss_pct'), '{:.1f}', '%')}",
     ]), indent="  ")
     out.add()
+    room = _headroom(d)
+    if room:     # how close the next limit is, beside "limited by": shown once here, so never among the findings
+        out.para("Headroom: " + " ".join(room), indent="  ", sub="  ")
+        out.add()
+
+
+def _headroom(d: Diagnosis) -> list[str]:
+    """The headroom sentence and its note (Diagnosis.stats "headroom", "headroom_note"), or nothing."""
+    s = d.stats if isinstance(d.stats, dict) else {}
+    room = s.get("headroom")
+    if not isinstance(room, str) or not room.strip():
+        return []
+    note = s.get("headroom_note")
+    return [room] + ([note] if isinstance(note, str) and note.strip() else [])
 
 
 def _findings(out: _Out, d: Diagnosis, checkup: bool) -> None:
     if d.findings:
         out.add("Settings that can cost performance (most likely first):" if checkup else
                 "What is causing it (most likely first):")
+        shown_above = set(_headroom(d))
         for i, f in enumerate(d.findings[:3], 1):
             conf = _word(labels.CONFIDENCE, f.confidence)
             out.para(f"{i}. {f.title} [{conf}]", indent="  ", sub="     ")
-            for ev in f.evidence[:3]:
+            for ev in [x for x in f.evidence if not (isinstance(x.text, str) and x.text in shown_above)][:3]:
                 out.para(f"- {ev.text}", indent="     ", sub="       ")
             for fx in f.fixes[:2]:
                 if fx.fix_id:

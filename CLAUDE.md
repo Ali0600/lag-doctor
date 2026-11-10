@@ -155,7 +155,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `check` and `analyze` only print a note there, yet each writes a new folder under `paths.sessions_dir()`, into that
   private copy, where the owner never sees it: to re-run today's analysis on one of the owner's recordings, load it
   and call `diagnose()` in memory (`Capture.load(path)`; the agent's shell reads the real sessions folder, as it did on
-  2026-11-09).
+  2026-11-09). Nor does an agent change a game's own files (its settings, saves or install folder): Documents is not
+  moved, so an edit to a game's config there (FINAL FANTASY VII REBIRTH keeps its own under `Documents\My Games`)
+  changes the owner's real game, while one under `%LOCALAPPDATA%` lands in the private copy yet reads back as applied
+  (`docs/research/settings-sweeps.md`, section 6). Reading them is fine.
 - **`scripts/stage2` creates throwaway Windows services** (the capture-service experiments, `docs/INSTALLER-PLAN.md`
   Stage 2). It runs only on GitHub's hosted runners, from `.github/workflows/experiments.yml` (started by hand, or by
   a pull request that changes it, `scripts/stage2` or a module the experiments import, which its `paths:` lists and

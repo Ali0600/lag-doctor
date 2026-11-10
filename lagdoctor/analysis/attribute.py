@@ -87,6 +87,8 @@ BLAME_MAX_PIDS = 8           # the others table lists the top 8 per tick (DESIGN
 # ---- value checks (A15) ----------------------------------------------------------------------------
 MAX_COUNT = 1e15             # [inferred] a size, rate or count past 1e15 (a petabyte, or one a second) is corrupt;
                              # times, ms and % are bounded by frames.MAX_ABS_VALUE
+NV_MAX_MHZ = 10_000.0        # [inferred] a GPU clock past 10 GHz is corrupt (an RTX 3070 Laptop tops out at 2.1 GHz)
+NV_MAX_W = 2_000.0           # [inferred] a GPU drawing past 2 kW, or limited there, is corrupt
 
 CPU_SIDE = ("game_cpu_spike", "asset_streaming", "memory_paging", "background_cpu", "cpu_throttle")
 GPU_SIDE = ("gpu_throttle", "vram_overflow")
@@ -336,6 +338,62 @@ def power_cap_readings(cap: Capture) -> list[tuple[float, float, float, bool]]:
         named = POWER_CAP_REASON in _reasons(cell)
         out.append((float(ti), x if named else 0.0, x, named))
     return out
+
+
+def power_cap_named(reasons: Any) -> bool:
+    """Whether an nv_reasons cell names the software power cap (POWER_CAP_REASON)."""
+    return POWER_CAP_REASON in _reasons(reasons)
+
+
+def _nv_value(v: Any, top: float) -> float | None:
+    x = fa._num(v)
+    return float(x) if x is not None and 0 < x <= top else None
+
+
+def nvidia_depth(cap: Capture, keep: Callable[[Any], bool] | None = None) -> dict[str, Any] | None:
+    """How far below its top the NVIDIA GPU ran (DESIGN, Headroom): the medians of
+    nv_clock_mhz, nv_power_w and nv_power_limit_w over the readings that do not name gpu_idle (an idle GPU clocks
+    down by design, LC 4.2's confounder) and that `keep` accepts, given the reading's nv_reasons cell; and its top
+    clock, the median nv_clock_max_mhz, else the inventory's nvidia clock_max_mhz. A clock past NV_MAX_MHZ or a power
+    past NV_MAX_W is corrupt, so missing. None when no such reading has a clock."""
+    gpu = cap.gpu if isinstance(cap.gpu, dict) else {}
+    t, why = fa._col(gpu, G.T), fa._col(gpu, G.REASONS)
+    cols = {c: fa._col(gpu, c) for c in (G.CLOCK_MHZ, G.CLOCK_MAX_MHZ, G.POWER_W, G.POWER_LIMIT_W)}
+    vals: dict[str, list[float]] = {c: [] for c in cols}
+    for i, ti in enumerate(t):
+        cell = fa._at(why, i)
+        if fa._bounded(ti) is None or idle_named(cell) or (keep is not None and not keep(cell)):
+            continue
+        clock = _nv_value(fa._at(cols[G.CLOCK_MHZ], i), NV_MAX_MHZ)
+        if clock is None:
+            continue
+        vals[G.CLOCK_MHZ].append(clock)
+        for c, top in ((G.CLOCK_MAX_MHZ, NV_MAX_MHZ), (G.POWER_W, NV_MAX_W), (G.POWER_LIMIT_W, NV_MAX_W)):
+            x = _nv_value(fa._at(cols[c], i), top)
+            if x is not None:
+                vals[c].append(x)
+    if not vals[G.CLOCK_MHZ]:
+        return None
+    inv = cap.inventory if isinstance(cap.inventory, dict) else {}
+    nvidia = inv.get("nvidia") if isinstance(inv.get("nvidia"), dict) else {}
+    listed = _nv_value(nvidia.get("clock_max_mhz"), NV_MAX_MHZ)
+
+    def med(c: str) -> float | None:
+        return st.median(vals[c]) if vals[c] else None
+
+    return {"readings": len(vals[G.CLOCK_MHZ]), "clock_mhz": med(G.CLOCK_MHZ),
+            "clock_max_mhz": med(G.CLOCK_MAX_MHZ) if vals[G.CLOCK_MAX_MHZ] else listed,
+            "power_w": med(G.POWER_W), "power_limit_w": med(G.POWER_LIMIT_W)}
+
+
+NVIDIA_STATS = {"gpu_clock_mhz": "clock_mhz", "gpu_clock_max_mhz": "clock_max_mhz", "gpu_power_w": "power_w",
+                "gpu_power_limit_w": "power_limit_w"}
+
+
+def nvidia_stats(cap: Capture) -> dict[str, float | None]:
+    """Diagnosis.stats' NVIDIA keys (DESIGN): nvidia_depth over every reading that is not idle, each None without it."""
+    d = nvidia_depth(cap) or {}
+    return {key: d.get(part) for key, part in NVIDIA_STATS.items()}
 
 
 def _gpu_heat(cap: Capture) -> _Series:

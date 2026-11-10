@@ -110,6 +110,17 @@ roughly a quarter or more of that "busy" time not running at all.
 **Takeaway**: judge the CPU side from thread CPU time, never from PresentMon's CPU Busy; how fast the CPU could go in
 a GPU-bound game takes a second recording with lighter graphics.
 
+### A per-sample maximum over several noisy series reads high
+Averaging "the busiest of N threads" at each sample gives more than the busiest thread's own average: each sample
+picks whichever thread's noise ran high that time. Thread time moves in 15.625 ms steps, 16 to a 250 ms sample, so
+that noise is large: simulated with Windows' accounting, one thread at 75 % reads 75.0 %, two read 81.2 %, four read
+85.9 % (past the 85 % at which lag-doctor calls a thread saturated) and eight read 89.1 %.
+**Why it came up**: the headroom estimate divides the frame rate by the busiest-thread figure, so a game with several
+busy threads gets a CPU ceiling that leans low, and the 2026-11-09 audit had found the same figure can call such a
+game main-thread bound.
+**Takeaway**: average each series over the window first and take the maximum of those averages; a mean of per-sample
+maxima is an upper bound, never an estimate of the busiest one.
+
 ### Max-per-pixel downsampling must not treat empty buckets as gaps
 The report's charts keep the maximum of each pixel column so one stutter among 100,000 frames still reaches
 the top. Marking every empty bucket as a gap turned a 1 Hz ping line into dots.
@@ -956,3 +967,54 @@ the prompt thread in its snapshot (Cancel before the prompt: no prompt) and in i
 the relay is let go), each order made certain rather than likely (`tests/test_app_recording.py`, `Gate`).
 **Takeaway**: to test "X happens between A and B", stop the code at A with a gated seam, do X, then let it reach B;
 never sleep and hope.
+
+### On a fixed-refresh screen, any frame rate that does not divide the refresh rate judders
+With V-sync on and no variable refresh (VRR), each frame stays on screen for a whole number of refreshes. A game at
+58 FPS on a 144 Hz screen (6.9 ms a refresh) cannot hold every frame for the same time, so its frames alternate
+between 2 and 3 refreshes (13.9 and 20.8 ms) and motion judders. That is not only the 1-and-2 alternation of a game a
+little under the refresh rate: at 144 Hz everything between 48 and 72 FPS alternates 2 and 3. Display times that sit
+on whole refresh periods also show that VRR was not in use.
+**Why it came up**: a GPU-bound recording at 58 FPS on a 144 Hz monitor kept 92% of its frames on screen for 2 or 3
+refreshes, yet the report called it the game's own uneven pacing: `vsync_judder` only looked for frames that mostly
+took one refresh, and the 7.0 ms median swing that `uneven_pacing` printed was one refresh period.
+**Takeaway**: judge pacing in refreshes: count how many each frame stayed on screen, and read a mix of two neighbouring
+counts as judder at any multiple; the steady fixes are VRR or a cap that divides the refresh rate (48 or 72 FPS at
+144 Hz).
+
+### A higher power limit does not speed up a GPU that heat holds back
+A GPU's clock stops at whichever limit it meets first, power or temperature. When temperature binds, raising the power
+limit changes nothing: the GPU cannot use the extra watts without getting hotter. On this laptop the heat limit was a
+cliff, not a slope: the RTX 3070 Laptop ran about 1,700 MHz at 80-83 °C, then dropped to a fixed 780 MHz (of 2,100)
+once it reached about 86 °C, with NVML naming `sw_thermal_slowdown`.
+**Why it came up**: Armoury Crate's Turbo mode raised the GPU's power limit from Silent's 55 W to 103 W, but under a
+game the GPU drew about 61 W and sat at 780 MHz and 87-89 °C; only the first seconds of a recording, before it got
+hot, showed the 1,700 MHz it can run. No analysis code read the clock then, so the report never said so; since the
+headroom estimate, GPU throttling's evidence gives the median clock against the top clock (DESIGN, Headroom).
+**Takeaway**: before tuning power modes, read the GPU's clock against its temperature and its throttle reason; when
+heat binds, the fixes are cooling or less work per frame (a lower render resolution, a frame cap), not more watts.
+
+### Windows has one vendor-neutral query for GPU temperature and clocks, and a 0 from D3DKMT means "not reported"
+DXCore's `IDXCoreAdapter::QueryState` gives temperature and engine and memory clocks, each behind
+`IsQueryStateSupported`. `D3DKMTQueryAdapterInfo`'s perf data (types 61 to 63) gives temperature in tenths of a degree,
+the throttle-start and maximum temperatures, fan speed, power as tenths of a percent (not watts) and clocks. Both come
+from the WDDM driver, so the same ctypes code can ask AMD, Intel and NVIDIA drivers, unelevated; so far only NVIDIA
+cards are known to fill them. D3DKMT answers 0 for what a driver does not fill. The Learn page gives
+`D3DKMT_NODE_PERFDATA` 64 bytes and the SDK header 56; a 64-byte buffer fails with STATUS_INVALID_PARAMETER, the same
+answer as "no more engines".
+**Why it came up**: the research into reading AMD and Intel GPUs probed this laptop (2026-11-09). The RTX 3070 Laptop
+GPU gave its temperature and clocks through both; the Intel UHD gave zeros (D3DKMT) and "unsupported" (DXCore); Basic
+Render refused the perf-data queries (D3DKMT) and answered "unsupported" (DXCore)
+(`docs/research/other-hardware.md`, section 5.1).
+**Takeaway**: read vendor-neutral GPU sensors from DXCore where it says supported and from D3DKMT for the rest, map 0
+to "not reported" (a stopped fan reads 0 too), and size the structs from the SDK header, not the Learn page.
+
+### A sensor value that looks right can be another sensor's: read the same quantity from a second source
+On this laptop's Intel UHD, the "GPU energy" counter of Intel's Graphics Control Library (IGCL), `gpuEnergyCounter`,
+gave 28.5 to 34.3 W over five one-second intervals: a steady, well-formed reading in the right units, if high for an
+integrated GPU. In the same seconds Windows' Energy Meter counters (RAPL, the CPU's own energy counters) read the CPU
+package at 28.9 to 35.3 W and the graphics plane (PP1) at 0: the counter was the whole package's energy.
+**Why it came up**: the fact-check of the research into other hardware (2026-11-09, `docs/research/other-hardware.md`,
+section 5.2) ran the IGCL probe again beside `Get-Counter` on the Energy Meter counters, and the "GPU power" moved with
+the package second by second.
+**Takeaway**: before a new sensor's value reaches a report, read the same quantity from an independent source over the
+same seconds; on an integrated GPU, "GPU energy" may be the whole package's.
