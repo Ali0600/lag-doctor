@@ -166,8 +166,9 @@ def test_a_steady_low_frame_rate_is_led_by_the_part_that_holds_it_not_by_a_few_c
     # the claimer the headline used to name stays in it, as a side note
     assert text("gpu", 700.0) == ("Low frame rate (58 FPS average on a 144 Hz screen), most likely GPU at its limit; "
                                   "likely: background programs.")
-    # the steady time is shorter than the drops the best-ranked claimer explains (8 s): the claimer leads, as before
-    assert text("gpu", 5.0).endswith(", most likely background programs.")
+    # the steady time is shorter than the drops the best-ranked claimer explains (8 s): the claimer leads, as before,
+    # and the limit that holds the steady rate is the side note
+    assert text("gpu", 5.0).endswith(", most likely background programs; likely: GPU at its limit.")
     # waiting: no part holds the steady rate, so no steady lead
     assert text("waiting", 700.0).endswith(", most likely background programs.")
     # a part that is not the limit's never leads, even when it ranks first
@@ -184,7 +185,10 @@ def test_a_steady_low_frame_rate_is_led_by_the_part_that_holds_it_not_by_a_few_c
     # ... and a claimer that explains more than the steady time leads
     first = Finding(cause="uneven_pacing", title="t", category="pacing", confidence="high", score=0.99, summary="",
                     event_ids=[7])
-    assert "the game itself hands over its frames at uneven intervals" in text("gpu", 700.0, (first, limit), pacing)
+    assert text("gpu", 700.0, (first, limit), pacing).endswith(
+        ": the game itself hands over its frames at uneven intervals; likely: GPU at its limit.")
+    # no steady low frame rate (a cap is its own target): no limit to name beside the claimer
+    assert text("capped", 700.0).endswith(", most likely background programs.")
     # a capped game is its own target: its steady time is never low FPS
     assert dg.steady_low_s({"verdict": "capped", "steady_fps": 58.0, "refresh_hz": 144.0, "steady_s": 700.0}, True) == 0
 

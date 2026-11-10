@@ -1085,9 +1085,10 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   finding that claims the lag's own events, unless the steady low-FPS time is longer than the time of the events it
   claims; then the best confident finding of the part the bound verdict names leads (`diagnose.STEADY_LEADS`: for
   `gpu` the GPU's limit, throttling, wrong GPU, copy between GPUs or another program on it; for `cpu_main` and
-  `cpu_all` the CPU's limit or throttling). Without either, one of the lag's category, else the top finding as a side
-  note ("likely: ..."). A GPU-bound recording at 58 FPS on a 144 Hz screen once led with the background programs that
-  claimed 4 of its 6 FPS drops. Whenever the lag type is not stutter and there were
+  `cpu_all` the CPU's limit or throttling). With both, the other is a side note ("; likely: ..."), so a mixed lag
+  names the cause of each part and the headline never leaves out the app's Top cause. Without either, one of the
+  lag's category, else the top finding as a side note. A GPU-bound recording at 58 FPS on a 144 Hz screen once led
+  with the background programs that claimed 4 of its 6 FPS drops. Whenever the lag type is not stutter and there were
   severe hitches or freezes it adds "; also N severe hitches, worst X ms"; an open gap reads "the game server
   stopped answering at 13m 22s"; with zero hitches it says "no hitches ≥ 50 ms in N frames (at most 3/N at 95 %)";
   without frames it opens "Frame timing was not measured (why), so stutter and frame rate could not be checked",
