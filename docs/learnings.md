@@ -395,6 +395,31 @@ where quiet stretches as long as a mark's window gave 0.64, so routine reads loo
 **Takeaway**: compute a base rate with the same statistic and the same window length as the events it is compared
 with, or the comparison measures the windows, not the cause.
 
+### A lift test cannot see a condition that is on all the time
+A lift test asks whether a signal rises above its normal level at the lag's events. When the condition is the normal
+level, it cannot rise anywhere, so "it never coincided with a stutter" is certain and says nothing against it.
+**Why it came up**: a GPU-bound recording's GPU was held down by heat 97 % of the time; the lift test read
+"contradicts" against its 55 stutters and FPS drops, which cost the finding 2 points, dropped it from likely to
+possible and out of the summary's top three. The same coupling hid a small page file: the paging test counts paging
+only while RAM is nearly full, and RAM stayed free.
+**Takeaway**: let event-linked evidence only support a steady cause, and count a "contradicts" only where the
+condition could have risen at the events.
+
+### A headline that only follows event claims never names a steady cause
+Choosing the cause to name by "which finding claims the lag's events" works for stutters, but a low frame rate is
+mostly steady time, and the finding that explains it (the part at its limit) claims no events at all.
+**Why it came up**: a game held at 58 FPS by its GPU for 12 minutes had 6 FPS drops, 4 of them claimed by background
+programs, and the headline said "most likely background programs".
+**Takeaway**: pick the cause a summary names by the share of the problem it explains, steady time included.
+
+### One number doing two jobs can make a label unreachable
+A cause's lift weight was capped at 1 so that it ranks last when each stutter is pinned on one cause; the same weight
+was its whole score, and "possible" needs 2.
+**Why it came up**: the driver-delay finding was documented as "capped at possible", and nothing it measured could
+ever lift it above "worth checking".
+**Takeaway**: when one value serves two purposes, check each outcome at its limit, and split the value when they need
+different ones.
+
 ### A "see the other list" pointer must land for every case it can come from
 Replacing a repeated detail with a pointer ("which was not recorded (see Not measured)") moves the duty of saying
 why to the list it points at, and that list may be built from a different predicate than the one behind the pointer.

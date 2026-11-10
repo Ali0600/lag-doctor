@@ -1820,6 +1820,19 @@ def test_a_supported_stutter_cause_with_the_cpu_side_slow_is_likely():
     assert any("CPU side was slow" in e.text for e in res.evidence)
 
 
+def test_a_driver_holding_up_the_cpu_reaches_possible_and_no_further():
+    # DESIGN: driver_dpc is capped at "possible" (PDH cannot name the driver). Its lift weight is 1 so it ranks last
+    # when explaining away, and that 1 point was its whole score: it could never be more than "worth checking".
+    evs = [stutter(i, 3.0 * i, "driver_dpc") for i in range(1, 10)]
+    strong = lift("supports", weight=1.0, lift_=50.0, cap="possible")       # attribute.py's summary for a capped cause
+    res = run("driver_dpc", make(), events=evs, causes={"driver_dpc": strong})
+    assert is_finding(res, "medium") and res.event_ids == list(range(1, 10))
+    marked = [LagEvent(id=i, kind="mark", t_start=3.0 * i, t_end=3.0 * i + 4.25, severity=0.0, detail={},
+                       causes=["driver_dpc"]) for i in range(1, 10)]
+    half = dict(strong, weight=0.5, half_weight=True)                      # marks stand in at half weight
+    assert is_finding(run("driver_dpc", make(), events=marked, causes={"driver_dpc": half}), "low")
+
+
 @pytest.mark.parametrize("cpu_side, conf", [(7, "high"), (6, "medium")])
 def test_the_cpu_side_counts_when_seventy_percent_of_the_events_show_it(cpu_side, conf):
     evs = [stutter(i, 3.0 * i, "game_cpu_spike", side="cpu" if i <= cpu_side else "gpu") for i in range(1, 11)]

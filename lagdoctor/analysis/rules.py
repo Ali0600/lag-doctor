@@ -1849,6 +1849,8 @@ def _event_link(c: _Case, cause: str, family: str, phrase: str, contradict: bool
     share = 100 * a / n
     if label == "supports":
         w = _fin(entry.get("weight")) or W_STEADY
+        if entry.get("cap") == "possible":   # DESIGN: at most possible. Its lift weight stays 1 so it ranks last when
+            w = W_STEADY * (HALF if half else 1.0)    # explaining away, but 1 point alone could never reach possible
         c.support(family, w, f"{a:.0f} of {n:.0f} {what} coincided with {phrase}"
                   + (f" (lift {lift:.1f})" if lift is not None else ""), share, "%", 100 * attribute.LIFT_MIN_SHARE)
         return True

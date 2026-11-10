@@ -1652,5 +1652,23 @@
   "tests": [
    "tests/test_analysis_rules.py::test_throttling_held_all_the_time_is_never_contradicted_by_stutters_it_cannot_rise_at"
   ]
+ },
+ {
+  "name": "a cause capped at possible scores its 1-point lift weight",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if entry.get(\"cap\") == \"possible\":",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_driver_holding_up_the_cpu_reaches_possible_and_no_further"
+  ]
+ },
+ {
+  "name": "marks lose their half weight on a capped cause",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            w = W_STEADY * (HALF if half else 1.0)",
+  "new": "            w = W_STEADY",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_driver_holding_up_the_cpu_reaches_possible_and_no_further"
+  ]
  }
 ]
