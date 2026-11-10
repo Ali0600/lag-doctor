@@ -1296,8 +1296,9 @@ DECISIONS 2026-11-09), so the store creates the game and lag-doctor holds no han
 
 ```python
 def steam_link(appid: str) -> str                 # steam://rungameid/<appid>, digits only (1 to 4294967295)
-def epic_link(namespace: str, item: str, app: str) -> str   # Epic's documented three-part form, each id letters,
-                                                  # digits, dashes and underscores (Fortnite's namespace is "fn")
+def epic_link(namespace: str, item: str, app: str) -> str   # Epic's documented three-part form, each id letters
+                                                  # and digits with dashes, underscores and dots inside (RFC 3986's
+                                                  # unreserved set; Fortnite's namespace is "fn", the engine "UE_5.4")
 def store_of(link) -> "steam" | "epic" | None     # only for a link those two built, matched whole
 def play(link: str) -> dict                       # winapi/launch.py's dict plus "store"; ValueError for any other
                                                   # link, PermissionError when lag-doctor runs elevated

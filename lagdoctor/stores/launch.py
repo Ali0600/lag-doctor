@@ -14,10 +14,13 @@ from lagdoctor.winapi import launch as shell
 
 STEAM_APPID = re.compile(r"[1-9][0-9]{0,9}", re.ASCII)       # Steam's app ids are unsigned 32-bit numbers
 MAX_STEAM_APPID = 0xFFFFFFFF
-# Epic's ids are letters, digits and dashes or underscores; not always 32 hex digits (Fortnite's namespace is "fn").
-EPIC_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9_-]{0,126}[A-Za-z0-9])?", re.ASCII)
+# Epic publishes no grammar for its ids. Every one seen is in RFC 3986's unreserved set and not always 32 hex digits
+# (Fortnite's namespace is "fn", the engine's app name "UE_5.4"), so: letters and digits, with dashes, underscores and
+# dots inside. Each is then the same written raw or percent-encoded, and none can end a part of the link or start a
+# query key (Epic's link takes arg= and env.<name>= keys).
+EPIC_ID = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?", re.ASCII)
 STEAM_LINK = re.compile(r"steam://rungameid/([1-9][0-9]{0,9})", re.ASCII)
-EPIC_LINK = re.compile(r"com\.epicgames\.launcher://apps/([A-Za-z0-9_-]+)%3A([A-Za-z0-9_-]+)%3A([A-Za-z0-9_-]+)"
+EPIC_LINK = re.compile(r"com\.epicgames\.launcher://apps/([A-Za-z0-9._-]+)%3A([A-Za-z0-9._-]+)%3A([A-Za-z0-9._-]+)"
                        r"\?action=launch&silent=true", re.ASCII)
 
 
@@ -31,7 +34,7 @@ def steam_link(appid: object) -> str:
 
 def epic_link(namespace: object, item: object, app: object) -> str:
     """Epic's launch link for a game's catalog namespace, catalog item id and app name; ValueError unless each is an
-    id of letters, digits, dashes and underscores."""
+    id of letters and digits, with dashes, underscores and dots inside."""
     for name, value in (("catalog namespace", namespace), ("catalog item id", item), ("app name", app)):
         if not isinstance(value, str) or not EPIC_ID.fullmatch(value):
             raise ValueError(f"not an Epic {name}: {value!r}")

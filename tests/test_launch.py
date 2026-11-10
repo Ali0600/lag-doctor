@@ -190,10 +190,12 @@ def test_epic_link_is_the_documented_three_part_form():
     assert link == ("com.epicgames.launcher://apps/fn%3A4fe75bbc5a674f4f9b356b5c90567da5%3AFortnite"
                     "?action=launch&silent=true")
     assert store_launch.store_of(link) == "epic"
+    dotted = store_launch.epic_link("ue", "a" * 32, "UE_5.4")                  # a dot inside an id is unreserved
+    assert dotted.endswith("%3AUE_5.4?action=launch&silent=true") and store_launch.store_of(dotted) == "epic"
 
 
-@pytest.mark.parametrize("bad", ["", "a:b", "a%3Ab", "a?x", "a&b", "a/b", "a b", "a#b", "-a", "a-", "_a", "\u00e9",
-                                 "a" * 129, None, 7])
+@pytest.mark.parametrize("bad", ["", "a:b", "a%3Ab", "a?x", "a&b", "a/b", "a b", "a#b", "-a", "a-", "_a", ".a", "a.",
+                                 "..", "a~b", "\u00e9", "a" * 129, None, 7])
 def test_epic_link_refuses_ids_that_could_change_the_link(bad):
     for args in [(bad, "item", "App"), ("ns", bad, "App"), ("ns", "item", bad)]:
         with pytest.raises(ValueError, match="not an Epic"):
