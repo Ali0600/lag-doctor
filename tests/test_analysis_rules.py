@@ -985,12 +985,23 @@ def test_throttling_held_all_the_time_is_never_contradicted_by_stutters_it_canno
     gpu = make(adapter=NV, ok=("frames", "system", "gpu"), gpu=nv(97.0, nv_reasons="sw_thermal_slowdown"))
     res = run("gpu_throttle", gpu, bound={"verdict": "gpu"}, events=events, causes={"gpu_throttle": never})
     assert is_finding(res, "high")
-    assert "0 of 20 stutters and FPS drops coincided with the GPU slowing down." in [e.text for e in res.evidence]
+    # nor a line: "0 of 20 coincided" under "held down 97 % of the time" read as a GPU that never slowed down
+    assert not [e.text for e in res.evidence if "coincided" in e.text]
     cpu = make(system=cpu_sys(limit=80.0), duration=60.0)
     res = run("cpu_throttle", cpu, bound={"verdict": "cpu_main", "busiest_thread": 0.95}, events=events,
               causes={"cpu_throttle": never})
     assert is_finding(res, "medium")                      # held down in every sample (+2), no longer cancelled
-    assert "0 of 20 stutters and FPS drops coincided with the CPU slowing down." in [e.text for e in res.evidence]
+    assert not [e.text for e in res.evidence if "coincided" in e.text]
+    # an earlier capture whose share could not be told from the power cap stays "could not check", with its reason
+    old = saved_before_the_power_cap_split(100.0, "sw_power_cap", heat_every=4)
+    res = run("gpu_throttle", make(adapter=NV, ok=("frames", "system", "gpu"), gpu=old), bound={"verdict": "gpu"},
+              events=events, causes={"gpu_throttle": never})
+    assert isinstance(res, rules.Unchecked) and "only 7 of 30 readings named heat" in res.text
+    # a lift that supports still counts
+    res = run("gpu_throttle", make(adapter=NV, ok=("frames", "system", "gpu"), gpu=nv(10.0)), bound={"verdict": "gpu"},
+              events=events, causes={"gpu_throttle": lift("supports", a=12, n=20)})
+    assert "12 of 20 stutters and FPS drops coincided with the GPU slowing down (lift 20.0)." in \
+        [e.text for e in res.evidence]
 
 
 @pytest.mark.parametrize("later, kind", [(80.0, Finding), (80.1, rules.Cleared)])

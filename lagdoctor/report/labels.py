@@ -197,7 +197,7 @@ COLUMNS = {
     "commit_pct": ("memory committed", "%"),
     "hard_faults_ps": ("reads from disk for memory", "/s"),
     "disk_busy_pct": ("busiest disk", "%"),
-    "disk_read_bps": ("disk reads, busiest disk", "B/s"),
+    "disk_read_bps": ("disk reads, all disks", "B/s"),
     "disk_read_ms": ("disk read time", "ms"),
     "disk_queue": ("disk queue", ""),
     # NVIDIA (NVML)

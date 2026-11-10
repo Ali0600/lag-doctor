@@ -227,6 +227,16 @@ def _system(cap: Capture, column: str, f: Callable[[float], float] | None = None
     return _Series(ts, vs)
 
 
+def _disk_reads(cap: Capture) -> _Series:
+    """The game's reads the disks can have served, tick by tick. The game's own read counter also counts what the file
+    cache served from memory (a buffered 64 MiB read of a cached file grew it 64 MiB while the disks read 0.00 MiB,
+    measured 2026-11-09), so each tick is capped at what the physical disks read in it (disk_read_bps, all disks). A
+    tick without that counter has no value: the game's counter alone cannot say the disk was read."""
+    game, disk = _system(cap, S.GAME_IO_READ_BPS), _system(cap, S.DISK_READ_BPS)
+    on_disk = _align(disk, game.t)
+    return _Series(game.t, [None if g is None or d is None else min(g, d) for g, d in zip(game.v, on_disk)])
+
+
 def _rise(series: _Series, lookback: float) -> _Series:
     """How far each reading stands above the lowest reading of the `lookback` seconds up to it: 0 on a plateau
     however high, the climb while a level rises (item 4). Missing readings stay missing."""
@@ -495,7 +505,7 @@ def _mbps(v: float) -> str:
 def _causes(cap: Capture, others: _Others) -> list[_Cause]:
     inv = cap.inventory if isinstance(cap.inventory, dict) else {}
     thread = _system(cap, S.GAME_TOP_THREAD_PCT)
-    io = _system(cap, S.GAME_IO_READ_BPS)
+    io = _disk_reads(cap)
     disk_busy = _system(cap, S.DISK_BUSY_PCT)
     disk_ms = _system(cap, S.DISK_READ_MS)
     faults = _system(cap, S.HARD_FAULTS_PS)
@@ -538,7 +548,7 @@ def _causes(cap: Capture, others: _Others) -> list[_Cause]:
                                         "the game's busiest thread ran {v} of a CPU (normally {n})", _pct)],
                why_missing="no per-thread CPU for the game"),
         _Cause("asset_streaming", [
-            _Part(io, +1, lambda m: IO_EXTRA_BPS, "the game read {v} from disk (normally {n})", _mbps),
+            _Part(io, +1, lambda m: IO_EXTRA_BPS, "up to {v} of the game's reads came from disk (normally {n})", _mbps),
             _Part(disk_busy, +1, lambda m: 0.0, "the disk was {v} busy (normally {n})", _pct,
                   level=lambda x: x >= DISK_BUSY_PCT),
             _Part(disk_ms, +1, lambda m: 0.0, "disk reads took {v} (normally {n})", lambda v: f"{v:.1f} ms",

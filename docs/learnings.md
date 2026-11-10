@@ -412,6 +412,15 @@ mostly steady time, and the finding that explains it (the part at its limit) cla
 programs, and the headline said "most likely background programs".
 **Takeaway**: pick the cause a summary names by the share of the problem it explains, steady time included.
 
+### A process's read counter is not a disk read counter
+Windows' per-process I/O counters (`ReadTransferCount`, Task Manager's "I/O read bytes") count every read the
+process asked for, and the file cache serves many of them from memory without touching a disk.
+**Why it came up**: a real recording read "471.7 MB/s from disk" at its stutters while the physical disks read
+0.07 MB/s. A buffered 64 MiB read of a cached file grew the reading process's counter by 64.0 MiB while
+`\PhysicalDisk(_Total)\Disk Read Bytes/sec` showed 0.00 MiB; read unbuffered, the disk showed 64.22 MiB.
+**Takeaway**: to say a process read from disk, check the disks' own counters; the process counter is only an upper
+bound.
+
 ### One number doing two jobs can make a label unreachable
 A cause's lift weight was capped at 1 so that it ranks last when each stutter is pinned on one cause; the same weight
 was its whole score, and "possible" needs 2.

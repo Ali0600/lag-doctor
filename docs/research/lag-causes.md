@@ -968,7 +968,10 @@ consent and is not reversible.
 
 - Defender scanning the same reads.
 - Background disk users (§4.6).
-- Process I/O counters include non-disk I/O [verified: S40].
+- Process I/O counters include non-disk I/O [verified: S40], and reads the file cache served from memory: a
+  buffered 64 MiB read of a cached file grew the reading process's `ReadTransferCount` by 64.0 MiB while
+  `\PhysicalDisk(_Total)\Disk Read Bytes/sec` showed 0.00 MiB; the same read unbuffered showed 64.22 MiB on the
+  disk [verified: own process, 2026-11-09]. So game reads are disk reads only up to what the disks read.
 
 **Confidence:** medium-high on HDD; medium on NVMe. NVMe drives rarely exceed these latencies, so
 the stall is more often CPU-side decompression [unverified, secondary].

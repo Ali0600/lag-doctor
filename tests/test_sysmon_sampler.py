@@ -82,6 +82,18 @@ def test_disk_columns_follow_the_busiest_physical_disk():
     assert got[S.DISK_QUEUE] == 2.0 and got[S.DISK_READ_BPS] == 1e6
 
 
+def test_disk_reads_are_every_disk_together_and_named_so():
+    # disk_read_bps is _Total, every physical disk together (the busy and latency columns follow the busiest disk),
+    # and its label said "busiest disk"
+    from lagdoctor.report import labels
+    got = sysmon.disk_columns(idle={"0 C:": 40.0, "1 E:": 95.0, "_Total": 67.5}, sec_read={"0 C:": 0.004},
+                              read_bps={"0 C:": 3e6, "1 E:": 1e6, "_Total": 4e6}, queue={"0 C:": 1.0})
+    assert got[S.DISK_BUSY_PCT] == pytest.approx(60.0) and got[S.DISK_READ_MS] == pytest.approx(4.0)
+    assert got[S.DISK_READ_BPS] == 4e6                                       # C: alone read 3e6
+    assert labels.column_text(S.DISK_BUSY_PCT) == "busiest disk (%)"
+    assert labels.column_text(S.DISK_READ_BPS) == "disk reads, all disks (B/s)"
+
+
 def test_an_idle_disk_reading_above_100_is_0_busy():
     assert sysmon.disk_columns({"1 E:": 100.3}, {}, {}, {})[S.DISK_BUSY_PCT] == 0.0
     assert sysmon.disk_columns({}, {}, {"_Total": 5.0}, {}) == {

@@ -12,8 +12,10 @@ TIMES = (4.0, 8.0, 12.0, 16.0, 20.0, 24.0)
 BASE = {S.GAME_TOP_THREAD_PCT: 25.0, S.GAME_CPU_PCT: 30.0, S.CPU_TOTAL_PCT: 10.0, S.GAME_IO_READ_BPS: 0.0,
         S.DISK_BUSY_PCT: 2.0, S.DISK_READ_MS: 0.2, S.HARD_FAULTS_PS: 5.0, S.RAM_AVAIL_MB: 20000.0,
         S.GPU_OTHER_PCT: 2.0, S.DPC_PCT: 0.5, S.INTERRUPT_PCT: 0.4, S.CPU_PERF_PCT: 105.0,
-        S.CPU_PERF_LIMIT_PCT: 100.0, S.GAME_FOCUSED: 1, S.VRAM_USED_MB: 3000.0, S.GAME_SHARED_MB: 100.0}
-OTHERS = [[7777, "python.exe", 100.0, 0.0, 100.0], [2656, "dwm.exe", 3.0, 0.0, 3.0], [1844, "MsMpEng.exe", 1.0, 1e4, 0.0]]
+        S.CPU_PERF_LIMIT_PCT: 100.0, S.GAME_FOCUSED: 1, S.VRAM_USED_MB: 3000.0, S.GAME_SHARED_MB: 100.0,
+        S.DISK_READ_BPS: 0.07e6}
+READS = {S.GAME_IO_READ_BPS: 30e6, S.DISK_READ_BPS: 30e6}      # the game read from disk, and the disks read it
+OTHERS =[[7777, "python.exe", 100.0, 0.0, 100.0], [2656, "dwm.exe", 3.0, 0.0, 3.0], [1844, "MsMpEng.exe", 1.0, 1e4, 0.0]]
 
 
 def lag_cap(times=TIMES, *, stutter_ms=160.0, gpu_ms=0.5, stutter_gpu_ms=None, base=None, during=None,
@@ -147,6 +149,7 @@ def reads_cap(io_at, marks, duration=120.0):
     """A capture without frame timing whose game reads io_at(t) bytes/s, and lag-key presses at `marks`."""
     cap = lag_cap(times=(), with_frames=False, duration=duration)
     cap.system[S.GAME_IO_READ_BPS] = [io_at(t) for t in cap.system[S.T]]
+    cap.system[S.DISK_READ_BPS] = [io_at(t) for t in cap.system[S.T]]       # the disks read it too
     cap.marks = list(marks)
     return cap
 
@@ -256,10 +259,27 @@ def test_a_signal_quiet_in_most_of_ten_events_contradicts():
 # --------------------------------------------------------------------------- explaining away ---
 
 def test_reading_from_disk_explains_the_extra_cpu_work():
-    events, summary = analyse(lag_cap(during={S.GAME_IO_READ_BPS: 30e6, S.GAME_TOP_THREAD_PCT: 60.0}))
+    events, summary = analyse(lag_cap(during=dict(READS, **{S.GAME_TOP_THREAD_PCT: 60.0})))
     assert firsts(events) == ["asset_streaming"] * 6
     assert all(e.causes[1:] == ["game_cpu_spike"] for e in events)    # still listed, second
     assert summary["asset_streaming"]["share"] == 1.0 and summary["game_cpu_spike"]["share"] == 0.0
+
+
+def test_reads_the_file_cache_served_are_never_reading_from_disk():
+    # The game's own read counter (ReadTransferCount) also counts reads the file cache served from memory: a buffered
+    # 64 MiB read of a cached file grew it 64 MiB while the physical disks read 0.00 MiB (measured 2026-11-09). A real
+    # recording read "471.7 MB/s from disk" beside 0.07 MB/s of disk reads. Only what the disks read can be from disk.
+    game = {S.GAME_IO_READ_BPS: 471.7e6, S.GAME_TOP_THREAD_PCT: 60.0}
+    events, summary = analyse(lag_cap(during=game))                  # BASE: the disks read 0.07 MB/s throughout
+    assert firsts(events) == ["game_cpu_spike"] * 6 and summary["asset_streaming"]["a"] == 0
+    assert not [w for e in events for w in e.detail["why"] if "from disk" in w]
+    events, _ = analyse(lag_cap(during=dict(game, **{S.DISK_READ_BPS: 471.7e6})))    # control: the disks read it
+    assert firsts(events) == ["asset_streaming"] * 6
+    assert events[0].detail["why"][1] == "up to 314.5 MB/s of the game's reads came from disk (normally 0.0 MB/s)"
+    blind = lag_cap(during=game)
+    blind.system[S.DISK_READ_BPS] = [None] * len(blind.system[S.T])   # the disks' read counter was not read
+    events, summary = analyse(blind)
+    assert firsts(events) == ["game_cpu_spike"] * 6 and summary["asset_streaming"]["a"] == 0
 
 
 def test_a_driver_is_never_the_first_cause_when_something_else_moved():
@@ -538,13 +558,13 @@ def test_page_faults_without_low_ram_are_not_paging():
 
 def test_the_window_starts_half_a_second_before_the_event():
     # the only moving sample is the tick 0.25 s before the stutter began
-    events, _ = analyse(lag_cap(during={S.GAME_IO_READ_BPS: 30e6}, hot=(-0.3, -0.2)))
+    events, _ = analyse(lag_cap(during=READS, hot=(-0.3, -0.2)))
     assert firsts(events) == ["asset_streaming"] * 6
 
 
 def test_the_window_ends_a_quarter_second_after_the_event():
     # the only moving sample is the tick about 0.08 s after the stutter frame was presented
-    events, _ = analyse(lag_cap(during={S.GAME_IO_READ_BPS: 30e6}, hot=(0.2, 0.3)))
+    events, _ = analyse(lag_cap(during=READS, hot=(0.2, 0.3)))
     assert firsts(events) == ["asset_streaming"] * 6
 
 
@@ -655,7 +675,7 @@ def test_dense_events_relax_the_quiet_guard():
 
 
 def test_marks_are_attributed_at_half_weight_when_frames_were_not_measured():
-    cap = lag_cap(during={S.GAME_IO_READ_BPS: 30e6}, with_frames=False)
+    cap = lag_cap(during=READS, with_frames=False)
     cap.marks = [h + 0.4 for h in TIMES]
     fr = fa.main_chain(cap)
     evs = ev.find_events(cap, fr, fa.frame_stats(fr, cap.duration_s))

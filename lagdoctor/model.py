@@ -107,7 +107,7 @@ class S:
     GAME_WS_MB = "game_ws_mb"                  # working set
     GAME_PRIVATE_MB = "game_private_mb"
     GAME_PAGE_FAULTS_PS = "game_page_faults_ps"  # soft + hard
-    GAME_IO_READ_BPS = "game_io_read_bps"
+    GAME_IO_READ_BPS = "game_io_read_bps"      # every read the game made, the file cache's included (not disk reads)
     GAME_IO_WRITE_BPS = "game_io_write_bps"
     GAME_IO_OPS_PS = "game_io_ops_ps"
     GAME_FOCUSED = "game_focused"              # 1 if the game owns the foreground window (Windows deprioritises it if not)
@@ -123,7 +123,7 @@ class S:
     COMMIT_PCT = "commit_pct"                  # committed bytes / commit limit
     HARD_FAULTS_PS = "hard_faults_ps"          # Memory\\Pages Input/sec: reads from disk to satisfy page faults
     DISK_BUSY_PCT = "disk_busy_pct"            # 100 - % idle, busiest physical disk
-    DISK_READ_BPS = "disk_read_bps"
+    DISK_READ_BPS = "disk_read_bps"            # Disk Read Bytes/sec of every physical disk together (_Total)
     DISK_READ_MS = "disk_read_ms"              # Avg. Disk sec/Read x 1000, busiest physical disk
     DISK_QUEUE = "disk_queue"
 
@@ -155,7 +155,8 @@ class G:
 
 
 class N:
-    """Network columns (about 4 per second). RTT None in a row = that probe was lost or not sent this tick.
+    """Network columns (2 per second: one probe round every 0.5 s). RTT None in a row = that probe was lost or not
+    sent this tick.
 
     The game server's own packet stream (needs ETW) lives in Capture.net_flows, written by the
     net_flows collector, so each series keeps exactly one writer.

@@ -1012,8 +1012,10 @@ def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
                                                  "target temperature", hot, "°C", target)
     # LC 4.2: a steady cause, whose event-linked variant (FPS sagging with the clock) can only support it. LC 5.2's
     # "contradicts" is for stutter causes: a GPU held down nearly all the time cannot rise at a stutter, and a real
-    # recording held down 97 % of the time read as contradicted and dropped out of the summary.
-    _event_link(c, "gpu_throttle", "gpu_telemetry", "the GPU slowing down", contradict=False)
+    # recording held down 97 % of the time read as contradicted and dropped out of the summary. A lift that does not
+    # support adds nothing, not even a line: "0 of 12 coincided" under "held down 97 %" read as never slowed.
+    if _dict(e.causes.get("gpu_throttle")).get("label") == "supports":
+        _event_link(c, "gpu_throttle", "gpu_telemetry", "the GPU slowing down")
     _quiet_power_hint(c, gpu=True)
     fixes = [_advice("Give the laptop more air", "Raise its back, keep the vents clear and clean."),
              _advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
@@ -1111,7 +1113,8 @@ def _cpu_throttle(cap: Capture, ctx: dict) -> Any:
     if busiest is not None and busiest < CPU_BUSY_FOR_THROTTLE:
         c.against("cpu_threads", W_STEADY, f"the game's busiest thread used only {100 * busiest:.0f}% of a CPU, so CPU "
                                            "speed is not what holds it back", 100 * busiest, "%", 100 * CPU_BUSY_FOR_THROTTLE)
-    _event_link(c, "cpu_throttle", "cpu_limits", "the CPU slowing down", contradict=False)   # LC 4.5: as gpu_throttle
+    if _dict(e.causes.get("cpu_throttle")).get("label") == "supports":       # LC 4.5: as gpu_throttle
+        _event_link(c, "cpu_throttle", "cpu_limits", "the CPU slowing down")
     _quiet_power_hint(c, gpu=False)
     fixes = [_advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"),
              _advice("Give the laptop more air", "Raise its back, keep the vents clear and clean."),

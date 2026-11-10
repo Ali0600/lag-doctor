@@ -910,6 +910,9 @@ game's GPU >= 10 % busy (`frames.gpu_shared`, LC 4.6), a `capped` or
   least 2 of 3 consecutive probe rounds, or one reply ≥ 100 ms over the minimum (NE 2.2's levels are 15 s window
   figures; one slow ICMP reply is often just deprioritised, NE 2.4).
 - **net_loss**: at least 2 lost probes and ≥ 1 % in a 15 s window; "burst" = at least 2 consecutive lost rounds.
+  A game server or router that answered none of its probes has no loss events (`events.SILENT_UNMEASURED`): many
+  ignore pings (NE 2.4, NE 7 row 9), so its loss was not measured; one that answered and then stopped still has
+  them, and so does an internet anchor that never answered (an outage).
 - **net_gap**: each `net_flows` gap ≥ 100 ms, spanning `[t, t + ms]` (t = the last packet before the silence),
   with its kind.
 - **mark**: each hotkey press; its window is `[mark − 3 s, mark + 0.5 s]` (LC 2.4); `detail` `{frame_events
@@ -937,7 +940,7 @@ cause at all when the sampler did not measure that moment.
 | side | signal that moved | cause id |
 |---|---|---|
 | CPU | game's busiest thread up | `game_cpu_spike` (the game's own work: loading, shader compiles, logic) |
-| CPU | game I/O reads up (disk busy or read latency up) | `asset_streaming` |
+| CPU | game reads up that the disks' own reads match (the game's counter also counts what the file cache served from memory, so each tick is capped at `disk_read_bps`), or disk busy or read latency up | `asset_streaming` |
 | CPU | hard page faults up, RAM low | `memory_paging` |
 | CPU | another process's CPU up (or machine-wide CPU beyond the game) | `background_cpu` |
 | any | another process's disk or GPU up | `background_disk` / `background_gpu` |

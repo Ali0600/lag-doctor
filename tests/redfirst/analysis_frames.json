@@ -1866,5 +1866,60 @@
   "tests": [
    "tests/test_analysis_frames.py::test_cpu_busy_never_calls_a_game_vsync_holds_cpu_bound"
   ]
+ },
+ {
+  "name": "a game server or router that never answered counts as lost",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        if role in SILENT_UNMEASURED and not answered:\n",
+  "new": "        if False:\n",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_a_server_or_router_that_never_answered_a_ping_has_no_loss_events",
+   "tests/test_analysis_rules_network.py::test_a_game_server_that_ignores_pings_is_neither_packet_loss_nor_network_lag"
+  ]
+ },
+ {
+  "name": "an internet anchor that never answered counts as unmeasured",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "SILENT_UNMEASURED = (\"gateway\", \"server\")",
+  "new": "SILENT_UNMEASURED = (\"gateway\", \"internet\", \"server\")",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_a_server_or_router_that_never_answered_a_ping_has_no_loss_events"
+  ]
+ },
+ {
+  "name": "a router that never answered counts as lost",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "SILENT_UNMEASURED = (\"gateway\", \"server\")",
+  "new": "SILENT_UNMEASURED = (\"server\",)",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_a_server_or_router_that_never_answered_a_ping_has_no_loss_events"
+  ]
+ },
+ {
+  "name": "the game's reads alone stand for disk reads",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    io = _disk_reads(cap)\n",
+  "new": "    io = _system(cap, S.GAME_IO_READ_BPS)\n",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_reads_the_file_cache_served_are_never_reading_from_disk"
+  ]
+ },
+ {
+  "name": "a missing disk read counter lets the game's reads stand",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "[None if g is None or d is None else min(g, d) for g, d in zip(game.v, on_disk)]",
+  "new": "[None if g is None else g if d is None else min(g, d) for g, d in zip(game.v, on_disk)]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_reads_the_file_cache_served_are_never_reading_from_disk"
+  ]
+ },
+ {
+  "name": "the game's reads worded as disk reads",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "\"up to {v} of the game's reads came from disk (normally {n})\"",
+  "new": "\"the game read {v} from disk (normally {n})\"",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_reads_the_file_cache_served_are_never_reading_from_disk"
+  ]
  }
 ]

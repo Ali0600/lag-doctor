@@ -1638,8 +1638,8 @@
  {
   "name": "stutters that cannot line up contradict GPU throttling",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "\"the GPU slowing down\", contradict=False)",
-  "new": "\"the GPU slowing down\")",
+  "old": "    if _dict(e.causes.get(\"gpu_throttle\")).get(\"label\") == \"supports\":",
+  "new": "    if True:",
   "tests": [
    "tests/test_analysis_rules.py::test_throttling_held_all_the_time_is_never_contradicted_by_stutters_it_cannot_rise_at"
   ]
@@ -1647,8 +1647,8 @@
  {
   "name": "stutters that cannot line up contradict CPU throttling",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "\"the CPU slowing down\", contradict=False)",
-  "new": "\"the CPU slowing down\")",
+  "old": "    if _dict(e.causes.get(\"cpu_throttle\")).get(\"label\") == \"supports\":",
+  "new": "    if True:",
   "tests": [
    "tests/test_analysis_rules.py::test_throttling_held_all_the_time_is_never_contradicted_by_stutters_it_cannot_rise_at"
   ]
