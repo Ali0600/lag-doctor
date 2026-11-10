@@ -119,6 +119,9 @@
   lag type or headline. Counting both sides from 10 % would flag a cap at refresh / 2 that slips 5 % each way
   (LagLab's smooth control at a 72 FPS cap); where the line sits is a feel number for the owner. Revisit hook: the
   `spread` branch of `rules._vsync_judder` (same entry).
+- **VSync judder judged per stretch, not over the whole capture**: a long menu at the refresh rate or a heavy stretch
+  bends the whole capture's hold counts, so judder in one part can go unnamed. Revisit hook: `rules._refresh_holds`
+  and `rules._judder` (same entry).
 - **An event's side under the 3D engine's verdict**: a stutter whose frames had no GPU timing takes the engine's
   "gpu" for its own side, leaving the CPU causes out; reading it as unknown instead made an idle-thread stutter on
   a pegged GPU "the game waited on itself". Revisit hook: `VERDICT_SIDE` in `attribute._side` and `_residual`
@@ -167,7 +170,8 @@ fix forked, the implementing session chose; the owner has not weighed in.
   MsCPUBusy, which counts waits outside Present().
   - **Only a saturated thread**: rejected; a thread VSync holds waits for the refresh and is never saturated.
 - **No CPU-side rule clears a CPU that `cpu_limit` holds open (chosen)**: one predicate (`rules._cpu_not_ruled_out`)
-  for `cpu_limit`, the cpu gate, `not_focused` and `cpu_throttle`'s thread line. It holds LC 3.2's grey zone, a
+  for `cpu_limit`, the cpu gate, `not_focused`, `cpu_throttle`'s thread line and the headline's low-FPS words. It
+  holds LC 3.2's grey zone, a
   saturated thread under VSync at one refresh a frame and an older capture past VSync's work edge, and never at the
   display's rate, where a CPU limit costs nothing the player sees.
   - **Hold only the grey zone**: rejected; under VSync at one refresh a frame a 90 % thread was then ruled out where
@@ -178,9 +182,15 @@ fix forked, the implementing session chose; the owner has not weighed in.
   presents taken for VSync's when 90 % of the holds sit on those two counts (`VSYNC_SHARE`; a real recording: 92 %)
   and judder is found there, never under a shared GPU's unknown verdict. Holds that slip both ways are neither judder
   nor fine: the texts name one side, and a cap at refresh / 2 slipping 5 % each way is no judder to fix. A pair is
-  named only when at least half of the frames on its side sit on its other count.
+  named only when at least half of the frames on its side sit on its other count, or, around a usual hold of two or
+  more, when that count holds 10 % of all frames itself.
   - **Any frame at that count**: rejected; one frame in a thousand at three brought back "two and three" and a 48 FPS
     cap for frames held four refreshes around a usual two.
+  - **Half of that side only**: rejected; a light stretch alternating two and three (26 % of all frames at three)
+    went silent beside a heavier one held four and five.
+  - **Judder judged per stretch**: deferred, worth trying; around a usual one refresh the pair still needs half its
+    side, since a long menu at the refresh rate looks the same over the whole capture. Revisit hook:
+    `rules._refresh_holds`.
   - **Count frames off the usual hold on both sides as judder**: rejected; the title, the summary's range and the cap
     then named the wrong side (10 % held one refresh around a usual three read "three and four").
   - **Only up to two and three refreshes**: rejected; an invented bound. LagLab's gpu and cpu modes (3 or 4 refreshes)

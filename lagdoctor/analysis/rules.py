@@ -869,7 +869,7 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
     b, v = e.bound, e.verdict
     if v in ("cpu_main", "cpu_all", "mixed", "unknown") and _fps_reaches_display(e):
         return Cleared("cpu_limit", _sentence(f"at {e.avg_fps:.0f} FPS the game already reaches the "
-                                              f"{e.refresh:.0f} Hz display"), firm=True)
+                                              f"{e.refresh:.0f} Hz display"))    # _cpu_not_ruled_out holds none here
     r, busiest = _fin(b.get("r")), _fin(b.get("busiest_thread"))
     rounds = next((n for n in b.get("notes") or [] if isinstance(n, str) and n.startswith("VSync rounds")), None)
     held = b.get("vsync") is True and v == "cpu_main" and rounds is not None   # A6: VSync holds it at refresh / k
@@ -1391,15 +1391,17 @@ def _cpu_throttle(cap: Capture, ctx: dict) -> Any:
         c.against("cpu_limits", W_STEADY, "Windows reported no power or thermal limit" + speed)
     busiest = _fin(e.bound.get("busiest_thread"))
     upper = any(isinstance(n, str) and fa.THREAD_UPPER_NOTE in n for n in e.bound.get("notes") or [])
-    # A6: under VSync's thread verdict, and an older capture's figure past VSync's work edge, a thread's share of a CPU
-    # is not what VSync holds it by
-    if busiest is not None and busiest < CPU_BUSY_FOR_THROTTLE and e.verdict != "cpu_main" and not upper:
+    # A6: under the CPU verdicts (every core busy is CPU-bound too, LC 4.5) and an older capture's figure past VSync's
+    # work edge, a thread's share of a CPU is not what decides whether CPU speed matters
+    if busiest is not None and busiest < CPU_BUSY_FOR_THROTTLE and e.verdict not in ("cpu_main", "cpu_all") \
+            and not upper:
         open_ = _cpu_not_ruled_out(e) is not None       # never "not what holds it back" beside "not ruled out"
+        used = math.floor(100 * busiest)                 # under the 70 %: never shown as 70 (learnings)
         c.against("cpu_threads", W_STEADY,
-                  (f"the game's busiest thread used {100 * busiest:.0f}% of a CPU, under the "
+                  (f"the game's busiest thread used {used}% of a CPU, under the "
                    f"{100 * CPU_BUSY_FOR_THROTTLE:.0f}% at which CPU speed starts to matter") if open_ else
-                  (f"the game's busiest thread used only {100 * busiest:.0f}% of a CPU, so CPU speed is not what "
-                   "holds it back"), 100 * busiest, "%", 100 * CPU_BUSY_FOR_THROTTLE)
+                  (f"the game's busiest thread used only {used}% of a CPU, so CPU speed is not what holds it back"),
+                  100 * busiest, "%", 100 * CPU_BUSY_FOR_THROTTLE)
     if _dict(e.causes.get("cpu_throttle")).get("label") == "supports":       # LC 4.5: as gpu_throttle
         _event_link(c, "cpu_throttle", "cpu_limits", "the CPU slowing down")
     _quiet_power_hint(c, gpu=False)
@@ -1766,7 +1768,8 @@ def _refresh_holds(e: _Env) -> tuple[Counter, int] | None:
 
 def _judder(e: _Env) -> tuple[Counter, int, int, int, float, float] | None:
     """(holds, lo, the usual hold, the other count of its pair, the share of frames past the usual hold on the other
-    count's side (0 unless at least half of them sit at that count), the share held for any count but the usual one);
+    count's side (0 unless at least half of them sit at that count, or, around a usual hold of two or more, it holds
+    JUDDER_SHARE of all frames itself), the share held for any count but the usual one);
     None without holds. The first is the judder the
     rule names: frames alternating between the usual count and the one beside it. The second, both sides, only keeps
     "no judder" from a game whose holds slip both ways (5 % one fewer and 5 % one more around a cap at refresh / 2):
@@ -1778,8 +1781,10 @@ def _judder(e: _Env) -> tuple[Counter, int, int, int, float, float] | None:
     usual, other = (lo, lo + 1) if held[lo] >= held[lo + 1] else (lo + 1, lo)
     n = sum(held.values())
     side = sum(v for h, v in held.items() if (h > usual if other > usual else h < usual))   # k = 1: held 2+
-    # at least half of that side at the count beside the usual one, or what alternates there is not the pair named
-    share = side / n if 2 * held[other] >= side else 0.0
+    # the pair named only where its other count holds at least half of that side, or (two refreshes or more) is
+    # judder on its own: frames past it are another stretch, and a lone frame there names no alternation
+    alternates = 2 * held[other] >= side or (usual >= 2 and held[other] >= JUDDER_SHARE * n)
+    share = side / n if alternates else 0.0
     spread = (n - held[usual]) / n
     return held, lo, usual, other, share, spread
 

@@ -597,6 +597,15 @@ def test_cpu_throttle_never_says_cpu_speed_is_not_what_holds_back_a_cpu_that_is_
     res = run("cpu_throttle", make(system=cpu_sys(busiest=65.0), duration=60.0), bound=grey)      # at full speed
     assert isinstance(res, rules.Cleared) and "not what holds it back" not in res.text, res
     assert "used 65% of a CPU, under the 70% at which CPU speed starts to matter" in res.text
+    # just under the 70 % reads under it: 69.7 % read "used 70% of a CPU, under the 70%"
+    res = run("cpu_throttle", make(system=cpu_sys(busiest=69.7), duration=60.0), bound=dict(grey, busiest_thread=0.697))
+    assert isinstance(res, rules.Cleared) and "used 69% of a CPU, under the 70%" in res.text, res
+    # every core busy is CPU-bound too (LC 4.5): the busiest thread's share says nothing of whether CPU speed matters,
+    # and it cancelled a CPU that Windows held below full speed
+    every = {"verdict": "cpu_all", "r": 0.30, "busiest_thread": 0.65}
+    res = run("cpu_throttle", make(system=cpu_sys(busiest=65.0), duration=60.0), bound=every)
+    assert isinstance(res, rules.Cleared) and "busiest thread" not in res.text, res
+    assert is_finding(run("cpu_throttle", make(system=cpu_sys(limit=80.0, busiest=65.0), duration=60.0), bound=every))
     # an older capture past VSync's work edge: a thread's share of a CPU is not what VSync holds it by (A6), so the
     # line goes, and a CPU that Windows held down reaches the gate's reason instead of cancelling out
     note = ("VSync rounds the frame rate down to 72 FPS (refresh / 2), but whether the CPU holds it there could not "
@@ -1738,7 +1747,7 @@ def test_holds_that_slip_both_ways_are_never_called_fine_and_never_silence_uneve
     assert is_finding(run("uneven_pacing", make(), frames=calm, bound=bound, events=[SWUNG]), "medium")
 
 
-def test_judder_names_a_pair_only_where_at_least_half_of_its_side_sits_beside_the_usual_hold():
+def test_judder_names_a_pair_only_where_its_other_count_alternates_with_the_usual_hold():
     # Frames held four refreshes around a usual two went silent only with no frame at all at three: one in 1000 there
     # brought back "frames alternate between two and three refreshes", a 48 FPS cap that leaves those frames at four,
     # and the silence of uneven_pacing
@@ -1749,6 +1758,14 @@ def test_judder_names_a_pair_only_where_at_least_half_of_its_side_sits_beside_th
     # control: with half of that side at three, the alternation is the pair named, and so is the judder
     half = holds_frames([2] * 900 + [3] * 50 + [4] * 50)
     assert is_finding(run("vsync_judder", make(), frames=half, bound=bound), "medium")
+    # a light stretch alternating two and three (26 % of all frames held three) beside a heavier one held four and
+    # five: the frames past the pair outnumber those at three, but that alternation is judder on its own
+    mixed = holds_frames([2, 3, 2, 3, 2] * 360 + [4, 5] * 480)
+    res = run("vsync_judder", make(), frames=mixed, bound=bound)
+    assert is_finding(res, "medium") and res.title == "VSync judder: frames alternate between two and three refreshes"
+    # at one refresh a frame, where a long menu at the refresh rate looks the same, the pair still needs half its side
+    menu = holds_frames([1] * 600 + [2] * 150 + [3] * 250)
+    assert run("vsync_judder", make(), frames=menu, bound=bound) is None
 
 
 def test_a_shared_gpu_never_lets_the_judder_shape_silence_uneven_pacing():

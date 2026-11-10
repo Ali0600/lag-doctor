@@ -1063,11 +1063,14 @@ below a minimum, ceiling above a maximum), and say which of several requirements
 
 ### Quote how a figure behaves from the code that reads it, not from the raw column
 A number given for how a measurement behaves has to come out of the consumer's own arithmetic (its windows, its
-median, its rounding). The raw column's plain mean is a different statistic, and it can lean the other way.
+median, its rounding), over everything the real data varies. The raw column's plain mean is a different
+statistic, and it can lean the other way.
 **Why it came up**: DESIGN said the lead thread read 62 % for a thread at 87.5 % whose work moved every 2 s, and
-82.5 % when it moved every 10 s. Both were the plain mean of the per-sample column. The bound verdict takes the
-median of 1 s window means, which gave 62–88 % at every 2 s (by how the moves line up with the windows) and the
-true 87.5 % at every 4 s or slower. Re-running the probe gave the same wrong numbers, because the probe itself took
-the plain mean.
-**Takeaway**: feed a probe's made-up data through the consumer's own function and quote what it returns; re-running
-a measurement checks its arithmetic, not whether it measures what the code reads.
+82.5 % when it moved every 10 s. Both were the plain mean of the per-sample column. Re-running that probe gave the
+same wrong numbers, because the probe itself took the plain mean. The correction, read from the bound verdict
+(the median of 1 s window means) but over a few alignments only, still said 62–88 % at every 2 s and the truth at
+every 4 s; sweeping where the moves fall against the sampler's ticks in 0.125 s steps gave 33–88 % at every 2 s,
+66–88 % at every 3 or 4 s, and the true 87.5 % only from every 5 s.
+**Takeaway**: feed a probe's made-up data through the consumer's own function, sweep what the real data varies
+(phase, alignment, seed), and quote what it returns; re-running a measurement checks its arithmetic, not whether it
+measures what the code reads.

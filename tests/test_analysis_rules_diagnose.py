@@ -865,6 +865,29 @@ def test_a_low_frame_rate_while_waiting_is_low_fps_and_says_neither_side_is_the_
     assert not diagnose(waiting_game(fps=120.0)).lag_type == "low_fps"              # 120 of 144: no low FPS
 
 
+def test_at_the_displays_rate_the_headline_never_holds_open_a_cpu_the_lists_rule_out():
+    # A waiting game at 135 FPS on 144 Hz with one 5 s drop and its lead thread at 70 %: the headline's own grey-zone
+    # test said "the CPU may be close to it" while the lists had "the CPU as the frame-rate limit" checked and fine,
+    # since at the display's rate a CPU limit costs nothing the player sees (rules._cpu_not_ruled_out)
+    import random
+    rng = random.Random(7)
+    ms, t = [], 1.0
+    while t < 59.5:
+        f = rng.uniform(11.0, 13.0) if 20.0 <= t < 25.0 else rng.uniform(6.0, 8.3)
+        ms.append(f)
+        t += f / 1000.0
+    fr = synth.frames_table(ms, gpu_ms=[0.5 * f for f in ms], display_ms=ms, displayed=1,
+                            mode="Hardware: Independent Flip")
+    sysb = synth.system_table(60, game_lead_thread_pct=lambda x: 70.0 + rng.uniform(-2, 2),
+                              game_cpu_pct=lambda x: 95.0 + rng.uniform(-5, 5), game_focused=1)
+    cap = synth.capture(fr, sysb, hz=144.0, duration=60.0)
+    cap.sources = synth.sources(("frames", "system"))
+    d = diagnose(cap)
+    assert d.stats["bound"] == "waiting" and d.lag_type == "low_fps" and d.stats["avg_fps"] >= 0.9 * 144.0, d.stats
+    assert "neither the CPU nor the GPU is at its limit" in d.headline and "may be close" not in d.headline, d.headline
+    assert "cpu_limit" in d.cleared
+
+
 # ------------------------------------------------------------------------- no hitches (A4) ---
 
 def test_the_rule_of_three_is_never_claimed_next_to_a_50_ms_stutter():

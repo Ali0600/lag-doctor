@@ -279,15 +279,16 @@ def _severe(stats: dict[str, Any], evs: list[LagEvent]) -> str | None:
 
 
 def _lag_part(kind: str, stats: dict[str, Any], evs: list[LagEvent], lag: dict[str, float],
-              duration: float | None, bound: dict[str, Any] | None, part: str) -> str:
+              duration: float | None, bound: dict[str, Any] | None, part: str, *, cpu_open: bool) -> str:
     """One lag type's words for the headline. `part` names what was analysed (rules._Env.part): every caller passes
-    it, so a measured part's share is never called the whole capture's."""
+    it, so a measured part's share is never called the whole capture's. `cpu_open`: rules._cpu_not_ruled_out, the
+    predicate the lists hold the CPU open by, so the headline never says otherwise."""
     if kind == "low_fps":
         fps, hz = rules._fin(stats.get("avg_fps")), rules._fin(stats.get("refresh_hz"))
         inner = [f"{fps:.0f} FPS average" + (f" on a {hz:.0f} Hz screen" if hz else "")] if fps is not None else []
         if stats.get("bound") == "waiting":      # A6, LC 3.2: the game waits on something else
             busiest = rules._fin((bound or {}).get("busiest_thread"))
-            if busiest is not None and busiest >= rules.THREAD_WAITING:    # LC 3.2's grey zone: the CPU stays open
+            if cpu_open and busiest is not None:          # LC 3.2's grey zone, not at the display's rate
                 inner.append(f"the GPU is not at its limit and the CPU may be close to it, its busiest thread at "
                              f"{100 * busiest:.0f}%")
             else:
@@ -365,11 +366,12 @@ def headline(lag_type: str, findings: list[Finding], stats: dict[str, Any], evs:
     steady = steady_low_s(env.bound, env.frames_measured) if "low_fps" in kinds else 0.0
     lead, explains, also = _lead(kinds, findings, evs, env.verdict, steady)
     severe = _severe(stats, evs) if env.frames_measured and "stutter" not in kinds else None
+    cpu_open = rules._cpu_not_ruled_out(env) is not None
     if lag_type == "mixed":
-        parts = [_lag_part(k, stats, evs, lag, env.duration, env.bound, env.part) for k in kinds]
+        parts = [_lag_part(k, stats, evs, lag, env.duration, env.bound, env.part, cpu_open=cpu_open) for k in kinds]
         text = "Several problems: " + " and ".join([parts[0]] + [p[0].lower() + p[1:] for p in parts[1:]])
     elif kinds:
-        text = _lag_part(kinds[0], stats, evs, lag, env.duration, env.bound, env.part)
+        text = _lag_part(kinds[0], stats, evs, lag, env.duration, env.bound, env.part, cpu_open=cpu_open)
     elif lag_type == "unknown":       # a short reason: its path and command are in the Not measured list, once
         text = (f"Frame timing was not measured ({labels.short_reason(env.why('frames'))}), so stutter and frame rate "
                 "could not be checked")

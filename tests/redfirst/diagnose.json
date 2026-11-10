@@ -197,7 +197,7 @@
              "tests/test_analysis_rules_diagnose.py::test_laglabs_pace_mode_is_uneven_and_low_and_the_headline_names_the_uneven_pacing"]},
   {"name": "the CPU's grey zone read as not at its limit",
    "file": "lagdoctor/analysis/diagnose.py",
-   "old": "            if busiest is not None and busiest >= rules.THREAD_WAITING:",
+   "old": "            if cpu_open and busiest is not None:",
    "new": "            if False:",
    "tests": ["tests/test_analysis_rules_diagnose.py::test_a_low_frame_rate_while_waiting_is_low_fps_and_says_neither_side_is_the_limit"]},
   {"name": "no-hitch bound next to a 50 ms stutter",
@@ -302,5 +302,10 @@
    "file": "lagdoctor/analysis/diagnose.py",
    "old": "\"hybrid_copy\", \"gpu_contention\"),",
    "new": "\"hybrid_copy\"),",
-   "tests": ["tests/test_analysis_rules_diagnose.py::test_every_frame_rate_rule_is_sorted_into_a_steady_lead_or_left_out_on_purpose"]}
+   "tests": ["tests/test_analysis_rules_diagnose.py::test_every_frame_rate_rule_is_sorted_into_a_steady_lead_or_left_out_on_purpose"]},
+  {"name": "the headline holds the CPU open by its own grey-zone test",
+   "file": "lagdoctor/analysis/diagnose.py",
+   "old": "            if cpu_open and busiest is not None:",
+   "new": "            if busiest is not None and busiest >= rules.THREAD_WAITING:",
+   "tests": ["tests/test_analysis_rules_diagnose.py::test_at_the_displays_rate_the_headline_never_holds_open_a_cpu_the_lists_rule_out"]}
 ]

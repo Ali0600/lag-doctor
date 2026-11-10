@@ -1087,10 +1087,10 @@ before each tick), but in a capture saved before that column it is the mean of p
 game's threads, so several busy threads read as one busier one, more so as thread time moves in 15.625 ms steps
 (WT 3.5, about 6 % of a 250 ms tick); and work a game does per second rather than per frame does not grow with the
 frame rate. Both make the CPU's figure lean low, as does a game that spins while it waits for the GPU; work that
-moves from one thread to another every 3 s or more often reads low, since the lead keeps reading the old thread
-for about half a second after each move and the verdict takes the median of 1 s windows (moving every 2 s, a
-thread's 87.5 % reads 62–88 %, by how the moves line up with those windows; every 1.5 s, 44–66 %; every 4 s or
-less often, within a few points of the truth), which leans it high. It holds for this game at these
+moves from one thread to another every few seconds can read low, since the lead keeps reading the old thread for
+about half a second after each move and the verdict takes the median of 1 s windows (for a thread at 87.5 %, by
+where the moves fall against the sampler's ticks and those windows: 44–66 % moving every 1.5 s, 33–88 % every
+2 s, 66–88 % every 3 or 4 s, the truth every 5 s or less often), which leans it high. It holds for this game at these
 settings only: the real check is a second recording with lighter graphics, read in Compare.
 
 For an NVIDIA GPU held down by heat or power, `gpu_throttle` says how deep, second in its evidence: its median
@@ -1218,9 +1218,10 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   >= 20 % from the first two minutes, or the level itself: a median `% Processor Performance` at or below 80 % of
   the base clock (a quiet mode set outside Windows held it at 70 % with no limit reported). A CPU held only by the
   level is titled "ran below its base clock", and "checked and fine" says the limit and the level measured, never
-  "full speed". Its line on a busiest thread under 70 % of a CPU (LC 4.5) is left out under VSync's thread verdict
-  and an older capture past VSync's work edge, and where the CPU is not ruled out it says the thread is under the
-  70 % at which CPU speed starts to matter, never that CPU speed is not what holds it back.
+  "full speed". Its line on a busiest thread under 70 % of a CPU (LC 4.5), the share rounded down, is left out
+  under the CPU verdicts (every core busy is CPU-bound too) and an older capture past VSync's work edge, and where
+  the CPU is not ruled out it says the thread is under the 70 % at which CPU speed starts to matter, never that CPU
+  speed is not what holds it back.
 - `ram_pressure`: free RAM under 10 % (5 % or 64 MB critical), hard faults, the commit charge over 80 / 90 %. A
   commit charge over 90 % while RAM stays free is the page file running short: free RAM is no evidence against it
   then (nor hard faults for it, being file reads, nor the paging lift test, which counts paging only while RAM is
@@ -1242,9 +1243,10 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   events' severity (the displayed frames' swing) as the game's own. `vsync_judder` judges the displayed holds in
   whole refreshes (`rules._refresh_holds`) between the two adjacent counts k and k + 1 that hold the most frames, at
   any k: one and two above half the refresh rate, two and three for 58 FPS on 144 Hz; frames on the pair's side of
-  the usual hold ≥ 10 % is judder when at least half of them sit on the pair's other count (frames held four
-  refreshes around a usual two are no alternation of two and three), one count only (72 FPS on 144 Hz) is no
-  judder, holds that slip both ways (10 %
+  the usual hold ≥ 10 % is judder when at least half of them sit on the pair's other count, or, around a usual hold
+  of two or more, that count holds 10 % of all frames itself (a light stretch alternating two and three beside a
+  heavier one held four and five); frames held four refreshes around a usual two, with a lone frame at three, are
+  no alternation of two and three. One count only (72 FPS on 144 Hz) is no judder, holds that slip both ways (10 %
   or more off the usual hold, under 10 % on the pair's side) are neither and the rule stays silent, and the cap it
   offers is refresh / (k + 1). Uneven presents leave it to `uneven_pacing`, except where the screen shapes them
   (`rules._vsync_shaped`, one predicate for both: no cap, frames quantised, VRR not seen, the usual hold 2 or more,

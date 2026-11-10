@@ -163,7 +163,7 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
 - **The headroom is a rough estimate**, not a benchmark: how much a faster GPU or CPU would help comes from the
   GPU's time per frame and the game's busiest thread (which read high when several threads were busy in recordings
   made before lag-doctor kept its lead thread), and work a game does per second does not grow with its frame rate,
-  so the CPU's figure leans low; work that moves between threads every 3 s or more often leans it high. It holds for that
+  so the CPU's figure leans low; work that moves between threads every few seconds can lean it high. It holds for that
   game at those settings; a second recording with lighter graphics, read beside the first in Compare, is the real check.
 - **From a checkout, `--elevate`, `scripts/e2e.py` and `scripts/etw_access.py` run its Python code as
   administrator.** A program already running as you could edit that code and ride along on the prompt you approve.
