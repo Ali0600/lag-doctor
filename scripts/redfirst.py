@@ -22,13 +22,22 @@ code 1). A collection or import error (exit code 2+) means the sabotage broke lo
 nothing, so it is BROKE-LOAD, not CAUGHT. A probe loaded into each pytest run records what that process
 touches: if it touched the real tree (outside the venv), or ended without its report, the mutation is
 UNISOLATED, since the copy may not be what was tested. The probe also takes the real tree off that process's
-sys.path, where the venv's editable install puts the repo's root. Exit status is 0 only if every mutation was
-caught.
+sys.path, where the venv's editable install puts the repo's root.
+
+Each pytest run may take TIMEOUT_S (10 minutes; REDFIRST_TIMEOUT_S, in seconds, overrides it). pytest starts
+suspended and is put in a job object of its own before it runs any code, so every process it starts, at any depth,
+is in that job; past the timeout the whole job is ended, and if any of its processes is still running soon after,
+everything stops (exit 3). Ending only the direct child is not enough: the venv's python.exe is a launcher, and a
+process a test started outlives it. A mutation whose run timed out is TIMEOUT, not CAUGHT: a hang names no failing
+test, and a test that waits without a bound proves nothing until its wait is bounded and fails. A baseline that
+times out is BAD-BASE. Exit status is 0 only if every mutation was caught.
 """
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -38,6 +47,7 @@ import sys
 import tempfile
 import time
 import uuid
+from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
@@ -48,6 +58,9 @@ SKIP_NAMES = (".venv", ".git", ".claude", "__pycache__", ".pytest_cache")
 SKIP_SUFFIXES = (".pyc", ".pyo")
 PROBE = "_redfirst_probe"              # written into the copy's root, loaded with -p
 PROBE_FILE = PROBE + ".py"
+TIMEOUT_S = 600.0                      # one pytest run; read at each run, as is TIMEOUT_ENV, which overrides it
+TIMEOUT_ENV = "REDFIRST_TIMEOUT_S"
+END_WAIT_S = 15.0                      # after a timeout: for the run's processes to be gone, then for its output
 
 PROBE_SOURCE = r'''"""Loaded into each pytest run by scripts/redfirst.py (-p _redfirst_probe).
 
@@ -121,7 +134,7 @@ class Stop(Exception):
 
 @dataclass
 class Run:
-    code: int
+    code: int | None               # pytest's exit code; None: it timed out and its processes were ended
     summary: str
     failed: list[str]
     touched: list[str] | None      # paths touched in the real tree; None: the probe never reported
@@ -201,15 +214,171 @@ def _bad_tests(tests: object) -> str | None:
     return None
 
 
+def _timeout_s() -> float:
+    """The time one pytest run may take, read at each call: TIMEOUT_ENV's seconds if set, else TIMEOUT_S."""
+    raw = os.environ.get(TIMEOUT_ENV)
+    if raw is None:
+        return TIMEOUT_S
+    try:
+        value = float(raw)
+    except ValueError:
+        value = math.nan
+    if not (math.isfinite(value) and value > 0):
+        raise ValueError(f"{TIMEOUT_ENV}={raw!r} is not a number of seconds above 0")
+    return value
+
+
+_CREATE_SUSPENDED = 0x4
+_TH32CS_SNAPTHREAD = 0x4
+_THREAD_SUSPEND_RESUME = 0x2
+_JOB_BASIC_ACCOUNTING = 1              # JobObjectBasicAccountingInformation
+_RESUME_FAILED = 0xFFFFFFFF
+
+
+class _ThreadEntry(ctypes.Structure):                  # THREADENTRY32
+    _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ThreadID", wintypes.DWORD),
+                ("th32OwnerProcessID", wintypes.DWORD), ("tpBasePri", wintypes.LONG),
+                ("tpDeltaPri", wintypes.LONG), ("dwFlags", wintypes.DWORD)]
+
+
+class _JobAccounting(ctypes.Structure):                # JOBOBJECT_BASIC_ACCOUNTING_INFORMATION
+    _fields_ = [("TotalUserTime", ctypes.c_longlong), ("TotalKernelTime", ctypes.c_longlong),
+                ("ThisPeriodTotalUserTime", ctypes.c_longlong), ("ThisPeriodTotalKernelTime", ctypes.c_longlong),
+                ("TotalPageFaultCount", wintypes.DWORD), ("TotalProcesses", wintypes.DWORD),
+                ("ActiveProcesses", wintypes.DWORD), ("TotalTerminatedProcesses", wintypes.DWORD)]
+
+
+assert ctypes.sizeof(_ThreadEntry) == 28 and ctypes.sizeof(_JobAccounting) == 48   # their documented sizes
+
+_k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+for _name, _args, _result in (
+        ("CreateJobObjectW", [wintypes.LPVOID, wintypes.LPCWSTR], wintypes.HANDLE),
+        ("AssignProcessToJobObject", [wintypes.HANDLE, wintypes.HANDLE], wintypes.BOOL),
+        ("TerminateJobObject", [wintypes.HANDLE, wintypes.UINT], wintypes.BOOL),
+        ("QueryInformationJobObject", [wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
+                                       wintypes.LPDWORD], wintypes.BOOL),
+        ("CreateToolhelp32Snapshot", [wintypes.DWORD, wintypes.DWORD], wintypes.HANDLE),
+        ("Thread32First", [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)], wintypes.BOOL),
+        ("Thread32Next", [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry)], wintypes.BOOL),
+        ("OpenThread", [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
+        ("ResumeThread", [wintypes.HANDLE], wintypes.DWORD),
+        ("CloseHandle", [wintypes.HANDLE], wintypes.BOOL)):
+    getattr(_k32, _name).argtypes, getattr(_k32, _name).restype = _args, _result
+_INVALID_HANDLE = wintypes.HANDLE(-1).value
+
+
+def _win_error() -> OSError:
+    return ctypes.WinError(ctypes.get_last_error())
+
+
+def _resume(pid: int) -> None:
+    """Let a process started suspended run: resume its one thread, whose suspend count must be 1."""
+    snap = _k32.CreateToolhelp32Snapshot(_TH32CS_SNAPTHREAD, 0)
+    if not snap or snap == _INVALID_HANDLE:
+        raise _win_error()
+    try:
+        entry, tids = _ThreadEntry(dwSize=ctypes.sizeof(_ThreadEntry)), []
+        more = _k32.Thread32First(snap, ctypes.byref(entry))
+        while more:
+            if entry.th32OwnerProcessID == pid:
+                tids.append(entry.th32ThreadID)
+            more = _k32.Thread32Next(snap, ctypes.byref(entry))
+    finally:
+        _k32.CloseHandle(snap)
+    if len(tids) != 1:
+        raise OSError(f"the process started suspended has {len(tids)} threads, not 1")
+    thread = _k32.OpenThread(_THREAD_SUSPEND_RESUME, False, tids[0])
+    if not thread:
+        raise _win_error()
+    try:
+        before = _k32.ResumeThread(thread)
+        if before == _RESUME_FAILED:
+            raise _win_error()
+    finally:
+        _k32.CloseHandle(thread)
+    if before != 1:
+        raise OSError(f"its thread's suspend count was {before}, not 1: it was not started suspended")
+
+
+class _Job:
+    """A pytest run in a job object of its own. The process starts suspended and joins the job before it runs any
+    code, so every process it starts, at any depth, is in the job too. The job takes the handle Popen holds, so no
+    process is ever opened. Closing the job ends nothing: only end() does."""
+
+    def __init__(self, argv: list[str], **popen) -> None:
+        self.handle = _k32.CreateJobObjectW(None, None)
+        if not self.handle:
+            raise Stop(f"could not make a job object for pytest's processes: {_win_error()}")
+        try:
+            self.proc = subprocess.Popen(argv, creationflags=_CREATE_SUSPENDED, **popen)
+        except BaseException:
+            self.close()
+            raise
+        try:
+            process = getattr(self.proc, "_handle", None)     # CreateProcess's handle, full access to our own child
+            if not process:
+                raise OSError("Popen holds no handle to the process")
+            if not _k32.AssignProcessToJobObject(self.handle, int(process)):
+                raise _win_error()
+            _resume(self.proc.pid)
+        except OSError as exc:
+            _k32.TerminateJobObject(self.handle, 1)        # if it is in the job and ran after all, all it started
+            self.proc.kill()
+            self.proc.communicate()
+            self.close()
+            raise Stop(f"could not put pytest's processes in a job object of their own: {exc}") from exc
+
+    def active(self) -> int:
+        """How many of the job's processes are running."""
+        info = _JobAccounting()
+        if not _k32.QueryInformationJobObject(self.handle, _JOB_BASIC_ACCOUNTING, ctypes.byref(info),
+                                              ctypes.sizeof(info), None):
+            raise Stop(f"could not count pytest's processes: {_win_error()}")
+        return info.ActiveProcesses
+
+    def end(self) -> None:
+        """End every process of the run, wait until none is left, and read its output to the end."""
+        if not _k32.TerminateJobObject(self.handle, 1):
+            raise Stop(f"could not end the pytest run that timed out: {_win_error()}")
+        deadline = time.monotonic() + END_WAIT_S
+        left = self.active()
+        while left and time.monotonic() < deadline:
+            time.sleep(0.05)
+            left = self.active()
+        if left:
+            raise Stop(f"{left} process(es) of the pytest run that timed out still ran {END_WAIT_S:g} s after it "
+                       f"was ended")
+        try:
+            self.proc.communicate(timeout=END_WAIT_S)
+        except subprocess.TimeoutExpired:
+            raise Stop("the output of the pytest run that timed out stayed open after its processes ended") from None
+
+    def close(self) -> None:
+        if self.handle:
+            _k32.CloseHandle(self.handle)
+            self.handle = None
+
+
 def _run(tests: list[str], copy: Path, watch: Path, work: Path) -> Run:
     report = work / f"{uuid.uuid4().hex}.json"
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", PYTHONIOENCODING="utf-8", REDFIRST_PROBE_REAL=str(ROOT),
                REDFIRST_PROBE_SKIP=os.pathsep.join(sorted({sys.prefix, sys.exec_prefix, sys.base_prefix})),
                REDFIRST_PROBE_WATCH=str(watch), REDFIRST_PROBE_OUT=str(report))
-    proc = subprocess.run([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-p", PROBE,
-                           "-q", "-rf", *tests], cwd=copy, env=env, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", timeout=600)
-    out = proc.stdout + proc.stderr
+    timeout = _timeout_s()
+    job = _Job([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-p", PROBE,
+                "-q", "-rf", *tests], cwd=copy, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+               encoding="utf-8", errors="replace")
+    try:
+        stdout, stderr = job.proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        job.end()
+        return Run(None, f"pytest did not finish within {timeout:g} s", [], None, False)
+    except BaseException:
+        _k32.TerminateJobObject(job.handle, 1)      # Ctrl+C, say: as subprocess.run kills its child, but all of it
+        raise
+    finally:
+        job.close()
+    out = stdout + stderr
     failed = re.findall(r"^FAILED (\S+)", out, flags=re.M)
     summary = next((ln for ln in reversed(out.splitlines()) if re.search(r"\d+ (passed|failed|error)", ln)), "")
     try:
@@ -217,7 +386,7 @@ def _run(tests: list[str], copy: Path, watch: Path, work: Path) -> Run:
         touched, seen = [str(p) for p in probe["touched"]], bool(probe["seen"])
     except (OSError, ValueError, KeyError, TypeError):
         touched, seen = None, False
-    return Run(proc.returncode, summary.strip("= "), failed, touched, seen)
+    return Run(job.proc.returncode, summary.strip("= "), failed, touched, seen)
 
 
 def _unisolated(run: Run) -> tuple[str, list[str]] | None:
@@ -262,6 +431,9 @@ def _mutation(m: dict, copy: Path, copied: dict[str, str], expected: dict[str, s
     finally:
         target.write_bytes(original)
     _check_copy(copy, expected)             # also proves the restore
+    if run.code is None:
+        return name, "TIMEOUT", (f"{run.summary} and was ended: a hang names no failing test, so give the test's "
+                                 f"wait a bound past which it fails (baseline: {base.summary})"), []
     why = _unisolated(run)
     if why:
         return name, "UNISOLATED", why[0], why[1]
@@ -312,6 +484,11 @@ def main(argv: list[str]) -> int:
     spec = json.loads(Path(argv[0]).read_text(encoding="utf-8"))
     if not isinstance(spec, list) or not spec:
         print(f"{argv[0]}: a spec must be a non-empty JSON list of mutations", file=sys.stderr)
+        return 2
+    try:
+        _timeout_s()
+    except ValueError as exc:
+        print(exc, file=sys.stderr)
         return 2
     tmp = Path(tempfile.mkdtemp(prefix="redfirst-")).resolve()
     copy, work = tmp / ROOT.name, tmp / "probe"

@@ -827,6 +827,31 @@ turns, showed no change beyond the noise between two detached windows (+1.0 %, 9
 window, and log the machine's busy CPUs in every window, so background load, your own jobs included, can be told
 apart from your change.
 
+### Several comparisons at 95 % each: widen every interval for the number compared
+A 95 % interval misses 5 % of the time, so comparing five variants with one baseline gives five chances for one to
+read "faster" or "slower" by luck: up to 23 % when the comparisons are independent (1 - 0.95^5). Bonferroni's
+correction gives each of k comparisons 5 % / k (each interval at 99 % for five), so all of them hold together at
+least 95 % of the time, however they depend on each other; the wider intervals cost runs.
+**Why it came up**: `lagdoctor sweep` compares up to five settings with the settings file as it was. Its review
+simulated five settings that changed nothing, at 3 runs each: 13.6 % of sweeps called one faster or slower on average
+FPS alone (`docs/DECISIONS.md`, 2026-11-09). The sweep's intervals are now widened for the number of settings compared.
+**Takeaway**: when one experiment makes several comparisons, choose the false-alarm rate for the whole set, divide it
+among the comparisons, and add runs to pay for the wider intervals.
+
+### "No measurable difference" says little until it says what difference the test could see
+A comparison that finds nothing has two readings: the variants are alike, or the runs were too few or too noisy to
+see what separates them. The smallest difference the test finds most of the time tells them apart: for two samples
+of n runs each with spread sd, (t at the test's level + t at 80 %) x sd x sqrt(2/n) is found 80 % of the time (the
+test's power). The extreme is a test that cannot find anything: at 3 runs a side a rank test (Mann-Whitney) has 20
+equally likely orderings, so its smallest two-sided p is 0.1, and it says "no difference" before a single run.
+**Why it came up**: at its default 3 counted runs a setting, `lagdoctor sweep` can see only a difference about three
+times A's run-to-run spread (more once widened for several settings), so "no measurable difference" may only mean
+"too small for this sweep". Its last lines give that spread and the difference the sweep could see 80 % of the time
+(`results.detectable`). A rank test was weighed for the comparison and rejected for the reason above
+(`docs/DECISIONS.md`, 2026-11-09).
+**Takeaway**: give every null result its detectable difference, and check that a test can reject at all at your
+sample size before choosing it.
+
 ### Turning on a game's ETW provider can change what the game does
 An ETW provider gets an enable callback, so a program can act when a trace session starts listening to it. NVIDIA's PC
 Latency (Reflex) stats code in a game starts a ping thread at launch that idles until a session enables its provider;
@@ -1102,3 +1127,17 @@ watch would have played its chimes. `tests/conftest.py`'s `_no_real_keys_or_soun
 doing exactly that on its first run.
 **Takeaway**: before the first test run of a change that turns a side effect on by default, guard the whole suite
 with a tripwire that records and fails at teardown, then fix each test it catches.
+
+### A timeout that kills the child leaves the processes the child started
+`subprocess.run(..., timeout=)` ends a run that hangs with `Popen.kill()`, which on Windows is `TerminateProcess` on
+the direct child only: Windows has no process groups, so whatever that child started keeps running. Through a venv
+the direct child is the `python.exe` launcher; its own job object takes the real interpreter down with it, but that
+job lets processes started inside it leave, so a test's own child survives (2 of the 3 processes below the launcher
+did, measured). Starting the child suspended, putting it in a job object of your own before it runs any code, and
+then letting it run puts every process it starts, at any depth, in that job; `TerminateJobObject` ends them all, and
+the job's `ActiveProcesses` count says when none is left.
+**Why it came up**: `scripts/redfirst.py` ran each pytest under `subprocess.run(timeout=600)` with no handler, so a
+sabotage that made a test hang would have crashed the whole red-first run, and fixing only that would still have left
+the test's own processes running in the copy it was about to delete.
+**Takeaway**: to end a process tree on Windows, put its root in a job object while it is suspended, end the job, and
+wait for its process count to reach zero before trusting that nothing of it is left.

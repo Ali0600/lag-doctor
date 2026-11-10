@@ -7,10 +7,23 @@ from __future__ import annotations
 
 import os
 import py_compile
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 from lagdoctor import guard
+
+# A process started by a check that hangs: says its own id and the check's (written whole, then renamed), then
+# outlives the check unless whoever ends the check's process ends everything under it too.
+HANG_CHILD = """\
+import json, os, pathlib, sys, time
+marker = pathlib.Path(sys.argv[1])
+part = marker.with_name(marker.name + ".part")
+part.write_text(json.dumps({"check": int(sys.argv[2]), "child": os.getpid()}), encoding="utf-8")
+os.replace(part, marker)
+time.sleep(300)
+"""
 
 
 def test_pid_zero_is_refused():
@@ -36,6 +49,22 @@ def test_blocks_while_sabotaged():
     os.replace(part, marker)
     time.sleep(60)
     raise AssertionError("not killed within 60 s")
+
+
+def test_hangs_while_sabotaged():
+    # The timeout test: under the sabotage this starts a process of its own and waits far past the runner's timeout.
+    # That process's output goes nowhere, so only the process itself outlives a kill that misses it.
+    if guard.refuses(0):
+        return
+    subprocess.Popen([sys.executable, "-c", HANG_CHILD, os.environ["REDFIRST_FIXTURE_MARKER"], str(os.getpid())],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    time.sleep(120)
+    raise AssertionError("not ended within 120 s")
+
+
+def test_always_hangs():
+    time.sleep(120)
+    raise AssertionError("not ended within 120 s: a baseline that never finishes")
 
 
 def test_reads_the_real_tree():

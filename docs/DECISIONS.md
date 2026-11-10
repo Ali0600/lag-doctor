@@ -122,11 +122,11 @@
 - **The page file with the RAM size unknown**: when GlobalMemoryStatusEx fails, `ram_pressure` cannot tell the page
   file from RAM, and the paging lift test still counts against a commit charge at the limit. Revisit hook: the
   `roomy` branch of `rules._ram_pressure` with attribution's own RAM floor (same entry).
-- **Judder that slips both ways**: frames held one refresh fewer and one more around the usual hold (8 % and 6 %
-  around a usual three, LagLab's gpu mode at a 20.8 ms frame) are neither judder nor fine today, so they reach no
-  lag type or headline. Counting both sides from 10 % would flag a cap at refresh / 2 that slips 5 % each way
-  (LagLab's smooth control at a 72 FPS cap); where the line sits is a feel number for the owner. Revisit hook: the
-  `spread` branch of `rules._vsync_judder` (same entry).
+- **Judder that slips both ways, counted from 20 %**: frames held one refresh fewer and one more around the usual
+  hold (8 % and 6 % around a usual three, LagLab's gpu mode at a 20.8 ms frame) stay unnamed by the owner's choice
+  (2026-11-10). Worth trying if a recording shows that judder on screen and no rule names it; from 10 % it would flag
+  a cap at refresh / 2 that slips 5 % each way (LagLab's smooth control at a 72 FPS cap). Revisit hook: the `spread`
+  branch of `rules._vsync_judder` (same entry).
 - **VSync judder judged per stretch, not over the whole capture**: a long menu at the refresh rate or a heavy stretch
   bends the whole capture's hold counts, so judder in one part can go unnamed. Revisit hook: `rules._refresh_holds`
   and `rules._judder` (same entry).
@@ -254,6 +254,29 @@ Revisit hooks: `Session.start` and `Session._watch` in `capture/session.py`, `cr
 
 ---
 
+## 2026-11-10: A red-first run that hangs is a TIMEOUT, ended with every process under it
+
+`scripts/redfirst.py` ran each pytest under `subprocess.run(timeout=600)` with no handler, so a sabotage that made a
+test hang would have crashed the whole run and lost its verdicts. Decided in the session that built the fix, from the
+repo's red-first rules; the owner was not asked.
+
+What a hang means:
+- **A: its own verdict, TIMEOUT, not caught (chosen)**: the run exits 1. A hang names no failing test, a deadlock the
+  sabotage causes while loading looks the same as a test noticing, and a wait without a bound is the test's defect;
+  bounding it turns the hang into a red that names its line.
+- **B: count a hang as caught**: rejected for those reasons; it would also make every unbounded wait in a test pass
+  red-first.
+
+How the run is ended:
+- **A: a job object (chosen)**: pytest starts suspended and joins a job of its own before it runs any code, so every
+  process it starts, at any depth, is in the job; `TerminateJobObject` ends them, and the job's process count must
+  reach zero within 15 s or the run stops (exit 3).
+- **B: `taskkill /T /F`**: rejected: it gives no count of what is left, so "nothing survived" could not be checked.
+- **C: `subprocess.run`'s own kill**: rejected, measured: it ends only the venv's launcher, and of the 3 processes
+  under it, the 2 a test had started kept running.
+
+Revisit hook: `_Job` and the TIMEOUT branch of `_mutation` in `scripts/redfirst.py`.
+
 ## 2026-11-09: How the bottleneck audit's eleven analysis bugs were fixed
 
 The audit of "which part of a PC limits a game" found eleven analysis bugs; the owner said "Fix all eleven". Where a
@@ -293,6 +316,9 @@ fix forked, the implementing session chose; the owner has not weighed in.
   nor fine: the texts name one side, and a cap at refresh / 2 slipping 5 % each way is no judder to fix. A pair is
   named only when at least half of the frames on its side sit on its other count, or, around a usual hold of two or
   more, when that count holds 10 % of all frames itself.
+  - **Holds that slip both ways stay unnamed (the owner's choice, 2026-11-10: "do A")**: uneven pacing still reports
+    them where the game's own presents swing. Counting both sides from 10 % was rejected, since it flags a steady
+    72 FPS cap that slips 5 % each way and looks smooth; counting them from 20 % is deferred, worth trying (Backlog).
   - **Any frame at that count**: rejected; one frame in a thousand at three brought back "two and three" and a 48 FPS
     cap for frames held four refreshes around a usual two.
   - **Half of that side only**: rejected; a light stretch alternating two and three (26 % of all frames at three)

@@ -96,7 +96,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   guard's reach, passes `--hotkey none --start-key none` (and `--no-sound` for a console `watch`): the lag key
   Ctrl+Alt+L is a real key too.
 - **Red first.** A new guard ships with a mutation in `tests/redfirst/*.json` that turns its test red;
-  `scripts/redfirst.py` must report every mutation `CAUGHT`. Never weaken a test to make it pass. The runner
+  `scripts/redfirst.py` must report every mutation `CAUGHT`. Never weaken a test to make it pass. A pytest run that
+  outlives `TIMEOUT_S` (10 minutes; `REDFIRST_TIMEOUT_S` sets it in seconds) is ended with every process under it (a
+  job object) and reads TIMEOUT, which is not caught: a hang names no failing test, so give the test's wait a bound
+  past which it fails. A baseline that times out is BAD-BASE. The runner
   mutates a temp copy of the tree, never the working tree; so tests must not read the real repo by an
   absolute path (reported UNISOLATED) or write into their own tree (stops the run). It copies the tree when each run
   starts, so keep the checkout still until a queued run has begun. Editing a line that an existing mutation's `old`
@@ -294,7 +297,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   body that held it was refused before posting, 2026-11-08). Name another project's issue in plain words ("PresentMon's
   issue 570"): `owner/repo#N` or its URL puts a backlink on that issue's public timeline that editing the body does not
   remove (PR #27, 2026-11-09). Run a PR body's scan in the same `&&` chain as `gh pr create`: on a line of its own, a
-  failing scan still let that body go out.
+  failing scan still let that body go out. The scan passes on grep's exit 1 only: `! grep` also passes on grep's own
+  error (exit 2), and PR #34's body went out unscanned that way when a backslash the Bash tool halved left `\2` in the
+  pattern (2026-11-09; a rescan found it clean). Take `.git/hooks/pre-push`'s own `pattern=` line in a script written
+  with the Write tool, add `Users[/\]` for folder paths (Git Bash's `grep -F` aborted on a backslash), and prove it on a
+  planted positive first.
 - **The README's Experience Gained carries totals** (tests, red-first sabotages and their specs, the tests on the real
   PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
   for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
