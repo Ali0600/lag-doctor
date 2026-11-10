@@ -145,6 +145,29 @@
 
 ---
 
+## 2026-11-10: A red-first run that hangs is a TIMEOUT, ended with every process under it
+
+`scripts/redfirst.py` ran each pytest under `subprocess.run(timeout=600)` with no handler, so a sabotage that made a
+test hang would have crashed the whole run and lost its verdicts. Decided in the session that built the fix, from the
+repo's red-first rules; the owner was not asked.
+
+What a hang means:
+- **A: its own verdict, TIMEOUT, not caught (chosen)**: the run exits 1. A hang names no failing test, a deadlock the
+  sabotage causes while loading looks the same as a test noticing, and a wait without a bound is the test's defect;
+  bounding it turns the hang into a red that names its line.
+- **B: count a hang as caught**: rejected for those reasons; it would also make every unbounded wait in a test pass
+  red-first.
+
+How the run is ended:
+- **A: a job object (chosen)**: pytest starts suspended and joins a job of its own before it runs any code, so every
+  process it starts, at any depth, is in the job; `TerminateJobObject` ends them, and the job's process count must
+  reach zero within 15 s or the run stops (exit 3).
+- **B: `taskkill /T /F`**: rejected: it gives no count of what is left, so "nothing survived" could not be checked.
+- **C: `subprocess.run`'s own kill**: rejected, measured: it ends only the venv's launcher, and of the 3 processes
+  under it, the 2 a test had started kept running.
+
+Revisit hook: `_Job` and the TIMEOUT branch of `_mutation` in `scripts/redfirst.py`.
+
 ## 2026-11-09: How the bottleneck audit's eleven analysis bugs were fixed
 
 The audit of "which part of a PC limits a game" found eleven analysis bugs; the owner said "Fix all eleven". Where a

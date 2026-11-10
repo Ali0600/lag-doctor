@@ -90,7 +90,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   pins in `tests/downloads.py`. Absent, they skip with the reason, unless `LAGDOCTOR_REQUIRE` names them (CI
   does): then they fail, because there a missing download means a broken download step.
 - **Red first.** A new guard ships with a mutation in `tests/redfirst/*.json` that turns its test red;
-  `scripts/redfirst.py` must report every mutation `CAUGHT`. Never weaken a test to make it pass. The runner
+  `scripts/redfirst.py` must report every mutation `CAUGHT`. Never weaken a test to make it pass. A pytest run that
+  outlives `TIMEOUT_S` (10 minutes; `REDFIRST_TIMEOUT_S` sets it in seconds) is ended with every process under it (a
+  job object) and reads TIMEOUT, which is not caught: a hang names no failing test, so give the test's wait a bound
+  past which it fails. A baseline that times out is BAD-BASE. The runner
   mutates a temp copy of the tree, never the working tree; so tests must not read the real repo by an
   absolute path (reported UNISOLATED) or write into their own tree (stops the run). It copies the tree when each run
   starts, so keep the checkout still until a queued run has begun. Editing a line that an existing mutation's `old`
