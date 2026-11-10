@@ -967,6 +967,20 @@ the package second by second.
 **Takeaway**: before a new sensor's value reaches a report, read the same quantity from an independent source over the
 same seconds; on an integrated GPU, "GPU energy" may be the whole package's.
 
+### A running program's path is the path it was opened through: junctions resolved, short names kept
+Windows gives a process's image path (NtQuerySystemInformation class 88, as QueryFullProcessImageName does) as the
+file was opened. A program started through a junction or a subst drive comes back as its real path. One started
+through an 8.3 short name (`C:\PROGRA~1\...`) comes back short. One on a volume that no drive letter names (a disk
+mounted on `C:\SteamLib`) comes back as `\Device\HarddiskVolumeN\...`, until something maps that device to its mount
+folder through the mount manager's volume list.
+**Why it came up**: Play's folder wait finds the game by its install folder (`capture/target.py`, 2026-11-09). Its
+review measured a program started through a junction in `%TEMP%`, which came back as the junction's target, and one
+started through `C:\PROGRA~1`, which came back short. The first version matched the junction's real path in the wait
+but not in the relay's check, so the two sides disagreed on the same game.
+**Takeaway**: before testing whether a process runs from a folder, resolve the folder (`os.path.realpath`) and write
+the image's short names out long (GetLongPathNameW, which opens no file), and do both inside the one function every
+side calls.
+
 ### Cut a recording at its own clock, and count totals again or drop them
 To analyse part of a timed recording, keep every timestamp as it was and make the length the part's: shifting the
 part to start at zero has to reach every time the data holds, and some sit inside text ("stopped at t=812.3 s") that

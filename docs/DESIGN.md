@@ -322,7 +322,10 @@ class Snapshotter:                                 # one reusable buffer, grown 
     def snapshot(self, threads_for: Iterable[int] = ()) -> dict[int, ProcInfo]
 def pids(snapshotter: Snapshotter | None = None) -> frozenset[int]   # every running PID, 0 included, from one
                                                   # snapshot: the list EnumProcesses (psutil.pids) gives, no handle
-def image_path(pid: int) -> str | None            # SystemProcessIdInformation (88) + QueryDosDeviceW
+def image_path(pid: int) -> str | None            # SystemProcessIdInformation (88) + QueryDosDeviceW; a volume
+                                                  # with no drive letter by the folder it is mounted on (the mount
+                                                  # manager's volume list), else its NT path
+def folder_mounts(entries) -> dict[str, str]      # NT device -> mount folder, for volumes no drive letter names
 def self_check(snapshotter=None) -> None          # compare our own process with GetProcessTimes /
                                                   # GetProcessIoCounters; raise if the layout drifted
 # CreateTime is raw FILETIME ticks (100 ns since 1601 UTC), the number GetProcessTimes returns.
@@ -378,6 +381,8 @@ def known_folder(folder_id: str) -> str           # SHGetKnownFolderPath for thi
                                                   # CoTaskMemFree); OSError (.winerror = the HRESULT) on failure
 def documents() -> str                            # FOLDERID_Documents, wherever OneDrive moved it
 def local_app_data() -> str                       # FOLDERID_LocalAppData
+def long_path(path: str) -> str | None            # GetLongPathNameW: 8.3 short names written out long (it reads
+                                                  # folder entries, opens no file); None when the path is gone
 
 # winapi/storage.py (WT 9.5) ---------------------------------------------------------------------------
 def media_type(path: str) -> str                  # "SSD" | "HDD" | "Unknown"  (seek penalty, access 0)
@@ -808,6 +813,56 @@ def game_pids(pid: int, create_time: int) -> set[int]   # the target and its des
   overlay tools, OEM utilities, the tool itself; python.exe stays allowed, LagLab is one). It needs at least
   2 % mean 3D use, and candidates within 1 point are tied (both inferred). A busy 3D engine alone is not a
   game: CUDA compute shows as `engtype_3D` (WT verify log). Ties go to the foreground window's process.
+
+**Play's folder wait** (LAUNCHER-PLAN M6): a store starts the game, so lag-doctor waits for it by its install folder.
+
+```python
+def check_folder(folder) -> str                  # the folder in Windows' form; ValueError says why not
+def folder_forms(folder) -> tuple[str, ...]      # it, plus its real path through a junction or subst drive; opens
+                                                 # the folder (never on a network drive); the player's side only
+def check_forms(folders) -> tuple[str, ...]      # 1 to 4 forms, each checked again
+def program_reason(image: str | None, folders: tuple[str, ...]) -> str | None   # why a program is under none of
+                                                 # them; None if it is under one. The folder rule's one test
+def folder_reason(image, folder) -> str | None   # the same against one form; in_folder(image, folder) -> bool
+def running_from(folders, procs=None) -> dict    # this session's processes from the folder, now (Play's
+                                                 # pre-flight): {running: [{pid, create_time, name, exe}],
+                                                 # unreadable: [{pid, create_time, name}]}
+def wait_for_target(folder, *, folders=None, since=None, deadline_s=300.0, cancel=None, on_status=None, exclude=(),
+                    pick=None, clock=time.monotonic, sleep=None) -> dict
+# find_target's dict with how "folder", plus folder, folders (the forms matched) and judged_by ("3d" | "window");
+# raises TargetNotFound (how far it got by the deadline, and what could not be measured), WaitCancelled (cancel set,
+# or pick chose nothing), ValueError (an argument), OSError (processes or windows unreadable 3 rounds in a row)
+def filetime_now() -> int                        # the system time in create-time units (100 ns since 1601)
+```
+- **The folder** comes from library files any local account can write, and the rule takes in every program under it,
+  so `check_folder` takes only a plain local drive path below the root, outside the Windows folder, with no `.` or
+  `..` part and no name Windows would change or refuse. A program is under it when its image path, slashes and case
+  folded, starts with the folder and a separator (`Game 2` is not under `Game`). Windows names a program by the path
+  it was opened through, junctions and subst drives resolved, so `folder_forms` adds the folder's real path. It
+  opens the folder, and refuses one on a network drive before that (a sleeping server could hold the call), so it
+  runs on the player's side before the UAC prompt; the prompt approves its forms and the relay never resolves a path
+  the player can change. `program_reason` writes an 8.3 short name in the image's path out long first
+  (`winapi.folders.long_path`). An image path Windows leaves in NT form (a volume no drive letter or folder names)
+  or a share never matches, and says so.
+- **The wait** opens no process. Each process created after `since` (default: 2 s before the call; Play passes the
+  relay's create time) has its image path read once, through `ntquery.image_path`; a failed read is tried again, up
+  to 3 times, and then counted. A process counts when `program_reason` puts it under one of the forms, it runs in
+  lag-doctor's Windows session, its name is not on the ignore list, and it is not in `exclude` (a launcher the caller
+  already tried). The GPU is sampled (1 s) only while such a process owns a window that counts for auto mode, and
+  the process must still own it after each sample. The game is the first to draw at least 2 % of a 3D engine on two
+  samples in a row, so stubs, bootstrappers and store relaunches, which never draw or exit, are passed over for as
+  long as they run. A sample with no reading changes no count, and still takes a sample's time when it fails at
+  once; three in a row make a window that stays for two rounds enough, and `on_status("windows-only", {why})` says
+  so. Several at once go to `pick` (default: the busiest, ties to the foreground). The other stages are heard once
+  each: `waiting`, `started` and `window`, with the first process's pid and name. The deadline's reason names only
+  the programs that reached its stage, and counts what could not be measured: unreadable paths, paths with no drive
+  letter, samples with no reading.
+- **`accept_target`'s folder mode**: `accept_target(procs, pid, create_time, session=, folders=, since=, image=)`
+  takes a process that runs as that exact process in `session`, started after `since` (the relay's own create
+  time) and runs a program `program_reason` puts under one of `folders`; `image` is its path, which each side reads
+  for itself. Exactly one of `approved=` (M3's running game) and `folders=` is given. Given the wait's own
+  `folders`, it takes the game the wait found (a test pins that). The relay does not use it yet: that comes with
+  Play's relay step, which needs `start` to carry the game.
 
 ## Analysis
 

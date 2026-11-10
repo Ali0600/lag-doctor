@@ -1,6 +1,7 @@
 """The signed-in user's own folders from SHGetKnownFolderPath (shell32): where Windows keeps Documents and the local
 AppData, wherever they were moved (OneDrive moves Documents into its own folder, so %USERPROFILE%\\Documents can be
-the wrong place). No admin rights.
+the wrong place). No admin rights. Also a path's long form (GetLongPathNameW), for paths Windows gives with 8.3 short
+names.
 
 FOLDERID values are from the SDK's um\\KnownFolders.h. The caller frees the returned string with CoTaskMemFree
 whether the call succeeds or not (the function's documentation).
@@ -31,6 +32,10 @@ _shell32.SHGetKnownFolderPath.restype = ctypes.c_long          # HRESULT
 _ole32 = ctypes.WinDLL("ole32", use_last_error=True)
 _ole32.CoTaskMemFree.argtypes = [ctypes.c_void_p]
 _ole32.CoTaskMemFree.restype = None
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_kernel32.GetLongPathNameW.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+_kernel32.GetLongPathNameW.restype = wintypes.DWORD
+MAX_LONG_PATH_CHARS = 32767
 
 
 def _guid(text: str) -> GUID:
@@ -52,6 +57,23 @@ def known_folder(folder_id: str) -> str:
         err.winerror = hr & 0xFFFFFFFF
         raise err
     return path
+
+
+def long_path(path: str) -> str | None:
+    """`path` with every 8.3 short name in it written out long, as GetLongPathNameW gives it: it reads the folders'
+    entries and opens no file. None when it cannot say (the path does not exist, or is not a path)."""
+    if not isinstance(path, str) or not path or "\0" in path or len(path) > MAX_LONG_PATH_CHARS:
+        return None
+    size = 512
+    for _ in range(3):
+        buf = ctypes.create_unicode_buffer(size)
+        got = _kernel32.GetLongPathNameW(path, buf, size)
+        if got == 0:
+            return None
+        if got < size:
+            return buf.value
+        size = min(got + 1, MAX_LONG_PATH_CHARS + 1)       # too small: `got` is the size it needs
+    return None
 
 
 def documents() -> str:
