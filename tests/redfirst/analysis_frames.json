@@ -1551,8 +1551,8 @@
  {
   "name": "the verdict's side passed off as the frames'",
   "file": "lagdoctor/analysis/attribute.py",
-  "old": "        return fallback, f\"its frames had no GPU timing; the game is {verdict}-bound overall\", \"verdict\"",
-  "new": "        return fallback, f\"its frames had no GPU timing; the game is {verdict}-bound overall\", \"frames\"",
+  "old": "                          f\"{labels.BOUND.get(verdict or '', verdict)}\", \"verdict\")",
+  "new": "                          f\"{labels.BOUND.get(verdict or '', verdict)}\", \"frames\")",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_the_verdict_stands_in_only_for_a_slow_frame_without_gpu_timing_and_says_so"
   ]
@@ -2001,6 +2001,24 @@
   "new": "    frames = f\"{n} steady frames\"",
   "tests": [
    "tests/test_analysis_frames.py::test_a_stretch_too_short_for_a_verdict_names_what_fell_short_and_never_rounds_up_to_the_need"
+  ]
+ },
+ {
+  "name": "the verdict named by its id in the why line",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "f\"{labels.BOUND.get(verdict or '', verdict)}\"",
+  "new": "f\"{verdict}-bound\"",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_verdict_stands_in_only_for_a_slow_frame_without_gpu_timing_and_says_so"
+  ]
+ },
+ {
+  "name": "the shared-GPU note cut by its own semicolon",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "busy (median of 1 s windows, \"",
+  "new": "busy (median of 1 s windows; \"",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_a_steady_rate_other_programs_gpu_work_may_set_is_no_cap_and_counts_as_low_fps"
   ]
  }
 ]

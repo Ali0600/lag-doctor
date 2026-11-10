@@ -543,6 +543,9 @@ def test_the_verdict_stands_in_only_for_a_slow_frame_without_gpu_timing_and_says
     events, _ = analyse(without_gpu_timing_on_the_stutters(lag_cap(base=base)))
     assert {e.detail["side"] for e in events} == {"cpu"} and {e.detail["side_source"] for e in events} == {"verdict"}
     assert all("no GPU timing" in e.detail["why"][0] for e in events)
+    # in plain words: "the game is cpu_main-bound overall" showed the player the analysis's own name for the verdict
+    assert all(e.detail["why"][0].endswith("overall the frame rate is limited by one busy game thread on the CPU")
+               for e in events), [e.detail["why"][0] for e in events]
     assert not idle_gpu_lines(diagnosed(without_gpu_timing_on_the_stutters(lag_cap(base=base))))
     assert idle_gpu_lines(diagnosed(lag_cap(base=base)))           # control: with GPU timing the split counts
     capped, _ = analyse(without_gpu_timing_on_the_stutters(lag_cap()))

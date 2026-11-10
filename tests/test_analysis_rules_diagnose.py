@@ -675,6 +675,11 @@ def test_a_steady_rate_other_programs_gpu_work_may_set_is_no_cap_and_counts_as_l
     assert "limited by -" in text and "limited by FPS cap" not in text and "frame-rate cap" not in d.headline
     assert not [c for c, t in d.cleared.items() if "frame-rate cap" in t], d.cleared
     assert "80% busy" in d.unchecked["frame_cap"] and "80% busy" in d.unchecked["gpu_limit"]
+    # as the lists show it, whole: they cut a reason at its first ";", and the note's own "(median of 1 s windows; 10%
+    # or more)" left "...80% busy (median of 1 s windows" there, its parenthesis never closed
+    from lagdoctor.report import labels
+    shown = {t: r for r, topics in labels.group_unchecked(d.unchecked) for t in topics}
+    assert shown[labels.topic_text("frame_cap")].endswith("may hold the frame rate"), shown
     quiet = diagnose(synth.laglab("smooth", fps_cap=58.0).cap)        # control: the job on the other GPU
     assert quiet.stats["bound"] == "capped" and quiet.lag_type == "none"
 

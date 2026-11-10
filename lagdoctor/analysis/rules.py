@@ -564,15 +564,21 @@ def _holds_open(cause: str, e: _Env) -> str | None:
 
 def _cpu_not_ruled_out(e: _Env) -> str | None:
     """Why the CPU cannot be ruled out in this capture, whatever a cause's own evidence says, or None: LC 3.2's grey
-    zone (A6) and an older capture's per-tick thread past VSync's work edge, under any verdict but frame timing's
-    GPU. One predicate for cpu_limit's held-open reason, the cpu gate and not_focused's CPU side."""
-    if e.verdict == "gpu" and not _gpu_by_engine(e):
+    zone (A6), a saturated thread under VSync at one refresh a frame (which never tests the thread), and an older
+    capture's per-tick thread past VSync's work edge. Never under frame timing's GPU, nor at the display's rate,
+    where a CPU limit costs nothing the player sees (LIMIT_FPS_FRAC). One predicate for cpu_limit's held-open reason,
+    the cpu gate, not_focused's CPU side and cpu_throttle's thread line."""
+    if (e.verdict == "gpu" and not _gpu_by_engine(e)) or _fps_reaches_display(e):
         return None
     busiest = _fin(e.bound.get("busiest_thread"))
     if busiest is not None and THREAD_WAITING <= busiest < fa.THREAD_BOUND:      # A6, LC 3.2
         return (f"the game's busiest thread ran {100 * busiest:.0f}% of a CPU, between "
                 f"{100 * THREAD_WAITING:.0f}% (waiting) and {100 * fa.THREAD_BOUND:.0f}% (CPU-bound): the CPU "
                 "may be close to its limit, so it is not ruled out")
+    if busiest is not None and busiest >= fa.THREAD_BOUND and e.verdict == "vsync":   # one refresh: no cpu_main
+        return (f"the game's busiest thread ran {100 * busiest:.0f}% of a CPU ({100 * fa.THREAD_BOUND:.0f}% or "
+                "more), and VSync at one refresh a frame does not tell whether it is what makes frames miss a "
+                "refresh, so the CPU is not ruled out")
     return next((n for n in e.bound.get("notes") or [] if isinstance(n, str) and fa.THREAD_UPPER_NOTE in n), None)
 
 
@@ -919,7 +925,10 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
                "needs more than a refresh's time for each frame, so the CPU decides the frame rate." if unsaturated
                else "The GPU sits idle for most of each frame while the game's CPU work finishes, so the CPU decides "
                     "the frame rate." if r is not None and r < 0.5
-               else "The game's CPU work takes longer than the GPU's each frame, so the CPU decides the frame rate.")
+               else "The game's CPU work takes longer than the GPU's each frame, so the CPU decides the frame rate."
+               if r is not None           # the GPU's time unmeasured: no comparison with it
+               else ("The game's busiest thread runs at its limit" if one else "The game keeps every CPU core busy")
+               + ", so the CPU decides the frame rate.")
     return _with_headroom(e, c.conclude(title, summary, fixes))
 
 
@@ -1381,9 +1390,16 @@ def _cpu_throttle(cap: Capture, ctx: dict) -> Any:
             (" with no speed drop" if dropped is False else "")
         c.against("cpu_limits", W_STEADY, "Windows reported no power or thermal limit" + speed)
     busiest = _fin(e.bound.get("busiest_thread"))
-    if busiest is not None and busiest < CPU_BUSY_FOR_THROTTLE and e.verdict != "cpu_main":   # VSync's thread verdict
-        c.against("cpu_threads", W_STEADY, f"the game's busiest thread used only {100 * busiest:.0f}% of a CPU, so CPU "
-                                           "speed is not what holds it back", 100 * busiest, "%", 100 * CPU_BUSY_FOR_THROTTLE)
+    upper = any(isinstance(n, str) and fa.THREAD_UPPER_NOTE in n for n in e.bound.get("notes") or [])
+    # A6: under VSync's thread verdict, and an older capture's figure past VSync's work edge, a thread's share of a CPU
+    # is not what VSync holds it by
+    if busiest is not None and busiest < CPU_BUSY_FOR_THROTTLE and e.verdict != "cpu_main" and not upper:
+        open_ = _cpu_not_ruled_out(e) is not None       # never "not what holds it back" beside "not ruled out"
+        c.against("cpu_threads", W_STEADY,
+                  (f"the game's busiest thread used {100 * busiest:.0f}% of a CPU, under the "
+                   f"{100 * CPU_BUSY_FOR_THROTTLE:.0f}% at which CPU speed starts to matter") if open_ else
+                  (f"the game's busiest thread used only {100 * busiest:.0f}% of a CPU, so CPU speed is not what "
+                   "holds it back"), 100 * busiest, "%", 100 * CPU_BUSY_FOR_THROTTLE)
     if _dict(e.causes.get("cpu_throttle")).get("label") == "supports":       # LC 4.5: as gpu_throttle
         _event_link(c, "cpu_throttle", "cpu_limits", "the CPU slowing down")
     _quiet_power_hint(c, gpu=False)
@@ -1750,7 +1766,8 @@ def _refresh_holds(e: _Env) -> tuple[Counter, int] | None:
 
 def _judder(e: _Env) -> tuple[Counter, int, int, int, float, float] | None:
     """(holds, lo, the usual hold, the other count of its pair, the share of frames past the usual hold on the other
-    count's side, the share held for any count but the usual one); None without holds. The first is the judder the
+    count's side (0 unless at least half of them sit at that count), the share held for any count but the usual one);
+    None without holds. The first is the judder the
     rule names: frames alternating between the usual count and the one beside it. The second, both sides, only keeps
     "no judder" from a game whose holds slip both ways (5 % one fewer and 5 % one more around a cap at refresh / 2):
     neither the alternation the texts name nor steady."""
@@ -1760,8 +1777,9 @@ def _judder(e: _Env) -> tuple[Counter, int, int, int, float, float] | None:
     held, lo = holds
     usual, other = (lo, lo + 1) if held[lo] >= held[lo + 1] else (lo + 1, lo)
     n = sum(held.values())
-    share = (sum(v for h, v in held.items() if (h > usual if other > usual else h < usual)) / n   # k = 1: held 2+
-             if held[other] else 0.0)        # no frame at the count beside the usual one: no alternation to name
+    side = sum(v for h, v in held.items() if (h > usual if other > usual else h < usual))   # k = 1: held 2+
+    # at least half of that side at the count beside the usual one, or what alternates there is not the pair named
+    share = side / n if 2 * held[other] >= side else 0.0
     spread = (n - held[usual]) / n
     return held, lo, usual, other, share, spread
 

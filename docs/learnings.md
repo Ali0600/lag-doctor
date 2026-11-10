@@ -1060,3 +1060,14 @@ plenty, and the time shown was the need. The GPU-limit evidence quotes that note
 9.9 s of steady frames; a verdict needs 10 s" (`frames._too_short_note`).
 **Takeaway**: format a measurement compared against a threshold with the rounding that keeps it on its side (floor
 below a minimum, ceiling above a maximum), and say which of several requirements it missed.
+
+### Quote how a figure behaves from the code that reads it, not from the raw column
+A number given for how a measurement behaves has to come out of the consumer's own arithmetic (its windows, its
+median, its rounding). The raw column's plain mean is a different statistic, and it can lean the other way.
+**Why it came up**: DESIGN said the lead thread read 62 % for a thread at 87.5 % whose work moved every 2 s, and
+82.5 % when it moved every 10 s. Both were the plain mean of the per-sample column. The bound verdict takes the
+median of 1 s window means, which gave 62–88 % at every 2 s (by how the moves line up with the windows) and the
+true 87.5 % at every 4 s or slower. Re-running the probe gave the same wrong numbers, because the probe itself took
+the plain mean.
+**Takeaway**: feed a probe's made-up data through the consumer's own function and quote what it returns; re-running
+a measurement checks its arithmetic, not whether it measures what the code reads.

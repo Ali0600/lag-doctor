@@ -24,6 +24,7 @@ from lagdoctor.analysis import events as ev_mod
 from lagdoctor.analysis import frames as fa
 from lagdoctor.analysis import stats as st
 from lagdoctor.model import F, G, S, Capture, LagEvent
+from lagdoctor.report import labels
 
 # ---- windows and baselines (LC 5.2) --------------------------------------------------------------
 WINDOW_BEFORE_S = 0.5        # LC 5.2: look at [t_start - 0.5 s, t_end + 0.25 s]
@@ -709,7 +710,8 @@ def _side(fr: dict[str, list], ev: LagEvent, verdict: str | None,
                    "no presented frame held the lost time (a stall, or the screen stopped updating)"
                    if ev.kind == "stutter" else "none of the game's own frames fell in it")
             return None, f"{why}, so which side was slow is unknown", None
-        return fallback, f"its frames had no GPU timing; the game is {verdict}-bound overall", "verdict"
+        return (fallback, f"its frames had no GPU timing; overall the frame rate is limited by "
+                          f"{labels.BOUND.get(verdict or '', verdict)}", "verdict")
     what = f"its slowest frame ({float(fm[rows[0]]):.0f} ms)" if ev.kind == "stutter" else "its frames"
     if r >= fa.R_GPU:
         return "gpu", f"the GPU was busy for {100 * r:.0f}% of {what}, so the GPU side was slow", "frames"

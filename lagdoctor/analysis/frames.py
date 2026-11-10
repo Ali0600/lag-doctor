@@ -671,7 +671,8 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
     if shared is not None and verdict in ("capped", "waiting"):
         # A7 (LC 4.6, PM 3.2): other programs' GPU work paces the game as evenly as a cap and leaves its own GPU
         # busy short, so neither "a cap" nor "waiting on something else" can be told from a shared GPU
-        notes.insert(0, f"other programs kept the game's GPU {shared:.0f}% busy (median of 1 s windows; "
+        # never a ";" inside: the lists cut a quoted reason at its first one (labels.group_unchecked)
+        notes.insert(0, f"other programs kept the game's GPU {shared:.0f}% busy (median of 1 s windows, "
                         f"{SHARED_GPU_PCT:.0f}% or more), so a frame-rate cap, the shared GPU or something else "
                         "may hold the frame rate")
         verdict, conf = "unknown", "low"

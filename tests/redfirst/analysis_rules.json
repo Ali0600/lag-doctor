@@ -1136,8 +1136,8 @@
  {
   "name": "grey zone held under a GPU verdict",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if e.verdict == \"gpu\" and not _gpu_by_engine(e):\n        return None\n    busiest = _fin(e.bound.get(\"busiest_thread\"))",
-  "new": "    busiest = _fin(e.bound.get(\"busiest_thread\"))",
+  "old": "    if (e.verdict == \"gpu\" and not _gpu_by_engine(e)) or _fps_reaches_display(e):\n        return None\n    busiest = _fin(e.bound.get(\"busiest_thread\"))",
+  "new": "    if _fps_reaches_display(e):\n        return None\n    busiest = _fin(e.bound.get(\"busiest_thread\"))",
   "tests": [
    "tests/test_analysis_rules.py::test_the_grey_zone_holds_neither_a_gpu_bound_verdict_nor_a_frame_rate_at_the_display"
   ]
@@ -1786,8 +1786,8 @@
  {
   "name": "judder counted on one side of the usual hold only",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    share = (sum(v for h, v in held.items() if (h > usual if other > usual else h < usual)) / n   # k = 1: held 2+\n",
-  "new": "    share = (sum(v for h, v in held.items() if h > usual) / n\n",
+  "old": "    side = sum(v for h, v in held.items() if (h > usual if other > usual else h < usual))   # k = 1: held 2+",
+  "new": "    side = sum(v for h, v in held.items() if h > usual)",
   "tests": [
    "tests/test_analysis_rules.py::test_vsync_judder_is_judged_between_any_two_adjacent_whole_numbers_of_refreshes"
   ]
@@ -1795,8 +1795,8 @@
  {
   "name": "judder share counts the usual hold",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    share = (sum(v for h, v in held.items() if (h > usual if other > usual else h < usual)) / n   # k = 1: held 2+\n",
-  "new": "    share = (held[usual] / n\n",
+  "old": "    share = side / n if 2 * held[other] >= side else 0.0",
+  "new": "    share = held[usual] / n if 2 * held[other] >= side else 0.0",
   "tests": [
    "tests/test_analysis_rules.py::test_a_steady_lock_at_two_refreshes_is_no_judder"
   ]
@@ -1841,8 +1841,8 @@
  {
   "name": "the engine fallback closes the CPU's grey zone",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if e.verdict == \"gpu\" and not _gpu_by_engine(e):\n        return None\n",
-  "new": "    if e.verdict == \"gpu\":\n        return None\n",
+  "old": "    if (e.verdict == \"gpu\" and not _gpu_by_engine(e)) or _fps_reaches_display(e):",
+  "new": "    if e.verdict == \"gpu\" or _fps_reaches_display(e):",
   "tests": [
    "tests/test_analysis_rules.py::test_the_engine_fallback_never_rules_the_cpu_out"
   ]
@@ -1877,8 +1877,8 @@
  {
   "name": "cpu_throttle's 70 % line under VSync's thread verdict",
   "file": "lagdoctor/analysis/rules.py",
-  "old": " and e.verdict != \"cpu_main\":   # VSync's thread verdict",
-  "new": ":   # VSync's thread verdict",
+  "old": " and e.verdict != \"cpu_main\" and not upper:",
+  "new": " and not upper:",
   "tests": [
    "tests/test_analysis_rules.py::test_vsyncs_verdict_on_an_unsaturated_thread_is_supported_not_contradicted"
   ]
@@ -1967,8 +1967,8 @@
  {
   "name": "a judder pair with no frame at the count beside the usual one",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "             if held[other] else 0.0)",
-  "new": "             if True else 0.0)",
+  "old": "if 2 * held[other] >= side else 0.0",
+  "new": "if True else 0.0",
   "tests": [
    "tests/test_analysis_rules.py::test_holds_that_slip_both_ways_are_never_called_fine_and_never_silence_uneven_pacing"
   ]
@@ -2026,6 +2026,69 @@
   "new": "                    \"the frame rate.\" if True",
   "tests": [
    "tests/test_analysis_rules.py::test_vsyncs_verdict_on_an_unsaturated_thread_is_supported_not_contradicted"
+  ]
+ },
+ {
+  "name": "the CPU held open at the display's rate",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if (e.verdict == \"gpu\" and not _gpu_by_engine(e)) or _fps_reaches_display(e):",
+  "new": "    if e.verdict == \"gpu\" and not _gpu_by_engine(e):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsync_at_one_refresh_holds_the_cpu_open_below_the_display_whatever_the_thread_and_never_at_it"
+  ]
+ },
+ {
+  "name": "a saturated thread under VSync at one refresh rules the CPU out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if busiest is not None and busiest >= fa.THREAD_BOUND and e.verdict == \"vsync\":   # one refresh: no cpu_main",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsync_at_one_refresh_holds_the_cpu_open_below_the_display_whatever_the_thread_and_never_at_it"
+  ]
+ },
+ {
+  "name": "cpu_throttle's thread line kept on an old capture past VSync's work edge",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": " and e.verdict != \"cpu_main\" and not upper:",
+  "new": " and e.verdict != \"cpu_main\":",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_throttle_never_says_cpu_speed_is_not_what_holds_back_a_cpu_that_is_not_ruled_out"
+  ]
+ },
+ {
+  "name": "cpu_throttle says CPU speed is not what holds back a CPU not ruled out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "% at which CPU speed starts to matter\") if open_ else",
+  "new": "% at which CPU speed starts to matter\") if False else",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_throttle_never_says_cpu_speed_is_not_what_holds_back_a_cpu_that_is_not_ruled_out"
+  ]
+ },
+ {
+  "name": "cpu_limit compares with a GPU time never measured",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "               if r is not None           # the GPU's time unmeasured: no comparison with it",
+  "new": "               if True           # the GPU's time unmeasured: no comparison with it",
+  "tests": [
+   "tests/test_analysis_rules.py::test_cpu_limit_compares_with_the_gpus_time_only_where_it_was_measured"
+  ]
+ },
+ {
+  "name": "a judder pair named where most of its side sits past the count beside it",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "if 2 * held[other] >= side else 0.0",
+  "new": "if held[other] else 0.0",
+  "tests": [
+   "tests/test_analysis_rules.py::test_judder_names_a_pair_only_where_at_least_half_of_its_side_sits_beside_the_usual_hold"
+  ]
+ },
+ {
+  "name": "a judder pair named only past half of its side",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "if 2 * held[other] >= side else 0.0",
+  "new": "if 2 * held[other] > side else 0.0",
+  "tests": [
+   "tests/test_analysis_rules.py::test_judder_names_a_pair_only_where_at_least_half_of_its_side_sits_beside_the_usual_hold"
   ]
  }
 ]

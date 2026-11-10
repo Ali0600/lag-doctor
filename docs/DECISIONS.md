@@ -166,10 +166,21 @@ fix forked, the implementing session chose; the owner has not weighed in.
 - **Under VSync at k >= 2, a thread whose own CPU time a frame passes k - 1 periods is the limit (chosen)**, in place of
   MsCPUBusy, which counts waits outside Present().
   - **Only a saturated thread**: rejected; a thread VSync holds waits for the refresh and is never saturated.
+- **No CPU-side rule clears a CPU that `cpu_limit` holds open (chosen)**: one predicate (`rules._cpu_not_ruled_out`)
+  for `cpu_limit`, the cpu gate, `not_focused` and `cpu_throttle`'s thread line. It holds LC 3.2's grey zone, a
+  saturated thread under VSync at one refresh a frame and an older capture past VSync's work edge, and never at the
+  display's rate, where a CPU limit costs nothing the player sees.
+  - **Hold only the grey zone**: rejected; under VSync at one refresh a frame a 90 % thread was then ruled out where
+    an 84 % one was held.
+  - **Leave out `cpu_throttle`'s thread line wherever the CPU is held open**: rejected; LC 4.5's silence at 0.69 needs
+    its weight, so the line stays, worded as under the 70 % at which CPU speed starts to matter.
 - **VSync judder at any k (chosen)**, judged on the two adjacent hold counts with the most frames, with uneven
   presents taken for VSync's when 90 % of the holds sit on those two counts (`VSYNC_SHARE`; a real recording: 92 %)
   and judder is found there, never under a shared GPU's unknown verdict. Holds that slip both ways are neither judder
-  nor fine: the texts name one side, and a cap at refresh / 2 slipping 5 % each way is no judder to fix.
+  nor fine: the texts name one side, and a cap at refresh / 2 slipping 5 % each way is no judder to fix. A pair is
+  named only when at least half of the frames on its side sit on its other count.
+  - **Any frame at that count**: rejected; one frame in a thousand at three brought back "two and three" and a 48 FPS
+    cap for frames held four refreshes around a usual two.
   - **Count frames off the usual hold on both sides as judder**: rejected; the title, the summary's range and the cap
     then named the wrong side (10 % held one refresh around a usual three read "three and four").
   - **Only up to two and three refreshes**: rejected; an invented bound. LagLab's gpu and cpu modes (3 or 4 refreshes)
