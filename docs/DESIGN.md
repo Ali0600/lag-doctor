@@ -22,6 +22,10 @@ verification log; trust a note's *Corrected* entries over its body.
      still read it as an independent readout, and there its trap stands: `psutil.Process(pid)` (the
      constructor itself), all its methods, `psutil.process_iter()` and `psutil.pid_exists()` open the process
      (WT 9.4), and only `psutil.pids()` does not.
+   - **Play starts nothing itself.** A game starts only through its store's link, which Explorer opens
+     (`winapi/launch.py`), so neither the store client nor the game is ever lag-doctor's child. Every other place that
+     starts a program is listed by file and function in `tests/test_no_handles.py` (`SPAWN_ALLOWED`), which fails on
+     a new one until it is listed on purpose.
 2. **Evidence or silence.** Every finding carries the numbers behind it. A source that did not run is
    reported as *not measured*, never as *fine*; a cause that was checked and ruled out is listed as
    *checked and fine* with what was measured.
@@ -269,6 +273,8 @@ lagdoctor/
             elevation.py                                rights + UAC relaunch
             pipe.py                                     the locked named pipe (the relay, the capture service)
             webview2.py                                 WebView2 from ctypes, through the runtime's own export (the app)
+            launch.py                                   Explorer opens a link, as from a click (Play's store launch)
+  stores/   launch.py                                   Play's store links, built from fixed templates (M6)
   relay/    protocol.py server.py client.py __main__.py   frame timing and the network trace with admin rights
             process.py                                  priority of other processes (fixes/priority)
   capture/  base.py (done) target.py sysmon.py gpumon.py netmon.py netflows.py presentmon.py inventory.py
@@ -512,6 +518,15 @@ class PipeClient:
 # One read and one write may run at once. Waits run in 100 ms slices, so Ctrl+C and close() land within one. Each
 # direction's OVERLAPPED and buffer belong to the pipe, and a call an exception interrupts is cancelled and waited out
 # before the exception goes on (a message it had received is the next read's): Windows never writes freed memory.
+
+# winapi/launch.py (Play's store launch; research note desktop-app.md, sections 5 and 14) -------------------
+def open_through_explorer(target: str, args: str = "", show: int = SW_SHOWNORMAL) -> dict
+                                                  # the desktop's IShellDispatch2::ShellExecute, reached through
+                                                  # ShellWindows' desktop folder view: what starts is Explorer's
+                                                  # child; {explorer_pid, foreground_allowed}; OSError when the
+                                                  # desktop cannot be reached, which is never worked around
+SLOTS; IIDS; CLSID_SHELL_WINDOWS; SID_TOP_LEVEL_BROWSER   # 6 slots and 7 IIDs, each read back from the SDK's
+                                                  # C headers (tests/test_launch.py, needs windows_sdk)
 
 # winapi/webview2.py (the app's window; research note desktop-app.md, sections 3 and 11) -----------------
 SLOTS: dict[str, dict[str, int]]; IIDS: dict[str, str]   # only what lag-doctor calls or implements, every entry
@@ -1273,6 +1288,24 @@ lagdoctor app                        lag-doctor's window: recorded games and the
   to run elevated. A plan-time refusal is reported, never a traceback. Every command except `setup` first
   settles journal entries a crash left `pending`, and marks session-only changes whose process has ended as
   undone (checked without opening the process).
+
+## Play's store launch (lagdoctor/stores/)
+
+Play (LAUNCHER-PLAN M6) starts a game only through its store's link, which Explorer opens (the owner's choice,
+DECISIONS 2026-11-09), so the store creates the game and lag-doctor holds no handle to it.
+
+```python
+def steam_link(appid: str) -> str                 # steam://rungameid/<appid>, digits only (1 to 4294967295)
+def epic_link(namespace: str, item: str, app: str) -> str   # Epic's documented three-part form, each id letters,
+                                                  # digits, dashes and underscores (Fortnite's namespace is "fn")
+def store_of(link) -> "steam" | "epic" | None     # only for a link those two built, matched whole
+def play(link: str) -> dict                       # winapi/launch.py's dict plus "store"; ValueError for any other
+                                                  # link, PermissionError when lag-doctor runs elevated
+```
+- The fields come from library files every local account can write, so each link is built from a fixed template
+  and only after its fields pass the grammar; Steam's carries no arguments, so Steam shows no prompt for it.
+- `play` hands the link to `winapi.launch.open_through_explorer` and nothing else: when Explorer's desktop cannot
+  be reached it fails, and the link is never opened another way.
 
 ## The app (lagdoctor/app)
 
