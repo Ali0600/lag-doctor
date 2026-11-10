@@ -31,9 +31,9 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   second merged ("It works, merge it").
 - [ ] M5: measuring the right part, in three pull requests: the analysis of a part (`crop`, `analyze --from/--to`,
   built 2026-11-09), the start key in `watch`, then the app's half, which the owner tries before it merges.
-- [ ] M6: Play. Its folder wait is built: `wait_for_target`, `in_folder` and `accept_target`'s folder mode in
-  `capture/target.py` (M6, below). The store launch, the library readers, the relay's folder policy, `watch
-  --wait-folder` and screen 6 are not built yet.
+- [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
+  `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
+  below). The relay's folder policy, `watch --wait-folder`, screen 6 and the art are not built yet.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -566,7 +566,21 @@ The analysis half was built on 2026-11-09 (DESIGN.md, The measured part; DECISIO
 
 ### M6: Play
 
-- The library readers and the art.
+- [x] The library readers: `stores/steam.py` and `stores/epic.py` list the games installed through Steam, the Epic
+  Games Launcher and its Preview, read from the stores' own files without starting either (DESIGN.md, "Play's
+  library readers"; where each store keeps its list, and the other readers whose rules these follow, is the research
+  note's section 15). Other programs and accounts can write those files, so the readers cap every size and count,
+  check every field (the ids by the store launch's own grammar, the folder by the folder wait's), and name what they
+  skip in plain words. They reach files only through `stores`' file access, which follows every junction and link
+  by reading it, so nothing on a network share is opened, even through a link, and nothing kept online only. Steam's
+  KeyValues files go through a strict reader of their own (`stores/keyvalues.py`). Nothing reads an Epic game's
+  command line. From the review (2026-11-09): today's Epic launcher writes an empty MainGameAppName for a base game,
+  and Fortnite's names its editor there, so an Epic add-on is told by its AppCategories; Preview games take their
+  titles from the Preview's catalog cache; Steam passes over the Linux runtimes and Proton by app id.
+  - Open: the Preview treats two more catalog namespaces than "ue" as Unreal Engine's (an unofficial reading of
+    launcher 0.95.1, section 15). Which products they are is not known, so a Preview record in either is still
+    listed; pass them over once a source names them.
+- The art: the library's cover tiles for installed games, with the app's half of Play.
 - [x] The store launch: a policy module that builds each URI from its fixed template and refuses when elevated, over
   a thin `winapi/launch.py` that only hands the link to Explorer's `IShellDispatch2::ShellExecute` (DESIGN.md keeps
   policy out of `winapi/`). The `test_no_handles` extension ships with it. Built: `lagdoctor/stores/launch.py`

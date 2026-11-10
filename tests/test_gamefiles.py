@@ -336,6 +336,8 @@ def test_without_the_users_folders_the_unreal_check_is_an_error_with_its_reason(
 
 def test_the_users_folders_are_where_windows_and_dotnet_say():
     assert os.path.normcase(folders.local_app_data()) == os.path.normcase(os.environ["LOCALAPPDATA"])
+    # where the legacy Epic launcher keeps its manifests (stores/epic.py): only the folder's path is read
+    assert os.path.normcase(folders.program_data()) == os.path.normcase(os.environ["ProgramData"])
     dotnet = subprocess.run([str(POWERSHELL), "-NoProfile", "-NonInteractive", "-Command",
                              "[Environment]::GetFolderPath('MyDocuments')"], capture_output=True, text=True,
                             timeout=60)

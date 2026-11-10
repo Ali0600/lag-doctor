@@ -17,11 +17,13 @@ from __future__ import annotations
 import math
 import os
 import re
+import stat
 import threading
 import time
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
+from lagdoctor.capture import gamefiles
 from lagdoctor.winapi import folders as winfolders
 from lagdoctor.winapi import ntquery, storage, windows
 from lagdoctor.winapi.ntquery import ProcInfo, Snapshotter
@@ -253,10 +255,17 @@ def game_pids(pid: int, create_time: int) -> set[int]:
 # ---------------------------------------------------------------- the game's folder (Play, M6) ---
 
 MAX_FOLDER_CHARS = 260
+MAX_SHOWN_CHARS = 80            # of a refused value that a message quotes: the files that give it are any size
 # A plain local drive path: a letter, a colon and one separator. Never a share, a device path or "C:relative".
 _LOCAL_DRIVE = re.compile(r"[A-Za-z]:[\\/](?![\\/])")
 _SEPARATORS = re.compile(r"[\\/]+")
 _BAD_NAME_CHARS = frozenset('<>:"|?*')
+
+
+def _shown(value: object) -> str:
+    """A refused value as a message quotes it: its repr, cut to MAX_SHOWN_CHARS."""
+    text = repr(value)
+    return text if len(text) <= MAX_SHOWN_CHARS else text[:MAX_SHOWN_CHARS - 3] + "..."
 
 
 def fold_path(path: str) -> str:
@@ -281,9 +290,9 @@ def check_folder(folder: object) -> str:
     that Windows would change (a trailing dot or space) or refuse (<>:"|?* and control characters).
     """
     if not isinstance(folder, str):
-        raise ValueError(f"not a folder path: {folder!r}")
+        raise ValueError(f"not a folder path: {_shown(folder)}")
     if not 3 <= len(folder) <= MAX_FOLDER_CHARS or any(ord(c) < 32 for c in folder):
-        raise ValueError(f"not a folder path of 3 to {MAX_FOLDER_CHARS} printable characters: {folder!r}")
+        raise ValueError(f"not a folder path of 3 to {MAX_FOLDER_CHARS} printable characters: {_shown(folder)}")
     if not _LOCAL_DRIVE.match(folder):
         raise ValueError(f"{folder} is not a folder on a local drive (like C:\\Games\\Name)")
     parts = [p for p in _SEPARATORS.split(folder[3:]) if p]
@@ -330,6 +339,160 @@ def in_folder(image: str | None, folder: str) -> bool:
 MAX_FORMS = 4           # forms of one folder the rule takes: the folder itself and its resolved path, with room
 
 
+DRIVE_NOT_THERE = 1             # GetDriveTypeW's DRIVE_NO_ROOT_DIR: no disk at that root now (an unplugged one, say)
+
+
+def _disk_problem(root: str) -> str | None:
+    """Why the drive or volume at `root` ("C:\\" or "\\\\?\\Volume{...}\\") is no local fixed or removable disk, as the
+    rest of a sentence that starts with a path on it; None when it is one. GetDriveTypeW asks the root alone, so
+    nothing on a network drive is opened to find out: a sleeping server could hold the call for its whole timeout."""
+    kind = storage.drive_type(root)
+    if storage.judged_drive_type(kind):
+        return None
+    if kind == DRIVE_NOT_THERE:
+        return f"is on {root[:2]}, where no disk is connected now" if _LOCAL_DRIVE.match(root) \
+            else "is on a volume that is not connected now"
+    return "is not on a local fixed or removable disk"
+
+
+def disk_problem(folder: str) -> str | None:
+    """_disk_problem for `folder`'s drive (`folder` as check_folder gives it), as the rest of a sentence about it."""
+    return _disk_problem(folder[:3])
+
+
+def on_local_disk(folder: str) -> bool:
+    """True when `folder` (as check_folder gives it) is on a local fixed or removable disk, asked of its drive letter
+    alone (disk_problem). A link along the path can still lead elsewhere; local_problem follows each one."""
+    return disk_problem(folder) is None
+
+
+MAX_LINKS = 8                   # junctions and symbolic links one path may lead through (Windows itself stops at 63)
+MAX_LINK_CHARS = 1024           # a link's target as read: no folder a game sits under needs more
+_NAME_SURROGATES = frozenset({stat.IO_REPARSE_TAG_MOUNT_POINT, stat.IO_REPARSE_TAG_SYMLINK})
+_VOLUME_ROOT = re.compile(r"\\\\\?\\Volume\{[0-9A-Fa-f]{8}(?:-[0-9A-Fa-f]{4}){3}-[0-9A-Fa-f]{12}\}\\", re.ASCII)
+
+
+class NotLocal(OSError):
+    """A path that leads off the local disks, refused before anything was opened through it; strerror says why, in
+    plain words (local_problem's answer). The store readers' file access raises it (lagdoctor/stores)."""
+
+
+def _lstat(path: str) -> os.stat_result:
+    """os.lstat, looked up when called (the tests replace this, never os.lstat itself)."""
+    return os.lstat(path)
+
+
+def _readlink(path: str) -> str:
+    """os.readlink, looked up when called (the tests replace this, never os.readlink itself)."""
+    return os.readlink(path)
+
+
+def _names(text: str) -> list[str]:
+    """The names of a path below its root, with its . and .. parts worked out from the text, as Windows does."""
+    out: list[str] = []
+    for part in _SEPARATORS.split(text):
+        if part == "..":
+            if out:
+                out.pop()
+        elif part and part != ".":
+            out.append(part)
+    return out
+
+
+def _rooted(path: str) -> tuple[str, list[str]] | None:
+    """A path as (root, the names below it): a drive's root ("C:\\") or a volume's ("\\\\?\\Volume{...}\\"), read
+    through the \\\\?\\ and \\??\\ prefixes a link's target carries. None for any other path: a share (\\\\server\\...
+    or \\\\?\\UNC\\...), a device, or a path with no root."""
+    for prefix in ("\\\\?\\", "\\??\\"):
+        if path.startswith(prefix):
+            path = path[len(prefix):]
+            m = _VOLUME_ROOT.match("\\\\?\\" + path)
+            if m:
+                return m.group(0), _names(("\\\\?\\" + path)[m.end():])
+            break
+    if not _LOCAL_DRIVE.match(path):
+        return None
+    return path[0].upper() + ":\\", _names(path[3:])
+
+
+def _link_target(text: str, root: str, names: list[str]) -> tuple[str, list[str]] | None:
+    """Where the link at `root` + `names` points, given its target as readlink gives it, as (root, names); None when
+    that is not a path on a local drive. A target with no root is read against the link's own folder, and one that
+    starts with a single backslash against the link's drive, as Windows reads a symbolic link's relative target."""
+    if text.startswith("\\??\\") or (text[0] in "\\/" and text[1:2] in ("\\", "/")) or _LOCAL_DRIVE.match(text):
+        return _rooted(text)                # a share in either slash is no local path: _rooted refuses it
+    if text[0] in "\\/":
+        return root, _names(text)
+    if len(text) > 1 and text[1] == ":":
+        return None                         # "D:name": from a drive's current folder, which a link never has
+    return root, _names("\\".join([*names[:-1], text]))
+
+
+def _cut(text: str) -> str:
+    """A path or a link's target as a message names it: as written, cut to MAX_SHOWN_CHARS."""
+    return text[:MAX_SHOWN_CHARS - 3] + "..." if len(text) > MAX_SHOWN_CHARS else text
+
+
+def _line(text: str) -> str:
+    """local_problem's answer as one line of plain text: each character that cannot be shown becomes a ?."""
+    return "".join(c if c.isprintable() else "?" for c in text)
+
+
+def local_problem(path: object) -> str | None:
+    """Why `path` cannot be opened without leaving the local disks, in plain words; None when it can, or when one of
+    its parts does not exist (nothing past it can be opened at all, through a link or not).
+
+    on_local_disk asks a path's drive letter alone, and a junction or a symbolic link anywhere along the path can
+    still lead onto a network share (where a sleeping server holds a call for its whole timeout) or onto a drive that
+    is no local disk. So each part of the path is looked at in turn, from its root down, without following it (an
+    lstat), and a link is read (readlink), never opened: the walk goes on at its target, whose drive or volume must be
+    a local fixed or removable disk too. A part kept online only is refused as well (opening it would download it),
+    and so is a path that leads through more than MAX_LINKS links. Anything but text without control characters is
+    no path."""
+    if not isinstance(path, str):
+        return _line(f"{_shown(path)} is not a path on a local drive")
+    split = None if any(ord(c) < 32 for c in path) else _rooted(path)
+    if split is None:
+        return _line(f"{_cut(path)} is not a path on a local drive")
+    root, todo = split
+    why = _disk_problem(root)
+    if why is not None:
+        return _line(f"{path} {why}")
+    done: list[str] = []
+    links = 0
+    while todo:
+        done.append(todo.pop(0))
+        here = root + "\\".join(done)
+        try:
+            st = _lstat(here)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            return _line(f"{here} could not be looked at ({exc.strerror or exc})")
+        attrs = getattr(st, "st_file_attributes", 0)
+        if attrs & gamefiles.ONLINE_ONLY:
+            return _line(f"{here} is {gamefiles.WHY_ONLINE}")
+        if not attrs & stat.FILE_ATTRIBUTE_REPARSE_POINT or getattr(st, "st_reparse_tag", 0) not in _NAME_SURROGATES:
+            continue                        # a plain folder or file (or a reparse point that names no other place)
+        links += 1
+        if links > MAX_LINKS:
+            return _line(f"{path} leads through more than {MAX_LINKS} links, so it was not opened")
+        try:
+            text = _readlink(here)
+        except OSError as exc:
+            return _line(f"{here} is a link that could not be read ({exc.strerror or exc})")
+        if not isinstance(text, str) or not text or len(text) > MAX_LINK_CHARS or any(ord(c) < 32 for c in text):
+            return _line(f"{here} is a link to {_shown(text)}, which is not a folder's path")
+        to = _link_target(text, root, done)
+        if to is None:
+            return _line(f"{here} is a link to {_cut(text)}, which is not a path on a local drive")
+        why = None if to[0] == root else _disk_problem(to[0])
+        if why is not None:
+            return _line(f"{here} is a link to {_cut(text)}, which {why}")
+        root, done, todo = to[0], [], to[1] + todo
+    return None
+
+
 def _real_path(path: str) -> str:
     """os.path.realpath, looked up when called (the tests replace this, never the os.path function itself)."""
     return os.path.realpath(path)
@@ -339,23 +502,24 @@ def folder_forms(folder: object) -> tuple[str, ...]:
     """The forms of a game's install folder that its programs are matched against: the folder as check_folder returns
     it, then its real path when that names another plain local folder. Windows names a program by the path it was
     opened through with junctions and subst drives resolved, so a library moved with a junction matches only its real
-    path. ValueError when the folder is not on a local fixed or removable drive: a network drive is never opened, as
-    a sleeping server could hold the call for its whole timeout.
+    path. ValueError when the folder, or a junction or link along its path, leads off the local fixed and removable
+    disks (local_problem, which reads every link before anything is opened through it): a sleeping server could
+    hold the call for its whole timeout.
 
     It opens the folder (never a process), so it runs with the player's own rights, in the recorder or the app before
     the UAC prompt, and the prompt approves the forms it gives. The elevated relay takes them from its command line:
     it never resolves a path the player can change after the approval.
     """
     folder = check_folder(folder)
-    if not storage.judged_drive_type(storage.drive_type(folder[:3])):
-        raise ValueError(f"{folder} is not on a local disk (it is on a network drive, or no drive has that letter)")
+    why = local_problem(folder)
+    if why is not None:
+        raise ValueError(why)
     forms = [folder]
     try:
         real = check_folder(_real_path(folder))
     except (OSError, ValueError):
         real = None
-    if real is not None and fold_path(real) != fold_path(folder) \
-            and storage.judged_drive_type(storage.drive_type(real[:3])):
+    if real is not None and fold_path(real) != fold_path(folder) and on_local_disk(real):
         forms.append(real)
     return tuple(forms)
 

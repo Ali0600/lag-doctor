@@ -244,6 +244,22 @@ def test_check_folder_takes_only_text(bad):
         tgt.check_folder(bad)
 
 
+def test_check_folder_shows_a_long_value_it_refuses_cut_short():
+    words = "not a folder path of 3 to 260 printable characters: "
+    with pytest.raises(ValueError) as caught:
+        tgt.check_folder("C:/" + "x" * 5000)
+    assert str(caught.value) == words + "'C:/" + "x" * 73 + "..."             # 80 characters of it
+    with pytest.raises(ValueError) as caught:
+        tgt.check_folder(["C:/Games"] * 1000)
+    assert str(caught.value) == "not a folder path: " + repr(["C:/Games"] * 1000)[:77] + "..."
+    with pytest.raises(ValueError) as caught:
+        tgt.check_folder(b"x" * 77)                                          # exactly 80 characters: kept whole
+    assert str(caught.value) == "not a folder path: b'" + "x" * 77 + "'"
+    with pytest.raises(ValueError) as caught:
+        tgt.check_folder("C:")
+    assert str(caught.value) == words + "'C:'"
+
+
 def test_the_windows_folder_is_the_one_windows_says(monkeypatch):
     monkeypatch.setenv("SystemRoot", "D:\\WinNT")
     assert tgt.check_folder("C:\\Windows\\Lantern") == "C:\\Windows\\Lantern"
@@ -320,6 +336,10 @@ def test_folder_forms_adds_the_real_path_of_a_junction_or_subst_drive(monkeypatc
     assert tgt.folder_forms(GAME_DIR) == (GAME_DIR,)                            # itself
     monkeypatch.setattr(tgt, "_real_path", lambda p: "\\\\server\\games\\Lantern Drift")
     assert tgt.folder_forms(GAME_DIR) == (GAME_DIR,)                            # a share is never taken
+    monkeypatch.setattr(tgt.storage, "drive_type", lambda root: 4 if root == "Z:\\" else tgt.storage.DRIVE_FIXED)
+    monkeypatch.setattr(tgt, "_real_path", lambda p: "Z:\\Library\\Lantern Drift")
+    assert tgt.folder_forms(GAME_DIR) == (GAME_DIR,)                            # nor a mapped network drive
+    monkeypatch.setattr(tgt.storage, "drive_type", lambda root: tgt.storage.DRIVE_FIXED)
     monkeypatch.setattr(tgt, "_real_path", lambda p: "C:\\Windows\\System32")
     assert tgt.folder_forms(GAME_DIR) == (GAME_DIR,)                            # nor the Windows folder
     monkeypatch.setattr(tgt, "_real_path", lambda p: (_ for _ in ()).throw(OSError("gone")))
@@ -329,10 +349,10 @@ def test_folder_forms_adds_the_real_path_of_a_junction_or_subst_drive(monkeypatc
 def test_folder_forms_refuses_a_folder_on_a_network_drive_before_opening_it(monkeypatch):
     monkeypatch.setattr(tgt.storage, "drive_type", lambda root: 4)            # DRIVE_REMOTE
     monkeypatch.setattr(tgt, "_real_path", lambda p: pytest.fail("the folder was opened"))
-    with pytest.raises(ValueError, match="not on a local disk"):
+    with pytest.raises(ValueError, match="is not on a local fixed or removable disk"):
         tgt.folder_forms("Z:\\Games\\Lantern Drift")
     monkeypatch.setattr(tgt.storage, "drive_type", lambda root: 1)            # DRIVE_NO_ROOT_DIR
-    with pytest.raises(ValueError, match="not on a local disk"):
+    with pytest.raises(ValueError, match="is on Q:, where no disk is connected now"):
         tgt.folder_forms("Q:\\Games\\Lantern Drift")
 
 
