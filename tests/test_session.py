@@ -1600,8 +1600,9 @@ def test_the_too_late_line_says_the_time_that_was_left():
     s._late_at = 109.4                                 # 10.6 s before 2:00, which 1:49 and 2:00 alone would hide
     assert s._late_line() == ("Ctrl+Alt+S was pressed only 10.6 s before the recording stops at its set length (2:00), "
                               "and a part needs at least 11 s, so all of it will be analysed.")
-    s._late_at = 120.004                               # the loop woke a few ms past the set length
-    assert s._late_line().startswith("Ctrl+Alt+S was pressed as the recording reached its set length (2:00), and")
+    for late in (119.95, 120.004):                     # 0.05 s before (never "only 0.0 s"), a few ms past
+        s._late_at = late
+        assert s._late_line().startswith("Ctrl+Alt+S was pressed as the recording reached its set length (2:00), and")
     s.opts.start_advice = False                        # a sweep's run: watch's advice is left to the sweep
     assert s._late_line().endswith("and a part needs at least 11 s.")
 
@@ -1652,24 +1653,6 @@ def test_a_recording_already_stopping_never_says_its_start_key_is_ready(when):
     assert cap.start_key["at"] is None
     if when == "refused":                              # still noted for the report
         assert any("The start key ctrl+alt+s could not be registered" in note for note in cap.notes)
-
-
-def test_a_set_length_too_short_for_a_part_never_offers_the_start_key():
-    keys, lines, events, ticks = Keys(), [], [], []
-
-    def on_tick(elapsed, live):
-        ticks.append(elapsed)
-        if len(ticks) == 1:
-            keys.press(START)                          # held, but never offered: the press changes nothing
-    s = Session(TARGET, _with_start(duration_s=0.3, start_by_s=0.1), collectors=full_set(), inventory=INVENTORY,
-                alive=lambda: True, hotkey_factory=keys, printer=lines.append,
-                observers=sess.Observers(on_tick=on_tick, on_event=lambda kind, data: events.append(kind)))
-    cap = s.run()
-    assert ticks and "start_key" not in events and "measuring" not in events and cap.start_key["at"] is None
-    assert cap.target["stop_reason"] == "duration"     # no "not pressed in time" stop for a key never offered
-    assert not any("is ready" in line for line in lines) and s._late_at is None
-    assert ("\nCtrl+Alt+S is off for this recording: it stops at its set length at 0:00, too soon for a part (one "
-            "needs at least 11 s), so all of it will be analysed.\n") in lines
 
 
 def test_the_measuring_line_names_the_set_length_when_it_comes_before_the_window():

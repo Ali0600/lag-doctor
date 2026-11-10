@@ -20,7 +20,9 @@ From the recorder (`from_recorder` checks them):
   target       {name, pid, how}                 the game was chosen
   elevate      {argv: [str], cwd}               frame timing needs the relay: raise the UAC prompt for this command
   recording    {duration_s, hotkey, frames, network}   everything has started
-  start_key    {key, registered, window_s, start_by_s}  with a start key, after recording: whether Windows gave it
+  start_key    {key, registered, window_s, start_by_s}  with a start key, after recording unless it is already
+                                                stopping: whether Windows gave it (watch turns the key off for a
+                                                --duration of a part or less)
   measuring    {at, until}                      the start key's press: the measured window, seconds from the start
   mark         {at}                             the lag key, seconds from the start
   frames_lost  {why}                            frame timing stopped working

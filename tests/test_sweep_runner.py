@@ -486,7 +486,7 @@ def test_a_start_key_taken_after_the_check_fails_the_run_with_the_low_chime(tmp_
                                  "could not be pressed. If another program took it, close that program and try "
                                  "again, or stop (q) and go on with another key: lagdoctor sweep --resume "
                                  "--start-key KEY")
-    assert world.sounds[:2] == ["problem", "ready"]                 # never "ready" in that run; the next run's
+    assert world.sounds[:3] == ["problem", "ready", "start"]        # never "ready" in that run; the next run's
     assert world.sounds[0] == "problem" and world.sounds.count("start") == len(sweep.slots) - 1
 
 

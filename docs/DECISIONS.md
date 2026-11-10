@@ -211,10 +211,13 @@ The session's:
   no `measuring`, no rising chime, one line saying why, and the report says the key "was not pressed in time". It
   used to count, be announced and chimed, and then be analysed whole anyway (or, a few ms past the end, be told with
   `until` before `at`, which the control channel refuses). A recording that ends early in another way (Ctrl+C, the
-  game's exit) is still judged by `crop.key_part` afterwards. A set length that leaves no room for a part when the
-  key would be offered never offers it (no ready line or chime, one line saying why). The rule is judged to the
-  millisecond, as a part is, and the line says the time that was left. Tests that press keep a set length a part
-  fits in.
+  game's exit) is still judged by `crop.key_part` afterwards. The rule is judged to the millisecond, as a part is,
+  and the line says the time that was left. Tests that press keep a set length a part fits in.
+  - **A `--duration` of a part or less turns the key off (chosen, after the fourth review)**: watch never registers
+    it, says so once, and the capture has no `start_key`, so the reports treat it as `--start-key none`.
+  - **Offer it and refuse every press, or have the session withhold it at the ready point**: rejected; the first
+    promised a press that could never count, and the second left a `start_key` record that the reports then read
+    as "not pressed in time" after the console had said the key was off.
   - **Count it, and cut its part at the end the session announced** (save `until` in `start_key`, so a part bounded
     by `--duration` also stops at the set length rather than at the recorded end, which includes the stop's own
     seconds): deferred, worth trying when the app's half shows `until`; it changes the capture's record. Revisit

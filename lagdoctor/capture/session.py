@@ -122,8 +122,9 @@ class Observers:
 
     on_tick(elapsed, live) once a status period, with each collector's live() values; on_event(kind, data) when
     something happens: "waiting" (the game is being looked for), "target" (the game was chosen), "recording"
-    (everything has started), "start_key" (with a start key, right after "recording": whether Windows gave it, the
-    window and the time a press must come by), "measuring" (the start key's press: the window runs from `at` until
+    (everything has started), "start_key" (with a start key, right after "recording" unless the recording is already
+    stopping: whether Windows gave it, the window, and when the recording stops for want of a press; a press also
+    needs MIN_PART_S before the set length), "measuring" (the start key's press: the window runs from `at` until
     `until`), "mark" (the lag key),
     "frames_lost" (frame timing stopped working), "stopping", "saving" and "saved" (the capture is on disk). Each is
     contained the way the status line is: one that raises is not called again, and the capture says so (unless it
@@ -533,13 +534,9 @@ class Session:
                 return
             self.observers.event("recording", duration_s=self.opts.duration_s, hotkey=self._hotkey_on,
                                  frames=self.opts.frames, network=self.opts.network)
-            # One already stopping (Ctrl+C as it started, a sweep's run closed on "recording") says nothing of its key;
-            # one whose set length leaves no room for a part never offers it, as start() would refuse every press.
-            offer = bool(self.opts.start_key) and not stop.is_set()
-            if offer and self._start_on and not self._room_for_a_part(clock.now() - self.origin):
-                offer = False
-                self._print("\n" + self._no_room_line() + "\n")
-            if offer:
+            # One already stopping (Ctrl+C as it started, a sweep's run closed on "recording") says nothing of its key.
+            # (watch turns the key off for a set length too short for any part: cli._record.)
+            if self.opts.start_key and not stop.is_set():
                 self.observers.event("start_key", key=self.opts.start_key, registered=self._start_on,
                                      window_s=self.opts.window_s, start_by_s=self._press_by())
                 with self._marks_lock:
@@ -610,17 +607,11 @@ class Session:
         """What a first press too near the recording's set length is told (start): it measured nothing. The time
         left is floored to 0.1 s, as crop.key_part says it."""
         stops = clock_text(self.opts.duration_s or 0.0)
-        left = round((self.opts.duration_s or 0.0) - (self._late_at or 0.0), 3)
-        when = (f"only {math.floor(left * 10) / 10:.1f} s before the recording stops at its set length ({stops})"
-                if left > 0 else f"as the recording reached its set length ({stops})")
+        tenths = math.floor(round((self.opts.duration_s or 0.0) - (self._late_at or 0.0), 3) * 10)
+        when = (f"only {tenths / 10:.1f} s before the recording stops at its set length ({stops})" if tenths > 0
+                else f"as the recording reached its set length ({stops})")
         return (f"{self.opts.start_key.title()} was pressed {when}, and a part needs at least {MIN_PART_S:.0f} s"
                 + _analysed_all(self.opts.start_advice))
-
-    def _no_room_line(self) -> str:
-        """Said instead of the ready line when the set length leaves no room for a part (_watch)."""
-        return (f"{self.opts.start_key.title()} is off for this recording: it stops at its set length at "
-                f"{clock_text(self.opts.duration_s or 0.0)}, too soon for a part (one needs at least "
-                f"{MIN_PART_S:.0f} s)" + _analysed_all(self.opts.start_advice))
 
     def _start_end_line(self, why: str) -> str:
         if why == WINDOW_ENDED:

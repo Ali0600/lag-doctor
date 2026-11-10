@@ -535,6 +535,11 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     hotkey = None if (args.hotkey or "").lower() in ("", "none", "off") else args.hotkey
     start_key = getattr(args, "start_key", None)
     start_key = None if (start_key or "none") == "none" else start_key
+    # A set length of a part or less leaves no room for one after any press (Session.start would refuse them all), so
+    # the key is not even registered: the recording is analysed whole, as with --start-key none, and said so once.
+    off_key = start_key if start_key and _too_short_for_a_part(args.duration) else None
+    if off_key:
+        start_key = None
     opts = sess.SessionOptions(duration_s=args.duration, network=not args.no_network, server_ip=args.server,
                                hotkey=hotkey, presentmon_exe=exe, frames=frames, relay=relay,
                                tool_procs=relay.tool_procs() if relay is not None else ())
@@ -554,6 +559,9 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     else:
         say("Recording. Play normally" + (f"; press {hotkey.title()} the moment it lags" if hotkey else "")
             + "; Ctrl+C stops." + (f" Stops by itself after {args.duration:.0f} s." if args.duration else ""))
+    if off_key:
+        say(f"{off_key.title()} is off for this recording: a part needs at least {WINDOW_MIN_S:.0f} s after the press, "
+            f"and the recording stops after {args.duration:g} s, so all of it is analysed.")
     stop = stop if stop is not None else threading.Event()
     saved = threading.Event()
     printer = None if interactive else _silent        # None: the session draws its status line here
@@ -589,14 +597,17 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     return _analyze_saved(cap, cap_path, out_dir, say=say, remember=remember, show_summary=show_summary)
 
 
+def _too_short_for_a_part(duration: float | None) -> bool:
+    """Is a set length no longer than the shortest part? The key is offered only after the recording has started, so
+    no press then leaves a whole part before the end."""
+    return duration is not None and duration <= WINDOW_MIN_S
+
+
 def _recording_line(start_key: str, hotkey: str | None, window_s: float, start_by_s: float | None,
                     duration: float | None, *, chimes: bool) -> str:
     """The "Recording." line of a recording with a start key: when to press it, and what that measures. The press
     counts only once the session says the key is ready (it registers the key after reading the PC's settings)."""
     from lagdoctor.capture.session import span_words
-    if duration and duration < WINDOW_MIN_S:        # too short for any part: the session says the key is off
-        return ("Recording." + (f" Press {hotkey.title()} the moment it lags." if hotkey else "") + " Ctrl+C stops."
-                f" Stops by itself after {duration:.0f} s.")
     key = start_key.title()
     what = ("measuring for the rest of the recording" if duration and duration <= window_s
             else f"{span_words(window_s)} of measuring")

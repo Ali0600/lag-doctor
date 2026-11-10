@@ -605,11 +605,10 @@ on_event=None)` (M4: the app's window, through `watch`):
 - `on_event(kind, data)`: `waiting` `{}` (from `cli.cmd_watch`: the game is being looked for); `target` `{name,
   pid, how}` (from `cli.cmd_watch`: the game was chosen); `recording`
   `{duration_s, hotkey, frames, network}` (everything has started; the origin was set just before the collectors
-  started); with a start key, right after it when the key is offered (not when the recording is already stopping,
-  nor when its set length leaves no room for a part), `start_key` `{key, registered, window_s, start_by_s}`
-  (whether Windows gave it, the window, and when the recording stops for want of a press, null for a key it did not
-  give or when the recording's set length comes first; a press also needs `session.MIN_PART_S` before the set
-  length to count); `measuring` `{at, until}` (the start key's press, seconds from the start;
+  started); with a start key, right after it unless the recording is already stopping, `start_key` `{key,
+  registered, window_s, start_by_s}` (whether Windows gave it, the window, and when the recording stops for want of
+  a press, null for a key it did not give or when the recording's set length comes first; a press also needs
+  `session.MIN_PART_S` before the set length to count); `measuring` `{at, until}` (the start key's press, seconds from the start;
   `until` the window's end, or the set length's when that comes first, null for one that runs to the recording's
   end); `mark` `{t}`; `frames_lost` `{why}` (the "Frame timing is not working" line); `stopping`
   `{reason}` (the stop began: "duration", "game exited", "Ctrl+C", the start key's `session.WINDOW_ENDED` or
@@ -630,10 +629,10 @@ on_event=None)` (M4: the app's window, through `watch`):
   part can come of it, so it closes the key, is not told, plays no chime, and the loop says so once, before any
   stop ("Ctrl+Alt+S was pressed only 10.6 s before the recording stops at its set length (2:00), and a part needs
   at least 11 s, so all of it will be analysed."); the analysis then says the key was not pressed in time, and no
-  `start_by_s` stop follows it, nor a wait cut short for one. A set length that leaves no room for a part when the
-  key would be offered never offers it: no `start_key` event and no ready line, but "Ctrl+Alt+S is off for this
-  recording: it stops at its set length at 0:10, too soon for a part (one needs at least 11 s), so all of it will
-  be analysed.", and watch's "Recording." line for a `--duration` under 11 s promises no press. The
+  `start_by_s` stop follows it, nor a wait cut short for one. watch turns the key off before anything starts for a
+  `--duration` of a part or less (`cli._too_short_for_a_part`): it is never registered, the capture has no
+  `start_key`, and watch says once "Ctrl+Alt+S is off for this recording: a part needs at least 11 s after the
+  press, and the recording stops after 10 s, so all of it is analysed.". The
   start key calls it (`SessionOptions.start_key`, `window_s`, `start_by_s`; one listener per key, each made by
   `hotkey_factory(key, on_press)`). The recording stops `WINDOW_TAIL_S` (3 s, for PresentMon's late rows) after the
   window, or at `start_by_s` with no press (only before the recording's own set length); both are decided on the

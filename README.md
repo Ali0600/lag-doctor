@@ -142,7 +142,8 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
   `--duration S`, or when the game exits; with no Ctrl+Alt+S press within 20 minutes (`--start-by S`) it stops, and
   all of it is analysed, the report saying so. A start key Windows did not give is said at the start, and that
   recording ends only in the other ways. A press less than 11 s before `--duration`'s end measures nothing, and says
-  so; a `--duration` under 11 s has no start key. After the first Ctrl+C it says it is stopping and saving, and a second press cannot lose the capture. `lagdoctor analyze CAPTURE` analyses the same part again.
+  so; a `--duration` of 11 s or less has no start key. After the first Ctrl+C it says it is stopping and saving,
+  and a second press cannot lose the capture. `lagdoctor analyze CAPTURE` analyses the same part again.
 - **Frame timing uses Windows event tracing (ETW), which needs admin rights.** `watch` offers one UAC prompt
   per recording (`--elevate` skips the question, `--no-elevate` records without frame timing). Only PresentMon and
   the network trace then run elevated, in lag-doctor's relay: a background process with no window, which passes

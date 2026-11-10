@@ -1477,11 +1477,6 @@ def test_the_recording_line_says_when_to_press_what_is_measured_and_when_it_stop
     assert short == ("Recording. Once Ctrl+Alt+S is ready (said below), go to the spot you want measured and press "
                      "it to start measuring for the rest of the recording, so the startup before it is not counted. "
                      "Ctrl+C stops. Stops by itself after 30 s.")
-    # A set length too short for any part promises no press (the session says the key is off), at the boundary too.
-    assert cli._recording_line("ctrl+alt+s", None, 90.0, 1200.0, 10.0, chimes=True) == (
-        "Recording. Ctrl+C stops. Stops by itself after 10 s.")
-    assert "to start measuring" not in cli._recording_line("ctrl+alt+s", None, 90.0, 1200.0, 10.999, chimes=True)
-    assert "press it to start measuring" in cli._recording_line("ctrl+alt+s", None, 90.0, 1200.0, 11.0, chimes=True)
     longer = cli._recording_line("ctrl+alt+s", None, 90.0, 1200.0, 1800.0, chimes=False)
     assert "start 90 s of measuring," in longer and longer.endswith("within 20 minutes, it stops and analyses all of it.")
 
@@ -1514,40 +1509,49 @@ class _StartKeys:
             self.live[cli.DEFAULT_START_KEY](clock.now())
 
 
-def test_a_watch_measures_from_its_start_key_with_chimes_and_a_part_too_short_analyses_all_of_it(
-        fake_world, tmp_path, capsys, _no_real_keys_or_sounds):
+def test_a_watch_too_short_for_a_part_turns_its_start_key_off(fake_world, tmp_path, capsys, _no_real_keys_or_sounds):
+    # A 0.6 s recording leaves no room for an 11 s part after any press, so watch turns the key off before anything
+    # starts: never registered, no chime, no start key in the capture, analysed whole as with --start-key none.
     keys = _StartKeys()
-    fake_world["keys"], fake_world["on_tick"] = keys, keys.press_on_first_tick
+    fake_world["keys"] = keys
     assert cli.main(["watch", "--pid", "4242", "--duration", "0.6", "--window", "300", "--start-by", "900",
                      "--no-network", "--no-elevate", "--out", str(tmp_path / "out")]) == 0
-    assert keys.made == [cli.DEFAULT_HOTKEY, cli.DEFAULT_START_KEY] and keys.live == {}     # one per key, let go
-    opts = fake_world["sessions"][0]["opts"]
-    assert (opts.start_key, opts.window_s, opts.start_by_s, opts.start_advice) == ("ctrl+alt+s", 300.0, 900.0, True)
+    assert keys.made == [cli.DEFAULT_HOTKEY] and keys.live == {}             # the lag key only, let go
+    assert fake_world["sessions"][0]["opts"].start_key is None
     [made] = list((tmp_path / "out").iterdir())
     cap = Capture.load(made / cli.CAPTURE_NAME)
-    # A 0.6 s recording leaves no room for an 11 s part: the key is held but never offered (the session says it is
-    # off), so no chime promises measuring that cannot happen, and the press changes nothing.
-    assert keys.pressed and cap.start_key["registered"] is True and cap.start_key["at"] is None
-    assert _no_real_keys_or_sounds.played == []
+    assert cap.start_key is None and _no_real_keys_or_sounds.played == []
     assert _no_real_keys_or_sounds.players == 1
     assert "span" not in json.loads((made / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8"))["stats"]
     out = " ".join(capsys.readouterr().out.split())               # the summary wraps at the console's width
-    assert "Recording. Press Ctrl+Alt+L the moment it lags. Ctrl+C stops. Stops by itself after 1 s." in out
-    assert "is ready" not in out and "to start measuring" not in out
-    assert ("The start key Ctrl+Alt+S was not pressed in time, so the whole recording was analysed, startup "
-            "included.") in out, out
+    assert ("Recording. Play normally; press Ctrl+Alt+L the moment it lags; Ctrl+C stops. Stops by itself after 1 s. "
+            "Ctrl+Alt+S is off for this recording: a part needs at least 11 s after the press, and the recording "
+            "stops after 0.6 s, so all of it is analysed.") in out, out
+    assert "not pressed in time" not in out and "could not be registered" not in out   # no report note of a key
+
+
+def test_the_start_key_is_off_for_a_set_length_no_longer_than_a_part():
+    assert cli._too_short_for_a_part(cli.WINDOW_MIN_S) and cli._too_short_for_a_part(0.6)
+    assert not cli._too_short_for_a_part(cli.WINDOW_MIN_S + 0.001) and not cli._too_short_for_a_part(None)
 
 
 def test_a_chime_that_could_not_play_is_said_once_after_the_recording(fake_world, tmp_path, capsys, monkeypatch,
                                                                       _no_real_keys_or_sounds):
     _no_real_keys_or_sounds.sound_ok = False
-    monkeypatch.setattr(sess, "MIN_PART_S", 0.0)       # the press counts in a 0.5 s recording: three chimes fail
+    monkeypatch.setattr(cli, "WINDOW_MIN_S", 0.0)       # a part fits in a 0.5 s recording: the key is on, and
+    monkeypatch.setattr(sess, "MIN_PART_S", 0.0)        # the press counts, so three chimes play and fail
     keys = _StartKeys()
     fake_world["keys"], fake_world["on_tick"] = keys, keys.press_on_first_tick
-    assert cli.main(["watch", "--pid", "4242", "--duration", "0.5", "--no-network", "--no-elevate",
-                     "--out", str(tmp_path / "out")]) == 0
-    assert _no_real_keys_or_sounds.played == ["ready", "start", "done"]
-    assert capsys.readouterr().out.count("(A chime could not be played during the recording") == 1
+    assert cli.main(["watch", "--pid", "4242", "--duration", "0.5", "--window", "300", "--start-by", "900",
+                     "--no-network", "--no-elevate", "--out", str(tmp_path / "out")]) == 0
+    assert keys.made == [cli.DEFAULT_HOTKEY, cli.DEFAULT_START_KEY] and keys.live == {}     # one per key, let go
+    opts = fake_world["sessions"][0]["opts"]
+    assert (opts.start_key, opts.window_s, opts.start_by_s, opts.start_advice) == ("ctrl+alt+s", 300.0, 900.0, True)
+    assert _no_real_keys_or_sounds.played == ["ready", "start", "done"] and _no_real_keys_or_sounds.players == 1
+    out = capsys.readouterr().out
+    assert out.count("(A chime could not be played during the recording") == 1
+    assert ("Recording. Once Ctrl+Alt+S is ready (said below, with a short chime), go to the spot you want measured "
+            "and press it to start measuring for the rest of the recording, with a rising chime") in " ".join(out.split())
 
 
 def _keyed_capture(tmp_path: Path, *, pressed: bool = True) -> Path:
