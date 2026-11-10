@@ -1477,6 +1477,11 @@ def test_the_recording_line_says_when_to_press_what_is_measured_and_when_it_stop
     assert short == ("Recording. Once Ctrl+Alt+S is ready (said below), go to the spot you want measured and press "
                      "it to start measuring for the rest of the recording, so the startup before it is not counted. "
                      "Ctrl+C stops. Stops by itself after 30 s.")
+    # A set length too short for any part promises no press (the session says the key is off), at the boundary too.
+    assert cli._recording_line("ctrl+alt+s", None, 90.0, 1200.0, 10.0, chimes=True) == (
+        "Recording. Ctrl+C stops. Stops by itself after 10 s.")
+    assert "to start measuring" not in cli._recording_line("ctrl+alt+s", None, 90.0, 1200.0, 10.999, chimes=True)
+    assert "press it to start measuring" in cli._recording_line("ctrl+alt+s", None, 90.0, 1200.0, 11.0, chimes=True)
     longer = cli._recording_line("ctrl+alt+s", None, 90.0, 1200.0, 1800.0, chimes=False)
     assert "start 90 s of measuring," in longer and longer.endswith("within 20 minutes, it stops and analyses all of it.")
 
@@ -1520,15 +1525,15 @@ def test_a_watch_measures_from_its_start_key_with_chimes_and_a_part_too_short_an
     assert (opts.start_key, opts.window_s, opts.start_by_s, opts.start_advice) == ("ctrl+alt+s", 300.0, 900.0, True)
     [made] = list((tmp_path / "out").iterdir())
     cap = Capture.load(made / cli.CAPTURE_NAME)
-    # A 0.6 s recording leaves no room for an 11 s part: the press is refused as it comes (Session.start), so no
-    # rising chime announces measuring that cannot happen, and nothing ends it with three notes.
+    # A 0.6 s recording leaves no room for an 11 s part: the key is held but never offered (the session says it is
+    # off), so no chime promises measuring that cannot happen, and the press changes nothing.
     assert keys.pressed and cap.start_key["registered"] is True and cap.start_key["at"] is None
-    assert _no_real_keys_or_sounds.played == ["ready"]
+    assert _no_real_keys_or_sounds.played == []
     assert _no_real_keys_or_sounds.players == 1
     assert "span" not in json.loads((made / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8"))["stats"]
     out = " ".join(capsys.readouterr().out.split())               # the summary wraps at the console's width
-    assert ("Recording. Once Ctrl+Alt+S is ready (said below, with a short chime), go to the spot you want measured "
-            "and press it to start measuring for the rest of the recording, with a rising chime") in out
+    assert "Recording. Press Ctrl+Alt+L the moment it lags. Ctrl+C stops. Stops by itself after 1 s." in out
+    assert "is ready" not in out and "to start measuring" not in out
     assert ("The start key Ctrl+Alt+S was not pressed in time, so the whole recording was analysed, startup "
             "included.") in out, out
 

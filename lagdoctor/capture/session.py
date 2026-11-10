@@ -29,6 +29,7 @@ it, with administrator rights; their collectors here are fed from its pipe.
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import shutil
 import signal
@@ -323,7 +324,7 @@ class Session:
             try:
                 self._start_collectors()
                 hotkey = self._start_hotkey()
-                start = self._start_start_key()
+                start = self._start_start_key(stop)
                 self._watch(stop)
             finally:
                 guard.stopping = True
@@ -372,9 +373,10 @@ class Session:
         self.notes.append(f"The lag key {self.opts.hotkey} could not be registered ({why}); no marks were recorded.")
         return None
 
-    def _start_start_key(self):
+    def _start_start_key(self, stop: threading.Event | None = None):
         """The start key's listener (SessionOptions.start_key), or None. One Windows will not give is said at once,
-        while the player is still at the console, and noted: the recording goes on as one without a start key."""
+        while the player is still at the console, and noted: the recording goes on as one without a start key. A
+        recording already stopping (`stop` set) is not told what to do next: the note stays."""
         key = self.opts.start_key
         if not key:
             return None
@@ -396,7 +398,8 @@ class Session:
                         else "it no longer stops by itself: press Ctrl+C when you are done")
                      + (". To measure from a press, close the program that uses it, or record again with another "
                         "--start-key" if taken else ""))
-        self._print(line + ".\n")
+        if stop is None or not stop.is_set():
+            self._print(line + ".\n")
         return None
 
     def _stop_hotkey(self, listener, what: str = "lag key") -> None:
@@ -467,12 +470,17 @@ class Session:
             if not self._start_open or self.start_at is not None:
                 return None
             at = round(when - self.origin, 3)
-            if self.opts.duration_s is not None and self.opts.duration_s - at < MIN_PART_S:
+            if not self._room_for_a_part(at):
                 self._start_open, self._late_at = False, at
                 return None
             self.start_at = at
         self.observers.event("measuring", at=at, until=self._measured_until(at))
         return at
+
+    def _room_for_a_part(self, at: float) -> bool:
+        """Does a press at `at` (seconds from the start) leave MIN_PART_S before the recording's set length? Rounded to
+        the millisecond, as crop.check_span judges a part's length."""
+        return self.opts.duration_s is None or round(self.opts.duration_s - at, 3) >= MIN_PART_S
 
     def _measured_until(self, at: float) -> float | None:
         """Where measuring from a press at `at` ends, in seconds from the start: the window's end, or the recording's
@@ -494,10 +502,10 @@ class Session:
         """When the recording is due to stop for the start key, in seconds from the start: WINDOW_TAIL_S past the
         measured window, or the time a press must come by; None while neither applies. For the wait between ticks."""
         with self._marks_lock:
-            at = self.start_at
+            at, waiting = self.start_at, self._start_open
         if at is not None:
             return None if self.opts.window_s is None else at + self.opts.window_s + WINDOW_TAIL_S
-        return self.opts.start_by_s if self._start_on else None
+        return self.opts.start_by_s if waiting else None      # none once a press too late for a part closed it
 
     def _start_stop(self, elapsed: float) -> str | None:
         """The start key's reason to stop at `elapsed`, if it has one: the window and its tail have run (WINDOW_ENDED),
@@ -509,9 +517,9 @@ class Session:
                 if self.opts.window_s is None or elapsed < at + self.opts.window_s + WINDOW_TAIL_S:
                     return None
                 reason = WINDOW_ENDED
-            elif self._late_at is not None:          # pressed, too late for a part: the set length ends it
+            elif not self._start_open:               # never offered, or a press too late for a part closed it
                 return None
-            elif self._start_on and self.opts.start_by_s is not None and elapsed >= self.opts.start_by_s:
+            elif self.opts.start_by_s is not None and elapsed >= self.opts.start_by_s:
                 reason = NO_START
             else:
                 return None
@@ -525,8 +533,13 @@ class Session:
                 return
             self.observers.event("recording", duration_s=self.opts.duration_s, hotkey=self._hotkey_on,
                                  frames=self.opts.frames, network=self.opts.network)
-            # One already stopping (Ctrl+C as it started, a sweep's run closed on "recording") says nothing of its key.
-            if self.opts.start_key and not stop.is_set():
+            # One already stopping (Ctrl+C as it started, a sweep's run closed on "recording") says nothing of its key;
+            # one whose set length leaves no room for a part never offers it, as start() would refuse every press.
+            offer = bool(self.opts.start_key) and not stop.is_set()
+            if offer and self._start_on and not self._room_for_a_part(clock.now() - self.origin):
+                offer = False
+                self._print("\n" + self._no_room_line() + "\n")
+            if offer:
                 self.observers.event("start_key", key=self.opts.start_key, registered=self._start_on,
                                      window_s=self.opts.window_s, start_by_s=self._press_by())
                 with self._marks_lock:
@@ -594,11 +607,20 @@ class Session:
         return f"Measuring from {clock_text(at)} until {clock_text(until)}, when the recording stops at its set length."
 
     def _late_line(self) -> str:
-        """What a first press too near the recording's set length is told (start): it measured nothing."""
-        end = ", so all of it will be analysed." if self.opts.start_advice else "."
-        return (f"{self.opts.start_key.title()} was pressed at {clock_text(self._late_at or 0.0)}, too late: the "
-                f"recording stops at its set length at {clock_text(self.opts.duration_s or 0.0)}, and a part needs "
-                f"at least {MIN_PART_S:.0f} s" + end)
+        """What a first press too near the recording's set length is told (start): it measured nothing. The time
+        left is floored to 0.1 s, as crop.key_part says it."""
+        stops = clock_text(self.opts.duration_s or 0.0)
+        left = round((self.opts.duration_s or 0.0) - (self._late_at or 0.0), 3)
+        when = (f"only {math.floor(left * 10) / 10:.1f} s before the recording stops at its set length ({stops})"
+                if left > 0 else f"as the recording reached its set length ({stops})")
+        return (f"{self.opts.start_key.title()} was pressed {when}, and a part needs at least {MIN_PART_S:.0f} s"
+                + _analysed_all(self.opts.start_advice))
+
+    def _no_room_line(self) -> str:
+        """Said instead of the ready line when the set length leaves no room for a part (_watch)."""
+        return (f"{self.opts.start_key.title()} is off for this recording: it stops at its set length at "
+                f"{clock_text(self.opts.duration_s or 0.0)}, too soon for a part (one needs at least "
+                f"{MIN_PART_S:.0f} s)" + _analysed_all(self.opts.start_advice))
 
     def _start_end_line(self, why: str) -> str:
         if why == WINDOW_ENDED:
@@ -752,6 +774,11 @@ def _stop_quietly(c: Collector, timeout: float) -> None:
 
 
 # ------------------------------------------------------------------ status --
+
+def _analysed_all(advice: bool) -> str:
+    """The end of a line about a start key that measured nothing: watch's advice, or none (a sweep's run)."""
+    return ", so all of it will be analysed." if advice else "."
+
 
 def clock_text(seconds: float) -> str:
     """A time into the recording as the status line shows it ('3:12', '63:12'), which `analyze --from` reads back."""

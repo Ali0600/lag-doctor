@@ -490,10 +490,11 @@ def test_a_start_key_taken_after_the_check_fails_the_run_with_the_low_chime(tmp_
     assert world.sounds[0] == "problem" and world.sounds.count("start") == len(sweep.slots) - 1
 
 
-def test_a_press_while_a_run_the_sweep_stopped_is_stopping_plays_no_rising_chime(tmp_path):
+def test_a_run_the_sweep_stopped_as_it_began_chimes_only_its_problem(tmp_path):
+    # watch tells such a run no start_key (tests/test_session.py), so neither "ready" nor a press comes from it.
     sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
     plays = steady_plays(sweep)
-    plays[0] = Play(frames=False, press_in_stop=True)
+    plays[0] = Play(frames=False)
     world = World(tmp_path, sweep, FPS, answers=[GO, "n", GO, GO, GO], plays=plays)
     assert runner.run(sweep, folder, world.seams()) == 0
     assert sweep.runs[0].why == "frame timing was off (was the UAC prompt declined?)"
@@ -503,7 +504,7 @@ def test_a_press_while_a_run_the_sweep_stopped_is_stopping_plays_no_rising_chime
 
 def test_the_sweep_holds_its_start_key_while_the_game_starts_and_lets_go_before_the_recording(tmp_path):
     # Held from before the game starts, so a program that registers the key as the game starts cannot have it; let go
-    # right before the recording, which registers it for itself (World checks that, one listener at a time).
+    # as the recording starts, which registers it for itself (World checks that, one listener at a time).
     sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
     world = World(tmp_path, sweep, FPS, answers=[GO] * 4, plays=steady_plays(sweep))
     assert runner.run(sweep, folder, world.seams()) == 0

@@ -987,8 +987,8 @@ def _keyed(at, registered=True):
 def test_a_start_key_that_measured_nothing_is_said_in_both_reports_and_a_part_or_none_says_nothing():
     note = ("The start key Ctrl+Alt+S was not pressed in time, so the whole recording was analysed, startup included. "
             "To analyse only part of it, run lagdoctor analyze on the capture with --from (and --to).")
-    assert labels.unmeasured_note("the start key Ctrl+Alt+S was not pressed in time") == note
-    assert labels.unmeasured_note("") is None
+    assert labels.unmeasured_note("the start key Ctrl+Alt+S was not pressed in time", pickable=True) == note
+    assert labels.unmeasured_note("", pickable=True) is None
     cap = _keyed(None)
     d = diagnose(cap)
     assert note in html_report.render(d, cap) and note in " ".join(console.render(d, cap).split())
@@ -1001,17 +1001,37 @@ def test_a_start_key_that_measured_nothing_is_said_in_both_reports_and_a_part_or
     assert "startup included" not in " ".join((html_report.render(d, keyed) + console.render(d, keyed)).split())
 
 
+def _shown(cap) -> str:
+    return " ".join((html_report.render(diagnose(cap), cap) + console.render(diagnose(cap), cap)).split())
+
+
 def test_a_recording_of_unknown_length_is_not_told_to_pick_a_part_analyze_would_refuse():
     cap = _keyed(5.0)
     cap.duration_s = 0.0                                  # a damaged file: no part can be picked from it
-    from lagdoctor.analysis.crop import key_part
+    from lagdoctor.analysis.crop import key_part, part_pickable
     why = key_part(cap)[1]
     assert why == "the start key Ctrl+Alt+S's part cannot be found: the recording's length is not known"
-    assert labels.unmeasured_note(why) == (
+    assert not part_pickable(cap)
+    assert labels.unmeasured_note(why, pickable=False) == (
         "The start key Ctrl+Alt+S's part cannot be found: the recording's length is not known, so the whole recording "
         "was analysed, startup included.")
-    shown = " ".join((html_report.render(diagnose(cap), cap) + console.render(diagnose(cap), cap)).split())
+    shown = _shown(cap)
     assert "length is not known, so the whole recording was analysed" in shown and "--from" not in shown
+    cap = _keyed(None, registered=False)                  # another why, the same unknown length
+    cap.duration_s = 0.0
+    assert "could not be registered, so the whole" in _shown(cap) and "--from" not in _shown(cap)
+
+
+def test_a_recording_no_longer_than_a_part_is_not_told_to_pick_one():
+    from lagdoctor.analysis.crop import MIN_SPAN_S, part_pickable
+    cap = _keyed(None)                                    # not pressed in time, and only 8 s long
+    cap.duration_s = 8.0
+    assert not part_pickable(cap) and "was not pressed in time, so the whole" in _shown(cap)
+    assert "--from" not in _shown(cap)
+    cap.duration_s = MIN_SPAN_S                           # a part of all of it only: still none to pick
+    assert not part_pickable(cap)
+    cap.duration_s = MIN_SPAN_S + 0.5
+    assert part_pickable(cap) and "run lagdoctor analyze on the capture with --from" in _shown(cap)
 
 
 def test_a_header_with_no_frames_says_whether_a_part_or_the_recording_had_none():

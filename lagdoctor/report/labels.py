@@ -326,15 +326,14 @@ def part_note(part: dict[str, Any], outside_marks: int = 0) -> str:
     return text + "."
 
 
-def unmeasured_note(why: str) -> str | None:
+def unmeasured_note(why: str, *, pickable: bool) -> str | None:
     """What the reports say when a recording had a start key but the whole of it was analysed (analysis/crop.key_part's
-    `why`, e.g. 'the start key Ctrl+Alt+S was not pressed in time'); None without a why. It says how to pick a part,
-    unless the recording's length is not known, when no part can be picked (analyze --from refuses it too)."""
+    `why`, e.g. 'the start key Ctrl+Alt+S was not pressed in time'); None without a why. It says how to pick a part
+    only when one can be picked (`pickable`, crop.part_pickable), since analyze --from would refuse every other."""
     if not why:
         return None
-    from lagdoctor.analysis.crop import LENGTH_UNKNOWN
     text = f"{why[0].upper()}{why[1:]}, so the whole recording was analysed, startup included."
-    if why.endswith(LENGTH_UNKNOWN):
+    if not pickable:
         return text
     return text + " To analyse only part of it, run lagdoctor analyze on the capture with --from (and --to)."
 

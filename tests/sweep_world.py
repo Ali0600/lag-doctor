@@ -81,7 +81,6 @@ class Play:
     press: bool = True                    # the player presses the start key
     press_raced: bool = False             # the only press races the stop: watch counts it, but tells it after
                                           # "stopping" (Session.start tells it outside its lock)
-    press_in_stop: bool = False           # ... while a run the sweep stopped is still stopping (watch tells that one)
     key_taken: bool = False               # watch could not register the start key (taken after the sweep's check)
     frames: bool = True                   # frame timing on (False: the UAC prompt was declined)
     code: int = 0                         # watch's exit code when nothing was saved
@@ -226,8 +225,9 @@ class World:
         assert key == self.sweep.start_key and window == self.sweep.window_s and start_by == runner.START_WAIT_S
         # As watch: a press before "recording" is never told (watch's session ignores it; tests/test_session.py).
         observers.event("recording", duration_s=None, hotkey=False, frames=play.frames, network=False)
-        observers.event("start_key", key=key, registered=not play.key_taken, window_s=window,
-                        start_by_s=None if play.key_taken else start_by)
+        if not stop.is_set():                    # as watch: one the sweep stopped on "recording" says nothing of its key
+            observers.event("start_key", key=key, registered=not play.key_taken, window_s=window,
+                            start_by_s=None if play.key_taken else start_by)
         capture = dict(play.capture)
         if play.ends_by_itself:
             observers.event("stopping", reason="game exited")
@@ -236,8 +236,6 @@ class World:
             capture.setdefault("duration", 25.0)
             capture.setdefault("draws_until", 25.0)
         elif stop.is_set():                              # the sweep stopped the run: frame timing off, the key taken
-            if play.press_in_stop:                       # pressed before watch's next tick saw the stop: told
-                observers.event("measuring", at=PRESS_T, until=PRESS_T + window)
             observers.event("stopping", reason=getattr(stop, "reason", ""))
         elif play.press:
             observers.event("measuring", at=PRESS_T, until=PRESS_T + window)

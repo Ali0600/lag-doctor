@@ -535,10 +535,8 @@ def _record(sweep: plan.Sweep, slot: plan.Slot, folder: Path, seams: Seams,
             if not data.get("registered"):              # taken between check_start_key and the recording's start
                 stop_run(KEY_TAKEN)
                 return
-            with lock:
-                closed = seen["closed"]
-            if not closed:                              # the key is live: the press counts from now on
-                _sound(seams, "ready")
+            # The key is live: the press counts from now on. A run stopped on "recording" is told no start_key.
+            _sound(seams, "ready")
         elif kind == "measuring":
             with lock:
                 if seen["closed"]:                      # watch tells "measuring" once (Session.start)

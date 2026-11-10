@@ -653,8 +653,8 @@ def _head(d: Diagnosis, cap: Capture, game: str) -> str:
         note += (f'<p class="note">{e(labels.part_note(part, len(labels.outside_marks(cap.marks, part))))} '
                  "It is shaded on the charts.</p>")
     else:
-        from lagdoctor.analysis.crop import key_part
-        unmeasured = labels.unmeasured_note(key_part(cap)[1])
+        from lagdoctor.analysis.crop import key_part, part_pickable
+        unmeasured = labels.unmeasured_note(key_part(cap)[1], pickable=part_pickable(cap))
         if unmeasured:
             note += f'<p class="note">{e(unmeasured)}</p>'
     return (f"<header><h1>Lag report: {e(game)}</h1><p class=\"meta\">{exe}{e(when)} &middot; "

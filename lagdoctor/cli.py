@@ -594,6 +594,9 @@ def _recording_line(start_key: str, hotkey: str | None, window_s: float, start_b
     """The "Recording." line of a recording with a start key: when to press it, and what that measures. The press
     counts only once the session says the key is ready (it registers the key after reading the PC's settings)."""
     from lagdoctor.capture.session import span_words
+    if duration and duration < WINDOW_MIN_S:        # too short for any part: the session says the key is off
+        return ("Recording." + (f" Press {hotkey.title()} the moment it lags." if hotkey else "") + " Ctrl+C stops."
+                f" Stops by itself after {duration:.0f} s.")
     key = start_key.title()
     what = ("measuring for the rest of the recording" if duration and duration <= window_s
             else f"{span_words(window_s)} of measuring")

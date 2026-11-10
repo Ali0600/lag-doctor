@@ -108,6 +108,15 @@ def check_span(cap: Capture, t0: Any, t1: Any) -> tuple[float, float]:
 KEY_TEXT_MAX = 40                # a start key's name from a file, shown only when it is this short and plain
 
 
+def part_pickable(cap: Capture) -> bool:
+    """Can `analyze --from/--to` pick a part of `cap` other than all of it? Only when its length is known and longer
+    than the shortest part (check_span refuses every other part of a shorter one)."""
+    try:
+        return recorded_s(cap) > MIN_SPAN_S
+    except ValueError:
+        return False
+
+
 def key_part(cap: Capture) -> tuple[tuple[float, float] | None, str]:
     """The part the start key asks for (Capture.start_key, written by capture/session.py): ((t0, t1), "") with
     check_span's span for [press, press + window], ending at the recording's end at the latest; (None, why) when the

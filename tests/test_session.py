@@ -1342,11 +1342,14 @@ def test_the_start_keys_first_press_after_recording_starts_the_measured_window(m
 
 def test_a_start_press_before_the_recording_began_or_after_it_stopped_changes_nothing():
     events = []
-    s = Session(TARGET, _with_start(duration_s=0.05), collectors=full_set(), inventory=INVENTORY,
+    stop = threading.Event()
+    # No set length, so every press leaves room for a part: only the key being shut can refuse these.
+    s = Session(TARGET, _with_start(duration_s=None), collectors=full_set(), inventory=INVENTORY,
                 alive=lambda: True, hotkey_factory=Keys(), printer=lambda line: None,
-                observers=sess.Observers(on_event=lambda kind, data: events.append(kind)))
+                observers=sess.Observers(on_event=lambda kind, data: events.append(kind),
+                                         on_tick=lambda elapsed, live: sess.request_stop(stop, "enough")))
     assert s.start() is None                       # before the recording began
-    cap = s.run()
+    cap = s.run(stop)
     assert s.start() is None and s.start_at is None           # after it stopped
     assert "measuring" not in events and cap.start_key["at"] is None
 
@@ -1370,7 +1373,7 @@ def test_the_wait_for_the_next_tick_lands_on_the_start_keys_end(monkeypatch):
     s = Session(TARGET, _with_start(duration_s=None, window_s=10.0, start_by_s=30.0), collectors=[],
                 inventory=INVENTORY)
     assert s._next_wait(29.5) == 1.0               # Windows did not give the key: no time a press must come by
-    s._start_on = True
+    s._start_on = s._start_open = True              # given, and offered: a press is awaited until 30 s
     assert s._next_wait(29.5) == pytest.approx(0.5) and s._next_wait(10.0) == 1.0 and s._next_wait(31.0) == 0.0
     s.start_at = 5.0
     assert s._next_wait(17.75) == pytest.approx(0.25) and s._next_wait(12.0) == 1.0
@@ -1378,8 +1381,8 @@ def test_the_wait_for_the_next_tick_lands_on_the_start_keys_end(monkeypatch):
 
 def test_no_press_in_time_stops_the_recording_and_says_so():
     events, lines = [], []
-    s = Session(TARGET, _with_start(start_by_s=0.3), collectors=full_set(), inventory=INVENTORY, alive=lambda: True,
-                hotkey_factory=Keys(), printer=lines.append,
+    s = Session(TARGET, _with_start(start_by_s=0.3, duration_s=LONG_S), collectors=full_set(), inventory=INVENTORY,
+                alive=lambda: True, hotkey_factory=Keys(), printer=lines.append,
                 observers=sess.Observers(on_event=lambda kind, data: events.append((kind, data))))
     cap = s.run()
     assert cap.target["stop_reason"] == sess.NO_START and cap.duration_s < SAFETY_S
@@ -1563,53 +1566,110 @@ def test_a_first_press_with_too_little_set_length_left_for_a_part_measures_nothi
         control.from_recorder(control.encode(kind, **data))
 
 
-def test_a_press_too_late_for_a_part_is_said_once_before_the_stop_and_measures_nothing():
-    keys, lines, events, ticks = Keys(), [], [], []
+def test_a_press_too_late_for_a_part_is_said_once_before_the_stop_and_measures_nothing(monkeypatch):
+    # A 2.5 s part on a 3 s set length: offered at the start, a press after 0.5 s is too late. The run then goes on
+    # for three more ticks (counted, never timed) and is stopped, so a line said at every tick would show.
+    _counted(monkeypatch)
+    monkeypatch.setattr(sess, "MIN_PART_S", 2.5)
+    keys, lines, events, ticks, after = Keys(), [], [], [], []
+    stop = threading.Event()
 
     def on_tick(elapsed, live):
         ticks.append(elapsed)
-        if len(ticks) == 1:
+        if keys.pressed:
+            after.append(elapsed)
+            if len(after) == 3:
+                sess.request_stop(stop, "enough")
+        elif elapsed >= 0.6:
+            keys.pressed = True
             keys.press(START)
             keys.press(START)                          # once refused, the key is closed
-    s = Session(TARGET, _with_start(duration_s=0.3), collectors=full_set(), inventory=INVENTORY, alive=lambda: True,
+    keys.pressed = False
+    s = Session(TARGET, _with_start(duration_s=3.0), collectors=full_set(), inventory=INVENTORY, alive=lambda: True,
                 hotkey_factory=keys, printer=lines.append,
                 observers=sess.Observers(on_tick=on_tick, on_event=lambda kind, data: events.append(kind)))
-    cap = s.run()
-    assert ticks and cap.start_key["at"] is None and "measuring" not in events
-    assert cap.target["stop_reason"] == "duration"
-    late = [line for line in lines if "Ctrl+Alt+S was pressed at 0:00, too late:" in line]
-    assert late == ["\nCtrl+Alt+S was pressed at 0:00, too late: the recording stops at its set length at 0:00, and a "
-                    "part needs at least 11 s, so all of it will be analysed.\n"]
-    assert lines.index(late[0]) < lines.index(sess.STOPPING_MESSAGE + "\n")
+    cap = s.run(stop)
+    assert keys.pressed and "start_key" in events and "measuring" not in events and cap.start_key["at"] is None
+    assert cap.target["stop_reason"] == "enough" and len(after) == 3 and s._late_at is not None
+    late = [line for line in lines if "was pressed only" in line]
+    assert late == ["\n" + s._late_line() + "\n"] and lines.index(late[0]) < lines.index(sess.STOPPING_MESSAGE + "\n")
+
+
+def test_the_too_late_line_says_the_time_that_was_left():
+    s = Session(TARGET, _with_start(duration_s=120.0), collectors=[], inventory=INVENTORY)
+    s._late_at = 109.4                                 # 10.6 s before 2:00, which 1:49 and 2:00 alone would hide
+    assert s._late_line() == ("Ctrl+Alt+S was pressed only 10.6 s before the recording stops at its set length (2:00), "
+                              "and a part needs at least 11 s, so all of it will be analysed.")
+    s._late_at = 120.004                               # the loop woke a few ms past the set length
+    assert s._late_line().startswith("Ctrl+Alt+S was pressed as the recording reached its set length (2:00), and")
     s.opts.start_advice = False                        # a sweep's run: watch's advice is left to the sweep
     assert s._late_line().endswith("and a part needs at least 11 s.")
 
 
-def test_a_press_refused_as_too_late_is_not_said_to_be_missing():
+@pytest.mark.parametrize("duration,at,counts", [(16.4, 5.4, True), (16.4, 5.401, False), (120.0, 109.0, True)])
+def test_the_room_for_a_part_is_judged_to_the_millisecond_as_a_part_is(duration, at, counts):
+    from lagdoctor.analysis import crop
+    s = Session(TARGET, _with_start(duration_s=duration), collectors=[], inventory=INVENTORY)
+    s.origin, s._start_on, s._start_open = 1000.0, True, True
+    assert (s.start(1000.0 + at) is not None) is counts
+    from types import SimpleNamespace
+    cap = SimpleNamespace(span=None, duration_s=duration)   # all check_span reads of a capture
+    try:                                               # the analysis takes the same part, or refuses it
+        crop.check_span(cap, at, duration)
+        taken = True
+    except ValueError:
+        taken = False
+    assert taken is counts
+
+
+def test_a_press_refused_as_too_late_is_not_said_to_be_missing_and_the_loop_waits_a_whole_tick():
     s = Session(TARGET, _with_start(duration_s=120.0, start_by_s=115.0), collectors=[], inventory=INVENTORY)
-    s._start_on = True
+    s.origin, s._start_on, s._start_open = 1000.0, True, True
     assert s._start_stop(116.0) == sess.NO_START          # no press by 1:55
     s = Session(TARGET, _with_start(duration_s=120.0, start_by_s=115.0), collectors=[], inventory=INVENTORY)
-    s._start_on, s._late_at = True, 112.0                 # pressed at 1:52, too late: the set length ends it
+    s.origin, s._start_on, s._start_open = 1000.0, True, True
+    assert s.start(1000.0 + 112.0) is None               # pressed at 1:52, too late: the set length ends it
     assert s._start_stop(116.0) is None
+    assert s._next_wait(116.0) == sess.STATUS_PERIOD_S    # never 0 s from 1:55 on: no press is awaited
 
 
-@pytest.mark.parametrize("when", ["before", "on recording"])
+@pytest.mark.parametrize("when", ["before", "on recording", "refused"])
 def test_a_recording_already_stopping_never_says_its_start_key_is_ready(when):
-    keys, lines, events = Keys(), [], []
+    keys, lines, events = Keys(refuse={START} if when == "refused" else ()), [], []
     stop = threading.Event()
-    if when == "before":
+    if when in ("before", "refused"):
         sess.request_stop(stop, "Ctrl+C")              # Ctrl+C while the PC's settings were read
 
     def on_event(kind, data):
         events.append(kind)
         if kind == "recording" and when == "on recording":
             sess.request_stop(stop, "frame timing is off")   # as a sweep closes a run on "recording"
-    s = Session(TARGET, _with_start(), collectors=full_set(), inventory=INVENTORY, alive=lambda: True,
-                hotkey_factory=keys, printer=lines.append, observers=sess.Observers(on_event=on_event))
+    s = Session(TARGET, _with_start(duration_s=LONG_S), collectors=full_set(), inventory=INVENTORY,
+                alive=lambda: True, hotkey_factory=keys, printer=lines.append, observers=sess.Observers(on_event=on_event))
     cap = s.run(stop)
     assert events[:2] == ["recording", "stopping"] and keys.made == ["ctrl+alt+l", START]
-    assert not any("is ready" in line for line in lines) and cap.start_key["at"] is None
+    assert not any("is ready" in line or "could not be registered" in line for line in lines)
+    assert cap.start_key["at"] is None
+    if when == "refused":                              # still noted for the report
+        assert any("The start key ctrl+alt+s could not be registered" in note for note in cap.notes)
+
+
+def test_a_set_length_too_short_for_a_part_never_offers_the_start_key():
+    keys, lines, events, ticks = Keys(), [], [], []
+
+    def on_tick(elapsed, live):
+        ticks.append(elapsed)
+        if len(ticks) == 1:
+            keys.press(START)                          # held, but never offered: the press changes nothing
+    s = Session(TARGET, _with_start(duration_s=0.3, start_by_s=0.1), collectors=full_set(), inventory=INVENTORY,
+                alive=lambda: True, hotkey_factory=keys, printer=lines.append,
+                observers=sess.Observers(on_tick=on_tick, on_event=lambda kind, data: events.append(kind)))
+    cap = s.run()
+    assert ticks and "start_key" not in events and "measuring" not in events and cap.start_key["at"] is None
+    assert cap.target["stop_reason"] == "duration"     # no "not pressed in time" stop for a key never offered
+    assert not any("is ready" in line for line in lines) and s._late_at is None
+    assert ("\nCtrl+Alt+S is off for this recording: it stops at its set length at 0:00, too soon for a part (one "
+            "needs at least 11 s), so all of it will be analysed.\n") in lines
 
 
 def test_the_measuring_line_names_the_set_length_when_it_comes_before_the_window():
