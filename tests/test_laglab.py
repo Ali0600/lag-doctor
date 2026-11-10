@@ -164,6 +164,25 @@ def test_fixed_work_takes_the_90th_percentile_of_its_warmup():
     assert work.fix() == 1                     # never zero turns: the frame still does some work
 
 
+def test_hog_frames_measure_in_the_warmup_then_run_the_measured_work():
+    work = FixedWork(6.0, clock=FakeClock(1e-6))
+    t0 = 50.0
+    for start in (47.0, 48.0, t0 - app.HOG_MEASURE_GAP_S - 0.01):
+        app.hog_work(work, start, t0)
+    assert len(work.samples) == 3 and work.frames == 0
+    for start in (t0 - app.HOG_MEASURE_GAP_S, t0, t0 + 1.0):
+        app.hog_work(work, start, t0)
+    assert len(work.samples) == 3 and work.frames == 3
+
+
+def test_hog_frames_measure_once_when_the_first_one_comes_after_the_warmup():
+    # 64 hogs can take longer to start than a short warmup: the first frame then measures, and the next ones run
+    work = FixedWork(6.0, clock=FakeClock(1e-6))
+    app.hog_work(work, 51.0, 50.0)
+    app.hog_work(work, 51.1, 50.0)
+    assert len(work.samples) == 1 and work.frames == 1
+
+
 def test_fixed_work_never_measured_says_so():
     with pytest.raises(RuntimeError, match="lengthen --warmup"):
         FixedWork(6.0, clock=FakeClock(1e-6)).run()

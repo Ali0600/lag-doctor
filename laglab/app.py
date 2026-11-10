@@ -83,7 +83,7 @@ class FixedWork:
     """Hog mode's game work: a fixed amount of computation each frame, sized during the warmup.
 
     Busy-waiting for a fixed time (_burn) ends on time whatever else runs, so background programs cannot slow it, and
-    Windows wakes a sleeping foreground thread ahead of busy ones of the same priority: measured 2026-11-10 on this
+    Windows favours the foreground process's threads over busy ones of the same priority: measured 2026-11-10 on this
     laptop, 32 hogs held every CPU at 95 % and LagLab still drew a frame every 8.34 ms. A fixed count of loop turns
     takes longer when a hog shares the core and the clock drops: with 6 ms of it, 120 FPS fell to 86 FPS in the
     bursts. measure() runs one warmup frame's worth by the clock and counts the turns; fix() takes the 90th percentile
@@ -119,6 +119,15 @@ class FixedWork:
             clock()
             n += 1
         self.frames += 1
+
+
+def hog_work(work: FixedWork, frame_start: float, hog_t0: float) -> None:
+    """One frame of hog mode's game work: measured in the warmup until HOG_MEASURE_GAP_S before the first burst, and
+    at least once, should starting the hogs have taken the warmup's time; then run at the measured size."""
+    if frame_start < hog_t0 - HOG_MEASURE_GAP_S or not work.samples:
+        work.measure()
+    else:
+        work.run()
 
 
 class FrontWatch:
@@ -385,10 +394,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.mode == "cpu":
                 _burn(args.target_ms / 1000)
             elif game_work is not None:                        # hog mode: work the hogs can slow down
-                if frame_start < hog_t0 - HOG_MEASURE_GAP_S:
-                    game_work.measure()
-                else:
-                    game_work.run()
+                hog_work(game_work, frame_start, hog_t0)
             if args.mode in HITCH_MODES and frame_start >= next_hitch:
                 h0 = time.perf_counter()
                 detail: dict = {}

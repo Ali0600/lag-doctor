@@ -376,7 +376,9 @@ FIX_OF_CAUSE = {"power_plan": "power_plan", "refresh_rate": "refresh_rate", "wro
 
 
 def everything_wrong():
-    s = synth.laglab("hog")
+    # 12 ms of game work: at the 60 Hz this capture claims, a burst must take the game under 48 FPS to be an FPS drop,
+    # and the contention measured on LagLab (synth.HOG_STRETCH) takes hog mode's own 6 ms only to about 86 FPS
+    s = synth.laglab("hog", hog_game_ms=12.0)
     cap = s.cap
     inv = cap.inventory
     inv["power"] = {"scheme_guid": "64a64f24-65b9-4b56-befd-5ec1eaced9b3", "scheme_name": "Silent",

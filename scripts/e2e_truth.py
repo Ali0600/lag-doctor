@@ -103,6 +103,8 @@ def front_check(log: dict[str, Any], clock_origin: float, capture_s: float) -> C
         return Check(FRONT, True, f"its window had the focus for all {capture_s:.1f} s of the capture")
     if "front" not in log:
         return Check(FRONT, False, "LagLab's log does not say whether its window was in front")
+    if not isinstance(log["front"], list) or not log["front"]:
+        return Check(FRONT, False, "LagLab's log of its window is empty, so whether it was in front is unknown")
     since = (first or clock_origin) - clock_origin
     return Check(FRONT, False, f"its window was not in front for {away:.1f} of {capture_s:.1f} s of the capture, "
                                f"from {since:.1f} s on: its frames may not have reached the screen (a covered "

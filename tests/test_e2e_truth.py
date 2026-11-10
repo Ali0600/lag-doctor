@@ -136,6 +136,9 @@ def test_a_log_without_the_window_state_fails_closed():
     log = {k: v for k, v in LOG.items() if k != "front"}
     v = judge("hitch", log, ORIGIN, hitches_found(), has_discrete_gpu=True, capture_s=CAPTURE_S)
     assert not v.ok and v.checks[0].detail == "LagLab's log does not say whether its window was in front"
+    for empty in ([], None):
+        v = judge("hitch", dict(LOG, front=empty), ORIGIN, hitches_found(), has_discrete_gpu=True, capture_s=CAPTURE_S)
+        assert not v.ok and "empty, so whether it was in front is unknown" in v.checks[0].detail
 
 
 @pytest.mark.parametrize("capture_s", [0.0, -1.0, float("nan"), float("inf"), True])
