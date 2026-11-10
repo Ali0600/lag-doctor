@@ -74,6 +74,21 @@ def bring_forward(class_name: str) -> bool:
     return True
 
 
+def open_local(path: str) -> None:
+    """Open one of lag-doctor's own files or folders (a report, the sessions folder) with Windows' default program.
+
+    Anything else is refused with PermissionError (an OSError, which the window reports): a link of any scheme
+    (steam://, https://), a relative path, a share, or a path that does not exist. So no request of the page can have
+    a store link opened inside lag-doctor's own process, where a store client that starts would be lag-doctor's
+    child; Play hands its links to Explorer instead (lagdoctor/stores/launch.py).
+    """
+    text = str(path)
+    if not (len(text) > 3 and text[0].isascii() and text[0].isalpha() and text[1:3] in (":\\", ":/")) \
+            or ":" in text[2:] or "\0" in text or not os.path.exists(text):
+        raise PermissionError(0, "lag-doctor opens only its own files and folders this way", text)
+    os.startfile(text)
+
+
 def open_log(home: Path):
     """The app's log, the previous run's kept beside it; returns (file, write)."""
     path = home / LOG_NAME
@@ -112,7 +127,7 @@ class App:
         self.log = log
         self.tell = tell
         self.on_ready = on_ready
-        self.opener = opener or os.startfile        # opens a report in the browser, or the sessions folder
+        self.opener = opener or open_local          # opens a report in the browser, or the sessions folder
         self.lock = threading.Lock()
         self.entries: list[library.Entry] = []
         self.loaded: tuple | None = None            # (session id, capture, diagnosis, main chain): the last one read

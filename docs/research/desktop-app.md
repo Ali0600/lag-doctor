@@ -279,7 +279,13 @@ Each item is an owner run or a measurement, and the plan names it where it is ne
   parent link.
 - **Whether a game started through Explorer comes to the front**: Play has Explorer open the link while lag-doctor's
   window is in front (DECISIONS 2026-11-09), so whether the game's window and the store's own prompts take the
-  foreground is untested. M6's first run shows it.
+  foreground is untested. M6's first run shows it. The call itself is measured [verified: on the owner's PC,
+  2026-11-09]: the desktop's `IShellDispatch2::ShellExecute`, reached as Raymond Chen's article does, returned in 64
+  ms, and the windowless helper it was handed started with Explorer as its parent, not the caller. Its six vtable
+  slots and seven IIDs are the SDK's (`ExDisp.h`, `servprov.h`, `ShObjIdl_core.h`, `ShlDisp.h` of SDK
+  10.0.19041.0, read by `tests/test_launch.py`), and `ShellWindows` is registered only as a local server. Before the
+  call, `winapi/launch.py` lends Explorer the right to take the foreground (`AllowSetForegroundWindow`), which works
+  only while lag-doctor's window is in front.
 - **What `rungameid` does for a game with several launch options**: no chooser, by user reports, and the saved option
   since Valve's change of 2026-10-13. A game with one option gets no dialog (section 14).
 - **A static, hidden app window's effect on `gpu_other_pct` and `missed_ticks`.**

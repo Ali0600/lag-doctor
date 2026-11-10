@@ -21,6 +21,9 @@ CAPABILITIES = {
     # GitHub's windows-2025 runner has the runtime and opens the window (M0's probe, 2026-11-08), so CI declares
     # nothing; a PC without the runtime or a desktop (a service session) sets LAGDOCTOR_ABSENT=webview2.
     "webview2": "WebView2 Runtime and a desktop to open lag-doctor's window on",
+    # The laptop and GitHub's windows-2025 runner both have the Windows SDK's headers, which tests/test_launch.py reads
+    # Explorer's COM slots back from, so nothing declares it; a PC without the SDK sets LAGDOCTOR_ABSENT=windows_sdk.
+    "windows_sdk": "Windows SDK C headers (Windows Kits 10 Include um)",
 }
 
 
