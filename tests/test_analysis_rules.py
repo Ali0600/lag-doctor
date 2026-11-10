@@ -2507,7 +2507,7 @@ def judged(s):
     from e2e_truth import judge
     from lagdoctor.analysis.diagnose import diagnose
     d = diagnose(s.cap)
-    return d, judge(s.log["mode"], s.log, s.cap.clock_origin, d, has_discrete_gpu=True)
+    return d, judge(s.log["mode"], s.log, s.cap.clock_origin, d, has_discrete_gpu=True, capture_s=s.cap.duration_s)
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])

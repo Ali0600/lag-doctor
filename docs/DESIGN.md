@@ -1847,4 +1847,10 @@ typed on the player's PC, and the game is never started, stopped or opened by la
 - **End to end**: `scripts/e2e.py` runs each LagLab mode with a real capture and judges the diagnosis against
   LagLab's ground-truth log (`scripts/e2e_truth.py`). It needs ETW rights, so it runs on demand: without them
   it relaunches itself once through a UAC prompt and prints the verdicts back in the original window. The
-  `smooth` run also exercises the real ping and Kernel-Network ETW paths.
+  `smooth` run also exercises the real ping and Kernel-Network ETW paths. Every mode's first check is that LagLab's
+  window was the foreground window for the whole capture (LagLab logs each change, `log["front"]`): Windows shows
+  nothing of a covered window, and PresentMon's default metrics hold every frame that was not shown behind the last
+  one that was, so a covered LagLab gives few rows or none; and a change of focus makes it hitch. Hog mode does a
+  fixed amount of work per frame, measured in its warmup (`laglab.app.FixedWork`), because a timed busy-wait ends on
+  time whatever else runs; its bursts are whole ones only, and the run gives it 40 s, so that at least
+  `attribute.LIFT_MIN_EVENTS` bursts fall inside the capture (`tests/test_e2e_schedule.py`).

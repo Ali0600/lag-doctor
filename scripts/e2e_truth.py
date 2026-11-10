@@ -4,10 +4,13 @@ Both sides use the QPC clock: LagLab logs time.perf_counter() values, and a
 capture's times are perf_counter() minus Capture.clock_origin. The expected
 answer for each mode is written here, from LagLab's own log, never read back
 from the doctor's output: an expectation taken from the thing under test is
-satisfied by construction.
+satisfied by construction. A mode is judged only on a run that kept LagLab's
+window in front for the whole capture (front_check, also from LagLab's log):
+otherwise the run, not the doctor, is what failed.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -37,6 +40,9 @@ EXPECTATIONS: dict[str, Expectation] = {
 }
 
 
+FRONT = "LagLab's window stayed in front"
+
+
 @dataclass
 class Check:
     name: str
@@ -52,6 +58,58 @@ class Verdict:
     @property
     def ok(self) -> bool:
         return bool(self.checks) and all(c.ok for c in self.checks)
+
+
+def time_away(front: Any, t0: float, t1: float) -> tuple[float, float | None]:
+    """(seconds of [t0, t1] during which LagLab's window was not the foreground window, when the first of them
+    began), from LagLab's log["front"]: [[perf_counter time, in front], ...], one entry per change, the first at its
+    first frame. Before that frame LagLab had no window, so nothing counts there; a log without a usable list, or
+    without any entry, counts as away from t0: unknown is not fine.
+
+    The judge needs this because a mode run while LagLab's window was not in front says nothing about the doctor.
+    The owner's run of 2026-11-09 lost frames in exactly the modes and stretches where the window was not in front:
+    Windows showed nothing of the covered window, and PresentMon (default metrics) holds every frame that was not
+    shown behind the last one that was, so hitch and hitch-wait got no rows at all; and the one stutter of the smooth
+    control came 150 ms after the window lost the focus.
+    """
+    def entry(e: Any) -> bool:
+        return (isinstance(e, (list, tuple)) and len(e) == 2 and isinstance(e[0], (int, float))
+                and not isinstance(e[0], bool) and math.isfinite(e[0]) and isinstance(e[1], bool))
+
+    changes = sorted((float(t), v) for t, v in front) if isinstance(front, list) and all(map(entry, front)) else []
+    if not changes:
+        return max(0.0, t1 - t0), t0
+    away, first = 0.0, None
+    state: bool | None = None                      # before the first entry LagLab had no window yet
+    since = t0
+    for t, v in changes + [(t1, None)]:
+        end = min(max(t, t0), t1)
+        if state is False and end > since:
+            away += end - since
+            first = since if first is None else first
+        if t >= t1:
+            break
+        since, state = end, v
+    return away, first
+
+
+def front_check(log: dict[str, Any], clock_origin: float, capture_s: float) -> Check:
+    """Whether LagLab's window was the foreground window for the whole capture (time_away)."""
+    if isinstance(capture_s, bool) or not isinstance(capture_s, (int, float)) or not math.isfinite(capture_s) \
+            or capture_s <= 0:
+        return Check(FRONT, False, f"the capture has no length to judge ({capture_s!r} s)")
+    away, first = time_away(log.get("front"), clock_origin, clock_origin + capture_s)
+    if away == 0.0:
+        return Check(FRONT, True, f"its window had the focus for all {capture_s:.1f} s of the capture")
+    if "front" not in log:
+        return Check(FRONT, False, "LagLab's log does not say whether its window was in front")
+    if not isinstance(log["front"], list) or not log["front"]:
+        return Check(FRONT, False, "LagLab's log of its window is empty, so whether it was in front is unknown")
+    since = (first or clock_origin) - clock_origin
+    return Check(FRONT, False, f"its window was not in front for {away:.1f} of {capture_s:.1f} s of the capture, "
+                               f"from {since:.1f} s on: its frames may not have reached the screen (a covered "
+                               "window shows none) and a change of focus makes it hitch; run it again and leave the "
+                               "PC alone meanwhile")
 
 
 def truth_moments(log: dict[str, Any], clock_origin: float) -> list[tuple[float, float]]:
@@ -76,9 +134,12 @@ def match_events(truth: list[tuple[float, float]], events: list[tuple[float, flo
 
 
 def judge(mode: str, log: dict[str, Any], clock_origin: float, d: Diagnosis,
-          has_discrete_gpu: bool) -> Verdict:
+          has_discrete_gpu: bool, *, capture_s: float) -> Verdict:
+    """The checks for one mode. The first says whether the run itself can be judged (front_check): the capture's
+    span, capture_s from clock_origin on, is when LagLab's window had to be in front."""
     exp = EXPECTATIONS[mode]
     v = Verdict(mode)
+    v.checks.append(front_check(log, clock_origin, capture_s))
     causes = {f.cause for f in d.findings}
     for c in exp.required_findings:
         v.checks.append(Check(f"finding {c}", c in causes, f"findings: {sorted(causes)}"))

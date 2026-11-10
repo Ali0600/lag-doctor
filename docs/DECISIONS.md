@@ -142,8 +142,71 @@
   today the inventory is read once, before the recording starts, and the start key may come 20 minutes later; a mode
   switched during the startup would be described for the part. Revisit hook: the start key's press in
   `capture/session.py` (M5's second half) and `_collect_inventory` (DECISIONS 2026-11-09, the measured part).
+- **Keep LagLab's window topmost during the end-to-end run**, so a click elsewhere cannot cover it: its frames would
+  keep coming and the other checks would still say something, though the run would still fail its front check (a
+  change of focus makes LagLab hitch). Revisit hook: right after pyglet makes the window in `laglab/app.py` `main()`
+  (DECISIONS 2026-11-10, the end-to-end failures).
 
 ---
+
+## 2026-11-10: Why five end-to-end modes failed, and what a LagLab run must now show
+
+The owner's end-to-end run of 2026-11-09 (before PR #40) passed gpu, cpu and pace. Re-judged
+in memory on main after #40, the other five still failed, none of them in the analysis. Decided by the session that
+looked into it; the owner has not weighed in.
+
+What the saved captures and LagLab's logs show:
+- hitch and hitch-wait (no CSV at all), hitch-io (198 rows), hog (rows only from 7.4 s, 191 of 1,796 shown) and cpu's
+  last 5.7 s: LagLab's window was not the foreground window (`game_focused` 0 at every sample of the four modes; in cpu
+  from 17.0 s, and its rows stop at 17.08 s). PresentMon 2.6.0's default metrics hold every frame that was not shown
+  behind the last one that was (`UnifiedSwapChain::Enqueue`), so a covered window gives few rows or none, and with no
+  row no header. smooth lost the focus at 5.3 s with its window still shown, so its rows kept coming; LagLab's own log
+  has one long frame after t = 0 (17.8 ms, 150 ms after the focus left), the control's one stutter.
+- hog would have failed with every frame shown: LagLab's own frames held 8.34 ms through both bursts. Its game work was
+  a timed busy-wait, which ends on time whatever else runs. Measured 2026-11-10 (LagLab's log, per-CPU load):
+  - 32 hogs, LagLab in front: every CPU at 95 %, LagLab's frames 8.34 ms (p95 8.36 ms);
+  - the same with LagLab spinning out its frame cap instead of sleeping: 8.34 ms;
+  - hogs at above-normal priority: 8 FPS in the bursts (median 105 ms);
+  - 6 ms of fixed work, a counted loop: 11.4 ms in the bursts (86 FPS), 8.34 ms between them;
+  - LagLab losing the focus mid-burst: the hogs' load on the performance cores fell to 68-90 % while the efficient
+    cores stayed at 99 %. Windows gives the processes descended from a window's owner that window's QoS; in the owner's
+    run, with the window never in front, the 32 hogs added about 4 logical CPUs of load.
+- And the e2e's hog run held 2 bursts, while the doctor names background programs only from 5 lag moments
+  (`attribute.LIFT_MIN_EVENTS`): no capture of it could have named the hogs. The synthetic model passed because it
+  assumed a 2-3x stretch and a 15-50 ms wait on 10 % of frames, never measured.
+
+Forks:
+- **Every mode's first check is that LagLab's window kept the focus for the whole capture (chosen)**, from LagLab's
+  own log of the changes (`FrontWatch`, `e2e_truth.front_check`); `e2e.py` tells the owner to leave the PC alone.
+  - **Keep LagLab's window topmost**: deferred, worth trying (Backlog).
+  - **Leave such a mode unjudged instead of failed**: rejected; an unjudged mode reads as nothing to fix.
+- **Hog mode's game work is a fixed count of loop turns, measured in the warmup (chosen)**: the 90th percentile of the
+  warmup frames' counts for 6 ms, since the warmup overlaps the recorder's start; and the hogs burn nothing before
+  their start (`hog.py` used to run its on/off pattern backwards into the warmup).
+  - **Hogs at above-normal priority**: rejected; 8 FPS, and they would starve lag-doctor's own samplers, which run at
+    normal priority, just when those must measure.
+  - **LagLab spinning instead of sleeping**: rejected, measured: no slowdown.
+  - **The hogs tagged high QoS** (`SetProcessInformation`, `ProcessPowerThrottling`), so their placement no longer
+    follows LagLab's window: rejected; the front check fails a run whose window was not in front, and in front the
+    hogs have the window's high QoS anyway.
+- **3 s bursts every 5 s, whole bursts only, and 40 s for hog mode in the e2e (chosen)**: 7 bursts, 6 of them a
+  rolling window into the capture (`tests/test_e2e_schedule.py`). On the model refit to the measurement
+  (`synth.HOG_STRETCH`) and timed like the e2e's capture (it starts 2.1-2.7 s after LagLab's first frame), 40 of 40
+  runs passed the judge, the lift test supporting in all of them (lift 45 or more, 2 needed). A burst cut short by
+  LagLab's exit is never started: it
+  is too short for a lag event, and the doctor then took its busy seconds for quiet ones, which on 30 s of the model
+  (3 on, 3 off) hid every other burst (0 of 8 events blamed on background programs).
+  - **6 s on, 6 s off (the old)**: rejected; 2 bursts in 25 s.
+  - **3 s on, 3 s off**: rejected; it passed the same 40 runs, but a 30 s capture that starts just before LagLab (the
+    model's, LagLab from 0.4 to 29.8 s) then holds 4 whole bursts, one short of the doctor's minimum: 4 of 40 runs fell
+    short. With 2 s off, 5 fit there.
+- **Hog mode's frame-rate verdict is now cpu_main (changed on purpose)**: to fall below 80 % of the 120 FPS cap under
+  the measured 1.6-1.8x stretch, the work must fill at least ~76 % of the frame budget, and with the cap's last 1.5 ms
+  spun out the main thread reads 98 % of a CPU; capped needs it under 85 % (LC 3.2).
+
+Also found, left for a change of their own: the doctor reads a covered window's unshown frames as lag (hog's capture
+reads "2 stutters (worst 9483 ms) and low frame rate (13 FPS average)" while LagLab drew 120 FPS), and the frame
+source said only "PresentMon ran but wrote no CSV", leaving out PresentMon's own warning (overflowed present events).
 
 ## 2026-11-10: A red-first run that hangs is a TIMEOUT, ended with every process under it
 

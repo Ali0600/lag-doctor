@@ -157,7 +157,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   need ETW rights: PresentMon an elevated token or Performance Log Users, the tracker an elevated token only
   (measured, E1 in `docs/research/install-and-rights.md`: Kernel-Network's own descriptor lets only SYSTEM,
   LocalService and Administrators enable it). Tests use private
-  in-process sessions with unique names instead. The end-to-end run (`scripts/e2e.py`) is on demand. The venv's
+  in-process sessions with unique names instead. The end-to-end run (`scripts/e2e.py`) is on demand, and the owner's
+  (UAC prompt): each mode is judged only if LagLab's window kept the focus for the whole capture (a covered window
+  gives PresentMon no rows), so when you ask for a run, ask the owner to leave the PC alone until it ends (about 5.5
+  minutes). LagLab's hog mode burns every CPU in bursts: an agent runs it only on an idle PC, after the same check for
+  other sessions' `pytest`, `redfirst.py` or `laglab` as before a test run. The venv's
   `python.exe` is a launcher: the real process is the base interpreter, so target LagLab by the PID it writes to
   `--pid-file`.
 - **This laptop is hybrid** (RTX 3070 Laptop + Intel UHD; the internal panel is driven by the Intel GPU).

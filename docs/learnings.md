@@ -1128,3 +1128,40 @@ sabotage that made a test hang would have crashed the whole red-first run, and f
 the test's own processes running in the copy it was about to delete.
 **Takeaway**: to end a process tree on Windows, put its root in a job object while it is suspended, end the job, and
 wait for its process count to reach zero before trusting that nothing of it is left.
+
+### Background load cannot slow a timed busy-wait, and barely touches a foreground thread
+A loop that spins until a deadline ends on time whatever else runs: when the CPU is shared it only does less work, so
+a stressor aimed at it shows nothing. And Windows favours the threads of the foreground process over busy threads of
+the same priority (longer time slices, and a boost when they wake from a wait [inferred, the documented scheduler
+behaviour]), so a game thread at normal priority is seldom kept waiting by them. What still reaches it is the
+hardware: a busy thread on the other half of its core, and the lower clock every core runs at when all are busy, which
+stretch a fixed amount of work.
+**Why it came up**: LagLab's hog mode burned 4 ms by the clock each frame while 32 hogs held every CPU at 95 %, and
+its frames stayed at 8.34 ms, also when it spun out its frame cap instead of sleeping (measured 2026-11-10); the
+end-to-end run could never have found the hogs. With 6 ms of work counted as loop turns, the bursts took LagLab from
+120 to 86 FPS; hogs one priority class higher took it to 8 FPS, and would starve every normal-priority thread with it.
+**Takeaway**: to make background load hurt a test program, give it a fixed amount of work rather than a fixed time,
+and measure that the victim slowed before judging anything against it.
+
+### Windows gives a window's child processes that window's QoS
+A process that owns a window, and every process descended from it, gets a quality of service (QoS) from that window:
+high while it has the focus, medium while it is visible, low when it is minimized or fully covered (Microsoft's
+"Quality of Service" page). On a CPU with performance and efficient cores, lower QoS can steer work to the efficient
+cores: the page says so for low QoS on battery, and it was measured here on mains power too. A tool's helper processes
+therefore slow down or speed up with its window, not with their own work.
+**Why it came up**: LagLab's hogs are its child processes. In the owner's run LagLab's window was never in front and
+the 32 hogs added only about 4 logical CPUs of load; in a run here the hogs' load on the performance cores fell from
+95 % to 68-90 % the moment LagLab lost the focus, while the 4 efficient cores stayed at 99 %.
+**Takeaway**: on Windows, a load test's helper processes inherit the focus of their parent's window; keep that window
+in front, or measure where the load landed.
+
+### PresentMon holds the frames a covered window never showed
+PresentMon 2.6.0's default metrics need each shown frame's successor to compute its time on screen, so a frame not
+shown while a shown one waits is queued behind it and written only when the next shown frame arrives. A window that is
+covered shows no frames, so everything after its last shown frame stays queued: few rows or none, and since the CSV
+header is written with the first row, none at all.
+**Why it came up**: in the owner's end-to-end run, the hitch and hitch-wait captures read "PresentMon ran but wrote no
+CSV" while LagLab drew 120 FPS, and the hog capture's rows began 7.4 s in: LagLab's window was not in front in those
+modes (`IntelPresentMon/CommonUtilities/mc/UnifiedSwapChain.cpp`, `Enqueue`, at v2.6.0).
+**Takeaway**: no frame timing from PresentMon while the game runs means its frames are not reaching the screen; check
+whether its window was covered or minimized before suspecting the tracing.
