@@ -237,15 +237,29 @@ def test_a_start_key_another_program_holds_stops_the_sweep_before_the_player_sta
     assert ini.read_bytes() == RAW
 
 
-def test_a_measuring_told_after_the_recording_stopped_is_not_a_second_press(tmp_path):
-    # A press before the recording began is watch's to ignore (tests/test_session.py): it is never told.
-    sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
-    plays = steady_plays(sweep)
-    plays[0] = Play(press_late=True)
-    world = World(tmp_path, sweep, FPS, answers=[GO] * 4, plays=plays)
-    assert runner.run(sweep, folder, world.seams()) == 0
-    assert sweep.runs[0].start_t == pytest.approx(PRESS_T)            # the first press measured the run
-    assert world.sounds.count("start") == len(sweep.slots)            # and the late one never chimed
+@pytest.mark.parametrize("answers,code", [(["q"], 0), ([], 1)])
+def test_a_sweep_stopped_at_the_start_the_game_prompt_lets_go_of_its_start_key(tmp_path, answers, code):
+    # The run never reaches its recording, whose own release would hide a missing one here.
+    sweep, folder, _ = new_sweep(tmp_path, seed=1)
+    world = World(tmp_path, sweep, FPS, answers=answers)
+    assert runner.run(sweep, folder, world.seams()) == code
+    assert world.held_at_ask[:1] == [True] and world.argv == []                   # held at the prompt, never recorded
+    assert [(key.started, key.stopped) for key in world.listeners] == [(True, True)]
+
+
+def test_the_sounds_a_sweep_prepares_are_the_chimes_its_runs_play(tmp_path):
+    from lagdoctor.sweep import command
+    played: set[str] = set()
+    for n, play in enumerate([Play(), Play(press=False), Play(key_taken=True), Play(frames=False)]):
+        home = tmp_path / str(n)
+        home.mkdir()
+        sweep, folder, _ = new_sweep(home, seed=1)
+        world = World(home, sweep, FPS, answers=[GO], plays=[play])
+        runner.run(sweep, folder, world.seams())
+        assert len(world.argv) == 1, play                                   # each play was recorded
+        played |= set(world.sounds)
+    # prepared before any run (command.real_seams), so none is written on the start key's thread as it plays
+    assert played == set(command.SWEEP_SOUNDS)
 
 
 def test_the_file_is_never_changed_while_the_game_runs(tmp_path):

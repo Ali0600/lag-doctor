@@ -985,9 +985,9 @@ def _keyed(at, registered=True):
 
 
 def test_a_start_key_that_measured_nothing_is_said_in_both_reports_and_a_part_or_none_says_nothing():
-    note = ("The start key Ctrl+Alt+S was not pressed, so the whole recording was analysed, startup included. To "
-            "analyse only part of it, run lagdoctor analyze on the capture with --from (and --to).")
-    assert labels.unmeasured_note("the start key Ctrl+Alt+S was not pressed") == note
+    note = ("The start key Ctrl+Alt+S was not pressed in time, so the whole recording was analysed, startup included. "
+            "To analyse only part of it, run lagdoctor analyze on the capture with --from (and --to).")
+    assert labels.unmeasured_note("the start key Ctrl+Alt+S was not pressed in time") == note
     assert labels.unmeasured_note("") is None
     cap = _keyed(None)
     d = diagnose(cap)
@@ -999,6 +999,29 @@ def test_a_start_key_that_measured_nothing_is_said_in_both_reports_and_a_part_or
     keyed = _keyed(5.0)
     d = diagnose(crop(keyed, 5.0, 20.0, how="key"))        # the start key's part: its own note, none of this one
     assert "startup included" not in " ".join((html_report.render(d, keyed) + console.render(d, keyed)).split())
+
+
+def test_a_recording_of_unknown_length_is_not_told_to_pick_a_part_analyze_would_refuse():
+    cap = _keyed(5.0)
+    cap.duration_s = 0.0                                  # a damaged file: no part can be picked from it
+    from lagdoctor.analysis.crop import key_part
+    why = key_part(cap)[1]
+    assert why == "the start key Ctrl+Alt+S's part cannot be found: the recording's length is not known"
+    assert labels.unmeasured_note(why) == (
+        "The start key Ctrl+Alt+S's part cannot be found: the recording's length is not known, so the whole recording "
+        "was analysed, startup included.")
+    shown = " ".join((html_report.render(diagnose(cap), cap) + console.render(diagnose(cap), cap)).split())
+    assert "length is not known, so the whole recording was analysed" in shown and "--from" not in shown
+
+
+def test_a_header_with_no_frames_says_whether_a_part_or_the_recording_had_none():
+    from lagdoctor.analysis.crop import EMPTY_IN_SPAN
+    assert labels.no_frames_text({"frames": EMPTY_IN_SPAN}) == "no frame timing in the measured part"
+    for measured in ({"frames": "not recorded in this capture"}, {}, None):
+        assert labels.no_frames_text(measured) == "frame timing not recorded"
+    d = diagnose(make_capture())
+    d.measured = dict(d.measured, frames=EMPTY_IN_SPAN)
+    assert html_report._frames_text(d) == "no frame timing in the measured part"
 
 
 def test_the_footers_command_makes_the_same_analysis_again():

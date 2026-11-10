@@ -320,7 +320,7 @@ const SCREENS = {
     if (!live()) return;
     const head = el('div', null, el('h1', null, r.game),
       el('p', {class: 'muted'}, [r.exe_name !== r.game ? r.exe_name : null, r.when, `${r.length} recorded`,
-        r.frames_text].filter(Boolean).join(' · ')),
+        r.analysed, r.frames_text].filter(Boolean).join(' · ')),
       r.note ? el('p', {class: 'note', id: 'note'}, el('strong', null, 'Your note: '), r.note) : null,
       r.part ? el('p', {class: 'note', id: 'part'}, r.part) : null);
     const verdict = el('div', {class: 'card'}, el('div', {class: 'verdict'},

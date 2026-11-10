@@ -44,6 +44,7 @@ HOWS = ("key", "set")            # from the start key's press; set by the player
 TABLES = ("frames", "system", "gpu", "network")
 OK_STATES = ("ok", "partial")
 EMPTY_IN_SPAN = "it recorded nothing in the measured part"
+LENGTH_UNKNOWN = "the recording's length is not known"     # key_part's why when no part can be picked at all
 MARK_LATE_S = 1.0                # capture/session.py keeps a lag-key press up to 1 s after the recording stopped
 SERVER_BIN_S = 1.0               # net_flows server_rx: [t, packets] for the second that ends at t
 ROLE_COLUMNS = {"gateway": N.GW_RTT_MS, "internet": N.INET_RTT_MS, "server": N.SERVER_RTT_MS}
@@ -126,7 +127,7 @@ def key_part(cap: Capture) -> tuple[tuple[float, float] | None, str]:
     if not rec["registered"]:
         return None, f"{name} could not be registered"
     if rec["at"] is None:
-        return None, f"{name} was not pressed"
+        return None, f"{name} was not pressed in time"      # never, or too near the set length (Session.start)
     at, window = _time(rec["at"]), rec["window_s"]
     span = None if window is None else _time(window)
     if at is None or at < 0 or (window is not None and (span is None or span <= 0)):
@@ -134,7 +135,7 @@ def key_part(cap: Capture) -> tuple[tuple[float, float] | None, str]:
     try:
         end = recorded_s(cap)
     except ValueError:
-        return None, f"{name}'s part cannot be found: the recording's length is not known"
+        return None, f"{name}'s part cannot be found: {LENGTH_UNKNOWN}"
     if at >= end:
         return None, f"{name} was pressed after the recording ended"
     if span is not None and round(span, 3) < MIN_SPAN_S:     # rounded down, as check_span says a length

@@ -31,7 +31,8 @@ from lagdoctor.sweep import inifile, plan, results, runner
 EXIT_BAD = 2
 NEW_ONLY = ("game", "settings", "runs", "window")
 LOCK_PREFIX = "Local\\lag-doctor-sweep-"
-SWEEP_SOUNDS = ("ready", "start", "done", "problem")      # every chime runner._record plays (a test holds them so)
+SWEEP_SOUNDS = ("ready", "start", "done", "problem")      # every chime runner._record plays (test_sweep_runner holds
+                                                           # them equal)
 
 
 def main(args: argparse.Namespace, *, seams: Callable[[], runner.Seams] | None = None,

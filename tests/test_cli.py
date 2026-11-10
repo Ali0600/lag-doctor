@@ -1424,7 +1424,7 @@ def test_a_start_key_window_or_wait_watch_cannot_use_is_refused_by_the_parser(ba
 def test_the_shortest_window_is_the_shortest_part_and_the_sweeps_start_key_is_watchs():
     from lagdoctor.analysis import crop
     from lagdoctor.sweep import plan, runner
-    assert cli.WINDOW_MIN_S == crop.MIN_SPAN_S and plan.START_KEY == cli.DEFAULT_START_KEY
+    assert cli.WINDOW_MIN_S == crop.MIN_SPAN_S == sess.MIN_PART_S and plan.START_KEY == cli.DEFAULT_START_KEY
     assert runner.TAIL_S == sess.WINDOW_TAIL_S
 
 
@@ -1520,26 +1520,28 @@ def test_a_watch_measures_from_its_start_key_with_chimes_and_a_part_too_short_an
     assert (opts.start_key, opts.window_s, opts.start_by_s, opts.start_advice) == ("ctrl+alt+s", 300.0, 900.0, True)
     [made] = list((tmp_path / "out").iterdir())
     cap = Capture.load(made / cli.CAPTURE_NAME)
-    assert cap.start_key["registered"] is True and 0.0 <= cap.start_key["at"] < 0.6
-    # Ready, the press, and three notes when the set length ended the measuring the press's line had announced.
-    assert _no_real_keys_or_sounds.played == ["ready", "start", "done"]
+    # A 0.6 s recording leaves no room for an 11 s part: the press is refused as it comes (Session.start), so no
+    # rising chime announces measuring that cannot happen, and nothing ends it with three notes.
+    assert keys.pressed and cap.start_key["registered"] is True and cap.start_key["at"] is None
+    assert _no_real_keys_or_sounds.played == ["ready"]
     assert _no_real_keys_or_sounds.players == 1
     assert "span" not in json.loads((made / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8"))["stats"]
     out = " ".join(capsys.readouterr().out.split())               # the summary wraps at the console's width
     assert ("Recording. Once Ctrl+Alt+S is ready (said below, with a short chime), go to the spot you want measured "
             "and press it to start measuring for the rest of the recording, with a rising chime") in out
-    assert re.search(r"The start key Ctrl\+Alt\+S was pressed only 0\.\d s before the recording ended, and a part "
-                     r"needs at least 11 s, so the whole recording was analysed, startup included\.", out), out
+    assert ("The start key Ctrl+Alt+S was not pressed in time, so the whole recording was analysed, startup "
+            "included.") in out, out
 
 
-def test_a_chime_that_could_not_play_is_said_once_after_the_recording(fake_world, tmp_path, capsys,
+def test_a_chime_that_could_not_play_is_said_once_after_the_recording(fake_world, tmp_path, capsys, monkeypatch,
                                                                       _no_real_keys_or_sounds):
     _no_real_keys_or_sounds.sound_ok = False
+    monkeypatch.setattr(sess, "MIN_PART_S", 0.0)       # the press counts in a 0.5 s recording: three chimes fail
     keys = _StartKeys()
     fake_world["keys"], fake_world["on_tick"] = keys, keys.press_on_first_tick
     assert cli.main(["watch", "--pid", "4242", "--duration", "0.5", "--no-network", "--no-elevate",
                      "--out", str(tmp_path / "out")]) == 0
-    assert _no_real_keys_or_sounds.played[:2] == ["ready", "start"]
+    assert _no_real_keys_or_sounds.played == ["ready", "start", "done"]
     assert capsys.readouterr().out.count("(A chime could not be played during the recording") == 1
 
 
@@ -1575,7 +1577,7 @@ def test_a_watch_whose_start_key_was_not_pressed_analyses_all_of_it_and_both_rep
     assert cli._analyze_saved(Capture.load(p), p, out_dir, remember=False) == 0
     d, summary, page = _made(out_dir)
     assert "span" not in d["stats"] and d["lag_type"] == "stutter" and summary["measured_how"] is None
-    note = "The start key Ctrl+Alt+S was not pressed, so the whole recording was analysed, startup included."
+    note = "The start key Ctrl+Alt+S was not pressed in time, so the whole recording was analysed, startup included."
     assert note in " ".join(capsys.readouterr().out.split()) and note in page
 
 

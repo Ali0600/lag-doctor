@@ -584,7 +584,7 @@ def test_a_recording_without_a_start_key_has_no_part_and_no_word_about_one():
 
 @pytest.mark.parametrize("change,why", [
     ({"registered": False}, "the start key Ctrl+Alt+S could not be registered"),
-    ({"at": None}, "the start key Ctrl+Alt+S was not pressed"),
+    ({"at": None}, "the start key Ctrl+Alt+S was not pressed in time"),
     ({"at": 95.0}, "the start key Ctrl+Alt+S was pressed only 5.0 s before the recording ended, and a part needs at "
                    "least 11 s"),
     ({"at": 89.01}, "the start key Ctrl+Alt+S was pressed only 10.9 s before the recording ended, and a part needs "
@@ -621,7 +621,7 @@ def test_a_damaged_start_key_record_measures_nothing_and_never_raises(record):
                                        ("ctrl+alt+\x1b[31m", "the start key"), (7, "the start key"),
                                        ("", "the start key")])
 def test_a_start_keys_name_from_a_file_is_shown_only_when_short_and_plain(key, named):
-    assert crop_mod.key_part(_keyed(at=None, key=key)) == (None, f"{named} was not pressed")
+    assert crop_mod.key_part(_keyed(at=None, key=key)) == (None, f"{named} was not pressed in time")
 
 
 def test_a_recording_of_unknown_length_cannot_find_its_start_keys_part():

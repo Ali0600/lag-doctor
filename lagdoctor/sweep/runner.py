@@ -6,8 +6,8 @@ Each run (the assisted sweep the owner chose, DECISIONS 2026-11-09):
    checked to hold its original values and its other values as the runs count them, and the run's setting is written
    through the journal and read back.
 3. The start key is registered (check_start_key), so a key another program holds is found now, and held while the
-   player starts the game, loads a save, goes to a chosen spot and presses Enter here; it is let go right before the
-   recording registers it for itself.
+   player starts the game, loads a save, goes to a chosen spot and presses Enter here; it is let go as the recording
+   starts, which registers it for itself once its UAC prompt and the PC's settings are done (free meanwhile).
 4. The recording starts (`watch`, with one UAC prompt unless this account records frame timing without one), and
    watch's start key measures it (DECISIONS 2026-11-09, the start key). The player goes back to the game and presses
    the key at the spot: a rising chime, then `window_s` seconds are measured, a three-note chime a few seconds later,
@@ -85,7 +85,7 @@ class Seams:
     running: Callable[[str], bool]                        # is a process with the game's image name running?
     sleep: Callable[[float], None]
     hotkey: Callable[[str, Callable[[float], None]], Any]  # a listener: start() -> bool, stop(), error
-    sound: Callable[[str], bool]                          # "start", "done" or "problem"; False when it could not play
+    sound: Callable[[str], bool]                          # one of command.SWEEP_SOUNDS; False when it could not play
     load: Callable[[Path], Capture]
     fix: Any                                              # a fixes.game_setting.GameSettingFix
     journal: Any                                          # a fixes.journal.Journal
@@ -193,7 +193,7 @@ def _one(sweep: plan.Sweep, slot: plan.Slot, folder: Path, seams: Seams) -> None
     apply(sweep, v, slot, folder, seams)
     held = ", ".join(e.text() for e in plan.values_for(sweep, v.id))
     seams.say(f"  The settings file now holds {held}.")
-    key = check_start_key(sweep, seams)          # held while the game starts, until the recording registers it
+    key = check_start_key(sweep, seams)          # held while the game starts, let go as the recording starts
     try:
         while True:
             answer = _ask(seams, "  Start the game, load your save and go to your spot. Then press Enter here (q "
@@ -458,8 +458,9 @@ def wait_closed(sweep: plan.Sweep, seams: Seams, why: str, stop_when: Callable[[
 def check_start_key(sweep: plan.Sweep, seams: Seams) -> Any:
     """Before the player starts the game: the start key is registered, so a key another program holds is found
     before they spend the time, and held while the game starts (one that registers the same key then cannot have
-    it). The caller lets it go (_let_go) right before the run's recording registers it for itself: one listener for
-    the key at a time. Stop when Windows will not give it."""
+    it). The caller lets it go (_let_go) as the run's recording starts, which registers it for itself once its UAC
+    prompt and the PC's settings are done, so the key is free in between: one listener for the key at a time. Stop
+    when Windows will not give it."""
     listener, started, why = None, False, ""
     try:
         listener = seams.hotkey(sweep.start_key, lambda when: None)
@@ -512,7 +513,7 @@ def _record(sweep: plan.Sweep, slot: plan.Slot, folder: Path, seams: Seams,
     ("measuring"), and watch stops the recording a few seconds after the window ends, or once the press has not come
     within START_WAIT_S (both said by "stopping"'s reason). The sweep plays the chimes for those and for the key
     being ready, and stops the run itself when frame timing is off or watch could not register the key. `held`: the
-    sweep's own hold on the key (check_start_key), let go right before the recording. Returns the attempt (failed, or
+    sweep's own hold on the key (check_start_key), let go as the recording starts. Returns the attempt (failed, or
     "judge" for _judge), the press's time in the recording's seconds, and whether the player stopped with Ctrl+C."""
     (Path(folder) / plan.RUNS_DIR).mkdir(parents=True, exist_ok=True)
     attempt = plan.Run(slot.n, slot.variant, "failed")
@@ -540,7 +541,7 @@ def _record(sweep: plan.Sweep, slot: plan.Slot, folder: Path, seams: Seams,
                 _sound(seams, "ready")
         elif kind == "measuring":
             with lock:
-                if seen["closed"] or seen["press"] is not None:
+                if seen["closed"]:                      # watch tells "measuring" once (Session.start)
                     return
                 seen["press"] = data.get("at")
             _sound(seams, "start")

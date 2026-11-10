@@ -273,7 +273,8 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
         # Which part the numbers below cover; the charts show all of it until M5's app half shades the rest.
         "part": (labels.part_note(part, len(labels.outside_marks(cap.marks, part))) + " The charts below show the "
                  "whole recording.") if part else "",
-        "frames_text": f"{fmt(stats.get('frames'))} frames" if frames_ok else "frame timing not recorded",
+        "analysed": f"{labels.part_length(part)} analysed" if part else "",     # as the HTML report's header says
+        "frames_text": f"{fmt(stats.get('frames'))} frames" if frames_ok else labels.no_frames_text(d.measured),
         "verdict": {"key": d.lag_type if isinstance(d.lag_type, str) else "unknown", "title": lag_text(d.lag_type),
                     "headline": d.headline},
         "tiles": [["Average FPS", fmt(stats.get("avg_fps"))], ["1% low FPS", fmt(stats.get("low1_fps"))],

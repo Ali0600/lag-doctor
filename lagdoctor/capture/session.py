@@ -72,6 +72,7 @@ CANCELLED = "cancelled before it began"     # the stop reason when SessionOption
 WINDOW_TAIL_S = 3.0
 WINDOW_ENDED = "the measured window ended"            # the stop reasons of the start key's own ends
 NO_START = "the start key was not pressed in time"
+MIN_PART_S = 11.0               # analysis.crop.MIN_SPAN_S, the shortest part (a test holds them equal)
 
 
 @dataclass
@@ -282,6 +283,7 @@ class Session:
         self.start_at: float | None = None         # the start key's press that counts, seconds from the start
         self._start_on = False                     # Windows gave the start key
         self._start_open = False                   # from "recording" to "stopping": a start press counts
+        self._late_at: float | None = None         # a first press too near the set length for a part (start)
         self._tick_procs: dict[int, Any] | None = None   # this status tick's snapshot, once one was taken
         self._tools: dict[int, None] = {}          # lag-doctor's own PIDs seen so far (an ordered set)
         self._tools_listed = False
@@ -457,12 +459,18 @@ class Session:
     def start(self, when: float | None = None) -> float | None:
         """The start key's press at `when` (lagdoctor.clock time; default now). The first once the recording has begun
         (the "recording" event) and before it stops starts the measured window: returns it, in seconds from the start.
-        Any other press changes nothing and returns None: one before or after, and every one after the first."""
+        Any other press changes nothing and returns None: one before or after, and every one after the first. So does
+        a first press that leaves less than MIN_PART_S before the recording's set length (opts.duration_s), past it
+        included: no part can come of it, so it closes the key, and the loop says so (_late_line)."""
         when = clock.now() if when is None else when
         with self._marks_lock:
             if not self._start_open or self.start_at is not None:
                 return None
-            self.start_at = at = round(when - self.origin, 3)
+            at = round(when - self.origin, 3)
+            if self.opts.duration_s is not None and self.opts.duration_s - at < MIN_PART_S:
+                self._start_open, self._late_at = False, at
+                return None
+            self.start_at = at
         self.observers.event("measuring", at=at, until=self._measured_until(at))
         return at
 
@@ -501,6 +509,8 @@ class Session:
                 if self.opts.window_s is None or elapsed < at + self.opts.window_s + WINDOW_TAIL_S:
                     return None
                 reason = WINDOW_ENDED
+            elif self._late_at is not None:          # pressed, too late for a part: the set length ends it
+                return None
             elif self._start_on and self.opts.start_by_s is not None and elapsed >= self.opts.start_by_s:
                 reason = NO_START
             else:
@@ -515,17 +525,22 @@ class Session:
                 return
             self.observers.event("recording", duration_s=self.opts.duration_s, hotkey=self._hotkey_on,
                                  frames=self.opts.frames, network=self.opts.network)
-            if self.opts.start_key:
+            # One already stopping (Ctrl+C as it started, a sweep's run closed on "recording") says nothing of its key.
+            if self.opts.start_key and not stop.is_set():
                 self.observers.event("start_key", key=self.opts.start_key, registered=self._start_on,
                                      window_s=self.opts.window_s, start_by_s=self._press_by())
-            with self._marks_lock:
-                self._start_open = self._start_on    # from here on, the start key's first press counts
-            if self._start_on:            # only now: a press before Windows gave the key went to the game
-                self._print(f"\n{self.opts.start_key.title()} is ready: press it at the spot you want measured.\n")
+                with self._marks_lock:
+                    self._start_open = self._start_on    # from here on, the start key's first press counts
+                if self._start_on:            # only now: a press before Windows gave the key went to the game
+                    self._print(f"\n{self.opts.start_key.title()} is ready: press it at the spot you want measured.\n")
             said_start = False
+            said_late = False
             while True:
                 self._tick_procs = None                  # each tick takes a fresh one, the first time it is needed
                 elapsed = clock.now() - self.origin
+                if not said_late and self._late_at is not None:
+                    said_late = True             # before any stop: a press in the last tick is still answered
+                    self._print("\n" + self._late_line() + "\n")
                 if stop.is_set():
                     self.stop_reason = getattr(stop, "reason", "") or "stopped"
                     return
@@ -577,6 +592,13 @@ class Session:
         if window is not None and until >= round(at + window, 3):
             return f"Measuring from {clock_text(at)} for {span_words(window)}, until {clock_text(until)}."
         return f"Measuring from {clock_text(at)} until {clock_text(until)}, when the recording stops at its set length."
+
+    def _late_line(self) -> str:
+        """What a first press too near the recording's set length is told (start): it measured nothing."""
+        end = ", so all of it will be analysed." if self.opts.start_advice else "."
+        return (f"{self.opts.start_key.title()} was pressed at {clock_text(self._late_at or 0.0)}, too late: the "
+                f"recording stops at its set length at {clock_text(self.opts.duration_s or 0.0)}, and a part needs "
+                f"at least {MIN_PART_S:.0f} s" + end)
 
     def _start_end_line(self, why: str) -> str:
         if why == WINDOW_ENDED:

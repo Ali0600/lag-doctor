@@ -2,6 +2,14 @@
 
 ## Backlog: alternatives worth trying later
 
+- **Cut a part bounded by `--duration` at the end the session announced** (`until` saved in `start_key`), so the
+  analysis stops at the set length rather than at the recorded end with the stop's own seconds, and a press too late
+  for a part could count and be judged there: worth trying when the app's half shows `until` (2026-11-10, the start
+  key in `watch`). Revisit hook: `Session.start`, `Session._assemble`'s `start_key` record, `crop.key_part`.
+- **Hand the sweep's held start key to watch**, so nothing frees it between Enter and watch's registration (the UAC
+  prompt and the PC's settings sit in that gap): worth trying if a sweep run ever fails as `KEY_TAKEN` there
+  (2026-11-09, the start key in `watch`). Revisit hook: `runner._record`'s `_let_go(held)` and `Session`'s
+  `hotkey_factory`.
 - **Keep Alt from starting Windows' menu mode in the app's window**: the window procedure returns 0 for
   `WM_SYSCOMMAND` with `SC_KEYMENU` and no character, as Chromium's own window does, or the controller is created with
   AllowHostInputProcessing (`docs/research/desktop-app.md`, section 12). Alt+Left did not start menu mode on GitHub's
@@ -166,7 +174,8 @@ The owner's:
   key, and `--start-key none` records as before, the whole session.
   - **Only when asked**, with `--start-key KEY`: not chosen.
 - **No press: the whole recording, labelled (chosen: "Whole recording, labelled (Recommended)")**: when the start key
-  is on but was never pressed, could not be registered, or was pressed too late for a 10 s part, the whole recording
+  is on but was never pressed, could not be registered, or was pressed too late for an 11 s part (10 s until
+  2026-11-10), the whole recording
   is analysed, startup included, and both reports say so and name the `analyze --from` command that picks a part.
   - **Nothing until the player sets the start** (the plan's rule for the app's Results): not chosen for the terminal.
     M5c decides it for the app, which has trim handles.
@@ -197,6 +206,16 @@ The session's:
 - **What a line promises holds (chosen, after the review)**: the measuring line names the recording's set length when
   `--duration` ends it first, the `start_key` event waits for a press only up to that length, and a sweep run's lines
   leave out watch's own advice (`cmd_watch(start_advice=False)`), since the sweep words and fails such a run itself.
+- **A press too late for a part measures nothing (chosen, after the second review, 2026-11-10)**: a first press that
+  leaves less than 11 s (`session.MIN_PART_S`) before `--duration`'s end, past it included, is refused as it comes:
+  no `measuring`, no rising chime, one line saying why, and the report says the key "was not pressed in time". It
+  used to count, be announced and chimed, and then be analysed whole anyway (or, a few ms past the end, be told with
+  `until` before `at`, which the control channel refuses). A recording that ends early in another way (Ctrl+C, the
+  game's exit) is still judged by `crop.key_part` afterwards. Tests that press keep a set length a part fits in.
+  - **Count it, and cut its part at the end the session announced** (save `until` in `start_key`, so a part bounded
+    by `--duration` also stops at the set length rather than at the recorded end, which includes the stop's own
+    seconds): deferred, worth trying when the app's half shows `until`; it changes the capture's record. Revisit
+    hook: `Session.start`, the `start_key` record in `Session._assemble`, and `crop.key_part`.
 - **The window's end stops the recording (chosen, the plan's step 6)**, 3 s later for PresentMon's late rows; it is
   saved and analysed while the player plays on. With no press, the recording stops after 20 minutes (`--start-by`).
   - **Record on until the game closes**: deferred to M6 (Play's "after the game closes").
@@ -208,7 +227,12 @@ The session's:
 - **watch owns the window and the cap; the sweep follows its events (chosen)**: a sweep run passes `--start-key`,
   `--window` and `--start-by`, plays its chimes from watch's `measuring` and `stopping` events, and keeps its early
   check that the key is free. It holds the key while the game starts, as it did before (a program that registers the
-  key then cannot have it), and lets go right before the recording registers it.
+  key then cannot have it), and lets go as the recording starts. The key is then free until watch registers it,
+  after the UAC prompt and the PC's settings are read: before M5b the sweep's own listener held it through that too.
+  - **Hand the sweep's registration to watch** (a key factory that adopts the held listener and forwards its presses
+    to `Session.start`, as the old `_StartKey.target` did): deferred, worth trying if a run ever fails with
+    `KEY_TAKEN` taken in that gap; no program that does so is known. Revisit hook: `runner._record`'s `_let_go(held)`
+    and the `hotkey_factory` that `capture/session.Session` takes.
   - **The sweep keeps its own listener and timers**: rejected; two copies of one rule drift, and both would race to
     stop the recording.
 - **One player per sound (chosen)**: a terminal watch plays its own; under `--control stdio` the app keeps playing

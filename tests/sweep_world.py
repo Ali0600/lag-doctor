@@ -79,7 +79,6 @@ class Play:
 
     fps: float | None = None              # None: the world's frame rate for the setting the file holds
     press: bool = True                    # the player presses the start key
-    press_late: bool = False              # ... and a "measuring" comes again after "stopping" (never a real watch's)
     press_raced: bool = False             # the only press races the stop: watch counts it, but tells it after
                                           # "stopping" (Session.start tells it outside its lock)
     press_in_stop: bool = False           # ... while a run the sweep stopped is still stopping (watch tells that one)
@@ -249,8 +248,6 @@ class World:
                 observers.event("stopping", reason="Ctrl+C")
             else:
                 observers.event("stopping", reason=WINDOW_ENDED)  # watch stops the recording after the window
-            if play.press_late:
-                observers.event("measuring", at=95.0, until=95.0 + window)
         else:
             observers.event("stopping", reason=NO_START)          # no press within --start-by
         fps = play.fps if play.fps is not None else self.fps[self.variant_on_disk()]

@@ -469,7 +469,7 @@ def _no_events(d: Diagnosis) -> str:
 
 def _frames_text(d: Diagnosis) -> str:
     """The frames the analysis had, for the header: "0 frames" once stood for frame timing that never ran."""
-    return f"{_fmt(_dict(d.stats).get('frames'))} frames" if _ran(d, "frames") else "frame timing not recorded"
+    return f"{_fmt(_dict(d.stats).get('frames'))} frames" if _ran(d, "frames") else labels.no_frames_text(d.measured)
 
 
 def _events(d: Diagnosis) -> str:

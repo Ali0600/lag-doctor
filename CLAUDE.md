@@ -93,7 +93,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   sweep may hold), so `tests/conftest.py`'s `_no_real_keys_or_sounds` fails a test that registers any key but
   Ctrl+Alt+Shift+F23 or F24 or plays a sound, and gives a console `watch` a stand-in player (its `played` list). A
   stand-in session takes a stand-in `hotkey_factory`; a test that runs `watch` in a child process, out of the
-  guard's reach, passes `--start-key none --no-sound`.
+  guard's reach, passes `--hotkey none --start-key none` (and `--no-sound` for a console `watch`): the lag key
+  Ctrl+Alt+L is a real key too.
 - **Red first.** A new guard ships with a mutation in `tests/redfirst/*.json` that turns its test red;
   `scripts/redfirst.py` must report every mutation `CAUGHT`. Never weaken a test to make it pass. The runner
   mutates a temp copy of the tree, never the working tree; so tests must not read the real repo by an

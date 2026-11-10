@@ -23,9 +23,9 @@ generated, the analysis and the page are the real ones.*
 - **Records while you play**: every frame's timing (Intel PresentMon), the game's CPU per thread, GPU load
   and video memory, disk, RAM, CPU/GPU throttling, and the network path (router, internet, the game server's
   packet stream). Once it says **Ctrl+Alt+S** is ready (a short chime), press it at the spot you want measured: the
-  10 minutes after the press are analysed, never the game starting up, and a rising chime says the press counted
-  (with no press in time, all of the recording is analysed, and the report says so). Press **Ctrl+Alt+L** the moment
-  it lags; the analysis looks at what happened just before.
+  10 minutes after the press are analysed, not the game starting up, and a rising chime says the press counted. With
+  no press in time, or a recording that ends within 11 s of it, all of the recording is analysed, and the report
+  says so. Press **Ctrl+Alt+L** the moment it lags; the analysis looks at what happened just before.
 - **Explains**: the lag type, the likely causes ranked with their evidence ("9 of 9 stutters and FPS drops
   coincided with the game reading from disk"), what was **checked and fine**, and what **could not be
   checked** and why. Nothing unmeasured is ever reported as fine.
@@ -140,8 +140,9 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
 
 - **A recording ends** 3 s after the start key's window (`--window S`, default 600), with Ctrl+C, after
   `--duration S`, or when the game exits; with no Ctrl+Alt+S press within 20 minutes (`--start-by S`) it stops, and
-  all of it is analysed, the report saying so. After the first Ctrl+C it says it is stopping and saving, and a second
-  press cannot lose the capture. `lagdoctor analyze CAPTURE` analyses the same part again.
+  all of it is analysed, the report saying so. A start key Windows did not give is said at the start, and that
+  recording ends only in the other ways. A press less than 11 s before `--duration`'s end measures nothing, and says
+  so. After the first Ctrl+C it says it is stopping and saving, and a second press cannot lose the capture. `lagdoctor analyze CAPTURE` analyses the same part again.
 - **Frame timing uses Windows event tracing (ETW), which needs admin rights.** `watch` offers one UAC prompt
   per recording (`--elevate` skips the question, `--no-elevate` records without frame timing). Only PresentMon and
   the network trace then run elevated, in lag-doctor's relay: a background process with no window, which passes

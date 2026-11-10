@@ -328,11 +328,23 @@ def part_note(part: dict[str, Any], outside_marks: int = 0) -> str:
 
 def unmeasured_note(why: str) -> str | None:
     """What the reports say when a recording had a start key but the whole of it was analysed (analysis/crop.key_part's
-    `why`, e.g. 'the start key Ctrl+Alt+S was not pressed'); None without a why."""
+    `why`, e.g. 'the start key Ctrl+Alt+S was not pressed in time'); None without a why. It says how to pick a part,
+    unless the recording's length is not known, when no part can be picked (analyze --from refuses it too)."""
     if not why:
         return None
-    return (f"{why[0].upper()}{why[1:]}, so the whole recording was analysed, startup included. To analyse only part "
-            "of it, run lagdoctor analyze on the capture with --from (and --to).")
+    from lagdoctor.analysis.crop import LENGTH_UNKNOWN
+    text = f"{why[0].upper()}{why[1:]}, so the whole recording was analysed, startup included."
+    if why.endswith(LENGTH_UNKNOWN):
+        return text
+    return text + " To analyse only part of it, run lagdoctor analyze on the capture with --from (and --to)."
+
+
+def no_frames_text(measured: Any) -> str:
+    """The header's words for an analysis that had no frames (Diagnosis.measured): a measured part with none of its own
+    says so, since the charts may still draw the recording's frames outside it."""
+    from lagdoctor.analysis.crop import EMPTY_IN_SPAN
+    frames = measured.get("frames") if isinstance(measured, dict) else None
+    return "no frame timing in the measured part" if frames == EMPTY_IN_SPAN else "frame timing not recorded"
 
 
 def marks(stats: dict, events: list) -> list[tuple[float, list, list[str]]]:

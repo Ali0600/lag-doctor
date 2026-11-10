@@ -184,7 +184,7 @@ def from_recorder(line: bytes) -> dict[str, Any]:
     elif t == "measuring":
         _fields(msg, "at", "until")
         at, until = _seconds(msg, "at"), _seconds(msg, "until", optional=True)
-        if until is not None and until < at:            # equal: a press in the instant the recording's length ran out
+        if until is not None and until < at:            # watch's comes after at: Session.start refuses a late press
             raise ProtocolError("measuring.until is before measuring.at")
     elif t == "mark":
         _fields(msg, "at")

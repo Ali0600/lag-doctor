@@ -629,6 +629,20 @@ def test_results_say_which_part_a_start_key_measured_and_draw_only_its_presses(t
     assert later["frames"]["marks"] == []                 # a part without a press: never the presses it left out
     whole = views.results_view(entry, diagnose(cap), cap, main_chain(cap), is_last=False, has_report=False)
     assert whole["part"] == "" and whole["frames"]["marks"] == [20.0, 100.0]
+    # The header's figures: the part's length beside the part's frames, as the HTML report's header says them.
+    assert (part["length"], part["analysed"], whole["analysed"]) == ("3m", "1m analysed", "")
+    assert part["frames_text"] != whole["frames_text"] and part["frames_text"].endswith(" frames")
+
+
+def test_a_part_with_no_frames_of_its_own_says_so_while_the_chart_draws_the_rest(tmp_path):
+    from lagdoctor.analysis.crop import crop
+    cap, entry = _keyed_session(tmp_path)
+    kept = [i for i, t in enumerate(cap.frames["t"]) if t < 50.0]          # PresentMon stopped at 50 s
+    cap.frames = {name: [column[i] for i in kept] for name, column in cap.frames.items()}
+    part = views.results_view(entry, diagnose(crop(cap, 70.0, 130.0, how="key")), cap, main_chain(cap),
+                              is_last=False, has_report=False)
+    assert part["frames_text"] == "no frame timing in the measured part" and part["analysed"] == "1m analysed"
+    assert views.frame_bytes(main_chain(cap))[1] > 0                       # the frames the chart is sent
 
 
 def test_without_its_diagnosis_the_app_analyses_the_part_the_start_key_measured(tmp_path):

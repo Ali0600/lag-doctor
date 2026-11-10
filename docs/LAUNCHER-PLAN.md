@@ -572,11 +572,14 @@ analysed and labelled when the key measured nothing, and chimes in a terminal wi
 - `lagdoctor watch` registers Ctrl+Alt+S beside the lag key, one listener per key, and says (with a short chime) when
   it is ready. The first press after that starts a 10-minute window (`--window`), the recording stops 3 s after it,
   and the part is analysed; with no press within 20 minutes (`--start-by`) it stops, and all of it is analysed.
-  `--start-key none` records as before.
+  A press less than 11 s before `--duration`'s end measures nothing and says so. `--start-key none` records as
+  before.
 - The press is saved in the capture (`start_key`), so `analyze CAPTURE` finds the same part again (`crop.key_part`).
-- The sweep's runs use watch's key: the sweep checks it is free and holds it while the game starts, lets go right
-  before the recording registers it, and plays its chimes from watch's events. Two runner tests whose guard moved
-  into watch were rewritten to what watch can really tell (a press told after the stop); the rest pass unchanged.
+- The sweep's runs use watch's key: the sweep checks it is free and holds it while the game starts, lets go as the
+  recording starts (the key is free until watch registers it, after the UAC prompt and the PC's settings), and plays
+  its chimes from watch's events. Runner tests whose guard moved into watch were rewritten to what watch can really
+  tell (a press told after "stopping" as it races the stop, or while a run the sweep stopped is still stopping), and
+  one that could fail only with both of its guards gone was dropped.
 - The app's recorder passes `--start-key none` until this milestone's app half gives it the key, its words and its
   own sounds; `control.from_recorder` already checks the start key's two messages (`start_key`, `measuring`), and a
   window or no-press end is `completed`. A terminal recording measured from its start key shows in the app as it
