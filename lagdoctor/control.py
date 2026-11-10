@@ -184,8 +184,8 @@ def from_recorder(line: bytes) -> dict[str, Any]:
     elif t == "measuring":
         _fields(msg, "at", "until")
         at, until = _seconds(msg, "at"), _seconds(msg, "until", optional=True)
-        if until is not None and until <= at:
-            raise ProtocolError("measuring.until is not after measuring.at")
+        if until is not None and until < at:            # equal: a press in the instant the recording's length ran out
+            raise ProtocolError("measuring.until is before measuring.at")
     elif t == "mark":
         _fields(msg, "at")
         if isinstance(msg["at"], bool) or not isinstance(msg["at"], (int, float)) or not math.isfinite(msg["at"]):

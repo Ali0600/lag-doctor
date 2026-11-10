@@ -303,7 +303,8 @@ class _Quick(Collector):
         return self._result
 
 
-def test_a_sweep_run_records_through_watch_without_repointing_fix_or_saying_the_summary(ini, tmp_path, monkeypatch):
+def test_a_sweep_run_records_through_watch_without_repointing_fix_or_saying_the_summary(ini, tmp_path, monkeypatch,
+                                                                                       _no_real_keys_or_sounds):
     monkeypatch.setattr(tgt, "find_target", lambda **kw: dict(GAME))
     monkeypatch.setattr(elevation, "can_trace", lambda: True)          # frame timing here, no relay
     monkeypatch.setattr(sess, "_collect_inventory", lambda target: {"adapters": []})
@@ -321,8 +322,11 @@ def test_a_sweep_run_records_through_watch_without_repointing_fix_or_saying_the_
         def stop(self):
             pass
 
+    made: list = []
+
     class QuickSession(sess.Session):
         def __init__(self, target, opts, inventory=None, printer=None, observers=None, **kw):
+            made.append(opts)
             cols = [_Quick("system", {"columns": {"t": [0.0, 0.25], "cpu_total_pct": [10.0, 11.0]}}),
                     _Quick("frames", {"columns": {"t": [0.1, 0.12, 0.14], "frame_ms": [16.7, 16.6, 16.8]}})]
             ends = time.monotonic() + 10.0
@@ -358,6 +362,14 @@ def test_a_sweep_run_records_through_watch_without_repointing_fix_or_saying_the_
     said = "\n".join(lines)
     assert "Analysing..." in said and cli.REPORT_NAME not in said     # the summary, which names the report, is not said
     assert all(line.startswith("    ") for line in lines)
+    # The sweep words the start key itself: watch's own advice stays out, and only the sweep's chimes play (each
+    # written before the run, since they play on the key's thread).
+    assert "Recording. Play normally; Ctrl+C stops." in said and "is ready (said below" not in said
+    assert made[0].start_advice is False
+    assert _no_real_keys_or_sounds.players == 0
+    from lagdoctor.app import sounds
+    assert {p.name for p in (paths.home() / sounds.FOLDER).iterdir()} == {f"{n}.wav" for n in command.SWEEP_SOUNDS}
+    assert set(command.SWEEP_SOUNDS) <= set(sounds.SOUNDS)
 
 
 # ------------------------------------------------------ an earlier sweep's leftovers --

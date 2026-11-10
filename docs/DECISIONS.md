@@ -187,7 +187,16 @@ The session's:
     window**: rejected, it throws away measured time.
 - **A start key Windows will not give records anyway (chosen)**: said at once, while the player is still at the
   terminal, and kept as a note; the recording runs as with `--start-key none`, and its whole is analysed, labelled.
+  The line says the recording no longer stops by itself, and advises closing another program only when Windows said
+  one holds the key (`HotkeyListener.taken`).
   - **Refuse to record** (the sweep's way, which it keeps): rejected for watch, whose recording is still worth having.
+- **The press is asked for only once the key is live (chosen, after the review)**: the session registers the key
+  after reading the PC's settings, seconds after the "Recording." line, so the line says to press once the key is
+  ready, and the session says "Ctrl+Alt+S is ready" with a short chime (a new "ready" tone, a feel number) when
+  Windows has given it. An earlier press went to the game unrecorded.
+- **What a line promises holds (chosen, after the review)**: the measuring line names the recording's set length when
+  `--duration` ends it first, the `start_key` event waits for a press only up to that length, and a sweep run's lines
+  leave out watch's own advice (`cmd_watch(start_advice=False)`), since the sweep words and fails such a run itself.
 - **The window's end stops the recording (chosen, the plan's step 6)**, 3 s later for PresentMon's late rows; it is
   saved and analysed while the player plays on. With no press, the recording stops after 20 minutes (`--start-by`).
   - **Record on until the game closes**: deferred to M6 (Play's "after the game closes").
@@ -198,13 +207,16 @@ The session's:
     rejected, older builds would read it silently.
 - **watch owns the window and the cap; the sweep follows its events (chosen)**: a sweep run passes `--start-key`,
   `--window` and `--start-by`, plays its chimes from watch's `measuring` and `stopping` events, and keeps its early
-  check that the key is free, with a probe it releases before watch registers the key.
+  check that the key is free. It holds the key while the game starts, as it did before (a program that registers the
+  key then cannot have it), and lets go right before the recording registers it.
   - **The sweep keeps its own listener and timers**: rejected; two copies of one rule drift, and both would race to
     stop the recording.
 - **One player per sound (chosen)**: a terminal watch plays its own; under `--control stdio` the app keeps playing
   its own, and a sweep run its own.
 - **The app records the whole session until M5c (chosen)**: its recorder passes `--start-key none`, so M4's screen,
-  clock and words stay true.
+  clock and words stay true. A terminal recording measured from its start key still shows in the app, so Results say
+  which part its numbers cover, draw only that part's presses, and a diagnosis.json it lacks is made again for the
+  same part (`crop.key_part`); the shading of the rest waits for M5c.
 - **A sweep run's report and its numbers may differ by a frame at an edge (accepted)**. **One rule for both**:
   deferred, worth trying (Backlog).
 
@@ -316,7 +328,12 @@ reports and the app read a time or a total (the owner has not weighed in).
   `_Env.part`. Leaving them with only a header note was rejected: a finding would claim the whole recording.
 - **summary.json's `duration_s` is the length its numbers cover (chosen)**, with `recorded_s` beside it, so Compare's
   "Measured length" stays true; the library can show both.
-- **A part is at least 10 s (chosen)**, `frames.BOUND_MIN_S`: shorter, no verdict on what limits the game can come.
+- **A part is at least 11 s (chosen; 10 s until 2026-11-10)**, a second past `frames.BOUND_MIN_S`. At exactly 10 s no
+  part ever got a verdict on what limits the game: the frame that began before a part is left out, so its steady
+  frames summed to 9.96-9.99 s. The analysis-audit session measured it on LagLab-like captures (`tests/synth.py`, the
+  gpu, cpu, smooth and pace modes, two starts each), and every part of 10.5 s or more got one. A test now holds that a
+  part of exactly the minimum can get a verdict.
+  - **Keep 10 s and let a short part say it had no verdict**: rejected; `watch --window 10` would then never get one.
 - **The inventory stays as recorded (chosen for now)**: read once before the recording starts. **Read the power
   settings again at the start key's press**: deferred, worth trying (Backlog), with M5's second half.
 

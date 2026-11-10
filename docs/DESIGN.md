@@ -606,9 +606,10 @@ on_event=None)` (M4: the app's window, through `watch`):
   pid, how}` (from `cli.cmd_watch`: the game was chosen); `recording`
   `{duration_s, hotkey, frames, network}` (everything has started; the origin was set just before the collectors
   started); with a start key, right after it, `start_key` `{key, registered, window_s, start_by_s}` (whether
-  Windows gave it, the window, and the time a press must come by, null for a key it did not give); `measuring`
-  `{at, until}` (the start key's press: the window, seconds from the start; `until` null for one that runs to the
-  recording's end); `mark` `{t}`; `frames_lost` `{why}` (the "Frame timing is not working" line); `stopping`
+  Windows gave it, the window, and the time a press must come by, null for a key it did not give or when the
+  recording's set length comes first); `measuring` `{at, until}` (the start key's press, seconds from the start;
+  `until` the window's end, or the set length's when that comes first, null for one that runs to the recording's
+  end); `mark` `{t}`; `frames_lost` `{why}` (the "Frame timing is not working" line); `stopping`
   `{reason}` (the stop began: "duration", "game exited", "Ctrl+C", the start key's `session.WINDOW_ENDED` or
   `NO_START`, or the reason given to `request_stop`); `saving` `{frames}` and `saved` `{session}` (from
   `cli._record`; `session` is the folder's name, which is the app's id for it).
@@ -624,9 +625,14 @@ on_event=None)` (M4: the app's window, through `watch`):
   millisecond), told as `measuring`, and never becomes a mark; any other press returns None and changes nothing. The
   start key calls it (`SessionOptions.start_key`, `window_s`, `start_by_s`; one listener per key, each made by
   `hotkey_factory(key, on_press)`). The recording stops `WINDOW_TAIL_S` (3 s, for PresentMon's late rows) after the
-  window, or at `start_by_s` with no press; both are decided on the loop's thread, under the press's lock, and the
-  wait between ticks is cut so each lands on time. A start key Windows will not give is said at once and noted, and
-  the recording runs as one without a start key.
+  window, or at `start_by_s` with no press (only before the recording's own set length); both are decided on the
+  loop's thread, under the press's lock, and the wait between ticks is cut so each lands on time. Once Windows has
+  given the key the session says "Ctrl+Alt+S is ready" (a press before it went to the game); the press is said
+  ("Measuring from 3:12 for 10 minutes, until 13:12.", or "until 2:00, when the recording stops at its set length.")
+  on the loop's thread, between status lines. A start key Windows will not give is said at once and noted, and the
+  recording runs as one without a start key; `SessionOptions.start_advice` (True: watch's console) adds what that
+  means and what to do: the whole recording is analysed, it no longer stops by itself, and, only when Windows said
+  another hotkey holds the key (`HotkeyListener.taken`), to close that program or use another `--start-key`.
 - `session.Joined(*observers)`: several Observers told the same ticks and events, each contained on its own (the
   console's chimes beside a caller's).
 
@@ -991,8 +997,9 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
   list whose cut is empty stays a list (recorded, nothing in the span).
 - **Refused** (`check_span`; `analyze --from/--to` checks through it, and the app's trim handles, M5's app half, are
   to use it too): ends that are not numbers (an integer too large for a float included), a start before 0 or at or
-  after the recording's end, an end not after the start, a part shorter than `MIN_SPAN_S` (10 s, to the millisecond:
-  frames.BOUND_MIN_S, shorter than any verdict on what limits the game; a refused length is rounded down), and a
+  after the recording's end, an end not after the start, a part shorter than `MIN_SPAN_S` (11 s, to the millisecond:
+  a second past frames.BOUND_MIN_S, since a part's steady frames sum to a little under its length and a part of
+  exactly 10 s never got a verdict on what limits the game; a refused length is rounded down), and a
   capture that is a part already (its `duration_s` is the part's length); an end past the recording is its end.
 - **Never saved**: `Capture.save` refuses a capture whose `span` is set, `span` is not part of the file format
   (`to_json` and `from_json` leave it out; a file holding one loads as the whole recording with a note), and the
@@ -1001,7 +1008,7 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
 - **The start key's part** (`crop.key_part(cap) -> ((t0, t1) | None, why)`, M5's second part): from the press the
   capture's `start_key` kept, for its window, ending at the recording's end at the latest, through `check_span`; how
   "key". With no part, `why` says why ("the start key Ctrl+Alt+S was not pressed", "... could not be registered",
-  "... was pressed only 6.2 s before the recording ended, and a part needs at least 10 s", a window too short, a
+  "... was pressed only 6.2 s before the recording ended, and a part needs at least 11 s", a window too short, a
   damaged record) and the whole recording is analysed, both reports saying so with how to pick a part
   (`labels.unmeasured_note`); a recording without a start key gets ("" and) no word of one. The end of a watch and a
   later `analyze CAPTURE` both find the part here, so they measure the same one.
@@ -1073,8 +1080,8 @@ down to refresh/k), a frame cap (a regular present cadence: robust CoV, (IQR/1.3
 G minus 0.5 ms when HAGS is on for the game's adapter), `cpu_main` (r <= 0.75 and busiest thread, the lead
 thread where recorded, >= 0.85 of a
 CPU over >= 1 s), `cpu_all`, `waiting`, else `mixed`. A stretch too short for a verdict says what fell short, its
-seconds rounded down (`frames._too_short_note`: a 10 s measured part sums 9.96–9.99 s of steady frames, which read
-"10.0 s" beside the 10 s a verdict needs). Without enough steady frames (or none), a 3D engine at >= 95 %
+seconds rounded down (`frames._too_short_note`: a 10 s part summed 9.96–9.99 s of steady frames, which read
+"10.0 s" beside the 10 s a verdict needs, so a measured part is at least 11 s: crop.MIN_SPAN_S). Without enough steady frames (or none), a 3D engine at >= 95 %
 (median of 1 s windows) gives a probable `gpu` with no r, which the rules never count as frame-timing evidence
 (`rules._engine_fallback`); otherwise the verdict stays `unknown` and `gpu_probable` (`frames.probable_gpu`)
 reads the same fallback per second: the 1 s windows with the engine at >= 95 %, and the marks whose span touches
@@ -1476,18 +1483,21 @@ lagdoctor sweep --resume [FOLDER]    go on with an unfinished sweep; a finished 
   never cut. `_record` sets it on the capture once the session returns; the relay is never given it.
 - **The start key** (M5, DECISIONS 2026-11-09; on by default, the owner's choice): `--start-key KEY` (default
   `cli.DEFAULT_START_KEY`, Ctrl+Alt+S, held with Ctrl, Alt or Win, never the lag key's combination however written;
-  `none` records the whole session as before), `--window S` (default 600, 10 to 3600) and `--start-by S` (default
-  1200). The player goes to the spot and presses it: only the window after the press is analysed, and the recording
-  stops 3 s after it; with no press within `--start-by`, it stops and all of it is analysed, and so is a recording the
-  key could not measure (not registered, not pressed before Ctrl+C or the game's exit, or under 10 s left), each
-  report saying why. `--duration` stays the whole recording's limit. The "Recording." line says where to press it and
-  what it measures; the press ("Measuring from 3:12 for 10 minutes, until 13:12.") and the end are said on lines of
-  their own between status lines; a key Windows will not give is said at once. A console `watch` (`_watch_here`)
-  plays chimes through `cli.console_sound` (app/sounds.py's tones, written before the recording): rising at the press
-  that counts, three notes at the window's end, a low one for a problem (frame timing lost, a start key not given,
-  no press in time), a blip per lag-key press; `--no-sound` turns them off, and one that cannot play is said once after
-  the recording. `cmd_watch(sound=None)` is silent: the app plays its own from the channel, and a sweep from its own
-  events.
+  each key is kept in one spelling, `winapi.hotkey.hotkey_name`, each modifier once in a fixed order; `none` records
+  the whole session as before), `--window S` (default 600, 11 to 3600) and `--start-by S` (default 1200). Once the
+  key is ready (said, with a short chime), the player presses it at the spot: only the window after the press is
+  analysed, and the recording stops 3 s after it; with no press within `--start-by`, it stops and all of it is
+  analysed, and so is a recording the key could not measure (not registered, not pressed before Ctrl+C or the
+  game's exit, or under 11 s left), each report saying why. `--duration` stays the whole recording's limit, and the
+  lines say so when it comes first. The "Recording." line says when to press it and what it measures; the press and
+  the end are said on lines of their own between status lines; a key Windows will not give is said at once. A
+  console `watch` (`_watch_here`) plays chimes through `cli.console_sound` (app/sounds.py's tones, written before
+  the recording; `cli.CONSOLE_SOUNDS` names them all): one note when the key is ready, rising at the press that
+  counts, three notes when the measuring has run (its window, or the set length first), a low one for a problem
+  (frame timing lost, a start key not given, no press in time), a blip per lag-key press; `--no-sound` turns them off,
+  and one that cannot play is said once after the recording. `cmd_watch(sound=None)` is silent: the app plays its own
+  from the channel, and a sweep from its own events; `cmd_watch(start_advice=False)` (a sweep run) leaves out watch's
+  own words about the start key, the "Recording." line's included.
 - `analyze` writes into a fresh session folder (with `analyzed-capture.txt` naming its source), never beside
   the capture, and never changes what `fix` uses. A damaged, foreign or newer-format file gets one plain line. The
   capture's note comes with it into the new report and summary.
@@ -1728,7 +1738,10 @@ owner's run.
   each None. Read back field by field: one of the wrong type reads as None, and the note through `clean_note` again.
   A failed write is said and the analysis goes on.
 - **The views** (`views.py`), plain dicts: `library_view`, `game_view`, `results_view` (the saved diagnosis through
-  `Diagnosis.from_json`, analysed again only when it cannot be read), `moment_view` (`analysis.window` 5 s either side
+  `Diagnosis.from_json`, analysed again only when it cannot be read, for the part `crop.key_part` finds when its start
+  key measured one; a diagnosis of a part says which in `part`, `labels.part_note` plus that the charts show the
+  whole recording until M5's app half shades the rest, and draws only that part's lag-key presses), `moment_view`
+  (`analysis.window` 5 s either side
   of an event, at most 120 s of it), `compare_view` (the numbers with the better side marked, then what limited the
   frame rate: the FPS outside lag moments (higher is better), "Limited by", GPU busy per frame ("16.1 of 16.9 ms"),
   the busiest game thread, the NVIDIA GPU clock ("780 of 2,100 MHz") and the headroom sentence, "-" in a summary from
@@ -1801,13 +1814,15 @@ typed on the player's PC, and the game is never started, stopped or opened by la
   its originals (a value changed since the sweep began ends it) and its other values as the runs so far had them (a
   change is said, and the player decides whether runs count with the file as it is, which `notes` records); write the
   setting's values and read every one back; check the start key (Ctrl+Alt+S by default, `cli.DEFAULT_START_KEY`;
-  `--start-key` needs Ctrl, Alt or Win: `runner.check_start_key` registers it and lets it go at once), so a key
-  another program holds is found before the player starts the game; the player starts the game, goes to the spot and
-  presses Enter; `watch` records (`--game`, `--no-network`, `--hotkey none`, `--start-key` with `--window` and
-  `--start-by` 300, `--elevate` unless `can_trace`, `--out` the sweep's `runs` folder, a note naming the run; through
-  `cmd_watch` with `remember` and `show_summary` False and no sound of watch's own). watch's start key measures the
-  run (one listener for the key at a time): its `measuring` event (the first press after `recording` and before
-  `stopping`) plays the rising chime, `--window` seconds are measured (default 60, 30 to 600), and watch stops the
+  `--start-key` needs Ctrl, Alt or Win: `runner.check_start_key` registers it), so a key another program holds is
+  found before the player starts the game, and hold it while the game starts, so a program that registers it then
+  cannot have it; the player starts the game, goes to the spot and presses Enter; the sweep lets go of the key, and
+  `watch` records (`--game`, `--no-network`, `--hotkey none`, `--start-key` with `--window` and `--start-by` 300,
+  `--elevate` unless `can_trace`, `--out` the sweep's `runs` folder, a note naming the run; through `cmd_watch` with
+  `remember`, `show_summary` and `start_advice` False and no sound of watch's own). watch's start key measures the
+  run (one listener for the key at a time): its `start_key` event plays a short chime when the key is live, its
+  `measuring` event (the first press after `recording` and before `stopping`) the rising chime, `--window` seconds
+  are measured (default 60, 30 to 600), and watch stops the
   recording 3 s later (`TAIL_S`, watch's `WINDOW_TAIL_S`, for PresentMon's late rows), its `stopping` reason
   `session.WINDOW_ENDED` playing the closing chime. A run saved is judged whatever watch's exit code or error after
   the save (its report failing, a Ctrl+C during the analysis); one that saved nothing fails (exit 1, 2, 3) or stops
@@ -1864,8 +1879,9 @@ typed on the player's PC, and the game is never started, stopped or opened by la
 - **No test registers a real key or makes a sound**: `watch` measures from a start key by default, so
   `tests/conftest.py`'s `_no_real_keys_or_sounds` (autouse) catches a real registration of any key but the two the
   hotkey tests use (Ctrl+Alt+Shift+F23 and F24) and any real sound, and fails the test at its end (the code under test
-  swallows both by design); a console `watch` gets a stand-in player that only counts what it was asked to play. A
-  test that runs `watch` in a child process, out of its reach, passes `--start-key none --no-sound` itself.
+  swallows both by design; `tests/test_hotkey.py` shows it catching both); a console `watch` gets a stand-in player
+  that counts the players made (`players`, which control mode and a sweep run keep at 0) and what it was asked to play
+  (`played`). A test that runs `watch` in a child process, out of its reach, passes `--start-key none --no-sound`.
 - **The app's recording**: `tests/test_app_recording.py`, with `tests/fake_recorder.py` in the recorder's place (the
   recorder's side of the real control channel, through `control.Channel`, recording nothing) and a harmless process
   of the test's own in the relay's (`fake_recorder.stand_in_prompt`, handed over as the real one is); no test can reach

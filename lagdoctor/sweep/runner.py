@@ -191,19 +191,23 @@ def _one(sweep: plan.Sweep, slot: plan.Slot, folder: Path, seams: Seams) -> None
     apply(sweep, v, slot, folder, seams)
     held = ", ".join(e.text() for e in plan.values_for(sweep, v.id))
     seams.say(f"  The settings file now holds {held}.")
-    check_start_key(sweep, seams)
-    while True:
-        answer = _ask(seams, "  Start the game, load your save and go to your spot. Then press Enter here (q and "
-                             "Enter stops the sweep): ")
-        if answer in ("q", "quit", "stop"):
-            raise Stop("Stopped as you asked.", code=0)
-        if seams.running(sweep.game):
-            break
-        seams.say(f"  {sweep.game} is not running yet.")
-    seams.say(f"  After the UAC prompt (if Windows asks), go back to the game and press {sweep.start_key.title()} "
-              f"at your spot. A rising chime starts {sweep.window_s:.0f} s of measuring, and a three-note chime "
-              "ends it. Play as you did in the other runs.")
-    attempt, press, interrupted = _record(sweep, slot, folder, seams)
+    key = check_start_key(sweep, seams)          # held while the game starts, until the recording registers it
+    try:
+        while True:
+            answer = _ask(seams, "  Start the game, load your save and go to your spot. Then press Enter here (q "
+                                 "and Enter stops the sweep): ")
+            if answer in ("q", "quit", "stop"):
+                raise Stop("Stopped as you asked.", code=0)
+            if seams.running(sweep.game):
+                break
+            seams.say(f"  {sweep.game} is not running yet.")
+        seams.say(f"  After the UAC prompt (if Windows asks), go back to the game, and once a short chime says "
+                  f"{sweep.start_key.title()} is ready, press it at your spot. A rising chime starts "
+                  f"{sweep.window_s:.0f} s of measuring, and a three-note chime ends it. Play as you did in the other "
+                  "runs.")
+        attempt, press, interrupted = _record(sweep, slot, folder, seams, key)
+    finally:
+        _let_go(key)                             # let go before the recording already; never kept past the run
     if seams.silent:
         seams.say(f"  (A chime could not be played, so count for yourself: the window ends {sweep.window_s:.0f} s "
                   "after your press.)")
@@ -449,26 +453,32 @@ def wait_closed(sweep: plan.Sweep, seams: Seams, why: str, stop_when: Callable[[
 
 # ------------------------------------------------------------ recording --
 
-def check_start_key(sweep: plan.Sweep, seams: Seams) -> None:
-    """Before the player starts the game: the start key is registered and let go at once, so a key another program
-    holds is found before they spend the time. The run's recording (watch) then registers it for itself: one listener
-    for the key at a time. Stop when Windows will not give it."""
+def check_start_key(sweep: plan.Sweep, seams: Seams) -> Any:
+    """Before the player starts the game: the start key is registered, so a key another program holds is found
+    before they spend the time, and held while the game starts (one that registers the same key then cannot have
+    it). The caller lets it go (_let_go) right before the run's recording registers it for itself: one listener for
+    the key at a time. Stop when Windows will not give it."""
     listener, started, why = None, False, ""
     try:
         listener = seams.hotkey(sweep.start_key, lambda when: None)
         started, why = bool(listener.start()), getattr(listener, "error", "")
     except Exception as exc:  # noqa: BLE001 - said as a stop, never a traceback
         why = f"{type(exc).__name__}: {exc}"
-    finally:
-        if listener is not None:
-            try:
-                listener.stop()
-            except Exception:  # noqa: BLE001 - the check is over either way
-                pass
     if not started:
+        _let_go(listener)
         raise Stop(f"The start key {sweep.start_key.title()} could not be registered ({why or 'unknown reason'}). "
-                   "Close the program that uses it, or go on with another key: lagdoctor sweep --resume "
-                   "--start-key KEY")
+                   "Close the program that uses it (a lag-doctor recording in another window counts), or go on with "
+                   "another key: lagdoctor sweep --resume --start-key KEY")
+    return listener
+
+
+def _let_go(listener: Any) -> None:
+    """Release the sweep's own hold on the start key; again is harmless."""
+    if listener is not None:
+        try:
+            listener.stop()
+        except Exception:  # noqa: BLE001 - the run goes on either way
+            pass
 
 
 def watch_args(sweep: plan.Sweep, slot: plan.Slot, folder: Path, can_trace: bool) -> list[str]:
@@ -494,12 +504,14 @@ def _sound(seams: Seams, name: str) -> None:
         seams.silent.add(name)
 
 
-def _record(sweep: plan.Sweep, slot: plan.Slot, folder: Path, seams: Seams) -> tuple[plan.Run, float | None, bool]:
+def _record(sweep: plan.Sweep, slot: plan.Slot, folder: Path, seams: Seams,
+            held: Any = None) -> tuple[plan.Run, float | None, bool]:
     """Record one run. watch's start key measures it: its first press after the recording began starts the window
     ("measuring"), and watch stops the recording a few seconds after the window ends, or once the press has not come
-    within START_WAIT_S (both said by "stopping"'s reason). The sweep plays the chimes for those, and stops the run
-    itself when frame timing is off or watch could not register the key. Returns the attempt (failed, or "judge" for
-    _judge), the press's time in the recording's seconds, and whether the player stopped the sweep with Ctrl+C."""
+    within START_WAIT_S (both said by "stopping"'s reason). The sweep plays the chimes for those and for the key
+    being ready, and stops the run itself when frame timing is off or watch could not register the key. `held`: the
+    sweep's own hold on the key (check_start_key), let go right before the recording. Returns the attempt (failed, or
+    "judge" for _judge), the press's time in the recording's seconds, and whether the player stopped with Ctrl+C."""
     (Path(folder) / plan.RUNS_DIR).mkdir(parents=True, exist_ok=True)
     attempt = plan.Run(slot.n, slot.variant, "failed")
     stop = threading.Event()
@@ -519,6 +531,11 @@ def _record(sweep: plan.Sweep, slot: plan.Slot, folder: Path, seams: Seams) -> t
         elif kind == "start_key":
             if not data.get("registered"):              # taken between check_start_key and the recording's start
                 stop_run(KEY_TAKEN)
+                return
+            with lock:
+                closed = seen["closed"]
+            if not closed:                              # the key is live: the press counts from now on
+                _sound(seams, "ready")
         elif kind == "measuring":
             with lock:
                 if seen["closed"] or seen["press"] is not None:
@@ -537,6 +554,7 @@ def _record(sweep: plan.Sweep, slot: plan.Slot, folder: Path, seams: Seams) -> t
             seen["session"] = data.get("session")
 
     code, crashed = None, None
+    _let_go(held)                                       # watch registers the key next: one listener at a time
     try:
         code = seams.record(watch_args(sweep, slot, folder, seams.can_trace()), stop, Observers(on_event=on_event))
     except Exception as exc:  # noqa: BLE001 - judged below: a run saved before the error still counts
@@ -563,8 +581,9 @@ def _record(sweep: plan.Sweep, slot: plan.Slot, folder: Path, seams: Seams) -> t
     if reason == NO_FRAMES:
         attempt.why = "frame timing was off (was the UAC prompt declined?)"
     elif reason == KEY_TAKEN:
-        attempt.why = (f"another program took the start key {sweep.start_key.title()} before the recording began, "
-                       "so it could not be pressed")
+        attempt.why = (f"the recording could not register the start key {sweep.start_key.title()} (said above), so it "
+                       "could not be pressed. If another program took it, close that program and try again, or stop "
+                       "(q) and go on with another key: lagdoctor sweep --resume --start-key KEY")
     elif seen["press"] is None:
         attempt.why = (f"the start key was not pressed within {START_WAIT_S / 60:.0f} minutes"
                        if seen["ended"] == NO_START

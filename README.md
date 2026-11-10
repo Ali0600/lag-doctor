@@ -22,9 +22,10 @@ generated, the analysis and the page are the real ones.*
 
 - **Records while you play**: every frame's timing (Intel PresentMon), the game's CPU per thread, GPU load
   and video memory, disk, RAM, CPU/GPU throttling, and the network path (router, internet, the game server's
-  packet stream). Press **Ctrl+Alt+S** at the spot you want measured: only the 10 minutes after it are analysed, never
-  the game starting up, and a chime says the press counted. Press **Ctrl+Alt+L** the moment it lags; the analysis
-  looks at what happened just before.
+  packet stream). Once it says **Ctrl+Alt+S** is ready (a short chime), press it at the spot you want measured: the
+  10 minutes after the press are analysed, never the game starting up, and a rising chime says the press counted
+  (with no press in time, all of the recording is analysed, and the report says so). Press **Ctrl+Alt+L** the moment
+  it lags; the analysis looks at what happened just before.
 - **Explains**: the lag type, the likely causes ranked with their evidence ("9 of 9 stutters and FPS drops
   coincided with the game reading from disk"), what was **checked and fine**, and what **could not be
   checked** and why. Nothing unmeasured is ever reported as fine.

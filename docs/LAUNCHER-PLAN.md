@@ -558,7 +558,8 @@ The analysis half was built on 2026-11-09 (DESIGN.md, The measured part; DECISIO
   and the finding text says "the measured part".
 - What covers the whole recording is cut, clipped, counted again or dropped: the probe counts are counted again
   exactly, each program's network bytes become None, and a chain's first frame that began before the part is left
-  out. A part is at least 10 s, and a cut copy is never saved.
+  out. A part is at least 11 s (10 s until 2026-11-10: a part of exactly 10 s never got a verdict on what limits
+  the game), and a cut copy is never saved.
 - `lagdoctor analyze CAPTURE --from 3:12 --to 13:12` analyses that part into a fresh folder; both reports draw the
   whole recording with the rest shaded and say which part was analysed, and the footer's command picks it out again.
   summary.json's length is the part's, with the recording's beside it.
@@ -568,17 +569,20 @@ The analysis half was built on 2026-11-09 (DESIGN.md, The measured part; DECISIO
 The start key half was built on 2026-11-10 (DESIGN.md, CLI and Who follows a recording; DECISIONS 2026-11-09, the
 start key). The owner chose three of its forks on a question card: on by default in a terminal, the whole recording
 analysed and labelled when the key measured nothing, and chimes in a terminal with `--no-sound`.
-- `lagdoctor watch` registers Ctrl+Alt+S beside the lag key, one listener per key. The first press after the recording
-  began starts a 10-minute window (`--window`), the recording stops 3 s after it, and the part is analysed; with no
-  press within 20 minutes (`--start-by`) it stops, and all of it is analysed. `--start-key none` records as before.
+- `lagdoctor watch` registers Ctrl+Alt+S beside the lag key, one listener per key, and says (with a short chime) when
+  it is ready. The first press after that starts a 10-minute window (`--window`), the recording stops 3 s after it,
+  and the part is analysed; with no press within 20 minutes (`--start-by`) it stops, and all of it is analysed.
+  `--start-key none` records as before.
 - The press is saved in the capture (`start_key`), so `analyze CAPTURE` finds the same part again (`crop.key_part`).
-- The sweep's runs use watch's key: the sweep checks it is free before the game starts, then plays its chimes from
-  watch's events, and its runner tests pass unchanged.
+- The sweep's runs use watch's key: the sweep checks it is free and holds it while the game starts, lets go right
+  before the recording registers it, and plays its chimes from watch's events. Two runner tests whose guard moved
+  into watch were rewritten to what watch can really tell (a press told after the stop); the rest pass unchanged.
 - The app's recorder passes `--start-key none` until this milestone's app half gives it the key, its words and its
   own sounds; `control.from_recorder` already checks the start key's two messages (`start_key`, `measuring`), and a
-  window or no-press end is `completed`. For the app half: words of its own for those two ends, the fallback in
-  `App.load` (it analyses the whole capture when diagnosis.json is missing, which should crop by `crop.key_part`),
-  and Results showing the part.
+  window or no-press end is `completed`. A terminal recording measured from its start key shows in the app as it
+  is: Results say which part its numbers cover and draw only its presses, and `App.load` makes a missing
+  diagnosis again for that part. For the app half: words of its own for those two ends, the rest of the recording
+  shaded on Results' charts, and its own start key.
 
 ### M6: Play
 
@@ -668,7 +672,9 @@ above:
 
 - **Feel numbers**, to judge on screen: the 10-minute default window, the start key (Ctrl+Alt+S), the 20-minute cap
   before a press, and the 1-hour cap for "until I quit". Since M5's second part a terminal `watch` has them all
-  (`--window`, `--start-by`, `--window 3600` for the hour) and its chimes, whose tones are feel numbers too. Play
+  (`--window`, `--start-by`, `--window 3600` for the hour) and its chimes, whose tones are feel numbers too (a
+  new one says the key is ready). Ctrl+Alt+S is AltGr+S on keyboard layouts with AltGr (the Polish layout types
+  "ś" with it), so a player on one loses that letter while recording, as Ctrl+Alt+L already takes "ł". Play
   adds the folder wait's 5-minute deadline (`target.WAIT_DEADLINE_S`) and the 20 s within which a chosen process
   that exits re-arms the wait.
 - **Fixes from a trimmed span.** Should a trimmed span feed `lagdoctor fix`? Today `analyze` never does. A watch

@@ -861,16 +861,16 @@ def _part(cap: Capture, t0: float, t1: float) -> Diagnosis:
 
 def test_a_measured_part_is_named_in_both_headers_and_shaded_on_every_chart():
     cap = make_capture()                      # about 25 s, a lag-key press at 5 s
-    d = _part(cap, 10.0, 20.0)
+    d = _part(cap, 9.0, 20.0)
     page = html_report.render(d, cap, capture_path=Path(r"C:\Users\Jo Tester\cap.ldcap.json.gz"))
-    assert "25s recorded &middot; 10s analysed &middot; " in page
-    assert ("Analysed 10s, from 10s to 20s of the recording (the part you chose); the rest is not counted, nor the 1 "
+    assert "25s recorded &middot; 11s analysed &middot; " in page
+    assert ("Analysed 11s, from 9s to 20s of the recording (the part you chose); the rest is not counted, nor the 1 "
             "lag-key press in it. It is shaded on the charts.") in page
     assert page.count('class="band skip"') == 8              # before and after the part, on all four time charts
-    assert html_report.OUTSIDE_MARK in page and "--from 10 --to 20</code>" in page
+    assert html_report.OUTSIDE_MARK in page and "--from 9 --to 20</code>" in page
     text = console.render(d, cap)
-    assert "lag-doctor report: game.exe (25s recorded, 10s analysed, started 2026-11-04 15:30)" in text
-    assert "Analysed 10s, from 10s to 20s of the recording (the part you chose)" in text
+    assert "lag-doctor report: game.exe (25s recorded, 11s analysed, started 2026-11-04 15:30)" in text
+    assert "Analysed 11s, from 9s to 20s of the recording (the part you chose)" in text
 
 
 def test_a_report_of_the_whole_recording_shades_and_names_no_part():
@@ -943,13 +943,13 @@ def test_the_summary_keeps_the_recordings_length_and_the_part_apart(tmp_path):
     import json
     from lagdoctor.report import summary
     cap = make_capture()
-    s = summary.build(_part(cap, 10.0, 20.0), cap, "watch")
-    assert s["duration_s"] == 10.0 and s["recorded_s"] == pytest.approx(cap.duration_s)
-    assert (s["measured_from_s"], s["measured_to_s"], s["measured_how"]) == (10.0, 20.0, "set")
+    s = summary.build(_part(cap, 9.0, 20.0), cap, "watch")
+    assert s["duration_s"] == 11.0 and s["recorded_s"] == pytest.approx(cap.duration_s)
+    assert (s["measured_from_s"], s["measured_to_s"], s["measured_how"]) == (9.0, 20.0, "set")
     (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps(s), encoding="utf-8")
     back = summary.read(tmp_path)
     assert (back["duration_s"], back["measured_from_s"], back["measured_to_s"], back["measured_how"]) == \
-        (10.0, 10.0, 20.0, "set")
+        (11.0, 9.0, 20.0, "set")
     whole = summary.build(diagnose(cap), cap, "watch")
     assert whole["duration_s"] == whole["recorded_s"] == pytest.approx(cap.duration_s)
     assert whole["measured_from_s"] is None and whole["measured_to_s"] is None and whole["measured_how"] is None
@@ -970,7 +970,7 @@ def test_a_summarys_part_that_cannot_be_one_reads_back_as_none(tmp_path, bad):
     import json
     from lagdoctor.report import summary
     cap = make_capture()
-    s = dict(summary.build(_part(cap, 10.0, 20.0), cap, "watch"), **bad)
+    s = dict(summary.build(_part(cap, 9.0, 20.0), cap, "watch"), **bad)
     (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps(s), encoding="utf-8")
     back = summary.read(tmp_path)
     assert back["measured_from_s"] is None and back["measured_to_s"] is None and back["measured_how"] is None
@@ -995,8 +995,9 @@ def test_a_start_key_that_measured_nothing_is_said_in_both_reports_and_a_part_or
     for quiet in (make_capture(), _keyed(5.0)):           # no start key; one whose part was analysed whole, as asked
         d = diagnose(quiet)
         assert "startup included" not in " ".join((html_report.render(d, quiet) + console.render(d, quiet)).split())
+    from lagdoctor.analysis.crop import crop
     keyed = _keyed(5.0)
-    d = _part(keyed, 5.0, 20.0)                           # the start key's part: its own note, none of this one
+    d = diagnose(crop(keyed, 5.0, 20.0, how="key"))        # the start key's part: its own note, none of this one
     assert "startup included" not in " ".join((html_report.render(d, keyed) + console.render(d, keyed)).split())
 
 
@@ -1008,5 +1009,18 @@ def test_the_footers_command_makes_the_same_analysis_again():
     from lagdoctor.analysis.crop import crop
     key_part = crop(keyed, 5.0, 20.0, how="key").span
     assert html_report.rerun_args(key_part, keyed) == ""                   # analyze finds the start key's part
-    set_part = crop(keyed, 10.0, 20.0, how="set").span
-    assert html_report.rerun_args(set_part, keyed) == html_report.part_args(set_part) == " --from 10 --to 20"
+    set_part = crop(keyed, 9.0, 20.0, how="set").span
+    assert html_report.rerun_args(set_part, keyed) == html_report.part_args(set_part) == " --from 9 --to 20"
+    # A set part that is the whole recording to the millisecond: its own arguments are none, which now means the
+    # start key's part, so the footer asks for all of it.
+    whole_set = crop(keyed, 0.0, keyed.duration_s - 0.0005, how="set").span
+    assert html_report.part_args(whole_set) == "" and html_report.rerun_args(whole_set, keyed) == " --from 0"
+    assert html_report.rerun_args(whole_set, plain) == ""
+
+
+def test_a_part_the_player_set_says_nothing_of_a_start_key_that_measured_nothing():
+    from lagdoctor.analysis.crop import crop
+    cap = _keyed(None)                                    # the start key was not pressed
+    d = diagnose(crop(cap, 5.0, 20.0, how="set"))
+    shown = " ".join((html_report.render(d, cap) + console.render(d, cap)).split())
+    assert "the part you chose" in shown and "startup included" not in shown

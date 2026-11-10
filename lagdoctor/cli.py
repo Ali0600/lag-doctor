@@ -42,7 +42,7 @@ DEFAULT_HOTKEY = "ctrl+alt+l"
 # judged yet (docs/LAUNCHER-PLAN.md, open questions); the sweep's own default start key is held equal to this one.
 DEFAULT_START_KEY = "ctrl+alt+s"
 DEFAULT_WINDOW_S = 600.0       # analysed from the press: 10 minutes
-WINDOW_MIN_S = 10.0            # analysis.crop.MIN_SPAN_S: a shorter part could get no verdict (a test holds them equal)
+WINDOW_MIN_S = 11.0            # analysis.crop.MIN_SPAN_S, the shortest part (a test holds them equal)
 MAX_WINDOW_S = 3600.0          # "until I quit" is capped at an hour until compact frame storage exists
 DEFAULT_START_BY_S = 1200.0    # with no press by then, the recording stops: 20 minutes
 MAX_START_BY_S = 86400.0
@@ -88,7 +88,9 @@ def build_parser() -> argparse.ArgumentParser:
     pick.add_argument("--game", metavar="NAME", type=_exe_name, help="the game's exe name, e.g. eldenring.exe")
     pick.add_argument("--pid", type=_pid, help="the game's process id")
     pick.add_argument("--auto", action="store_true", help="pick the busiest game with a window (default)")
-    w.add_argument("--duration", type=_positive_float, metavar="S", help="stop after S seconds (default: Ctrl+C)")
+    w.add_argument("--duration", type=_positive_float, metavar="S",
+                   help="stop after S seconds, whatever the start key does (default: the start key's window or "
+                        "--start-by ends it, or Ctrl+C)")
     w.add_argument("--server", metavar="IP", type=_ip, help="also ping this game server")
     w.add_argument("--no-network", action="store_true", help="skip the network checks")
     el = w.add_mutually_exclusive_group()
@@ -98,15 +100,15 @@ def build_parser() -> argparse.ArgumentParser:
     w.add_argument("--hotkey", default=DEFAULT_HOTKEY, type=_hotkey,
                    help=f"the 'it lagged now' key (default {DEFAULT_HOTKEY}); 'none' to turn it off")
     w.add_argument("--start-key", default=DEFAULT_START_KEY, type=_watch_start_key, metavar="KEY",
-                   help=f"press it in the game where measuring should start: only the --window after it is analysed, "
-                        f"never the game starting up (default {DEFAULT_START_KEY}, held with Ctrl, Alt or Win); 'none' "
-                        "analyses the whole recording")
+                   help=f"press it in the game where measuring should start, once it is ready: pressed in time, only "
+                        f"the --window after it is analysed, not the game starting up (default {DEFAULT_START_KEY}, "
+                        "held with Ctrl or Alt); 'none' analyses the whole recording")
     w.add_argument("--window", type=_watch_window, default=DEFAULT_WINDOW_S, metavar="S",
                    help=f"seconds measured from the start key's press; the recording then stops (default "
-                        f"{DEFAULT_WINDOW_S:.0f}, at most {MAX_WINDOW_S:.0f})")
+                        f"{DEFAULT_WINDOW_S:.0f}, from {WINDOW_MIN_S:.0f} to {MAX_WINDOW_S:.0f})")
     w.add_argument("--start-by", type=_start_by, default=DEFAULT_START_BY_S, metavar="S",
                    help=f"with no start-key press S seconds in, stop and analyse all of it (default "
-                        f"{DEFAULT_START_BY_S:.0f})")
+                        f"{DEFAULT_START_BY_S:.0f}; only when Windows gives the start key)")
     w.add_argument("--no-sound", action="store_true", help="no chimes while you play")
     w.add_argument("--control", choices=["stdio"],
                    help="for lag-doctor's window, which starts the recording this way: JSON lines on stdin and stdout")
@@ -241,16 +243,16 @@ def _exe_name(text: str) -> str:
 
 
 def _hotkey(text: str) -> str:
-    """A key Windows can register ('ctrl+alt+l'), checked before anything starts; 'none' or 'off' for no key."""
+    """A key Windows can register, checked before anything starts, in its one spelling ('Alt + Ctrl+L' is
+    'ctrl+alt+l', each modifier once, so it is as short as it can be); 'none' or 'off' for no key."""
     key = text.strip().lower()
     if key in ("", "none", "off"):
         return "none"
-    from lagdoctor.winapi.hotkey import parse_hotkey
+    from lagdoctor.winapi.hotkey import hotkey_name
     try:
-        parse_hotkey(key)
+        return hotkey_name(key)
     except ValueError as exc:
         raise argparse.ArgumentTypeError(str(exc)) from None
-    return key
 
 
 def _start_key(text: str) -> str:
@@ -292,12 +294,6 @@ def _start_by(text: str) -> float:
     if not 0 < v <= MAX_START_BY_S:                                 # also refuses NaN
         raise argparse.ArgumentTypeError(f"give more than 0 and at most {MAX_START_BY_S:.0f} seconds")
     return v
-
-
-def _same_key(a: str, b: str) -> bool:
-    """Do two keys name the same combination, however written ('alt+ctrl+s' is 'control+alt+s')?"""
-    from lagdoctor.winapi.hotkey import parse_hotkey
-    return parse_hotkey(a) == parse_hotkey(b)
 
 
 def _note(text: str) -> str | None:
@@ -383,26 +379,33 @@ def console_sound() -> Callable[[str], bool]:
     return player.play
 
 
-CONSOLE_SOUNDS = ("start", "done", "problem", "mark")
+CONSOLE_SOUNDS = ("ready", "start", "done", "problem", "mark")    # every chime _Cues plays (a test holds them so)
 
 
 class _Cues:
-    """The console's chimes from the recording's events (DECISIONS 2026-11-09, the start key): a rising one when the
-    start key's press counts, three notes when the measured window has run, a low one when something went wrong
-    (frame timing lost, a start key Windows would not give, no press in time), a blip per lag-key press. Never raises:
-    a chime that cannot play is kept in `failed`, to be said once after the recording."""
+    """The console's chimes from the recording's events (DECISIONS 2026-11-09, the start key): a soft one when the
+    start key is ready, a rising one when its press counts, three notes when the measuring has run (its window, or
+    the recording's set length first), a low one when something went wrong (frame timing lost, a start key Windows
+    would not give, no press in time), a blip per lag-key press. Never raises: a chime that cannot play is kept in
+    `failed`, to be said once after the recording."""
 
     def __init__(self, play: Callable[[str], bool]) -> None:
         self.play = play
         self.failed: set[str] = set()
+        self.measuring = False
 
     def on_event(self, kind: str, data: dict[str, Any]) -> None:
         from lagdoctor.capture import session as sess
         name = {"measuring": "start", "mark": "mark", "frames_lost": "problem"}.get(kind)
-        if kind == "stopping":
-            name = {sess.WINDOW_ENDED: "done", sess.NO_START: "problem"}.get(data.get("reason"))
-        elif kind == "start_key" and not data.get("registered"):
-            name = "problem"
+        if kind == "measuring":
+            self.measuring = True
+        elif kind == "stopping":
+            reason = data.get("reason")
+            name = {sess.WINDOW_ENDED: "done", sess.NO_START: "problem"}.get(reason)
+            if reason == "duration" and self.measuring:     # the set length ended it, as the press's line said
+                name = "done"
+        elif kind == "start_key":                           # Windows gave the key (it is live now) or would not
+            name = "ready" if data.get("registered") else "problem"
         if name is None:
             return
         try:
@@ -418,12 +421,15 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
               observers: Any = None, launcher: Callable[..., Any] | None = None,
               cancel: threading.Event | None = None, tool_alone: tuple[tuple[int, int], ...] = (),
               tool_roots: Callable[[dict[int, Any]], Any] | None = None, remember: bool = True,
-              show_summary: bool = True, sound: Callable[[str], bool] | None = None) -> int:
+              show_summary: bool = True, sound: Callable[[str], bool] | None = None,
+              start_advice: bool = True) -> int:
     """Record the game, save the capture and analyse it. What a caller other than this console gives it (M4: the
     app's control channel; a settings sweep's runs), each defaulting to the console's own behaviour:
     - `sound`: plays a chime by name (app/sounds.py's, True when it started) while the player plays: the start key's
       press, the window's end, a problem, the lag key. None (the default) is silent: `lagdoctor watch` in a console
       passes its own (_watch_here), while the app plays its own from the channel and a sweep from its own events;
+    - `start_advice`: False leaves out watch's own words about the start key (the "Recording." line's, and what a key
+      that measured nothing means and what to do): a sweep says its own, and fails such a run;
     - `remember`: False keeps `lagdoctor fix` on the report it uses now (a sweep's runs try settings on purpose);
     - `show_summary`: False leaves the analysis' summary out of what watch says (a sweep says its own line per run);
     - `stop`: set it (session.request_stop) to stop the recording, as Ctrl+C does;
@@ -444,7 +450,8 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
     say = _teller(say)
     observers = observers if observers is not None else sess.Observers()
     start_key, lag_key = getattr(args, "start_key", "none") or "none", getattr(args, "hotkey", "none") or "none"
-    if "none" not in (start_key, lag_key) and _same_key(start_key, lag_key):
+    # Both come through the parser (_hotkey) in their one spelling, so one key however written is one string here.
+    if start_key != "none" and start_key == lag_key:
         say(f"The start key and the lag key are the same key ({start_key.title()}): give --start-key another one.")
         return EXIT_BAD_ARGS
     # One recording at a time, checked before PresentMon or any ETW session can start (they share fixed
@@ -497,7 +504,7 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
             return _record(args, target, exe, frames, frames_why, relay, stop=stop, say=say,
                            interactive=interactive is not False, observers=observers,
                            tool_alone=tool_alone, tool_roots=tool_roots, cancel=cancel, remember=remember,
-                           show_summary=show_summary, sound=sound)
+                           show_summary=show_summary, sound=sound, start_advice=start_advice)
     except Cancelled:
         say("Cancelled: nothing was recorded.")
         return EXIT_CANCELLED
@@ -510,7 +517,8 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
             relay: Any = None, *, stop: threading.Event | None = None, say: Callable[[str], None] | None = None,
             interactive: bool = True, observers: Any = None, tool_alone: tuple[tuple[int, int], ...] = (),
             tool_roots: Callable[[dict[int, Any]], Any] | None = None, cancel: threading.Event | None = None,
-            remember: bool = True, show_summary: bool = True, sound: Callable[[str], bool] | None = None) -> int:
+            remember: bool = True, show_summary: bool = True, sound: Callable[[str], bool] | None = None,
+            start_advice: bool = True) -> int:
     """Record, save and analyse. Ctrl+C, Ctrl+Break and closing the window all stop the recording; none of them can
     lose it once it is being stopped and saved. With a relay (relay/client.RelayLink), frame timing and the
     game-server tracker come through it, and it is let go as soon as the recording stops. `stop`, `say`, `observers`,
@@ -536,11 +544,12 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
         opts.start_key = start_key
         opts.window_s = getattr(args, "window", DEFAULT_WINDOW_S)
         opts.start_by_s = getattr(args, "start_by", DEFAULT_START_BY_S)
+        opts.start_advice = start_advice
     out_dir = sess.session_dir(args.out or paths.sessions_dir(), target)
     cap_path = out_dir / CAPTURE_NAME
     if not frames:
         say(f"Frame timing is off for this recording: {frames_why}")
-    if start_key:
+    if start_key and start_advice:
         say(_recording_line(start_key, hotkey, opts.window_s, opts.start_by_s, args.duration, chimes=cues is not None))
     else:
         say("Recording. Play normally" + (f"; press {hotkey.title()} the moment it lags" if hotkey else "")
@@ -582,15 +591,19 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
 
 def _recording_line(start_key: str, hotkey: str | None, window_s: float, start_by_s: float | None,
                     duration: float | None, *, chimes: bool) -> str:
-    """The "Recording." line of a recording with a start key: where to press it and what it measures."""
+    """The "Recording." line of a recording with a start key: when to press it, and what that measures. The press
+    counts only once the session says the key is ready (it registers the key after reading the PC's settings)."""
     from lagdoctor.capture.session import span_words
     key = start_key.title()
-    line = (f"Recording. Go to the spot you want measured and press {key} there to start {span_words(window_s)} of "
-            "measuring" + (", with a rising chime" if chimes else "") + "; the startup before it is never counted."
-            + (f" Press {hotkey.title()} the moment it lags." if hotkey else "") + " Ctrl+C stops.")
+    what = ("measuring for the rest of the recording" if duration and duration <= window_s
+            else f"{span_words(window_s)} of measuring")
+    line = (f"Recording. Once {key} is ready (said below" + (", with a short chime" if chimes else "") + "), go to the "
+            f"spot you want measured and press it to start {what}" + (", with a rising chime" if chimes else "")
+            + ", so the startup before it is not counted." + (f" Press {hotkey.title()} the moment it lags." if hotkey
+                                                              else "") + " Ctrl+C stops.")
     if duration:
         line += f" Stops by itself after {duration:.0f} s."
-    if start_by_s:
+    if start_by_s and (not duration or start_by_s < duration):
         line += f" With no {key} press within {span_words(start_by_s)}, it stops and analyses all of it."
     return line
 

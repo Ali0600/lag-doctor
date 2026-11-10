@@ -1288,6 +1288,7 @@ class Keys:
 
         class Listener:
             error = f"{key} is already used by another program" if key in keys.refuse else None
+            taken = key in keys.refuse                 # as HotkeyListener says for Windows' "already used"
 
             def start(self):
                 if key in keys.refuse:
@@ -1328,9 +1329,10 @@ def test_the_start_keys_first_press_after_recording_starts_the_measured_window(m
                 observers=sess.Observers(on_tick=on_tick, on_event=lambda kind, data: events.append((kind, data))))
     cap = s.run(stop)
     assert [k for k, _ in events] == ["recording", "start_key", "measuring", "stopping"], events
-    assert events[1][1] == {"key": START, "registered": True, "window_s": 600.0, "start_by_s": 1200.0}
+    # The recording's own set length (SAFETY_S) comes before the 20 minutes, so no press is waited for past it.
+    assert events[1][1] == {"key": START, "registered": True, "window_s": 600.0, "start_by_s": None}
     at = cap.start_key["at"]
-    assert events[2][1] == {"at": at, "until": round(at + 600.0, 3)}
+    assert events[2][1] == {"at": at, "until": SAFETY_S}          # the set length ends it before the window
     assert cap.start_key == {"key": START, "registered": True, "window_s": 600.0, "at": at} and at == s.start_at
     assert ticks[1] - 0.001 <= at < ticks[2] and at == round(at, 3)      # on the capture's clock, to the millisecond
     assert cap.marks == []                         # the start key's press is never a lag mark (DECISIONS 2026-11-09)
@@ -1415,8 +1417,10 @@ def test_a_start_key_windows_will_not_give_is_said_and_noted_and_the_recording_g
     assert dict(events)["start_key"] == {"key": START, "registered": False, "window_s": 600.0, "start_by_s": None}
     assert cap.start_key == {"key": START, "registered": False, "window_s": 600.0, "at": None}
     said = "".join(lines)
-    assert ("The start key Ctrl+Alt+S could not be registered (ctrl+alt+s is already used by another program), so the "
-            "whole recording will be analysed.") in said and "another --start-key" in said
+    assert ("\nThe start key Ctrl+Alt+S could not be registered (ctrl+alt+s is already used by another program), so "
+            "the whole recording will be analysed, and it stops only at its set length. To measure from a press, close "
+            "the program that uses it, or record again with another --start-key.\n") in said
+    assert "is ready" not in said                                   # never said for a key Windows did not give
     assert any(note.startswith("The start key ctrl+alt+s could not be registered") for note in cap.notes)
 
 
@@ -1476,3 +1480,135 @@ def test_a_time_is_said_as_the_status_line_shows_it(seconds, text):
     assert sess.clock_text(seconds) == text
     if seconds >= 0:
         assert status_line(seconds, {}).startswith(text + " |")
+
+
+def test_a_press_is_waited_for_only_until_the_recordings_own_set_length():
+    s = Session(TARGET, _with_start(duration_s=None, start_by_s=1200.0), collectors=[], inventory=INVENTORY)
+    assert s._press_by() is None                    # Windows has not given the key (yet)
+    s._start_on = True
+    assert s._press_by() == 1200.0
+    s.opts.duration_s = 1200.5
+    assert s._press_by() == 1200.0
+    s.opts.duration_s = 1200.0                      # the set length comes first: it, not the wait, ends the recording
+    assert s._press_by() is None
+    s.opts.duration_s, s.opts.start_by_s = None, None
+    assert s._press_by() is None
+
+
+def test_the_key_is_said_ready_only_once_windows_gave_it_and_a_press_before_that_changes_nothing():
+    lines, events, presses, pressed = [], [], {}, []
+
+    def factory(key, on_press):
+        presses[key] = on_press
+
+        class Listener:
+            error = None
+
+            def start(self):
+                on_press(clock.now())                 # pressed while Windows gives it
+                return True
+
+            def stop(self):
+                pass
+        return Listener()
+
+    def on_event(kind, data):
+        events.append(kind)
+        if kind in ("recording", "start_key"):        # Windows has given it, but it is not said ready yet
+            pressed.append(kind)
+            presses[START](clock.now())
+    s = Session(TARGET, _with_start(duration_s=0.1), collectors=full_set(), inventory=INVENTORY, alive=lambda: True,
+                hotkey_factory=factory, printer=lines.append, observers=sess.Observers(on_event=on_event))
+    cap = s.run()
+    assert pressed == ["recording", "start_key"]
+    assert cap.start_key["at"] is None and "measuring" not in events
+    ready = lines.index("\nCtrl+Alt+S is ready: press it at the spot you want measured.\n")
+    assert lines.index(sess.STOPPING_MESSAGE + "\n") > ready and lines.count(lines[ready]) == 1
+
+
+def test_a_window_to_the_recordings_end_waits_a_whole_tick_and_says_so(monkeypatch):
+    monkeypatch.setattr(sess, "STATUS_PERIOD_S", 1.0)
+    s = Session(TARGET, _with_start(duration_s=None, window_s=None), collectors=[], inventory=INVENTORY)
+    s._start_on, s.start_at = True, 5.0
+    assert s._window_end() is None and s._next_wait(1e6) == 1.0     # nothing of the start key's ends it
+    assert s._measuring_line() == "Measuring from 0:05 to the end of the recording."
+    s.opts.duration_s = 120.0
+    assert s._measuring_line() == "Measuring from 0:05 until 2:00, when the recording stops at its set length."
+
+
+def test_the_measuring_line_names_the_set_length_when_it_comes_before_the_window():
+    s = Session(TARGET, _with_start(duration_s=120.0, window_s=600.0), collectors=[], inventory=INVENTORY)
+    s.start_at = 30.0
+    assert s._measured_until(30.0) == 120.0
+    assert s._measuring_line() == "Measuring from 0:30 until 2:00, when the recording stops at its set length."
+    s.opts.duration_s = 700.0
+    assert s._measured_until(30.0) == 630.0
+    assert s._measuring_line() == "Measuring from 0:30 for 10 minutes, until 10:30."
+
+
+@pytest.mark.parametrize("taken,duration,advice", [
+    (False, None, "it no longer stops by itself: press Ctrl+C when you are done."),
+    (True, None, "it no longer stops by itself: press Ctrl+C when you are done. To measure from a press, close the "
+                 "program that uses it, or record again with another --start-key."),
+    (False, 0.2, "it stops only at its set length."),
+])
+def test_a_refused_start_keys_advice_follows_why_windows_refused_it(taken, duration, advice):
+    lines = []
+
+    class Refused:
+        def __init__(self, key, on_press):
+            self.error, self.taken = "Windows refused it (error 5)", taken
+
+        def start(self):
+            return False
+
+        def stop(self):
+            pass
+    stop = threading.Event()
+    threading.Timer(0.2, stop.set).start()          # a recording without a set length ends when it is told to
+    s = Session(TARGET, _with_start(duration_s=duration), collectors=full_set(), inventory=INVENTORY,
+                alive=lambda: True, hotkey_factory=Refused, printer=lines.append)
+    s.run(stop)
+    [line] = [x for x in lines if "could not be registered" in x]
+    assert line == (f"\nThe start key Ctrl+Alt+S could not be registered (Windows refused it (error 5)), so the whole "
+                    f"recording will be analysed, and {advice}\n")
+
+
+def test_a_sweep_runs_lines_say_only_what_happened():
+    lines = []
+    s = Session(TARGET, _with_start(start_advice=False, duration_s=0.3), collectors=full_set(), inventory=INVENTORY,
+                alive=lambda: True, hotkey_factory=Keys(refuse=[START]), printer=lines.append)
+    s.run()
+    assert ("\nThe start key Ctrl+Alt+S could not be registered (ctrl+alt+s is already used by another program).\n"
+            in lines)
+    s = Session(TARGET, _with_start(start_advice=False, start_by_s=0.3), collectors=full_set(), inventory=INVENTORY)
+    assert s._start_end_line(sess.NO_START) == "The start key was not pressed within 0.3 s, so the recording stops."
+
+
+def test_a_start_key_that_gives_no_reason_or_cannot_be_let_go_is_noted_as_the_start_keys():
+    class Silent:
+        error = None
+
+        def __init__(self, key, on_press):
+            self.key = key
+
+        def start(self):
+            return self.key != START                    # the lag key registers; the start key gives no reason
+
+        def stop(self):
+            pass
+
+    class Stuck(Silent):
+        def start(self):
+            return True
+
+        def stop(self):
+            if self.key == START:
+                raise OSError("the thread is gone")
+    lines = []
+    cap = Session(TARGET, _with_start(duration_s=0.05), collectors=full_set(), inventory=INVENTORY, alive=lambda: True,
+                  hotkey_factory=Silent, printer=lines.append).run()
+    assert any("could not be registered (Windows gave no reason)" in line for line in lines)
+    cap = Session(TARGET, _with_start(duration_s=0.05), collectors=full_set(), inventory=INVENTORY, alive=lambda: True,
+                  hotkey_factory=Stuck, printer=lambda line: None).run()
+    assert "The start key could not be released cleanly (OSError: the thread is gone)." in cap.notes

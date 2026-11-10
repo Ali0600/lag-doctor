@@ -103,6 +103,9 @@ class SessionOptions:
     start_key: str | None = None
     window_s: float | None = None
     start_by_s: float | None = None
+    # True (watch's console): the lines say what a start key that measured nothing means for this recording and what
+    # to do about it. False (a settings sweep's run): only what happened; the caller words the rest itself.
+    start_advice: bool = True
 
 
 def request_stop(stop: threading.Event, reason: str) -> None:
@@ -373,18 +376,25 @@ class Session:
         key = self.opts.start_key
         if not key:
             return None
+        taken = False
         try:
             listener = self._key_factory()(key, self._on_start)
             if listener.start():
                 self._start_on = True
                 return listener
-            why = getattr(listener, "error", "") or "unknown reason"
+            why = getattr(listener, "error", "") or "Windows gave no reason"
+            taken = getattr(listener, "taken", False) is True
         except Exception as exc:  # noqa: BLE001 - a start key that cannot be used must not end the capture either
             why = f"{type(exc).__name__}: {exc}"
         self.notes.append(f"The start key {key} could not be registered ({why}), so no part was measured from it.")
-        self._print(f"\nThe start key {key.title()} could not be registered ({why}), so the whole recording will be "
-                    "analysed. To measure from a press, close the program that uses it, or record again with "
-                    "another --start-key.\n")
+        line = f"\nThe start key {key.title()} could not be registered ({why})"
+        if self.opts.start_advice:
+            line += (", so the whole recording will be analysed, and "
+                     + ("it stops only at its set length" if self.opts.duration_s is not None
+                        else "it no longer stops by itself: press Ctrl+C when you are done")
+                     + (". To measure from a press, close the program that uses it, or record again with another "
+                        "--start-key" if taken else ""))
+        self._print(line + ".\n")
         return None
 
     def _stop_hotkey(self, listener, what: str = "lag key") -> None:
@@ -453,12 +463,24 @@ class Session:
             if not self._start_open or self.start_at is not None:
                 return None
             self.start_at = at = round(when - self.origin, 3)
-        window = self.opts.window_s
-        self.observers.event("measuring", at=at, until=None if window is None else round(at + window, 3))
+        self.observers.event("measuring", at=at, until=self._measured_until(at))
         return at
+
+    def _measured_until(self, at: float) -> float | None:
+        """Where measuring from a press at `at` ends, in seconds from the start: the window's end, or the recording's
+        own set length when that comes first; None when neither bounds it (to the recording's end)."""
+        ends = [e for e in (None if self.opts.window_s is None else at + self.opts.window_s, self.opts.duration_s)
+                if e is not None]
+        return round(min(ends), 3) if ends else None
 
     def _on_start(self, when: float) -> None:
         self.start(when)
+
+    def _press_by(self) -> float | None:
+        """The time a press must come by before the recording stops for want of one: start_by_s, for a start key
+        Windows gave and only when it comes before the recording's own set length; else None."""
+        by, duration = self.opts.start_by_s, self.opts.duration_s
+        return by if self._start_on and by is not None and (duration is None or by < duration) else None
 
     def _window_end(self) -> float | None:
         """When the recording is due to stop for the start key, in seconds from the start: WINDOW_TAIL_S past the
@@ -495,10 +517,11 @@ class Session:
                                  frames=self.opts.frames, network=self.opts.network)
             if self.opts.start_key:
                 self.observers.event("start_key", key=self.opts.start_key, registered=self._start_on,
-                                     window_s=self.opts.window_s,
-                                     start_by_s=self.opts.start_by_s if self._start_on else None)
+                                     window_s=self.opts.window_s, start_by_s=self._press_by())
             with self._marks_lock:
                 self._start_open = self._start_on    # from here on, the start key's first press counts
+            if self._start_on:            # only now: a press before Windows gave the key went to the game
+                self._print(f"\n{self.opts.start_key.title()} is ready: press it at the spot you want measured.\n")
             said_start = False
             while True:
                 self._tick_procs = None                  # each tick takes a fresh one, the first time it is needed
@@ -547,16 +570,19 @@ class Session:
         return wait
 
     def _measuring_line(self) -> str:
-        at, window = self.start_at or 0.0, self.opts.window_s
-        if window is None:
+        at = self.start_at or 0.0
+        until, window = self._measured_until(at), self.opts.window_s
+        if until is None:
             return f"Measuring from {clock_text(at)} to the end of the recording."
-        return f"Measuring from {clock_text(at)} for {span_words(window)}, until {clock_text(at + window)}."
+        if window is not None and until >= round(at + window, 3):
+            return f"Measuring from {clock_text(at)} for {span_words(window)}, until {clock_text(until)}."
+        return f"Measuring from {clock_text(at)} until {clock_text(until)}, when the recording stops at its set length."
 
     def _start_end_line(self, why: str) -> str:
         if why == WINDOW_ENDED:
             return f"Measured {span_words(self.opts.window_s or 0.0)} from your start key, so the recording stops."
         return (f"The start key was not pressed within {span_words(self.opts.start_by_s or 0.0)}, so the recording "
-                "stops, and all of it will be analysed.")
+                "stops" + (", and all of it will be analysed." if self.opts.start_advice else "."))
 
     def _check_frames(self, live: dict[str, dict[str, Any]], elapsed: float) -> None:
         """Say once, on its own line, that frame timing is not working: PresentMon failed or ended mid-recording

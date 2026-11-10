@@ -600,3 +600,42 @@ def test_compare_names_the_better_side_whichever_order_the_two_come_in(demo):
     backward = {r["name"]: r["better"] for r in views.compare_view(b, a)["numbers"]}
     assert forward["Stutters / min"] == "a" and backward["Stutters / min"] == "b"
     assert {k: {"a": "b", "b": "a", None: None}[v] for k, v in forward.items()} == backward
+
+
+# ------------------------------------------------------------- a terminal recording measured from its start key ---
+
+def _keyed_session(home: Path):
+    cap = synth.startup_then_smooth(startup_s=60.0, total_s=180.0)
+    cap.target = {"pid": 20000, "create_time": 5, "name": "Friend.exe"}
+    cap.marks = [20.0, 100.0]                                # one press in the startup, one in the measured part
+    cap.start_key = {"key": "ctrl+alt+s", "registered": True, "window_s": 60.0, "at": 70.0}
+    folder = home / "sessions" / "20261110-010000-friend"
+    folder.mkdir(parents=True)
+    cap.save(folder / library.CAPTURE_NAME)
+    [entry] = library.scan(home / "sessions")
+    return cap, entry
+
+
+def test_results_say_which_part_a_start_key_measured_and_draw_only_its_presses(tmp_path):
+    from lagdoctor.analysis.crop import crop
+    cap, entry = _keyed_session(tmp_path)
+    part = views.results_view(entry, diagnose(crop(cap, 70.0, 130.0, how="key")), cap, main_chain(cap),
+                              is_last=False, has_report=False)
+    assert part["part"].startswith("Analysed 1m, from 1m 10s to 2m 10s of the recording (measured from your start "
+                                   "key)") and part["part"].endswith(" The charts below show the whole recording.")
+    assert part["frames"]["marks"] == [100.0]
+    later = views.results_view(entry, diagnose(crop(cap, 130.0, 180.0, how="key")), cap, main_chain(cap),
+                               is_last=False, has_report=False)
+    assert later["frames"]["marks"] == []                 # a part without a press: never the presses it left out
+    whole = views.results_view(entry, diagnose(cap), cap, main_chain(cap), is_last=False, has_report=False)
+    assert whole["part"] == "" and whole["frames"]["marks"] == [20.0, 100.0]
+
+
+def test_without_its_diagnosis_the_app_analyses_the_part_the_start_key_measured(tmp_path):
+    from lagdoctor.app import main as app_main
+    _, entry = _keyed_session(tmp_path)                   # no diagnosis.json: the watch's analysis never finished
+    app = app_main.App(home=tmp_path, runtime={"version": "1.0.0.0", "build": 4000}, create_fn=None,
+                       log=lambda s: None, play=lambda name: None, flash=lambda on: None,
+                       launcher=lambda *a, **k: None, recorder=lambda: ["unused"])
+    _, _, d, _ = app.load(entry.id)
+    assert d.stats["span"] == {"from_s": 70.0, "to_s": 130.0, "recorded_s": 180.0, "how": "key"}

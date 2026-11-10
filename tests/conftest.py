@@ -68,13 +68,16 @@ TEST_KEYS = ("ctrl+alt+shift+f23", "ctrl+alt+shift+f24")
 
 
 class QuietWorld:
-    """What _no_real_keys_or_sounds caught (`caught`, each a failure) and the chimes a console `watch` asked for
-    (`played`, by name: cli.console_sound's stand-in)."""
+    """What _no_real_keys_or_sounds caught (`caught`, each a failure), how many console players were made (`players`:
+    each call of cli.console_sound's stand-in) and the chimes they were asked for (`played`, by name), and the real
+    cli.console_sound (`real_console_sound`) for its own test."""
 
     def __init__(self) -> None:
         self.caught: list[str] = []
         self.played: list[str] = []
+        self.players = 0
         self.sound_ok = True
+        self.real_console_sound = None
 
 
 @pytest.fixture(autouse=True)
@@ -93,7 +96,7 @@ def _no_real_keys_or_sounds(monkeypatch):
 
     def start(self, *args, **kwargs):
         if self.hotkey not in TEST_KEYS:
-            world.caught.append(f"the real key {self.hotkey!r} was registered")
+            world.caught.append(f"a test tried to register the real key {self.hotkey!r}")
             self.error = "a test may not register a real key"
             return False
         return real_start(self, *args, **kwargs)
@@ -102,10 +105,15 @@ def _no_real_keys_or_sounds(monkeypatch):
         world.played.append(name)
         return world.sound_ok
 
+    def player():
+        world.players += 1
+        return play
+
+    world.real_console_sound = cli.console_sound
     monkeypatch.setattr(hotkey.HotkeyListener, "start", start)
     monkeypatch.setattr(winsound, "PlaySound",
                         lambda *args, **kwargs: world.caught.append(f"a sound played: {args[:1]}"))
-    monkeypatch.setattr(cli, "console_sound", lambda: play)
+    monkeypatch.setattr(cli, "console_sound", player)
     yield world
     assert not world.caught, "; ".join(world.caught)
 

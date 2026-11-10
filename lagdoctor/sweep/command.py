@@ -31,6 +31,7 @@ from lagdoctor.sweep import inifile, plan, results, runner
 EXIT_BAD = 2
 NEW_ONLY = ("game", "settings", "runs", "window")
 LOCK_PREFIX = "Local\\lag-doctor-sweep-"
+SWEEP_SOUNDS = ("ready", "start", "done", "problem")      # every chime runner._record plays (a test holds them so)
 
 
 def main(args: argparse.Namespace, *, seams: Callable[[], runner.Seams] | None = None,
@@ -365,15 +366,16 @@ def real_seams() -> runner.Seams:
     from lagdoctor.winapi import elevation
     from lagdoctor.winapi.hotkey import HotkeyListener
     player = Player(paths.home(), log=lambda text: None)
-    player.prepare(("start", "done", "problem"))     # they play on the start key's thread, which must not wait
+    player.prepare(SWEEP_SOUNDS)                      # they play on the start key's thread, which must not wait
 
     def record(argv: list[str], stop: threading.Event, observers) -> int:
         try:
             watch = cli.build_parser().parse_args(["watch", *argv])
         except SystemExit:                                # a command line watch refuses: never this process's end
             return cli.EXIT_BAD_ARGS
+        # watch's own words about the start key are left out: the sweep says its own, and fails such a run itself.
         return cli.cmd_watch(watch, stop=stop, observers=observers, say=lambda line: cli.say("    " + line),
-                             remember=False, show_summary=False)
+                             remember=False, show_summary=False, start_advice=False)
 
     def ask(prompt: str) -> str | None:
         try:

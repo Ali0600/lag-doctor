@@ -60,7 +60,7 @@ def test_a_key_already_taken_is_reported_not_raised():
     try:
         rival = HotkeyListener(TEST_KEY, lambda t: None)
         assert rival.start() is False
-        assert "already used" in rival.error
+        assert "already used" in rival.error and rival.taken is True and owner.taken is False
         rival.stop()
     finally:
         owner.stop()
@@ -108,3 +108,15 @@ def test_two_listeners_hold_two_keys_at_once_and_each_press_reaches_only_its_own
         a.stop()
         b.stop()
     assert not a.registered and not b.registered
+
+
+def test_the_suites_guard_refuses_a_real_key_and_catches_a_real_sound(_no_real_keys_or_sounds, tmp_path):
+    # tests/conftest.py's tripwire: no test registers a key the owner may use or makes a sound; each is caught.
+    from lagdoctor.app import sounds
+    lst = HotkeyListener("ctrl+alt+s", lambda t: None)
+    assert lst.start() is False and lst._thread is None              # refused before any thread or registration
+    assert sounds.Player(tmp_path, log=lambda s: None).play("start") is True       # PlaySound is the guard's
+    caught = list(_no_real_keys_or_sounds.caught)
+    assert caught[0] == "a test tried to register the real key 'ctrl+alt+s'" and len(caught) == 2
+    assert caught[1].startswith("a sound played")
+    _no_real_keys_or_sounds.caught.clear()                            # this test's own: it ends clean

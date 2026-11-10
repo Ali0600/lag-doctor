@@ -266,9 +266,11 @@ class App:
         try:
             d = Diagnosis.from_json(saved)
         except ValueError:
+            from lagdoctor.analysis import crop
             from lagdoctor.analysis.diagnose import diagnose
             self.log(f"{session}: its diagnosis.json could not be read; analysing the capture again")
-            d = diagnose(cap)
+            span, _ = crop.key_part(cap)              # the part its start key measured, as the watch analysed it
+            d = diagnose(cap if span is None else crop.crop(cap, *span, how="key"))
         main = main_chain(cap)
         with self.lock:
             self.loaded = (session, cap, d, main)

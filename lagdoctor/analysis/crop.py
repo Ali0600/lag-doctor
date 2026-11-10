@@ -36,7 +36,10 @@ from lagdoctor.analysis import window
 from lagdoctor.model import F, N, Capture, SourceStatus
 from lagdoctor.report.charts import fmt_elapsed
 
-MIN_SPAN_S = fa.BOUND_MIN_S      # a shorter part could never get a verdict on what limits the game
+# The shortest part: a second past what a verdict on what limits the game needs (frames.BOUND_MIN_S), since the frame
+# that began before a part is left out and a part's steady frames sum to a little under its length (a part of exactly
+# 10 s never got a verdict: its steady frames summed to 9.96-9.99 s, measured 2026-11-10 on LagLab-like captures).
+MIN_SPAN_S = fa.BOUND_MIN_S + 1.0
 HOWS = ("key", "set")            # from the start key's press; set by the player (analyze --from/--to, the app)
 TABLES = ("frames", "system", "gpu", "network")
 OK_STATES = ("ok", "partial")
@@ -116,13 +119,15 @@ def key_part(cap: Capture) -> tuple[tuple[float, float] | None, str]:
     raw = rec.get("key") if isinstance(rec, dict) else None
     name = (f"the start key {raw.title()}" if isinstance(raw, str) and 0 < len(raw) <= KEY_TEXT_MAX
             and all(c.isascii() and (c.isalnum() or c == "+") for c in raw) else "the start key")
-    if not isinstance(rec, dict) or not isinstance(rec.get("registered"), bool):
+    # The session writes all four keys: one left out is a damaged record, never read as a None it does not hold.
+    if not isinstance(rec, dict) or not isinstance(rec.get("registered"), bool) or "at" not in rec \
+            or "window_s" not in rec:
         return None, f"{name}'s record in the capture is damaged"
     if not rec["registered"]:
         return None, f"{name} could not be registered"
-    if rec.get("at") is None:
+    if rec["at"] is None:
         return None, f"{name} was not pressed"
-    at, window = _time(rec.get("at")), rec.get("window_s")
+    at, window = _time(rec["at"]), rec["window_s"]
     span = None if window is None else _time(window)
     if at is None or at < 0 or (window is not None and (span is None or span <= 0)):
         return None, f"{name}'s record in the capture is damaged"
@@ -132,10 +137,11 @@ def key_part(cap: Capture) -> tuple[tuple[float, float] | None, str]:
         return None, f"{name}'s part cannot be found: the recording's length is not known"
     if at >= end:
         return None, f"{name} was pressed after the recording ended"
-    if span is not None and round(span, 3) < MIN_SPAN_S:
-        return None, f"{name}'s window was {span:.1f} s long, and a part needs at least {MIN_SPAN_S:.0f} s"
-    try:
-        return check_span(cap, at, end if span is None else at + span), ""
+    if span is not None and round(span, 3) < MIN_SPAN_S:     # rounded down, as check_span says a length
+        return None, (f"{name}'s window was {math.floor(span * 10) / 10:.1f} s long, and a part needs at least "
+                      f"{MIN_SPAN_S:.0f} s")
+    try:            # an end past the recording's is its end, whatever the window: check_span sees only real ends
+        return check_span(cap, at, end if span is None else min(at + span, end)), ""
     except ValueError:              # the recording ended within MIN_SPAN_S of the press
         return None, (f"{name} was pressed only {math.floor((end - at) * 10) / 10:.1f} s before the recording "
                       f"ended, and a part needs at least {MIN_SPAN_S:.0f} s")

@@ -24,6 +24,7 @@ FOLDER = "sounds"
 # (frequency in Hz, seconds) of each note.
 SOUNDS = {
     "ask": ((880.0, 0.07), (880.0, 0.07)),                        # a double knock: Windows asks, behind the game
+    "ready": ((659.25, 0.15),),                                   # one note: the start key is ready to press
     "start": ((523.25, 0.09), (783.99, 0.14)),                    # rising: the recording has begun
     "mark": ((1046.5, 0.06),),                                    # a blip: the lag key was heard
     "problem": ((392.0, 0.12), (311.13, 0.2)),                    # falling and low: something stopped working
@@ -87,8 +88,8 @@ class Player:
 
     def prepare(self, names: tuple[str, ...] | None = None) -> None:
         """Write each sound's file now (all of SOUNDS by default), so playing it later is only the play: a recording's
-        sounds play on the thread a key arrived on, which must return at once. One that cannot be written is logged
-        and plays as False."""
+        sounds play on the thread a key arrived on, which must return at once. One that cannot be written is logged;
+        each play of it tries the write again and returns False."""
         for name in names or tuple(SOUNDS):
             self.path(name)
 

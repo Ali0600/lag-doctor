@@ -263,9 +263,12 @@ def rerun_args(part: dict | None, cap: Capture) -> str:
     """The `analyze` arguments that make this report again: none for the start key's part, which analyze finds by
     itself (analysis/crop.key_part), " --from 0" for the whole of a recording that has one, else part_args'."""
     from lagdoctor.analysis.crop import key_part
+    all_of_it = " --from 0" if key_part(cap)[0] is not None else ""
     if part is None:
-        return " --from 0" if key_part(cap)[0] is not None else ""
-    return "" if part["how"] == "key" else part_args(part)
+        return all_of_it
+    if part["how"] == "key":
+        return ""
+    return part_args(part) or all_of_it         # a set part that is the whole recording to the millisecond
 
 
 # ------------------------------------------------------------------ sections --

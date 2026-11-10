@@ -79,8 +79,9 @@ class Play:
 
     fps: float | None = None              # None: the world's frame rate for the setting the file holds
     press: bool = True                    # the player presses the start key
-    press_early: bool = False             # ... before the recording has begun (watch ignores it: nothing is told)
-    press_late: bool = False              # ... again after the recording has stopped (watch ignores it too)
+    press_late: bool = False              # ... and a "measuring" comes again after "stopping" (never a real watch's)
+    press_raced: bool = False             # the only press races the stop: watch counts it, but tells it after
+                                          # "stopping" (Session.start tells it outside its lock)
     press_in_stop: bool = False           # ... while a run the sweep stopped is still stopping (watch tells that one)
     key_taken: bool = False               # watch could not register the start key (taken after the sweep's check)
     frames: bool = True                   # frame timing on (False: the UAC prompt was declined)
@@ -112,6 +113,7 @@ class World:
         self.seen: list[dict[str, str]] = []           # what the file held as each run's game started
         self.argv: list[list[str]] = []
         self.listeners: list[Listener] = []
+        self.held_at_ask: list[bool] = []              # at each prompt: does the sweep hold its start key?
         self.sleeps = 0
         self.listener_ok = True
         self.journal = Journal(tmp / "journal.json", lock_timeout=0.3)
@@ -156,6 +158,7 @@ class World:
 
     def ask(self, prompt: str) -> str | None:
         self.said.append(prompt)
+        self.held_at_ask.append(bool(self.listeners) and self.listeners[-1].started and not self.listeners[-1].stopped)
         if not self.answers:
             return None
         answer = self.answers.pop(0)
@@ -222,13 +225,15 @@ class World:
         window = float(argv[argv.index("--window") + 1])
         start_by = float(argv[argv.index("--start-by") + 1])
         assert key == self.sweep.start_key and window == self.sweep.window_s and start_by == runner.START_WAIT_S
-        # As watch: a press before "recording" or after "stopping" (play.press_early, press_late) is never told.
+        # As watch: a press before "recording" is never told (watch's session ignores it; tests/test_session.py).
         observers.event("recording", duration_s=None, hotkey=False, frames=play.frames, network=False)
         observers.event("start_key", key=key, registered=not play.key_taken, window_s=window,
                         start_by_s=None if play.key_taken else start_by)
         capture = dict(play.capture)
         if play.ends_by_itself:
             observers.event("stopping", reason="game exited")
+            if play.press_raced:                         # pressed as the game closed: told after "stopping"
+                observers.event("measuring", at=24.9, until=24.9 + window)
             capture.setdefault("duration", 25.0)
             capture.setdefault("draws_until", 25.0)
         elif stop.is_set():                              # the sweep stopped the run: frame timing off, the key taken
@@ -244,6 +249,8 @@ class World:
                 observers.event("stopping", reason="Ctrl+C")
             else:
                 observers.event("stopping", reason=WINDOW_ENDED)  # watch stops the recording after the window
+            if play.press_late:
+                observers.event("measuring", at=95.0, until=95.0 + window)
         else:
             observers.event("stopping", reason=NO_START)          # no press within --start-by
         fps = play.fps if play.fps is not None else self.fps[self.variant_on_disk()]
