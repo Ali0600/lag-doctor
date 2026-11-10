@@ -30,7 +30,8 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   (`lagdoctor/app/recording.py`, PR #33). The owner recorded a game from the app in their own terminal before the
   second merged ("It works, merge it").
 - [ ] M5: measuring the right part, in three pull requests: the analysis of a part (`crop`, `analyze --from/--to`,
-  built 2026-11-09), the start key in `watch`, then the app's half, which the owner tries before it merges.
+  merged 2026-11-09, PR #37), the start key in `watch` (built 2026-11-10, on by default in a terminal), then the
+  app's half, which the owner tries before it merges.
 - [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
   below). The relay's folder policy, `watch --wait-folder`, screen 6 and the art are not built yet.
@@ -564,6 +565,21 @@ The analysis half was built on 2026-11-09 (DESIGN.md, The measured part; DECISIO
 - Eight read-only readers mapped every reader of a time or a total first (analysis, rules, the capture's fields, the
   recorder, the reports, the app, the tests).
 
+The start key half was built on 2026-11-10 (DESIGN.md, CLI and Who follows a recording; DECISIONS 2026-11-09, the
+start key). The owner chose three of its forks on a question card: on by default in a terminal, the whole recording
+analysed and labelled when the key measured nothing, and chimes in a terminal with `--no-sound`.
+- `lagdoctor watch` registers Ctrl+Alt+S beside the lag key, one listener per key. The first press after the recording
+  began starts a 10-minute window (`--window`), the recording stops 3 s after it, and the part is analysed; with no
+  press within 20 minutes (`--start-by`) it stops, and all of it is analysed. `--start-key none` records as before.
+- The press is saved in the capture (`start_key`), so `analyze CAPTURE` finds the same part again (`crop.key_part`).
+- The sweep's runs use watch's key: the sweep checks it is free before the game starts, then plays its chimes from
+  watch's events, and its runner tests pass unchanged.
+- The app's recorder passes `--start-key none` until this milestone's app half gives it the key, its words and its
+  own sounds; `control.from_recorder` already checks the start key's two messages (`start_key`, `measuring`), and a
+  window or no-press end is `completed`. For the app half: words of its own for those two ends, the fallback in
+  `App.load` (it analyses the whole capture when diagnosis.json is missing, which should crop by `crop.key_part`),
+  and Results showing the part.
+
 ### M6: Play
 
 - [x] The library readers: `stores/steam.py` and `stores/epic.py` list the games installed through Steam, the Epic
@@ -651,9 +667,12 @@ above:
 ## Open questions for the owner
 
 - **Feel numbers**, to judge on screen: the 10-minute default window, the start key (Ctrl+Alt+S), the 20-minute cap
-  before a press, and the 1-hour cap for "until I quit". Play adds the folder wait's 5-minute deadline
-  (`target.WAIT_DEADLINE_S`) and the 20 s within which a chosen process that exits re-arms the wait.
-- **Fixes from a trimmed span.** Should a trimmed span feed `lagdoctor fix`? Today `analyze` never does.
+  before a press, and the 1-hour cap for "until I quit". Since M5's second part a terminal `watch` has them all
+  (`--window`, `--start-by`, `--window 3600` for the hour) and its chimes, whose tones are feel numbers too. Play
+  adds the folder wait's 5-minute deadline (`target.WAIT_DEADLINE_S`) and the 20 s within which a chosen process
+  that exits re-arms the wait.
+- **Fixes from a trimmed span.** Should a trimmed span feed `lagdoctor fix`? Today `analyze` never does. A watch
+  measured from its start key does: its diagnosis covers the part, and it is the one `fix` acts on.
 - **A fork the planning session settled** (DECISIONS 2026-11-08), open to the owner: measuring from a start key,
   rather than the whole recording or a fixed startup skipped per game.
 - **The privacy statement.** It gains a sentence about WebView2's diagnostic data, and SignPath requires the

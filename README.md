@@ -22,7 +22,9 @@ generated, the analysis and the page are the real ones.*
 
 - **Records while you play**: every frame's timing (Intel PresentMon), the game's CPU per thread, GPU load
   and video memory, disk, RAM, CPU/GPU throttling, and the network path (router, internet, the game server's
-  packet stream). Press **Ctrl+Alt+L** the moment it lags; the analysis looks at what happened just before.
+  packet stream). Press **Ctrl+Alt+S** at the spot you want measured: only the 10 minutes after it are analysed, never
+  the game starting up, and a chime says the press counted. Press **Ctrl+Alt+L** the moment it lags; the analysis
+  looks at what happened just before.
 - **Explains**: the lag type, the likely causes ranked with their evidence ("9 of 9 stutters and FPS drops
   coincided with the game reading from disk"), what was **checked and fine**, and what **could not be
   checked** and why. Nothing unmeasured is ever reported as fine.
@@ -76,6 +78,8 @@ uv run lagdoctor setup                                  # download + verify Pres
 uv run lagdoctor check                                  # settings check-up, no game needed
 uv run lagdoctor watch --game eldenring.exe             # or --pid PID; with neither, the busiest game
 uv run lagdoctor watch --note "shadows to low"          # what you changed, kept with the recording
+uv run lagdoctor watch --window 300 --no-sound          # measure 5 minutes from Ctrl+Alt+S, without chimes
+uv run lagdoctor watch --start-key none                 # analyse the whole recording, as before the start key
 uv run lagdoctor fix --list                             # the automatic fixes the last report suggested
 uv run lagdoctor fix power_plan                         # shows before -> after and asks
 uv run lagdoctor undo                                   # what lag-doctor changed; undo an ID, or --all
@@ -133,8 +137,10 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
 - **`lagdoctor` is a command in `.venv`**: after `.venv\Scripts\activate`, plain `lagdoctor watch ...` works in that
   window. `uv build` makes a wheel of the `lagdoctor` package alone (`dist\`); nothing is published yet.
 
-- **A recording ends** with Ctrl+C, after `--duration S`, or when the game exits. After the first Ctrl+C it
-  says it is stopping and saving, and a second press cannot lose the capture.
+- **A recording ends** 3 s after the start key's window (`--window S`, default 600), with Ctrl+C, after
+  `--duration S`, or when the game exits; with no Ctrl+Alt+S press within 20 minutes (`--start-by S`) it stops, and
+  all of it is analysed, the report saying so. After the first Ctrl+C it says it is stopping and saving, and a second
+  press cannot lose the capture. `lagdoctor analyze CAPTURE` analyses the same part again.
 - **Frame timing uses Windows event tracing (ETW), which needs admin rights.** `watch` offers one UAC prompt
   per recording (`--elevate` skips the question, `--no-elevate` records without frame timing). Only PresentMon and
   the network trace then run elevated, in lag-doctor's relay: a background process with no window, which passes

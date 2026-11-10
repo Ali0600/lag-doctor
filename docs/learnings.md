@@ -1089,3 +1089,16 @@ app's game list for the drive's whole timeout. Libraries moved with a junction s
 reads links rather than refusing them.
 **Takeaway**: when a path must not leave the local disks, walk it part by part with lstat and readlink, judging each
 link's target, never open it to find out.
+
+### A side effect turned on by default reaches every test that runs the real entry point
+When a change makes something happen by default that a test must never do on the developer's own machine (register a
+global hotkey, play a sound, open a window), every existing test that drives the real entry point starts doing it,
+silently: the code under test swallows the errors a refusal would raise, by design. The protection is a suite-wide
+tripwire, added in the same change and before the first test run: an autouse fixture that replaces the side effect
+with one that records the attempt, and fails the test at its end, since raising inside swallowed code would pass.
+**Why it came up**: M5b turned watch's start key on by default. Tests that build a real session without a stand-in
+key would have registered Ctrl+Alt+S on the owner's PC, where their own watch or sweep may hold it, and a console
+watch would have played its chimes. `tests/conftest.py`'s `_no_real_keys_or_sounds` caught the sweep's real-watch test
+doing exactly that on its first run.
+**Takeaway**: before the first test run of a change that turns a side effect on by default, guard the whole suite
+with a tripwire that records and fails at teardown, then fix each test it catches.

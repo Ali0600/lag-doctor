@@ -140,8 +140,9 @@
   `lagdoctor/capture/netflows.py`, and `crop.NET_FLOWS` (DECISIONS 2026-11-09, the measured part).
 - **The power settings read again when measuring starts**, so a part is judged by the power plan and mode it ran under:
   today the inventory is read once, before the recording starts, and the start key may come 20 minutes later; a mode
-  switched during the startup would be described for the part. Revisit hook: the start key's press in
-  `capture/session.py` (M5's second half) and `_collect_inventory` (DECISIONS 2026-11-09, the measured part).
+  switched during the startup would be described for the part. Revisit hook: `Session.start` in
+  `capture/session.py`, the start key's press (built in M5's second part, which left this out), and
+  `_collect_inventory` (DECISIONS 2026-11-09, the measured part).
 - **A second press of the start key ends the window early**, as FrameView's, CapFrameX's and PresentMon's own capture
   keys do: the player decides where the interesting part ends. Today a second press changes nothing, so a stray one
   cannot cut a measurement short. Revisit hook: `Session.start` in `capture/session.py` (DECISIONS 2026-11-09, the
