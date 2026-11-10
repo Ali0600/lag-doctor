@@ -557,16 +557,23 @@ def _holds_open(cause: str, e: _Env) -> str | None:
         if m is not None:      # A7: the game's GPU time was shared, so "the GPU is not the limit" cannot be told
             return (f"other programs kept the game's GPU {m:.0f}% busy (median of 1 s windows), so whether the "
                     "game's own GPU work is the limit could not be told")
-    if cause == "cpu_limit" and (e.verdict != "gpu" or _gpu_by_engine(e)):     # the engine judged no CPU
-        busiest = _fin(e.bound.get("busiest_thread"))
-        if busiest is not None and THREAD_WAITING <= busiest < fa.THREAD_BOUND:      # A6, LC 3.2
-            return (f"the game's busiest thread ran {100 * busiest:.0f}% of a CPU, between "
-                    f"{100 * THREAD_WAITING:.0f}% (waiting) and {100 * fa.THREAD_BOUND:.0f}% (CPU-bound): the CPU "
-                    "may be close to its limit, so it is not ruled out")
-        upper = next((n for n in e.bound.get("notes") or [] if isinstance(n, str) and fa.THREAD_UPPER_NOTE in n), None)
-        if upper is not None:                     # A6: an old capture's per-tick figure passed VSync's work edge
-            return upper
+    if cause == "cpu_limit":
+        return _cpu_not_ruled_out(e)
     return None
+
+
+def _cpu_not_ruled_out(e: _Env) -> str | None:
+    """Why the CPU cannot be ruled out in this capture, whatever a cause's own evidence says, or None: LC 3.2's grey
+    zone (A6) and an older capture's per-tick thread past VSync's work edge, under any verdict but frame timing's
+    GPU. One predicate for cpu_limit's held-open reason, the cpu gate and not_focused's CPU side."""
+    if e.verdict == "gpu" and not _gpu_by_engine(e):
+        return None
+    busiest = _fin(e.bound.get("busiest_thread"))
+    if busiest is not None and THREAD_WAITING <= busiest < fa.THREAD_BOUND:      # A6, LC 3.2
+        return (f"the game's busiest thread ran {100 * busiest:.0f}% of a CPU, between "
+                f"{100 * THREAD_WAITING:.0f}% (waiting) and {100 * fa.THREAD_BOUND:.0f}% (CPU-bound): the CPU "
+                "may be close to its limit, so it is not ruled out")
+    return next((n for n in e.bound.get("notes") or [] if isinstance(n, str) and fa.THREAD_UPPER_NOTE in n), None)
 
 
 def _contention(e: _Env) -> float | None:
@@ -611,8 +618,12 @@ def _gated(rule: Rule, env: _Env, finding: Finding) -> Any:
     if v == "unknown" or fallback:
         notes = [n for n in env.bound.get("notes") or [] if isinstance(n, str)]
         why = notes[:1] + ([probable[1]] if probable is not None else [])
+        # never a ";" inside: the lists group a reason by what comes before its first one (labels.group_unchecked)
         return Unchecked(rule.cause, f"whether {side} limits the frame rate could not be judged"
-                         + (f" ({'; '.join(why)})" if why else ""))
+                         + (f" ({', '.join(w.replace(';', ',') for w in why)})" if why else ""))
+    held = _cpu_not_ruled_out(env) if rule.gate == "cpu" else None
+    if held is not None:            # the CPU may be close to its limit: never "not what limits the frame rate"
+        return Unchecked(rule.cause, held)
     return Cleared(rule.cause, _sentence(f"{side} is not what limits the frame rate: "
                                          f"it is limited by {labels.BOUND.get(v, v)}"))
 
@@ -685,7 +696,9 @@ def _wrong_gpu(cap: Capture, ctx: dict) -> Any:
     fixes = [_gpu_preference_fix(e, best)]
     limited = v == "gpu"
     summary = (f"Windows ran the game on {_name(game)} instead of {_name(best)}. "
-               + ("That integrated GPU is what holds the frame rate down." if limited else
+               + ("That integrated GPU is probably what holds the frame rate down: its 3D engine stayed busy."
+                  if limited and _gpu_by_engine(e) else
+                  "That integrated GPU is what holds the frame rate down." if limited else
                   "It is not the limit at the moment, but the discrete GPU would give the game far more headroom."))
     return c.conclude(f"The game ran on the integrated GPU, not on {_name(best)}", summary, fixes)
 
@@ -905,7 +918,8 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
     summary = ("With VSync on, a frame that misses a refresh waits for the next one, and the game's busiest thread "
                "needs more than a refresh's time for each frame, so the CPU decides the frame rate." if unsaturated
                else "The GPU sits idle for most of each frame while the game's CPU work finishes, so the CPU decides "
-                    "the frame rate.")
+                    "the frame rate." if r is not None and r < 0.5
+               else "The game's CPU work takes longer than the GPU's each frame, so the CPU decides the frame rate.")
     return _with_headroom(e, c.conclude(title, summary, fixes))
 
 
@@ -1746,7 +1760,8 @@ def _judder(e: _Env) -> tuple[Counter, int, int, int, float, float] | None:
     held, lo = holds
     usual, other = (lo, lo + 1) if held[lo] >= held[lo + 1] else (lo + 1, lo)
     n = sum(held.values())
-    share = sum(v for h, v in held.items() if (h > usual if other > usual else h < usual)) / n   # k = 1: held 2+
+    share = (sum(v for h, v in held.items() if (h > usual if other > usual else h < usual)) / n   # k = 1: held 2+
+             if held[other] else 0.0)        # no frame at the count beside the usual one: no alternation to name
     spread = (n - held[usual]) / n
     return held, lo, usual, other, share, spread
 
@@ -1994,7 +2009,7 @@ def _frame_cap(cap: Capture, ctx: dict) -> Any:
     c = _Case(cap, ctx, "frame_cap")
     e = c.env
     v, b = e.verdict, e.bound
-    if v == "unknown":
+    if v == "unknown" or _gpu_by_engine(e):        # the engine's "gpu": the cadence was never judged
         notes = [n for n in b.get("notes") or [] if isinstance(n, str)]
         c.lack("frame_timing", W_STEADY, "the frame-rate limit could not be judged" + (f": {notes[0]}" if notes else ""))
         return c.conclude()
@@ -2149,7 +2164,7 @@ def _not_focused(cap: Capture, ctx: dict) -> Any:
         return Unchecked("not_focused", f"the game was the active window {100 * (1 - share):.0f}% of the time, but "
                                         f"{a:.0f} of the {n:.0f} {what} came while another window was in front: too "
                                         f"few to tell (at least {MIN_EVENTS} needed)")
-    if share >= UNFOCUSED_SHARE and (e.verdict in GATES["cpu"] or _gpu_by_engine(e)):   # the engine judged no CPU
+    if share >= UNFOCUSED_SHARE and (e.verdict in GATES["cpu"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e)):
         c.support("foreground", W_STEADY, f"the game was not the active window for {100 * share:.0f}% of {e.part} "
                                           f"({100 * UNFOCUSED_SHARE:.0f}% or more)", 100 * share, "%", 100 * UNFOCUSED_SHARE)
     elif share >= UNFOCUSED_SHARE:

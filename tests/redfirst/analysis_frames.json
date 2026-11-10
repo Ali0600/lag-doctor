@@ -1966,14 +1966,5 @@
   "tests": [
    "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_a_thread_that_needs_more_than_one_period"
   ]
- },
- {
-  "name": "the engine's gpu verdict stands in for an event's side",
-  "file": "lagdoctor/analysis/attribute.py",
-  "old": "    if verdict == \"gpu\" and _num((bound or {}).get(\"r\")) is None:\n",
-  "new": "    if False:\n",
-  "tests": [
-   "tests/test_analysis_frames_attribute.py::test_the_engines_gpu_verdict_never_stands_in_for_an_events_side"
-  ]
  }
 ]

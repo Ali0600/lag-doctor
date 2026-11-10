@@ -1072,7 +1072,7 @@ frames (none with fewer than 300 of them or 10 s), and so roughly how much a fas
   (VSync's verdict on a thread whose own time a frame passes k - 1 refreshes, and the rules then give no sentence).
 
 The rules say it in one sentence (`rules.headroom_text`), second in the evidence of `gpu_limit` and `cpu_limit`
-after their frame-timing line, with the screen's even steps after it (`rules._steps_text`) and `labels.HEADROOM_NOTE`
+after their first supporting line, with the screen's even steps after it (`rules._steps_text`) and `labels.HEADROOM_NOTE`
 last: "At these settings the CPU could feed about 66-78 FPS, so a GPU about 1.1-1.3x faster would make the CPU the
 limit". A GPU that heat alone held down at least 30 % of the time, whose top clock is at least the speedup's high
 end above its held clock, adds "heat held this one at 37% of its top clock, so keeping it cooler may be enough" (the
@@ -1085,7 +1085,9 @@ before each tick), but in a capture saved before that column it is the mean of p
 game's threads, so several busy threads read as one busier one, more so as thread time moves in 15.625 ms steps
 (WT 3.5, about 6 % of a 250 ms tick); and work a game does per second rather than per frame does not grow with the
 frame rate. Both make the CPU's figure lean low, as does a game that spins while it waits for the GPU; work that
-moves from one thread to another within a second reads low, which leans it high. It holds for this game at these
+moves from one thread to another every few seconds reads low, since the lead keeps reading the old thread for
+about half a second after each move (moving every 2 s, a thread's 87.5 % reads 62 %; every 10 s, 82.5 %), which
+leans it high. It holds for this game at these
 settings only: the real check is a second recording with lighter graphics, read in Compare.
 
 For an NVIDIA GPU held down by heat or power, `gpu_throttle` says how deep, second in its evidence: its median
@@ -1117,8 +1119,8 @@ is not idle.
   figures; one slow ICMP reply is often just deprioritised, NE 2.4).
 - **net_loss**: at least 2 lost probes and ≥ 1 % in a 15 s window; "burst" = at least 2 consecutive lost rounds.
   A game server or router that answered none of its probes has no loss events (`events.SILENT_UNMEASURED`): many
-  ignore pings (NE 2.4, NE 7 row 9), so its loss was not measured; one that answered and then stopped still has
-  them, and so does an internet anchor that never answered (an outage).
+  ignore pings (NE 2.4, NE 7 row 9), so its loss was not measured; one that answered and then stopped, within the
+  part analysed, still has them, and so does an internet anchor that never answered (an outage).
 - **net_gap**: each `net_flows` gap ≥ 100 ms, spanning `[t, t + ms]` (t = the last packet before the silence),
   with its kind.
 - **mark**: each hotkey press; its window is `[mark − 3 s, mark + 0.5 s]` (LC 2.4); `detail` `{frame_events
@@ -1177,7 +1179,9 @@ passes where
 hold, the Unchecked reason gives the seconds and marks. A rule whose source was not measured is `unchecked` with
 the reason.
 Some clearances are held open (`_holds_open`): `gpu_limit` while other programs share the game's GPU, and
-`cpu_limit` while the busiest thread is in LC 3.2's grey zone (0.6–0.85 of a CPU); and pacing causes stay open
+`cpu_limit` while the busiest thread is in LC 3.2's grey zone (0.6–0.85 of a CPU) or an older capture's per-tick
+thread passed VSync's work edge (`rules._cpu_not_ruled_out`, which the cpu gate and `not_focused` read too, so no
+CPU-side rule clears what `cpu_limit` holds open); and pacing causes stay open
 while pacing events that no finding claims cover ≥ 10 % of the capture.
 
 The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_contention`, `gpu_throttle`,

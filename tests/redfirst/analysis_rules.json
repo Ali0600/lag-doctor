@@ -1109,7 +1109,7 @@
  {
   "name": "not focused counted on the GPU side",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if share >= UNFOCUSED_SHARE and (e.verdict in GATES[\"cpu\"] or _gpu_by_engine(e)):",
+  "old": "    if share >= UNFOCUSED_SHARE and (e.verdict in GATES[\"cpu\"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e)):",
   "new": "    if share >= UNFOCUSED_SHARE:",
   "tests": [
    "tests/test_analysis_rules.py::test_not_focused_steady_share_counts_only_while_the_cpu_side_limits_the_game"
@@ -1118,8 +1118,8 @@
  {
   "name": "CPU limit cleared in the grey zone",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "        if busiest is not None and THREAD_WAITING <= busiest < fa.THREAD_BOUND:",
-  "new": "        if False:",
+  "old": "    if busiest is not None and THREAD_WAITING <= busiest < fa.THREAD_BOUND:      # A6, LC 3.2\n",
+  "new": "    if False:\n",
   "tests": [
    "tests/test_analysis_rules.py::test_cpu_limit_is_never_cleared_in_lc_3_2s_grey_zone"
   ]
@@ -1136,8 +1136,8 @@
  {
   "name": "grey zone held under a GPU verdict",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if cause == \"cpu_limit\" and (e.verdict != \"gpu\" or _gpu_by_engine(e)):",
-  "new": "    if cause == \"cpu_limit\":",
+  "old": "    if e.verdict == \"gpu\" and not _gpu_by_engine(e):\n        return None\n    busiest = _fin(e.bound.get(\"busiest_thread\"))",
+  "new": "    busiest = _fin(e.bound.get(\"busiest_thread\"))",
   "tests": [
    "tests/test_analysis_rules.py::test_the_grey_zone_holds_neither_a_gpu_bound_verdict_nor_a_frame_rate_at_the_display"
   ]
@@ -1786,8 +1786,8 @@
  {
   "name": "judder counted on one side of the usual hold only",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    share = sum(v for h, v in held.items() if (h > usual if other > usual else h < usual)) / n   # k = 1: held 2+\n",
-  "new": "    share = sum(v for h, v in held.items() if h > usual) / n\n",
+  "old": "    share = (sum(v for h, v in held.items() if (h > usual if other > usual else h < usual)) / n   # k = 1: held 2+\n",
+  "new": "    share = (sum(v for h, v in held.items() if h > usual) / n\n",
   "tests": [
    "tests/test_analysis_rules.py::test_vsync_judder_is_judged_between_any_two_adjacent_whole_numbers_of_refreshes"
   ]
@@ -1795,8 +1795,8 @@
  {
   "name": "judder share counts the usual hold",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    share = sum(v for h, v in held.items() if (h > usual if other > usual else h < usual)) / n   # k = 1: held 2+\n",
-  "new": "    share = held[usual] / n\n",
+  "old": "    share = (sum(v for h, v in held.items() if (h > usual if other > usual else h < usual)) / n   # k = 1: held 2+\n",
+  "new": "    share = (held[usual] / n\n",
   "tests": [
    "tests/test_analysis_rules.py::test_a_steady_lock_at_two_refreshes_is_no_judder"
   ]
@@ -1841,8 +1841,8 @@
  {
   "name": "the engine fallback closes the CPU's grey zone",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "(e.verdict != \"gpu\" or _gpu_by_engine(e))",
-  "new": "e.verdict != \"gpu\"",
+  "old": "    if e.verdict == \"gpu\" and not _gpu_by_engine(e):\n        return None\n",
+  "new": "    if e.verdict == \"gpu\":\n        return None\n",
   "tests": [
    "tests/test_analysis_rules.py::test_the_engine_fallback_never_rules_the_cpu_out"
   ]
@@ -1949,8 +1949,8 @@
  {
   "name": "an old capture past VSync's work edge called fine",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "        if upper is not None:                     # A6: an old capture's per-tick figure passed VSync's work edge",
-  "new": "        if False:",
+  "old": "    return next((n for n in e.bound.get(\"notes\") or [] if isinstance(n, str) and fa.THREAD_UPPER_NOTE in n), None)",
+  "new": "    return None",
   "tests": [
    "tests/test_analysis_rules.py::test_an_old_capture_past_vsyncs_work_edge_on_its_upper_bound_is_never_called_fine"
   ]
@@ -1962,6 +1962,70 @@
   "new": "    return e.verdict == \"gpu\" and _fin(e.bound.get(\"r\")) is None and e.frames_measured",
   "tests": [
    "tests/test_analysis_rules.py::test_the_engine_fallback_never_rules_the_cpu_out"
+  ]
+ },
+ {
+  "name": "a judder pair with no frame at the count beside the usual one",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "             if held[other] else 0.0)",
+  "new": "             if True else 0.0)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_holds_that_slip_both_ways_are_never_called_fine_and_never_silence_uneven_pacing"
+  ]
+ },
+ {
+  "name": "the cpu gate clears a CPU that cannot be ruled out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    held = _cpu_not_ruled_out(env) if rule.gate == \"cpu\" else None",
+  "new": "    held = None",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cpu_that_cannot_be_ruled_out_is_never_cleared_by_any_cpu_side_rule"
+  ]
+ },
+ {
+  "name": "not_focused rules out a CPU that cannot be ruled out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "(e.verdict in GATES[\"cpu\"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e))",
+  "new": "(e.verdict in GATES[\"cpu\"] or _gpu_by_engine(e))",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cpu_that_cannot_be_ruled_out_is_never_cleared_by_any_cpu_side_rule",
+   "tests/test_analysis_rules.py::test_an_old_capture_past_vsyncs_work_edge_on_its_upper_bound_is_never_called_fine"
+  ]
+ },
+ {
+  "name": "the gate's reason keeps a semicolon the lists cut at",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "w.replace(';', ',') for w in why",
+  "new": "w for w in why",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_engine_fallback_never_rules_the_cpu_out"
+  ]
+ },
+ {
+  "name": "frame_cap clears a cap the engine's verdict never judged",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if v == \"unknown\" or _gpu_by_engine(e):        # the engine's \"gpu\": the cadence was never judged",
+  "new": "    if v == \"unknown\":",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_verdict_from_too_few_steady_frames_never_claims_frame_timing"
+  ]
+ },
+ {
+  "name": "wrong_gpu sure of the engine's verdict",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                  if limited and _gpu_by_engine(e) else",
+  "new": "                  if False else",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_gpu_verdict_from_too_few_steady_frames_never_claims_frame_timing"
+  ]
+ },
+ {
+  "name": "cpu_limit says the GPU idles at r 0.78",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                    \"the frame rate.\" if r is not None and r < 0.5",
+  "new": "                    \"the frame rate.\" if True",
+  "tests": [
+   "tests/test_analysis_rules.py::test_vsyncs_verdict_on_an_unsaturated_thread_is_supported_not_contradicted"
   ]
  }
 ]

@@ -114,6 +114,15 @@
 - **The page file with the RAM size unknown**: when GlobalMemoryStatusEx fails, `ram_pressure` cannot tell the page
   file from RAM, and the paging lift test still counts against a commit charge at the limit. Revisit hook: the
   `roomy` branch of `rules._ram_pressure` with attribution's own RAM floor (same entry).
+- **Judder that slips both ways**: frames held one refresh fewer and one more around the usual hold (8 % and 6 %
+  around a usual three, LagLab's gpu mode at a 20.8 ms frame) are neither judder nor fine today, so they reach no
+  lag type or headline. Counting both sides from 10 % would flag a cap at refresh / 2 that slips 5 % each way
+  (LagLab's smooth control at a 72 FPS cap); where the line sits is a feel number for the owner. Revisit hook: the
+  `spread` branch of `rules._vsync_judder` (same entry).
+- **An event's side under the 3D engine's verdict**: a stutter whose frames had no GPU timing takes the engine's
+  "gpu" for its own side, leaving the CPU causes out; reading it as unknown instead made an idle-thread stutter on
+  a pegged GPU "the game waited on itself". Revisit hook: `VERDICT_SIDE` in `attribute._side` and `_residual`
+  (same entry).
 - **The game's own packets as the arbiter of ICMP loss** on its server, which would cover rate-limited servers.
   Revisit hook: `diagnose._ignored_losses` with `rules._packet_loss` (same entry).
 - **An unattended settings sweep** (B of 2026-11-09's sweep fork): the assisted sweep plus key presses lag-doctor sends

@@ -282,21 +282,6 @@ def test_reads_the_file_cache_served_are_never_reading_from_disk():
     assert firsts(events) == ["game_cpu_spike"] * 6 and summary["asset_streaming"]["a"] == 0
 
 
-def test_the_engines_gpu_verdict_never_stands_in_for_an_events_side():
-    # With too few steady frames the 3D engine names the GPU, never frame timing; a stutter whose frames had no GPU timing
-    # took that "gpu" for its own side ("the game is gpu-bound overall") and every CPU-side cause was left out
-    cap = lag_cap(times=(1.0,), duration=2.5, gpu_ms=0.0, base=dict(BASE, **{S.GAME_GPU_PCT: 99.0}),
-                  during={S.GAME_TOP_THREAD_PCT: 95.0})
-    fr = fa.main_chain(cap)
-    evs = ev.find_events(cap, fr, fa.frame_stats(fr, cap.duration_s))
-    b = fa.bound(cap, fr, evs)
-    assert b["verdict"] == "gpu" and b["r"] is None                  # the engine's verdict
-    at.attribute(cap, fr, evs, b)
-    stutters = [e for e in evs if e.kind == "stutter"]
-    assert stutters and all(e.detail["side"] is None and e.detail["side_source"] is None for e in stutters)
-    assert all("so which side was slow is unknown" in e.detail["why"][0] for e in stutters)
-
-
 def test_a_driver_is_never_the_first_cause_when_something_else_moved():
     events, summary = analyse(lag_cap(during={S.DPC_PCT: 40.0, S.GAME_TOP_THREAD_PCT: 60.0}))
     assert firsts(events) == ["game_cpu_spike"] * 6 and all("driver_dpc" in e.causes for e in events)
