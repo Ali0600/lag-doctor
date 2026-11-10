@@ -374,11 +374,13 @@ def test_running_from_lists_this_sessions_processes_from_the_folder_whenever_the
     world.start(0.0, 45, STUB)
     world.images[ME] = GAME_DIR + "\\python.exe"                   # lag-doctor itself never counts
     world._apply()
-    assert sorted(p["pid"] for p in tgt.running_from(FORMS)) == [42, 45]
-    assert tgt.running_from(FORMS)[0] == {"pid": 42, "create_time": SINCE - SECOND, "name": "lantern_.exe",
-                                          "exe": GAME}
-    world.image_fails[42] = 1
-    assert [p["pid"] for p in tgt.running_from(FORMS)] == [45]
+    found = tgt.running_from(FORMS)
+    assert sorted(p["pid"] for p in found["running"]) == [42, 45] and found["unreadable"] == []
+    assert found["running"][0] == {"pid": 42, "create_time": SINCE - SECOND, "name": "lantern_.exe", "exe": GAME}
+    world.image_fails[42] = 1                                     # unknown is not "not running": it is listed so
+    found = tgt.running_from(FORMS)
+    assert [p["pid"] for p in found["running"]] == [45]
+    assert found["unreadable"] == [{"pid": 42, "create_time": SINCE - SECOND, "name": "lantern_.exe"}]
 
 
 # ---------------------------------------------------------------- the wait ---

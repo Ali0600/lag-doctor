@@ -821,8 +821,9 @@ def check_forms(folders) -> tuple[str, ...]      # 1 to 4 forms, each checked ag
 def program_reason(image: str | None, folders: tuple[str, ...]) -> str | None   # why a program is under none of
                                                  # them; None if it is under one. The folder rule's one test
 def folder_reason(image, folder) -> str | None   # the same against one form; in_folder(image, folder) -> bool
-def running_from(folders, procs=None) -> list[dict]   # this session's processes from the folder, now:
-                                                 # [{pid, create_time, name, exe}] (Play's pre-flight)
+def running_from(folders, procs=None) -> dict    # this session's processes from the folder, now (Play's
+                                                 # pre-flight): {running: [{pid, create_time, name, exe}],
+                                                 # unreadable: [{pid, create_time, name}]}
 def wait_for_target(folder, *, folders=None, since=None, deadline_s=300.0, cancel=None, on_status=None, exclude=(),
                     pick=None, clock=time.monotonic, sleep=None) -> dict
 # find_target's dict with how "folder", plus folder, folders (the forms matched) and judged_by ("3d" | "window");

@@ -380,26 +380,30 @@ def program_reason(image: str | None, folders: tuple[str, ...]) -> str | None:
     return first
 
 
-def running_from(folders: tuple[str, ...], procs: dict[int, ProcInfo] | None = None) -> list[dict]:
+def running_from(folders: tuple[str, ...], procs: dict[int, ProcInfo] | None = None) -> dict[str, list[dict]]:
     """The processes in lag-doctor's Windows session whose program is under one of `folders`, read now, opening no
-    process: [{pid, create_time, name, exe}]. Play's pre-flight asks it before the link is opened, since a store
-    starts nothing for a game that already runs, and the wait sees only processes started after it began."""
+    process: {"running": [{pid, create_time, name, exe}], "unreadable": [{pid, create_time, name}]}, the second the
+    processes whose path Windows did not give, which may be the game too. Play's pre-flight asks it before the link
+    is opened, since a store starts nothing for a game that already runs, and the wait sees only processes started
+    after it began."""
     folders = check_forms(folders)
     procs = _snapshot() if procs is None else procs
     me = procs.get(os.getpid())
     if me is None:
         raise OSError("lag-doctor's own process is not in Windows' process list")
     mine = self_and_ancestors(procs)
-    out = []
+    out: dict[str, list[dict]] = {"running": [], "unreadable": []}
     for p in procs.values():
         if p.session_id != me.session_id or p.pid in mine or p.pid in (0, 4):
             continue
+        who = {"pid": p.pid, "create_time": p.create_time, "name": p.name}
         try:
             image = ntquery.image_path(p.pid)
         except OSError:
+            out["unreadable"].append(who)
             continue
         if program_reason(image, folders) is None:
-            out.append({"pid": p.pid, "create_time": p.create_time, "name": p.name, "exe": image})
+            out["running"].append({**who, "exe": image})
     return out
 
 
