@@ -745,8 +745,8 @@
  {
   "name": "VSync never rounds down",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "        verdict, conf = _vsync_limit(fr, rows, ft, hz, raw, busiest, notes)",
-  "new": "        verdict, conf = \"vsync\", \"high\"",
+  "old": "        verdict, conf = _vsync_limit(fr, rows, ft, hz, raw, busiest, notes,\n",
+  "new": "        verdict, conf = \"vsync\", \"high\"\n        _ = dict(fr=fr, rows=rows, ft=ft, hz=hz, raw=raw, busiest=busiest, notes=notes,\n",
   "tests": [
    "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_gpu_that_needs_more_than_one",
    "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
@@ -764,26 +764,8 @@
  {
   "name": "busiest thread ignored under VSync",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "    if busiest is not None and busiest >= THREAD_BOUND:",
+  "old": "    if busiest is not None and (busiest >= THREAD_BOUND or (work is not None and work > one)):",
   "new": "    if False:",
-  "tests": [
-   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
-  ]
- },
- {
-  "name": "MsCPUBusy ignored under VSync",
-  "file": "lagdoctor/analysis/frames.py",
-  "old": "    if cpu is not None and cpu > one:",
-  "new": "    if False:",
-  "tests": [
-   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
-  ]
- },
- {
-  "name": "MsCPUBusy read for runtime Other",
-  "file": "lagdoctor/analysis/frames.py",
-  "old": "    if not runtimes or runtimes.most_common(1)[0][0] == \"Other\":",
-  "new": "    if not runtimes:",
   "tests": [
    "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_the_cpu_that_needs_more_than_one"
   ]
@@ -1569,8 +1551,8 @@
  {
   "name": "the verdict's side passed off as the frames'",
   "file": "lagdoctor/analysis/attribute.py",
-  "old": "        return fallback, f\"its frames had no GPU timing; the game is {verdict}-bound overall\", \"verdict\"",
-  "new": "        return fallback, f\"its frames had no GPU timing; the game is {verdict}-bound overall\", \"frames\"",
+  "old": "                          f\"{labels.BOUND.get(verdict or '', verdict)}\", \"verdict\")",
+  "new": "                          f\"{labels.BOUND.get(verdict or '', verdict)}\", \"frames\")",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_the_verdict_stands_in_only_for_a_slow_frame_without_gpu_timing_and_says_so"
   ]
@@ -1874,6 +1856,169 @@
   "tests": [
    "tests/test_analysis_frames.py::test_the_steady_frame_rate_is_the_displayed_rate_outside_lag_events",
    "tests/test_analysis_rules_diagnose.py::test_freezes_never_make_a_steady_frame_rate_low"
+  ]
+ },
+ {
+  "name": "CPU Busy past k - 1 periods calls a game VSync holds CPU-bound",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return \"vsync\", \"high\"\n\n\ndef _sync_off(",
+  "new": "    if (_num(_at(fr.get(F.CPU_BUSY_MS), rows[0])) or 0.0) > one:\n        return \"cpu_main\", \"high\"\n    return \"vsync\", \"high\"\n\n\ndef _sync_off(",
+  "tests": [
+   "tests/test_analysis_frames.py::test_cpu_busy_never_calls_a_game_vsync_holds_cpu_bound"
+  ]
+ },
+ {
+  "name": "a game server or router that never answered counts as lost",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        if role in SILENT_UNMEASURED and not answered:\n",
+  "new": "        if False:\n",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_a_server_or_router_that_never_answered_a_ping_has_no_loss_events",
+   "tests/test_analysis_rules_network.py::test_a_game_server_that_ignores_pings_is_neither_packet_loss_nor_network_lag"
+  ]
+ },
+ {
+  "name": "an internet anchor that never answered counts as unmeasured",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "SILENT_UNMEASURED = (\"gateway\", \"server\")",
+  "new": "SILENT_UNMEASURED = (\"gateway\", \"internet\", \"server\")",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_a_server_or_router_that_never_answered_a_ping_has_no_loss_events"
+  ]
+ },
+ {
+  "name": "a router that never answered counts as lost",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "SILENT_UNMEASURED = (\"gateway\", \"server\")",
+  "new": "SILENT_UNMEASURED = (\"server\",)",
+  "tests": [
+   "tests/test_analysis_frames_events.py::test_a_server_or_router_that_never_answered_a_ping_has_no_loss_events"
+  ]
+ },
+ {
+  "name": "the game's reads alone stand for disk reads",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    io = _disk_reads(cap)\n",
+  "new": "    io = _system(cap, S.GAME_IO_READ_BPS)\n",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_reads_the_file_cache_served_are_never_reading_from_disk"
+  ]
+ },
+ {
+  "name": "a missing disk read counter lets the game's reads stand",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "[None if g is None or d is None else min(g, d) for g, d in zip(game.v, on_disk)]",
+  "new": "[None if g is None else g if d is None else min(g, d) for g, d in zip(game.v, on_disk)]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_reads_the_file_cache_served_are_never_reading_from_disk"
+  ]
+ },
+ {
+  "name": "the game's reads worded as disk reads",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "\"up to {v} of the game's reads came from disk (normally {n})\"",
+  "new": "\"the game read {v} from disk (normally {n})\"",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_reads_the_file_cache_served_are_never_reading_from_disk"
+  ]
+ },
+ {
+  "name": "the bound never reads the lead thread",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return S.GAME_LEAD_THREAD_PCT if any(_num(v) is not None for v in lead) else S.GAME_TOP_THREAD_PCT",
+  "new": "    return S.GAME_TOP_THREAD_PCT",
+  "tests": [
+   "tests/test_analysis_frames.py::test_the_bound_reads_the_lead_thread_where_the_capture_has_it"
+  ]
+ },
+ {
+  "name": "the bound reads an empty lead column on an old capture",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return S.GAME_LEAD_THREAD_PCT if any(_num(v) is not None for v in lead) else S.GAME_TOP_THREAD_PCT",
+  "new": "    return S.GAME_LEAD_THREAD_PCT",
+  "tests": [
+   "tests/test_analysis_frames.py::test_the_bound_reads_the_lead_thread_where_the_capture_has_it"
+  ]
+ },
+ {
+  "name": "a thread VSync holds counts only when saturated",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if busiest is not None and (busiest >= THREAD_BOUND or (work is not None and work > one)):",
+  "new": "    if busiest is not None and busiest >= THREAD_BOUND:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_a_thread_that_needs_more_than_one_period"
+  ]
+ },
+ {
+  "name": "the VSync work test reads an old capture's per-tick upper bound",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    work = busiest * ft if busiest is not None and lead else None",
+  "new": "    work = busiest * ft if busiest is not None else None",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_a_thread_that_needs_more_than_one_period"
+  ]
+ },
+ {
+  "name": "an old capture past VSync's work edge says nothing",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if busiest is not None and not lead and busiest * ft > one:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_vsync_at_two_refreshes_names_a_thread_that_needs_more_than_one_period"
+  ]
+ },
+ {
+  "name": "the too-short note shows 9.99 s as the 10 s it needs",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    shown = math.floor(seconds * 10.0) / 10.0 if seconds < BOUND_MIN_S else seconds",
+  "new": "    shown = seconds",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_stretch_too_short_for_a_verdict_names_what_fell_short_and_never_rounds_up_to_the_need"
+  ]
+ },
+ {
+  "name": "the too-short note says only so many frames beside enough frames",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if n < BOUND_MIN_FRAMES and seconds < BOUND_MIN_S:",
+  "new": "    if True:",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_stretch_too_short_for_a_verdict_names_what_fell_short_and_never_rounds_up_to_the_need"
+  ]
+ },
+ {
+  "name": "the too-short note names the seconds when the frames fell short",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if n < BOUND_MIN_FRAMES:\n        return f\"only {frames}; a verdict needs {BOUND_MIN_FRAMES}\"",
+  "new": "    if False:\n        return f\"only {frames}; a verdict needs {BOUND_MIN_FRAMES}\"",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_stretch_too_short_for_a_verdict_names_what_fell_short_and_never_rounds_up_to_the_need"
+  ]
+ },
+ {
+  "name": "the too-short note says 1 steady frames",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    frames = f\"{n} steady frame{'' if n == 1 else 's'}\"",
+  "new": "    frames = f\"{n} steady frames\"",
+  "tests": [
+   "tests/test_analysis_frames.py::test_a_stretch_too_short_for_a_verdict_names_what_fell_short_and_never_rounds_up_to_the_need"
+  ]
+ },
+ {
+  "name": "the verdict named by its id in the why line",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "f\"{labels.BOUND.get(verdict or '', verdict)}\"",
+  "new": "f\"{verdict}-bound\"",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_verdict_stands_in_only_for_a_slow_frame_without_gpu_timing_and_says_so"
+  ]
+ },
+ {
+  "name": "the shared-GPU note cut by its own semicolon",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "busy (median of 1 s windows, \"",
+  "new": "busy (median of 1 s windows; \"",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_a_steady_rate_other_programs_gpu_work_may_set_is_no_cap_and_counts_as_low_fps"
   ]
  }
 ]

@@ -46,8 +46,11 @@ def test_every_laglab_scenario_passes_the_end_to_end_judge(mode, seed, hiccups):
     assert not [w for w in d.unchecked.values() if w.startswith("the check failed")]
 
 
-@pytest.mark.parametrize("mode, lag, lead", [("smooth", "none", None), ("gpu", "low_fps", "wrong_gpu"),
-                                             ("cpu", "low_fps", "cpu_limit"), ("hitch", "stutter", "game_cpu_spike"),
+# gpu and cpu: changed on purpose. Their frames stay up 3 or 4 of the 144 Hz refreshes (40 FPS), judder that
+# vsync_judder used to miss once most frames took 2 or more, so they are low FPS and uneven pacing: "mixed" (LagLab
+# presents with VSync off: Windows' composition holds its frames on whole refreshes).
+@pytest.mark.parametrize("mode, lag, lead", [("smooth", "none", None), ("gpu", "mixed", "wrong_gpu"),
+                                             ("cpu", "mixed", "cpu_limit"), ("hitch", "stutter", "game_cpu_spike"),
                                              ("hitch-io", "stutter", "asset_streaming"),
                                              ("hitch-wait", "stutter", "game_stall"), ("hog", "mixed", "background_hogs")])
 def test_lag_type_and_the_finding_the_headline_names(mode, lag, lead):
@@ -74,7 +77,8 @@ def test_laglabs_pace_mode_is_uneven_and_low_and_the_headline_names_the_uneven_p
 
 def test_headlines_carry_the_numbers_and_the_rule_of_three():
     gpu = diagnose(synth.laglab("gpu").cap).headline
-    assert gpu.startswith("Low frame rate (40 FPS average on a 144 Hz screen), most likely running on the wrong GPU")
+    assert gpu.startswith("Several problems: Low frame rate (40 FPS average on a 144 Hz screen) and uneven frame pacing "
+                          "over 98% of the capture, most likely running on the wrong GPU; possible: VSync judder;")
     assert "no hitches ≥ 50 ms in" in gpu and "at 95% confidence" in gpu
     hitch = diagnose(synth.laglab("hitch").cap).headline
     assert hitch.startswith("9 stutters (18.0 a minute, worst ") and "no hitches" not in hitch
@@ -140,6 +144,151 @@ def test_the_headline_names_the_finding_that_claims_the_lags_own_events():
     text = dg.headline("none", [claims], {"hitches": 0, "frames": 3000, "hitch_rate_bound": 0.001}, [], {}, env)
     assert text == ("No lag stood out: no hitches ≥ 50 ms in 3,000 frames (at most 0.1% of frames at 95% "
                     "confidence); possible: loading from disk.")
+
+
+def test_a_steady_low_frame_rate_is_led_by_the_part_that_holds_it_not_by_a_few_claimed_drops():
+    # A real GPU-bound recording ran 58 FPS on a 144 Hz screen for 12 minutes with 6 FPS drops, 4 of them claimed by
+    # background programs, and its headline blamed background programs: the steady low rate, most of the lag, was
+    # the GPU's, and the finding that names it claims no events.
+    from lagdoctor.model import LagEvent
+    cap = synth.laglab("hitch").cap
+    evs = [LagEvent(i, "fps_drop", 20.0 * i, 20.0 * i + 2.0, 30.0, {}) for i in range(1, 7)]
+    hogs = Finding(cause="background_hogs", title="t", category="stutter", confidence="high", score=0.95, summary="",
+                   event_ids=[1, 2, 3, 4])
+    limit = Finding(cause="gpu_limit", title="t", category="fps", confidence="high", score=0.9, summary="")
+    stats = {"avg_fps": 58.0, "refresh_hz": 144.0, "duration_s": 750.0}
+
+    def text(verdict, steady_s, findings=(hogs, limit), events=evs, fps=58.0):
+        b = {"verdict": verdict, "steady_fps": fps, "refresh_hz": 144.0, "steady_s": steady_s}
+        env = rules._Env(cap, {"stats": {"frames": 40000}, "bound": b})
+        st = dict(stats, avg_fps=fps)
+        lag = dg.lag_time(events, list(findings), st, b, True)
+        return dg.headline(dg.pick_lag_type(lag, True), list(findings), st, events, lag, env)
+
+    # the claimer the headline used to name stays in it, as a side note
+    assert text("gpu", 700.0) == ("Low frame rate (58 FPS average on a 144 Hz screen), most likely GPU at its limit; "
+                                  "likely: background programs.")
+    # the steady time is shorter than the drops the best-ranked claimer explains (8 s): the claimer leads, as before,
+    # and the limit that holds the steady rate is the side note
+    assert text("gpu", 5.0).endswith(", most likely background programs; likely: GPU at its limit.")
+    # waiting: no part holds the steady rate, so no steady lead
+    assert text("waiting", 700.0).endswith(", most likely background programs.")
+    # a part that is not the limit's never leads, even when it ranks first
+    cpu = Finding(cause="cpu_throttle", title="t", category="fps", confidence="high", score=0.99, summary="")
+    assert text("gpu", 700.0, (cpu, hogs, limit)).endswith(", most likely GPU at its limit; likely: background programs.")
+    # mixed with pacing: the steady time is set against what the best-ranked claimer explains, not every event ...
+    pacing = evs + [LagEvent(7, "pacing", 0.0, 800.0, 8.0, {})]
+    paced = Finding(cause="uneven_pacing", title="t", category="pacing", confidence="medium", score=0.5, summary="",
+                    event_ids=[7])
+    assert text("gpu", 700.0, (hogs, limit, paced), pacing).endswith(
+        ", most likely GPU at its limit; likely: background programs.")
+    # with no claimer there is no side note
+    assert text("gpu", 700.0, (limit,)).endswith(", most likely GPU at its limit.")
+    # ... and a claimer that explains more than the steady time leads
+    first = Finding(cause="uneven_pacing", title="t", category="pacing", confidence="high", score=0.99, summary="",
+                    event_ids=[7])
+    assert text("gpu", 700.0, (first, limit), pacing).endswith(
+        ": the game itself hands over its frames at uneven intervals; likely: GPU at its limit.")
+    # no steady low frame rate (a cap is its own target, and 130 FPS on 144 Hz is no low FPS): no limit to name
+    assert text("capped", 700.0).endswith(", most likely background programs.")
+    assert text("gpu", 700.0, fps=130.0).endswith(", most likely background programs.")
+    # a lag that is mostly stutter: the steady time is no part of it, so no limit beside the stutters' claimer
+    long = [LagEvent(10 + i, "stutter", 200.0 + 3.0 * i, 202.5 + 3.0 * i, 150.0, {}) for i in range(40)]
+    stutters = Finding(cause="background_hogs", title="t", category="stutter", confidence="high", score=0.95,
+                       summary="", event_ids=[e.id for e in long])
+    assert text("gpu", 30.0, (stutters, limit), long).endswith(", most likely background programs.")
+    # a limit that claims the drops itself is never its own side note, whichever way the time falls
+    both = Finding(cause="gpu_limit", title="t", category="fps", confidence="high", score=0.9, summary="",
+                   event_ids=[1, 2])
+    assert text("gpu", 700.0, (both,)).endswith(", most likely GPU at its limit.")
+    assert text("gpu", 1.0, (both,)).endswith(", most likely GPU at its limit.")
+    # a capped game is its own target: its steady time is never low FPS
+    assert dg.steady_low_s({"verdict": "capped", "steady_fps": 58.0, "refresh_hz": 144.0, "steady_s": 700.0}, True) == 0
+
+
+def gpu_bound_with_drops(drop_r: float, n: int = 6, dur: float = 120.0) -> Capture:
+    """A GPU-bound game at ~51 FPS on the 144 Hz panel (r = 0.96) with n 3 s FPS drops to ~25 FPS (the GPU busy
+    drop_r of each of their frames) while another program, hog.exe, uses 1.5 CPUs; nothing else moves."""
+    import random
+    rng = random.Random(7)
+    spans = [(15.0 + i * (dur - 30.0) / (n - 1), 18.0 + i * (dur - 30.0) / (n - 1)) for i in range(n)]
+
+    def hot(x):
+        return any(a <= x <= b for a, b in spans)
+
+    fms, gms, t = [], [], 1.0
+    while t < dur - 0.5:
+        f = (40.0 if hot(t) else 19.6) * rng.uniform(0.97, 1.03)
+        fms.append(f)
+        gms.append(f * (drop_r if hot(t) else 0.96))
+        t += f / 1000.0
+    fr = synth.frames_table(fms, gpu_ms=gms, display_ms=fms, displayed=1, mode="Hardware: Independent Flip",
+                            runtime="DXGI")
+    sysb = synth.system_table(dur, game_top_thread_pct=lambda x: 55.0 + rng.uniform(-3, 3), game_cpu_pct=120.0,
+                              game_gpu_pct=lambda x: 80.0 if hot(x) else 97.0, cpu_total_pct=20.0, game_focused=1)
+    cap = synth.capture(fr, sysb, hz=synth.REFRESH_HZ, duration=dur)
+    cap.sources = synth.sources(("frames", "system"))
+    cap.target = {"pid": 4242, "pids": [4242], "name": "game.exe"}
+    cap.others = [[x, [[30000, "hog.exe", 150.0 if hot(x) else rng.uniform(0.5, 1.5), 0.0, 0.0],
+                       [2656, "dwm.exe", rng.uniform(2.0, 4.5), 0.0, 2.0]]] for x in sysb[S.T]]
+    return cap
+
+
+def test_a_gpu_bound_recording_with_a_few_background_drops_is_headed_by_the_gpu():
+    # Through diagnose(): the GPU limits every steady frame (r = 0.96, 51 FPS on 144 Hz, 100 of the 118 s), a background
+    # program is behind all 6 FPS drops (18 s), and the GPU limit, which ranks first, claims no events
+    d = diagnose(gpu_bound_with_drops(drop_r=0.80))
+    drops = [e.id for e in d.events if e.kind == "fps_drop"]
+    assert d.stats["bound"] == "gpu" and d.lag_type == "low_fps" and len(drops) == 6
+    assert [(f.cause, f.confidence) for f in d.findings[:2]] == [("gpu_limit", "high"), ("background_hogs", "medium")]
+    assert d.findings[0].event_ids == [] and d.findings[1].event_ids == drops
+    assert d.headline.startswith("Low frame rate (47 FPS average on a 144 Hz screen), most likely GPU at its limit; "
+                                 "possible: background programs"), d.headline
+
+
+def test_when_the_drops_claimer_outranks_the_steady_limit_the_headline_still_names_it():
+    # CPU-side drops give background_hogs frame-timing support (S = 5) over gpu_limit (S = 4, no NVIDIA telemetry), so
+    # it ranks first and is the app's Top cause; the steady lead is still the GPU, and the headline names both
+    d = diagnose(gpu_bound_with_drops(drop_r=0.40))
+    assert [f.cause for f in d.findings[:2]] == ["background_hogs", "gpu_limit"]
+    assert "most likely GPU at its limit; likely: background programs" in d.headline, d.headline
+
+
+def held_two_or_three(seed=5, n=1700):
+    """A GPU-bound game under VSync on the 144 Hz panel (a made-up shape): frames stay up two or three refreshes (now
+    and then one or four) in runs, each presented that hold plus up to 1.5 ms of jitter; GPU busy 16.5 ms a frame."""
+    import random
+    rng = random.Random(seed)
+    p = 1000.0 / synth.REFRESH_HZ
+    holds = [2]
+    while len(holds) < n:
+        holds.append(holds[-1] if rng.random() < 0.5 else rng.choices([1, 2, 3, 4], [3, 52, 43, 2])[0])
+    ms = [h * p + rng.uniform(-1.5, 1.5) for h in holds]
+    fr = synth.frames_table(ms, gpu_ms=16.5, display_ms=[h * p for h in holds], displayed=1)
+    cap = synth.capture(fr, hz=synth.REFRESH_HZ, duration=1.0 + sum(ms) / 1000.0)
+    cap.sources = synth.sources(("frames",))
+    return cap
+
+
+def test_a_game_vsync_holds_two_and_three_refreshes_is_named_vsync_judder_with_the_48_fps_cap():
+    # A real recording held 92 % of its frames two or three refreshes on a 144 Hz screen with VSync on, and its report
+    # said "the game itself hands over its frames at uneven intervals": vsync_judder gave up once most frames held two
+    d = diagnose(held_two_or_three())
+    pace = [e for e in d.events if e.kind == "pacing"]
+    assert d.stats["bound"] == "gpu" and pace
+    assert max(e.detail["present_swing_pct"] for e in pace) > 10.0        # the presents swing too
+    judder = [f for f in d.findings if f.cause == "vsync_judder"]
+    assert judder and judder[0].title == "VSync judder: frames alternate between two and three refreshes"
+    assert "Or cap the frame rate at 48 FPS (a third of the refresh)" in [x.title for x in judder[0].fixes]
+    assert set(judder[0].event_ids) == {e.id for e in pace}
+    assert "uneven_pacing" not in causes(d) and "uneven_pacing" not in d.cleared
+    assert "the game itself hands over its frames at uneven intervals" not in d.headline
+
+
+def test_every_frame_rate_rule_is_sorted_into_a_steady_lead_or_left_out_on_purpose():
+    fps_rules = {r.cause for r in rules.RULES if r.category == "fps"}
+    sorted_in = {c for causes in dg.STEADY_LEADS.values() for c in causes} | set(dg.NOT_STEADY_LEADS)
+    assert sorted_in == fps_rules
 
 
 def test_without_frame_timing_marks_stand_in_at_half_weight_and_the_lag_stays_unknown():
@@ -526,6 +675,11 @@ def test_a_steady_rate_other_programs_gpu_work_may_set_is_no_cap_and_counts_as_l
     assert "limited by -" in text and "limited by FPS cap" not in text and "frame-rate cap" not in d.headline
     assert not [c for c, t in d.cleared.items() if "frame-rate cap" in t], d.cleared
     assert "80% busy" in d.unchecked["frame_cap"] and "80% busy" in d.unchecked["gpu_limit"]
+    # as the lists show it, whole: they cut a reason at its first ";", and the note's own "(median of 1 s windows; 10%
+    # or more)" left "...80% busy (median of 1 s windows" there, its parenthesis never closed
+    from lagdoctor.report import labels
+    shown = {t: r for r, topics in labels.group_unchecked(d.unchecked) for t in topics}
+    assert shown[labels.topic_text("frame_cap")].endswith("may hold the frame rate"), shown
     quiet = diagnose(synth.laglab("smooth", fps_cap=58.0).cap)        # control: the job on the other GPU
     assert quiet.stats["bound"] == "capped" and quiet.lag_type == "none"
 
@@ -709,6 +863,29 @@ def test_a_low_frame_rate_while_waiting_is_low_fps_and_says_neither_side_is_the_
     # the headline and the lists agree: the grey zone keeps the CPU open, under 0.6 it is checked and fine
     assert ("cpu_limit" in d.cleared) == (thread < 100 * rules.THREAD_WAITING) and "gpu_limit" in d.cleared
     assert not diagnose(waiting_game(fps=120.0)).lag_type == "low_fps"              # 120 of 144: no low FPS
+
+
+def test_at_the_displays_rate_the_headline_never_holds_open_a_cpu_the_lists_rule_out():
+    # A waiting game at 135 FPS on 144 Hz with one 5 s drop and its lead thread at 70 %: the headline's own grey-zone
+    # test said "the CPU may be close to it" while the lists had "the CPU as the frame-rate limit" checked and fine,
+    # since at the display's rate a CPU limit costs nothing the player sees (rules._cpu_not_ruled_out)
+    import random
+    rng = random.Random(7)
+    ms, t = [], 1.0
+    while t < 59.5:
+        f = rng.uniform(11.0, 13.0) if 20.0 <= t < 25.0 else rng.uniform(6.0, 8.3)
+        ms.append(f)
+        t += f / 1000.0
+    fr = synth.frames_table(ms, gpu_ms=[0.5 * f for f in ms], display_ms=ms, displayed=1,
+                            mode="Hardware: Independent Flip")
+    sysb = synth.system_table(60, game_lead_thread_pct=lambda x: 70.0 + rng.uniform(-2, 2),
+                              game_cpu_pct=lambda x: 95.0 + rng.uniform(-5, 5), game_focused=1)
+    cap = synth.capture(fr, sysb, hz=144.0, duration=60.0)
+    cap.sources = synth.sources(("frames", "system"))
+    d = diagnose(cap)
+    assert d.stats["bound"] == "waiting" and d.lag_type == "low_fps" and d.stats["avg_fps"] >= 0.9 * 144.0, d.stats
+    assert "neither the CPU nor the GPU is at its limit" in d.headline and "may be close" not in d.headline, d.headline
+    assert "cpu_limit" in d.cleared
 
 
 # ------------------------------------------------------------------------- no hitches (A4) ---

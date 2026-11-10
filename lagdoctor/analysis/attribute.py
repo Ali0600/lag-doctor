@@ -24,6 +24,7 @@ from lagdoctor.analysis import events as ev_mod
 from lagdoctor.analysis import frames as fa
 from lagdoctor.analysis import stats as st
 from lagdoctor.model import F, G, S, Capture, LagEvent
+from lagdoctor.report import labels
 
 # ---- windows and baselines (LC 5.2) --------------------------------------------------------------
 WINDOW_BEFORE_S = 0.5        # LC 5.2: look at [t_start - 0.5 s, t_end + 0.25 s]
@@ -227,6 +228,16 @@ def _system(cap: Capture, column: str, f: Callable[[float], float] | None = None
         ts.append(float(ti))
         vs.append(None if x is None else (f(x) if f else x))
     return _Series(ts, vs)
+
+
+def _disk_reads(cap: Capture) -> _Series:
+    """The game's reads the disks can have served, tick by tick. The game's own read counter also counts what the file
+    cache served from memory (a buffered 64 MiB read of a cached file grew it 64 MiB while the disks read 0.00 MiB,
+    measured 2026-11-09), so each tick is capped at what the physical disks read in it (disk_read_bps, all disks). A
+    tick without that counter has no value: the game's counter alone cannot say the disk was read."""
+    game, disk = _system(cap, S.GAME_IO_READ_BPS), _system(cap, S.DISK_READ_BPS)
+    on_disk = _align(disk, game.t)
+    return _Series(game.t, [None if g is None or d is None else min(g, d) for g, d in zip(game.v, on_disk)])
 
 
 def _rise(series: _Series, lookback: float) -> _Series:
@@ -553,7 +564,7 @@ def _mbps(v: float) -> str:
 def _causes(cap: Capture, others: _Others) -> list[_Cause]:
     inv = cap.inventory if isinstance(cap.inventory, dict) else {}
     thread = _system(cap, S.GAME_TOP_THREAD_PCT)
-    io = _system(cap, S.GAME_IO_READ_BPS)
+    io = _disk_reads(cap)
     disk_busy = _system(cap, S.DISK_BUSY_PCT)
     disk_ms = _system(cap, S.DISK_READ_MS)
     faults = _system(cap, S.HARD_FAULTS_PS)
@@ -596,7 +607,7 @@ def _causes(cap: Capture, others: _Others) -> list[_Cause]:
                                         "the game's busiest thread ran {v} of a CPU (normally {n})", _pct)],
                why_missing="no per-thread CPU for the game"),
         _Cause("asset_streaming", [
-            _Part(io, +1, lambda m: IO_EXTRA_BPS, "the game read {v} from disk (normally {n})", _mbps),
+            _Part(io, +1, lambda m: IO_EXTRA_BPS, "up to {v} of the game's reads came from disk (normally {n})", _mbps),
             _Part(disk_busy, +1, lambda m: 0.0, "the disk was {v} busy (normally {n})", _pct,
                   level=lambda x: x >= DISK_BUSY_PCT),
             _Part(disk_ms, +1, lambda m: 0.0, "disk reads took {v} (normally {n})", lambda v: f"{v:.1f} ms",
@@ -699,7 +710,8 @@ def _side(fr: dict[str, list], ev: LagEvent, verdict: str | None,
                    "no presented frame held the lost time (a stall, or the screen stopped updating)"
                    if ev.kind == "stutter" else "none of the game's own frames fell in it")
             return None, f"{why}, so which side was slow is unknown", None
-        return fallback, f"its frames had no GPU timing; the game is {verdict}-bound overall", "verdict"
+        return (fallback, f"its frames had no GPU timing; overall the frame rate is limited by "
+                          f"{labels.BOUND.get(verdict or '', verdict)}", "verdict")
     what = f"its slowest frame ({float(fm[rows[0]]):.0f} ms)" if ev.kind == "stutter" else "its frames"
     if r >= fa.R_GPU:
         return "gpu", f"the GPU was busy for {100 * r:.0f}% of {what}, so the GPU side was slow", "frames"

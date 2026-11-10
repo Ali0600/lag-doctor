@@ -432,6 +432,29 @@ def test_lost_probes_can_be_keyed_by_ip():
     assert len(kinds(run(net_cap([20.0] * 100, net_flows=nf)), "net_loss")) == 1
 
 
+def test_a_server_or_router_that_never_answered_a_ping_has_no_loss_events():
+    # NE 2.4, NE 7 row 9: game servers and routers often never answer ICMP. One that answered none of its probes was
+    # not measured by ping: its loss is unknown, never 100 %
+    t = [0.5 * (i + 1) for i in range(200)]
+
+    def server(rtt):
+        lost = [x for x, v in zip(t[20:], rtt[20:]) if v is None]
+        return {"targets": {"server": "203.0.113.7"}, "lost": {"server": lost},
+                "probes": {"server": {"sent": 180, "lost": len(lost), "from_t": 10.5}}}
+
+    never = [None] * 200
+    assert kinds(run(net_cap([20.0] * 200, server=never, net_flows=server(never))), "net_loss") == []
+    stopped = [None] * 20 + [30.0 if x < 60.0 else None for x in t[20:]]       # answered until 60 s, then silent
+    loss = kinds(run(net_cap([20.0] * 200, server=stopped, net_flows=server(stopped))), "net_loss")
+    assert [(e.detail["target"], e.detail["lost"], e.severity, e.detail["burst"]) for e in loss] == [
+        ("server", 81, 100.0, True)]
+    # a router that never answered is no loss either; an internet anchor that never answered is an outage
+    nf = {"probes": {r: {"sent": 200, "lost": 200, "from_t": 0.5} for r in ("gateway", "internet")},
+          "lost": {r: list(t) for r in ("gateway", "internet")}}
+    loss = kinds(run(net_cap([None] * 200, gw=None, net_flows=nf)), "net_loss")
+    assert sorted({e.detail["target"] for e in loss}) == ["internet"]
+
+
 def test_loss_also_needs_1_percent_of_its_15_s_window():
     # The 1 % rule (NE 2.2) never binds at 2 Hz, where two losses are 6 % of a window. This pins it with a probe
     # every 9.5 ms (a 15 s window holds ~1,579), a rate the product does not use.

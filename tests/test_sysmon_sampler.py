@@ -82,6 +82,18 @@ def test_disk_columns_follow_the_busiest_physical_disk():
     assert got[S.DISK_QUEUE] == 2.0 and got[S.DISK_READ_BPS] == 1e6
 
 
+def test_disk_reads_are_every_disk_together_and_named_so():
+    # disk_read_bps is _Total, every physical disk together (the busy and latency columns follow the busiest disk),
+    # and its label said "busiest disk"
+    from lagdoctor.report import labels
+    got = sysmon.disk_columns(idle={"0 C:": 40.0, "1 E:": 95.0, "_Total": 67.5}, sec_read={"0 C:": 0.004},
+                              read_bps={"0 C:": 3e6, "1 E:": 1e6, "_Total": 4e6}, queue={"0 C:": 1.0})
+    assert got[S.DISK_BUSY_PCT] == pytest.approx(60.0) and got[S.DISK_READ_MS] == pytest.approx(4.0)
+    assert got[S.DISK_READ_BPS] == 4e6                                       # C: alone read 3e6
+    assert labels.column_text(S.DISK_BUSY_PCT) == "busiest disk (%)"
+    assert labels.column_text(S.DISK_READ_BPS) == "disk reads, all disks (B/s)"
+
+
 def test_an_idle_disk_reading_above_100_is_0_busy():
     assert sysmon.disk_columns({"1 E:": 100.3}, {}, {}, {})[S.DISK_BUSY_PCT] == 0.0
     assert sysmon.disk_columns({}, {}, {"_Total": 5.0}, {}) == {
@@ -227,6 +239,65 @@ def test_a_reused_thread_id_is_a_new_thread():
     r.update({100: p(100, 0, threads=[th(1, 5, 0), th(2, 6, 4_000_000)])}, 0)
     cols, _ = r.update({100: p(100, 0, threads=[th(1, 5, 250_000), th(2, 7, 1_500_000)])}, DT_NS)
     assert cols[S.GAME_TOP_THREAD_ID] == 2 and cols[S.GAME_TOP_THREAD_PCT] == pytest.approx(60.0)
+
+
+def test_the_lead_thread_is_read_at_its_own_share_when_several_threads_are_as_busy():
+    # Four threads each charged 12 of the 16 clock ticks of every 250 ms (75 %), in turns: the one whose turn it is 15,
+    # the other three 11. Each tick's busiest thread then reads 93.75 %, though no thread runs over 75 %, and the
+    # bound took that for one thread maxing out a CPU; the lead thread, picked on the ticks before, reads 75 %.
+    tick = 156_250                                       # 15.625 ms in 100 ns units
+    r = ProcessRates(100, 1100)
+    totals = [0, 0, 0, 0]
+    top, lead = [], []
+    for k in range(13):
+        if k:
+            for i in range(4):
+                totals[i] += (15 if k % 4 == i else 11) * tick
+        cols, _ = r.update({100: p(100, sum(totals), threads=[th(1 + i, 5 + i, totals[i]) for i in range(4)])},
+                           k * DT_NS)
+        if k:
+            top.append(cols[S.GAME_TOP_THREAD_PCT])
+            lead.append(cols[S.GAME_LEAD_THREAD_PCT])
+    assert top == [93.75] * 12                           # the per-tick column stays as it was, for lag events
+    assert lead[0] is None                               # nothing to pick on yet
+    assert statistics.mean(lead[4:12]) == 75.0           # two whole turns once 1 s of history is in
+    # a failed snapshot starts the history over
+    r.update(None, 13 * DT_NS)
+    r.update({100: p(100, sum(totals), threads=[th(1 + i, 5 + i, totals[i]) for i in range(4)])}, 14 * DT_NS)
+    totals = [t + 12 * tick for t in totals]
+    cols, _ = r.update({100: p(100, sum(totals), threads=[th(1 + i, 5 + i, totals[i]) for i in range(4)])}, 15 * DT_NS)
+    assert cols[S.GAME_LEAD_THREAD_PCT] is None and cols[S.GAME_TOP_THREAD_PCT] == 75.0
+
+
+def test_the_lead_is_the_thread_busiest_over_the_second_before_and_moves_on_when_it_ends():
+    # The busy thread (87.5 %) has the higher id, and the other one spikes to 100 % for one tick: the lead stays on the
+    # busy thread through the spike (each tick's busiest does not), and moves to the one left, never a KeyError, when
+    # the busy thread ends. Unreadable threads start the history over.
+    tick = 156_250
+
+    def snap(threads):
+        return {100: p(100, sum(t[2] for t in threads), threads=[th(tid, ct, tot) for tid, ct, tot in threads])}
+
+    r = ProcessRates(100, 1100)
+    busy = other = 0
+    lead, top = [], []
+    for k in range(10):
+        if k:
+            busy += 14 * tick                          # 87.5 %
+            other += (16 if k == 7 else 2) * tick      # 12.5 %, one tick at 100 %
+        cols, _ = r.update(snap([(9, 50, busy), (2, 60, other)]), k * DT_NS)
+        if k:
+            lead.append(cols[S.GAME_LEAD_THREAD_PCT])
+            top.append(cols[S.GAME_TOP_THREAD_PCT])
+    assert lead == [None] + [87.5] * 8                 # the busy thread at every tick once one tick of history is in
+    assert top[6] == 100.0                             # the spike is that tick's busiest
+    other += 2 * tick
+    cols, _ = r.update(snap([(2, 60, other)]), 10 * DT_NS)      # the busy thread has ended
+    assert cols[S.GAME_LEAD_THREAD_PCT] == 12.5
+    r.update({100: p(100, other, threads=None)}, 11 * DT_NS)     # its threads could not be read this tick
+    r.update(snap([(2, 60, other + 2 * tick)]), 12 * DT_NS)      # a baseline for the threads again
+    cols, _ = r.update(snap([(2, 60, other + 4 * tick)]), 13 * DT_NS)
+    assert cols[S.GAME_TOP_THREAD_PCT] == 12.5 and cols[S.GAME_LEAD_THREAD_PCT] is None   # no history yet
 
 
 def test_a_gone_or_replaced_game_has_no_game_columns():

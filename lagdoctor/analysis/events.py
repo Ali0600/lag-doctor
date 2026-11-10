@@ -61,6 +61,10 @@ MARK_AFTER_S = 0.5
 
 KIND_ORDER = {"stutter": 0, "fps_drop": 1, "pacing": 2, "net_spike": 3, "net_loss": 4, "net_gap": 5, "mark": 6}
 _NET_COLS = {"gateway": N.GW_RTT_MS, "internet": N.INET_RTT_MS, "server": N.SERVER_RTT_MS}
+# NE 2.4, NE 7 row 9: game servers and routers often ignore pings. One that answered none of its probes was never
+# measured by ping, so its loss is unknown, never 100 % (a silent server once read as "Network lag" over a whole
+# capture while its game packets kept arriving). The internet anchor is not one of them: silence there is an outage.
+SILENT_UNMEASURED = ("gateway", "server")
 _num = fa._num
 
 
@@ -420,7 +424,8 @@ def _longest_outage(lost: list[float], answered: list[float]) -> int:
 
 def _net_losses(cap: Capture) -> list[LagEvent]:
     """At least LOSS_MIN_PROBES lost probes in the 15 s around a loss, and >= 1 % of that window (A8, NE 2.2);
-    detail["burst"] when >= BURST_ROUNDS consecutive rounds were lost (an outage of >= 1 s at 2 Hz)."""
+    detail["burst"] when >= BURST_ROUNDS consecutive rounds were lost (an outage of >= 1 s at 2 Hz). A game server or
+    router that answered none of its probes has none (SILENT_UNMEASURED): its loss was not measured."""
     nf = cap.net_flows if isinstance(cap.net_flows, dict) else {}
     targets = nf.get("targets") if isinstance(nf.get("targets"), dict) else {}
     out = []
@@ -442,6 +447,8 @@ def _net_losses(cap: Capture) -> list[LagEvent]:
         else:
             sent_t = sorted([t for t, v in rows if v is not None] + lost)
         answered = [t for t, v in rows if v is not None and (from_t is None or t >= from_t)]
+        if role in SILENT_UNMEASURED and not answered:
+            continue
         for g in _group(lost, NET_MERGE_S):
             mid = g[0] + (g[-1] - g[0]) / 2.0
             lo, hi = mid - LOSS_WINDOW_S / 2, mid + LOSS_WINDOW_S / 2

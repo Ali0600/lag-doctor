@@ -118,8 +118,10 @@ that noise is large: simulated with Windows' accounting, one thread at 75 % read
 **Why it came up**: the headroom estimate divides the frame rate by the busiest-thread figure, so a game with several
 busy threads gets a CPU ceiling that leans low, and the 2026-11-09 audit had found the same figure can call such a
 game main-thread bound.
-**Takeaway**: average each series over the window first and take the maximum of those averages; a mean of per-sample
-maxima is an upper bound, never an estimate of the busiest one.
+**Takeaway**: a mean of per-sample maxima is an upper bound, never an estimate of the busiest one. Pick the series on
+earlier samples and read it on the current one (the thread busiest over the second before, read at its share in this
+tick, reads 75 % for four threads at 75 %): averaging each series over a window first and taking the maximum still
+reads high, four threads at 80 % still reading 85 %.
 
 ### Max-per-pixel downsampling must not treat empty buckets as gaps
 The report's charts keep the maximum of each pixel column so one stutter among 100,000 frames still reaches
@@ -405,6 +407,49 @@ computed from longer events.
 where quiet stretches as long as a mark's window gave 0.64, so routine reads looked linked to the lag.
 **Takeaway**: compute a base rate with the same statistic and the same window length as the events it is compared
 with, or the comparison measures the windows, not the cause.
+
+### A lift test cannot see a condition that is on all the time
+A lift test asks whether a signal rises above its normal level at the lag's events. When the condition is the normal
+level, it cannot rise anywhere, so "it never coincided with a stutter" is certain and says nothing against it.
+**Why it came up**: a GPU-bound recording's GPU was held down by heat 97 % of the time; the lift test read
+"contradicts" against its 55 stutters and FPS drops, which cost the finding 2 points, dropped it from likely to
+possible and out of the summary's top three. The same coupling hid a small page file: the paging test counts paging
+only while RAM is nearly full, and RAM stayed free.
+**Takeaway**: let event-linked evidence only support a steady cause, and count a "contradicts" only where the
+condition could have risen at the events.
+
+### A headline that only follows event claims never names a steady cause
+Choosing the cause to name by "which finding claims the lag's events" works for stutters, but a low frame rate is
+mostly steady time, and the finding that explains it (the part at its limit) claims no events at all.
+**Why it came up**: a game held at 58 FPS by its GPU for 12 minutes had 6 FPS drops, 4 of them claimed by background
+programs, and the headline said "most likely background programs".
+**Takeaway**: pick the cause a summary names by the share of the problem it explains, steady time included.
+
+### A number printed under the wrong label misleads its next reader, its author included
+A report line "the game's own frame times swung ... (median swing 7.0 ms)" took its number from the displayed frames,
+not the game's presents.
+**Why it came up**: reading that line for a V-sync judder bug, I took 7.0 ms (one refresh at 144 Hz) for a measurement of
+the game's presents and briefed an investigation that the presents followed the display; the presents were in fact a
+single hump at 16.9 ms, and the line's number was the screen's own swing.
+**Takeaway**: a number on screen is named by the quantity it was computed from; before building on one, trace it back to
+its column.
+
+### A process's read counter is not a disk read counter
+Windows' per-process I/O counters (`ReadTransferCount`, Task Manager's "I/O read bytes") count every read the
+process asked for, and the file cache serves many of them from memory without touching a disk.
+**Why it came up**: a real recording read "471.7 MB/s from disk" at its stutters while the physical disks read
+0.07 MB/s. A buffered 64 MiB read of a cached file grew the reading process's counter by 64.0 MiB while
+`\PhysicalDisk(_Total)\Disk Read Bytes/sec` showed 0.00 MiB; read unbuffered, the disk showed 64.22 MiB.
+**Takeaway**: to say a process read from disk, check the disks' own counters; the process counter is only an upper
+bound.
+
+### One number doing two jobs can make a label unreachable
+A cause's lift weight was capped at 1 so that it ranks last when each stutter is pinned on one cause; the same weight
+was its whole score, and "possible" needs 2.
+**Why it came up**: the driver-delay finding was documented as "capped at possible", and nothing it measured could
+ever lift it above "worth checking".
+**Takeaway**: when one value serves two purposes, check each outcome at its limit, and split the value when they need
+different ones.
 
 ### A "see the other list" pointer must land for every case it can come from
 Replacing a repeated detail with a pointer ("which was not recorded (see Not measured)") moves the duty of saying
@@ -1004,6 +1049,31 @@ start back. The ping probes could be counted again exactly from their logged los
 could not, so a part drops them rather than spread a startup download over play.
 **Takeaway**: slice timed data in its own coordinates, read every length-versus-end use of its duration, and
 recount or drop each running total, never keep it.
+
+### A number shown beside its threshold rounds toward the side it fell on
+A value measured just under a limit and printed with ordinary rounding can print as the limit itself, and the
+sentence then contradicts its own verdict: round it down when it fell short of a minimum (up when it went past a
+maximum), and name only the requirement that failed.
+**Why it came up**: a 10 s measured part (the shortest M5a's crop allows) sums 9.96–9.99 s of steady frames, and the
+bound verdict's note read "only 402 steady frames over 10.0 s; a verdict needs 300 frames and 10 s": 402 frames were
+plenty, and the time shown was the need. The GPU-limit evidence quotes that note to the player; it now reads "only
+9.9 s of steady frames; a verdict needs 10 s" (`frames._too_short_note`).
+**Takeaway**: format a measurement compared against a threshold with the rounding that keeps it on its side (floor
+below a minimum, ceiling above a maximum), and say which of several requirements it missed.
+
+### Quote how a figure behaves from the code that reads it, not from the raw column
+A number given for how a measurement behaves has to come out of the consumer's own arithmetic (its windows, its
+median, its rounding), over everything the real data varies. The raw column's plain mean is a different
+statistic, and it can lean the other way.
+**Why it came up**: DESIGN said the lead thread read 62 % for a thread at 87.5 % whose work moved every 2 s, and
+82.5 % when it moved every 10 s. Both were the plain mean of the per-sample column. Re-running that probe gave the
+same wrong numbers, because the probe itself took the plain mean. The correction, read from the bound verdict
+(the median of 1 s window means) but over a few alignments only, still said 62–88 % at every 2 s and the truth at
+every 4 s; sweeping where the moves fall against the sampler's ticks in 0.125 s steps gave 33–88 % at every 2 s,
+66–88 % at every 3 or 4 s, and the true 87.5 % only from every 5 s.
+**Takeaway**: feed a probe's made-up data through the consumer's own function, sweep what the real data varies
+(phase, alignment, seed), and quote what it returns; re-running a measurement checks its arithmetic, not whether it
+measures what the code reads.
 
 ### Look at a path's links without following them, one part at a time
 On Windows a folder path can pass through a junction or a symbolic link at any part, and opening it follows them, so

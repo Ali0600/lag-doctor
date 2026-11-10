@@ -409,6 +409,14 @@ def _window_bins(cap: Capture, column: str, spans: list[tuple[float, float]]) ->
     return {b: math.fsum(xs) / len(xs) for b, xs in bins.items() if b not in tainted and len(xs) >= 3}
 
 
+def busiest_column(cap: Capture) -> str:
+    """The column the busiest thread is judged on: the lead thread's (S.GAME_LEAD_THREAD_PCT), where the capture has
+    it. The per-tick busiest thread reads high whenever several threads are about as busy (four at 75 % read 86 %,
+    over THREAD_BOUND), so a capture saved before the lead column gives only an upper bound."""
+    lead = _col(cap.system, S.GAME_LEAD_THREAD_PCT)
+    return S.GAME_LEAD_THREAD_PCT if any(_num(v) is not None for v in lead) else S.GAME_TOP_THREAD_PCT
+
+
 def _window_means(cap: Capture, column: str, spans: list[tuple[float, float]]) -> list[float]:
     """Means over 1 s windows of a 4 Hz system column, skipping any window that touches an event."""
     return list(_window_bins(cap, column, spans).values())
@@ -517,6 +525,19 @@ def bound(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent]) -> dict
     return out
 
 
+def _too_short_note(n: int, seconds: float) -> str:
+    """What a steady stretch too short for a verdict fell short on, in words the rules quote to the player. Its seconds
+    round down: a 10 s measured part sums 9.96-9.99 s of steady frames, which read "10.0 s" beside "needs 10 s"."""
+    shown = math.floor(seconds * 10.0) / 10.0 if seconds < BOUND_MIN_S else seconds     # under 10 s: 9.9 at most
+    frames = f"{n} steady frame{'' if n == 1 else 's'}"
+    if n < BOUND_MIN_FRAMES and seconds < BOUND_MIN_S:
+        return (f"only {frames} over {shown:.1f} s; a verdict needs {BOUND_MIN_FRAMES} frames and "
+                f"{BOUND_MIN_S:.0f} s")
+    if n < BOUND_MIN_FRAMES:
+        return f"only {frames}; a verdict needs {BOUND_MIN_FRAMES}"
+    return f"only {shown:.1f} s of steady frames; a verdict needs {BOUND_MIN_S:.0f} s"
+
+
 def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
               tick_spans: list[tuple[float, float]]) -> dict[str, Any]:
     hz = refresh_hz(cap)
@@ -527,7 +548,8 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
                            "notes": notes, "gpu_busy_pct": None, "quantised_pct": None, "steady_frames": 0,
                            "steady_s": 0.0, "steady_fps": None, "cpu_share": None, "headroom": None}
 
-    means = _window_means(cap, S.GAME_TOP_THREAD_PCT, tick_spans)
+    thread_col = busiest_column(cap)
+    means = _window_means(cap, thread_col, tick_spans)
     busiest = st.median(means) / 100.0 if means else None
     out["busiest_thread"] = busiest
     nlp = _logical_cpus(cap)
@@ -548,8 +570,7 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
     out["steady_fps"] = 1000.0 * len(shown) / math.fsum(shown) if shown else None
     if len(frame_ms) < BOUND_MIN_FRAMES or out["steady_s"] < BOUND_MIN_S:
         if frame_ms:
-            notes.append(f"only {len(frame_ms)} steady frames over {out['steady_s']:.1f} s; a verdict needs "
-                         f"{BOUND_MIN_FRAMES} frames and {BOUND_MIN_S:.0f} s")
+            notes.append(_too_short_note(len(frame_ms), out["steady_s"]))
         elif fr.get(F.T):
             notes.append("no steady frames: every frame was inside a lag event")
         else:
@@ -624,7 +645,8 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
 
     verdict, conf = "unknown", "low"
     if vsync:
-        verdict, conf = _vsync_limit(fr, rows, ft, hz, raw, busiest, notes)
+        verdict, conf = _vsync_limit(fr, rows, ft, hz, raw, busiest, notes,
+                                     lead=thread_col == S.GAME_LEAD_THREAD_PCT)
     elif regular and (r is None or r < R_CPU) and (busiest is None or busiest < THREAD_BOUND):
         verdict = "capped"
         out["cap_fps"] = 1000.0 / c
@@ -649,7 +671,8 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
     if shared is not None and verdict in ("capped", "waiting"):
         # A7 (LC 4.6, PM 3.2): other programs' GPU work paces the game as evenly as a cap and leaves its own GPU
         # busy short, so neither "a cap" nor "waiting on something else" can be told from a shared GPU
-        notes.insert(0, f"other programs kept the game's GPU {shared:.0f}% busy (median of 1 s windows; "
+        # never a ";" inside: the lists cut a quoted reason at its first one (labels.group_unchecked)
+        notes.insert(0, f"other programs kept the game's GPU {shared:.0f}% busy (median of 1 s windows, "
                         f"{SHARED_GPU_PCT:.0f}% or more), so a frame-rate cap, the shared GPU or something else "
                         "may hold the frame rate")
         verdict, conf = "unknown", "low"
@@ -734,12 +757,20 @@ def headroom(b: dict[str, Any], shared: float | None = None) -> dict[str, Any] |
     return out
 
 
+THREAD_UPPER_NOTE = ("a figure that reads high when several threads are busy (this capture was saved by an earlier "
+                     "lag-doctor)")                                   # rules._holds_open finds the note by it
+
+
 def _vsync_limit(fr: dict[str, list], rows: list[int], ft: float, hz: float, raw_gpu: float | None,
-                 busiest: float | None, notes: list[str]) -> tuple[str, str]:
+                 busiest: float | None, notes: list[str], lead: bool = False) -> tuple[str, str]:
     """(verdict, confidence) for a game locked to k refreshes a frame (A6). From k = 2, VSync rounds the rate
     down to refresh / k, so whatever needs more than k - 1 periods is what holds it there: the GPU when its
-    raw busy time does, the CPU when the busiest thread is saturated or MsCPUBusy (where it is the CPU's own
-    work) does. Only when neither does is the display itself the limit."""
+    raw busy time does, the CPU when the busiest thread is saturated or its own CPU time a frame does (a thread VSync
+    holds waits for the refresh the rest of the frame, so it is never saturated). Never MsCPUBusy: it counts the waits
+    outside Present() (a waitable swap chain, a limiter's sleep), so a game VSync holds reads busy for the whole
+    frame (PM 3.2). Only when neither does is the display itself the limit. The time a frame is judged only on the
+    lead thread (`lead`): a capture saved before it has each tick's busiest, an upper bound (four threads at 40 %
+    read 53 %, past half of a two-refresh frame)."""
     period = 1000.0 / hz
     k = round(ft / period)
     if k < 2:
@@ -750,26 +781,18 @@ def _vsync_limit(fr: dict[str, list], rows: list[int], ft: float, hz: float, raw
         notes.append(f"{rounds}: the GPU needs {raw_gpu:.1f} ms a frame, more than {k - 1} refresh period(s) "
                      f"({one:.1f} ms)")
         return "gpu", ("medium" if raw_gpu / one - 1.0 < CONF_MARGIN else "high")
-    if busiest is not None and busiest >= THREAD_BOUND:
-        notes.append(f"{rounds}: the busiest game thread runs {100 * busiest:.0f}% of a CPU")
-        return "cpu_main", ("medium" if busiest - THREAD_BOUND < CONF_MARGIN else "high")
-    cpu = _cpu_busy_ms(fr, rows)
-    if cpu is not None and cpu > one:
-        notes.append(f"{rounds}: the CPU works {cpu:.1f} ms a frame, more than {k - 1} refresh period(s) "
-                     f"({one:.1f} ms)")
-        return "cpu_main", ("medium" if cpu / one - 1.0 < CONF_MARGIN else "high")
+    work = busiest * ft if busiest is not None and lead else None      # the lead thread's own CPU time a frame
+    if busiest is not None and (busiest >= THREAD_BOUND or (work is not None and work > one)):
+        notes.append(f"{rounds}: the busiest game thread runs {100 * busiest:.0f}% of a CPU"
+                     + ("" if busiest >= THREAD_BOUND else f", {work:.1f} ms a frame, more than {k - 1} refresh "
+                                                     f"period(s) ({one:.1f} ms)"))
+        margin = busiest - THREAD_BOUND if busiest >= THREAD_BOUND else work / one - 1.0
+        return "cpu_main", ("medium" if margin < CONF_MARGIN else "high")
+    if busiest is not None and not lead and busiest * ft > one:      # each tick's busiest: it may pass, or not
+        notes.append(f"{rounds}, but whether the CPU holds it there could not be told: the busiest game thread read "
+                     f"{100 * busiest:.0f}% of a CPU, {busiest * ft:.1f} ms a frame, more than {k - 1} refresh "
+                     f"period(s) ({one:.1f} ms), {THREAD_UPPER_NOTE}")
     return "vsync", "high"
-
-
-def _cpu_busy_ms(fr: dict[str, list], rows: list[int]) -> float | None:
-    """Median MsCPUBusy over the rows where it is the CPU's own work: MsCPUWait measured on most of them
-    (PM 2.2), and a runtime other than "Other", whose MsCPUBusy holds the wait as well (PM 8.2)."""
-    runtimes = Counter(v for v in (_at(fr.get(F.RUNTIME), i) for i in rows) if isinstance(v, str))
-    if not runtimes or runtimes.most_common(1)[0][0] == "Other":
-        return None
-    cb, cw = fr.get(F.CPU_BUSY_MS) or [], fr.get(F.CPU_WAIT_MS) or []
-    busy = [float(cb[i]) for i in rows if _pos(_at(cb, i)) and _bounded(_at(cw, i)) is not None]
-    return st.median(busy) if busy and len(busy) * 2 >= len(rows) else None
 
 
 def _sync_off(fr: dict[str, list], rows: list[int]) -> bool:

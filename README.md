@@ -161,9 +161,10 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
 - **GPU heat, clocks and throttling are NVIDIA-only** (NVML). On other GPUs the load and video memory still
   come from Windows counters.
 - **The headroom is a rough estimate**, not a benchmark: how much a faster GPU or CPU would help comes from the
-  GPU's time per frame and the game's busiest thread, which reads high when several threads are busy, and work a game
-  does per second does not grow with its frame rate, so the CPU's figure leans low. It holds for that game at those
-  settings; a second recording with lighter graphics, read beside the first in Compare, is the real check.
+  GPU's time per frame and the game's busiest thread (which read high when several threads were busy in recordings
+  made before lag-doctor kept its lead thread), and work a game does per second does not grow with its frame rate,
+  so the CPU's figure leans low; work that moves between threads every few seconds can lean it high. It holds for that
+  game at those settings; a second recording with lighter graphics, read beside the first in Compare, is the real check.
 - **From a checkout, `--elevate`, `scripts/e2e.py` and `scripts/etw_access.py` run its Python code as
   administrator.** A program already running as you could edit that code and ride along on the prompt you approve.
   Approve them only for a checkout you trust, or install the MSI, whose `--elevate` runs only code under Program
@@ -327,16 +328,18 @@ connection to Microsoft, as the runtime does on its own.
   less than 0.1 % in a CPU-bound workload.
 - **A diagnosis engine judged against ground truth**: 36 rules with lift-test attribution and
   evidence-family scoring, scored end to end against LagLab, a fake game with 8 scenarios that logs what it
-  did wrong; its bottleneck verdict says how far off the next limit is (the CPU, the GPU or the screen, and how
+  did wrong, and audited on real recordings: 11 bugs fixed, each with a test that fails on the old code, among them
+  a headline that put background programs ahead of a GPU held down by heat 97 % of the time; its bottleneck verdict
+  says how far off the next limit is (the CPU, the GPU or the screen, and how
   many times faster the limiting part must get), from thread CPU time rather than PresentMon's CPU Busy, which
   read 16.55 ms of a 16.9 ms GPU-bound frame.
-- **Testing that proves itself**: 4,480 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 4,520 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 43 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 3,061 deliberate
+  there, failing rather than skipping if they go missing; plus a mutation harness of 3,151 deliberate
   sabotages in 57 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes, and a settings sweep that edits a game's settings file
   between runs and puts it back byte for byte, all behind a write-ahead journal, readback verification, undo and
