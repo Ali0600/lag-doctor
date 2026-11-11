@@ -100,7 +100,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   quotes, or adding a line that repeats one, makes that mutation BAD-SPEC, and no test notices (M6b's spawn scan
   copied the handle scan's parse-failure line, 2026-11-10): after any edit to a file a spec names, check every `old`
   in `tests/redfirst/*.json` still occurs exactly once in its file, and re-point the ones that moved (same sabotage,
-  new text). Most specs (`report.json`, `user_text.json` and `session.json` among them) are laid out by hand: change their
+  new text). Renaming a test does the same to each mutation that names it: only a run of that spec notices, as
+  BAD-BASE, so grep the specs for a test's old name when you rename it. Before merging, rerun every mutation whose
+  `file` or tests the change touches, picked by path from all of `tests/redfirst/`, never from a list kept by hand
+  (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). Most specs (`report.json`, `user_text.json` and `session.json` among them) are laid out by hand: change their
   values in place, never by rewriting the file through `json.dumps`. A script may rewrite a spec only after checking
   it is byte for byte `json.dumps(indent=1)` plus a newline (`first_capture.json` and `power_plan.json` are), and with
   `write_bytes`: Python's `write_text` writes CRLF on Windows. The copy holds `lagdoctor/`, `laglab/`, `tests/`,
