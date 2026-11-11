@@ -2373,5 +2373,378 @@
   "tests": [
    "tests/test_analysis_covered.py::test_the_lift_test_never_says_no_moment_came_behind_a_window_it_was_behind_most_of_the_time"
   ]
+ },
+ {
+  "name": "a frozen frame the thread worked through is never the game's own work",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if extra >= hold * (0.5 - share) and extra >= bar:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_long_frozen_frame_the_thread_worked_through_is_the_games_own_work_though_its_1_s_mean_hardly_rose"
+  ]
+ },
+ {
+  "name": "a frozen frame is worked through only when the thread ran all of it",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if extra >= hold * (0.5 - share) and extra >= bar:",
+  "new": "            if extra >= hold * (1.0 - share) and extra >= bar:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_long_frozen_frame_the_thread_worked_through_is_the_games_own_work_though_its_1_s_mean_hardly_rose"
+  ]
+ },
+ {
+  "name": "a thread at its usual level works through a frozen frame",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if extra >= hold * (0.5 - share) and extra >= bar:",
+  "new": "            if extra >= hold * (0.5 - share):",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_busy_thread_at_its_usual_level_through_a_frozen_frame_names_neither_answer"
+  ]
+ },
+ {
+  "name": "a frozen frame not worked through is never the game waiting",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if extra < hold * (0.5 - share):",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_long_frozen_frame_the_thread_did_not_work_through_is_the_game_waiting_on_itself"
+  ]
+ },
+ {
+  "name": "a reading between the two answers is the game waiting",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            return None, f\"nothing else moved: {ran}, nearer {work} than {wait} but within what its readings vary \" \\",
+  "new": "            return \"game_stall\", f\"nothing else moved: {ran}, nearer {work} than {wait} but within what its readings vary \" \\",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_busy_thread_at_its_usual_level_through_a_frozen_frame_names_neither_answer"
+  ]
+ },
+ {
+  "name": "a thread that usually does nothing waits by 0 ms",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            wait = f\"waiting ({idle:.0f} ms less)\" if round(idle) else \"waiting (no change)\"",
+  "new": "            wait = f\"waiting ({idle:.0f} ms less)\"",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_thread_that_usually_does_nothing_waits_with_no_change"
+  ]
+ },
+ {
+  "name": "every frozen frame is long enough to tell working from waiting",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if 0.5 * hold >= bar:",
+  "new": "        if True:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_frozen_frame_too_short_to_tell_working_from_waiting_keeps_the_1_s_reading",
+   "tests/test_analysis_frames_attribute.py::test_a_thread_whose_readings_swing_from_tick_to_tick_cannot_tell_a_frozen_frame"
+  ]
+ },
+ {
+  "name": "the readings' noise never bars telling a frozen frame",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        bar = max(BUSY_Z * noise, THREAD_EXTRA_MS)",
+  "new": "        bar = THREAD_EXTRA_MS",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_thread_whose_readings_swing_from_tick_to_tick_cannot_tell_a_frozen_frame"
+  ]
+ },
+ {
+  "name": "two accounting ticks never bar telling a frozen frame",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        bar = max(BUSY_Z * noise, THREAD_EXTRA_MS)",
+  "new": "        bar = BUSY_Z * noise",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_frozen_frame_too_short_to_tell_working_from_waiting_keeps_the_1_s_reading"
+  ]
+ },
+ {
+  "name": "one tick's spread is only twice the 1 s means'",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        noise = 10.0 * max(2.0 * base.scale, tick or 0.0) * math.sqrt(sq)",
+  "new": "        noise = 10.0 * 2.0 * base.scale * math.sqrt(sq)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_thread_whose_readings_swing_from_tick_to_tick_cannot_tell_a_frozen_frame"
+  ]
+ },
+ {
+  "name": "one tick's spread is only the quiet ticks' own",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        noise = 10.0 * max(2.0 * base.scale, tick or 0.0) * math.sqrt(sq)",
+  "new": "        noise = 10.0 * (tick or 0.0) * math.sqrt(sq)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_thread_whose_level_wanders_over_seconds_cannot_tell_a_frozen_frame"
+  ]
+ },
+ {
+  "name": "one reading's spread is taken from a single reading",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if len(xs) < MIN_BASE_WINDOWS:\n        return None\n    return MEAN_AD_TO_SD",
+  "new": "    if len(xs) < 1:\n        return None\n    return MEAN_AD_TO_SD",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_one_readings_spread_needs_as_many_readings_as_a_baseline"
+  ]
+ },
+ {
+  "name": "a tick's extra thread time is counted over a whole second",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        extra += (v - med) / 100.0 * (t - lo) * 1000.0",
+  "new": "        extra += (v - med) / 100.0 * BASE_WINDOW_S * 1000.0",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_long_frozen_frame_the_thread_worked_through_is_the_games_own_work_though_its_1_s_mean_hardly_rose",
+   "tests/test_analysis_frames_attribute.py::test_the_tick_test_needs_readings_over_the_whole_frozen_frame"
+  ]
+ },
+ {
+  "name": "a frozen frame is judged on whatever ticks hold some of it",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    return (extra, sq) if sq > 0 and covered >= 0.99 * (b - a) else None",
+  "new": "    return (extra, sq) if sq > 0 else None",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_tick_test_needs_readings_over_the_whole_frozen_frame"
+  ]
+ },
+ {
+  "name": "an FPS drop is judged as one frozen frame",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if ev.kind != \"stutter\" or isinstance(ms, bool) or isinstance(t, bool):",
+  "new": "    if isinstance(ms, bool) or isinstance(t, bool):",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_only_a_stutters_frozen_frame_is_judged_by_the_ticks"
+  ]
+ },
+ {
+  "name": "a frozen frame of no length is judged",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "math.isfinite(ms) and math.isfinite(t) and ms > 0:",
+  "new": "math.isfinite(ms) and math.isfinite(t):",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_only_a_stutters_frozen_frame_is_judged_by_the_ticks"
+  ]
+ },
+ {
+  "name": "frozen frames worked through leave the lift test contradicting the cause",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if entry[\"label\"] == \"contradicts\" and _label(entry[\"a\"] + worked, entry[\"n\"], None, True) != \"contradicts\":",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_frozen_frames_worked_through_never_leave_the_lift_test_contradicting_the_cause"
+  ]
+ },
+ {
+  "name": "one frame worked through clears a contradiction of twelve",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if entry[\"label\"] == \"contradicts\" and _label(entry[\"a\"] + worked, entry[\"n\"], None, True) != \"contradicts\":",
+  "new": "            if entry[\"label\"] == \"contradicts\" and worked:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_frozen_frames_worked_through_never_leave_the_lift_test_contradicting_the_cause"
+  ]
+ },
+ {
+  "name": "a saturated thread's frames clear the lift test's contradiction too",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "                worked += 1 if res == \"game_cpu_spike\" and line.startswith(WORKED_LINE) else 0",
+  "new": "                worked += 1 if res == \"game_cpu_spike\" else 0",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_frozen_frames_worked_through_never_leave_the_lift_test_contradicting_the_cause"
+  ]
+ },
+ {
+  "name": "a screen held while the game kept presenting is the game waiting",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if screen:\n        return None, screen\n",
+  "new": "",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_screen_held_while_the_game_kept_presenting_is_no_cause_of_the_games"
+  ]
+ },
+ {
+  "name": "a held screen's side line says which side of the game was slow",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "                why[0] = screen[0]            # its slowest frame, never \"the CPU side was slow\" beside a held screen",
+  "new": "                pass",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_screen_held_while_the_game_kept_presenting_is_no_cause_of_the_games"
+  ]
+ },
+ {
+  "name": "a held screen with every frame unshown says only 0",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "{f'only {shown_n}' if shown_n else 'none'}",
+  "new": "{f'only {shown_n}'}",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_held_screen_with_none_of_the_frames_shown_says_none"
+  ]
+ },
+ {
+  "name": "a held screen needs no presents from the game",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if (not known or len(rows) < SCREEN_KEPT * expected or len(unshown) < SCREEN_MIN_UNSHOWN",
+  "new": "    if (not known or len(unshown) < SCREEN_MIN_UNSHOWN",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_held_screen_needs_the_game_presenting_and_windows_leaving_off_frames_it_had_time_to_show"
+  ]
+ },
+ {
+  "name": "a held screen needs a third of the presents its rate gives",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "SCREEN_KEPT = 0.5            # [inferred]",
+  "new": "SCREEN_KEPT = 0.34           # [inferred]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_held_screen_needs_the_game_presenting_and_windows_leaving_off_frames_it_had_time_to_show"
+  ]
+ },
+ {
+  "name": "one frame off the screen is a held screen",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if (not known or len(rows) < SCREEN_KEPT * expected or len(unshown) < SCREEN_MIN_UNSHOWN",
+  "new": "    if (not known or len(rows) < SCREEN_KEPT * expected",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_held_screen_needs_the_game_presenting_and_windows_leaving_off_frames_it_had_time_to_show"
+  ]
+ },
+ {
+  "name": "a held screen ignores how many frames Windows usually leaves off",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            or len(unshown) / len(known) < usual[1] + SCREEN_UNSHOWN):",
+  "new": "            or len(unshown) / len(known) < SCREEN_UNSHOWN):",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_held_screen_needs_the_game_presenting_and_windows_leaving_off_frames_it_had_time_to_show"
+  ]
+ },
+ {
+  "name": "frames composition dropped by design make a held screen",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if passed < SCREEN_MIN_PASSED:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_held_screen_needs_the_game_presenting_and_windows_leaving_off_frames_it_had_time_to_show",
+   "tests/test_analysis_frames_attribute.py::test_a_screen_held_because_the_game_stopped_presenting_is_still_the_games"
+  ]
+ },
+ {
+  "name": "an FPS drop is judged as a held screen",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if ev.kind != \"stutter\" or usual is None or usual[0] <= 0:",
+  "new": "    if usual is None or usual[0] <= 0:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_held_screen_needs_the_game_presenting_and_windows_leaving_off_frames_it_had_time_to_show"
+  ]
+ },
+ {
+  "name": "a stutter with no span is judged as a held screen",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if not span_ms > 0:\n        return None\n",
+  "new": "",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_held_screen_needs_the_game_presenting_and_windows_leaving_off_frames_it_had_time_to_show"
+  ]
+ },
+ {
+  "name": "a held screen counts a generated frame as the game's",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    lo, hi = bisect.bisect_left(t, ev.t_start), bisect.bisect_right(t, ev.t_end)\n    rows = [i for i in range(lo, hi) if fa._is_app(fr, i)]\n    known = ",
+  "new": "    lo, hi = bisect.bisect_left(t, ev.t_start), bisect.bisect_right(t, ev.t_end)\n    rows = list(range(lo, hi))\n    known = ",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_frames_a_driver_generated_are_not_the_games_presents"
+  ]
+ },
+ {
+  "name": "the usual share off the screen counts time behind another window",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    rows = [i for i in range(len(fr.get(F.T) or [])) if fa._is_app(fr, i) and fa._at(hid, i) is not True]",
+  "new": "    rows = [i for i in range(len(fr.get(F.T) or [])) if fa._is_app(fr, i)]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_the_usual_share_left_off_the_screen_leaves_out_time_behind_another_window"
+  ]
+ },
+ {
+  "name": "a generated frame counts toward the usual share",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    rows = [i for i in range(len(fr.get(F.T) or [])) if fa._is_app(fr, i) and fa._at(hid, i) is not True]",
+  "new": "    rows = [i for i in range(len(fr.get(F.T) or [])) if fa._at(hid, i) is not True]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_frames_a_driver_generated_are_not_the_games_presents"
+  ]
+ },
+ {
+  "name": "a clock that fell as every CPU filled is throttling",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if not part.turbo or x < CPU_BASE_PCT or base is None:",
+  "new": "        if True:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_clock_coming_down_to_base_speed_as_every_cpu_fills_is_turbo_not_throttling"
+  ]
+ },
+ {
+  "name": "a clock below base speed is turbo when the load rose",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if not part.turbo or x < CPU_BASE_PCT or base is None:",
+  "new": "        if not part.turbo or base is None:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_clock_drop_the_load_does_not_explain_still_counts"
+  ]
+ },
+ {
+  "name": "a clock at exactly base speed is throttling",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if not part.turbo or x < CPU_BASE_PCT or base is None:",
+  "new": "        if not part.turbo or x <= CPU_BASE_PCT or base is None:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_clock_at_exactly_base_speed_as_every_cpu_fills_is_turbo_too"
+  ]
+ },
+ {
+  "name": "any signal that rose with the load is turbo",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if not part.turbo or x < CPU_BASE_PCT or base is None:",
+  "new": "        if x < CPU_BASE_PCT or base is None:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_clock_coming_down_to_base_speed_as_every_cpu_fills_is_turbo_not_throttling"
+  ]
+ },
+ {
+  "name": "any clock drop to base speed or above is turbo",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if y is None or not _judge(load, base, y)[0]:",
+  "new": "        if y is None:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_clock_drop_the_load_does_not_explain_still_counts"
+  ]
+ },
+ {
+  "name": "moments the load explains count against the cause",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        m = n - left",
+  "new": "        m = n",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_moments_the_load_explains_leave_the_lift_test_instead_of_counting_against_it",
+   "tests/test_analysis_frames_attribute.py::test_a_clock_coming_down_to_base_speed_as_every_cpu_fills_is_turbo_not_throttling"
+  ]
+ },
+ {
+  "name": "a quiet window the load explains counts as one without a throttle",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        judged = [(k, hit is not None) for k, (hit, _, why_not) in judged if hit is not None or not why_not]",
+  "new": "        judged = [(k, hit is not None) for k, (hit, _, why_not) in judged]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_quiet_windows_the_load_explains_leave_the_lift_baselines_share_too"
+  ]
+ },
+ {
+  "name": "an event never says why a move did not count",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        why += [explained[k] for k in sorted(explained)]     # last: rules quote why[1] as a cause's example",
+  "new": "        pass",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_clock_coming_down_to_base_speed_as_every_cpu_fills_is_turbo_not_throttling"
+  ]
+ },
+ {
+  "name": "an event says why a move did not count before what moved",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        why += [explained[k] for k in sorted(explained)]     # last: rules quote why[1] as a cause's example",
+  "new": "        why[1:1] = [explained[k] for k in sorted(explained)]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_clock_coming_down_to_base_speed_as_every_cpu_fills_is_turbo_not_throttling"
+  ]
  }
 ]

@@ -151,8 +151,100 @@
   keep coming and the other checks would still say something, though the run would still fail its front check (a
   change of focus makes LagLab hitch). Revisit hook: right after pyglet makes the window in `laglab/app.py` `main()`
   (DECISIONS 2026-11-10, the end-to-end failures).
+- **No cause for a frozen frame too short or too noisy to tell working from waiting**: such a frame still reads
+  `game_stall`, "the busiest game thread was not busy", from a 1 s mean that cannot see it (a 40 ms frame worked
+  through adds 3 points).
+  Naming none would say what was measured. Revisit hook: the last return in `attribute._residual` (DECISIONS
+  2026-11-11, the e2e attribution).
+- **A cause of its own for a held screen** ("Windows held the screen", with fullscreen or flip-model advice), so a
+  stutter the game did not make points at a fix instead of naming no cause. Revisit hook: `attribute._residual`'s
+  screen branch and `rules.STUTTER_CAUSES` (DECISIONS 2026-11-11, the e2e attribution).
+- **A held screen for a game faster than the refresh**: its frames are under one refresh apart, so no frame Windows
+  left off passes `_screen_hold`'s refresh test, and such a stutter still reads as the game's. Asking whether a vblank
+  passed between a frame's present and the next (from the shown frames' screen times) would judge it. Revisit hook:
+  the refresh test in `attribute._screen_hold` (DECISIONS 2026-11-11, the e2e attribution).
 
 ---
+
+## 2026-11-11: The e2e run's three misattributions: a busy hitch, turbo under load, a screen Windows held
+
+The owner's e2e rerun of 2026-11-11 passed 5 of 8 modes with every window in front; lined up with LagLab's own log,
+the three failures were the doctor's. The owner said "Yes, fix them"; the implementing session chose where the fixes
+forked, except the judge's control, which the owner chose. Re-judged in memory on the owner's captures, that run
+passes 8 of 8; the 2026-11-09 run's diagnoses change only at its two held screens (its logs predate the focus log, so
+it cannot be judged).
+
+Telling a long frozen frame the game's thread worked through (hitch's 150 ms busy wait read `game_stall` in 5 of 8)
+from one it waited through (hitch-wait's sleep):
+- **A: the thread's extra CPU time in the 4 Hz ticks that hold the frame (chosen)**, at the midpoint of the two
+  answers, where two spreads of those ticks' noise fit in half their distance. On the run the busy wait read +85 to
+  +101 ms and the sleep -42 to +5 ms, against a 52 ms midpoint.
+- **B: a lower z cut for the thread**: rejected. A 1 s mean diluted 150 ms to 6-16 points over the thread's usual
+  17 % (under the cut in 5 of 8), and the cut is every signal's guard against noise.
+- **C: PresentMon's CPU-busy time of the frame**: rejected. OpenGL reports no CPU wait, so busy is the whole frame
+  whether the game worked or slept (PM 8.2).
+- **One tick's spread, the larger of twice the 1 s means' and the quiet ticks' own (chosen)**: each alone fell short
+  of the real spread of 160 ms sums on some e2e capture (6.3 against 9.6 ms; 31 against 43 ms).
+- **Working through it needs a rise past the noise too (chosen in review)**: for a thread usually past half a CPU the
+  midpoint is below nothing, so its usual level read as worked through. A reading nearer working through it but within
+  that bar names no cause and says neither answer was measured. Stutters only: an FPS drop holds no frame, and a tick
+  missing inside the frame leaves it unjudged.
+- **A frame too short to tell keeps the 1 s reading (chosen for now)**: naming no cause there is in the backlog.
+- Such frames leave no "contradicts" behind where counting them ends it (one in twenty does not): the lift test, whose
+  1 s means could not show them, reads "neutral" there. The rule counts every stutter the residual named for the game's
+  work on a line of its own ("in 5 of 8 ...", the hitch finding had said "8 of 8" over a count of 3), weighed only by
+  the frames worked through, since a thread saturated all along says nothing of the moment.
+
+The CPU's clock falling under load (hog's FPS drops named `cpu_throttle` first, 102 % of base against 144 %):
+- **A: a fall to base speed or above while the whole machine's CPU use rose is turbo, not throttling (chosen)**:
+  LC 4.5 compares speeds "at a similar load", and the run's clock was about 137-156 % with the CPUs nearly idle and
+  100-105 % with all of them busy, % Performance Limit at 100 throughout. Such a moment leaves the cause's lift test,
+  and a quiet window like it leaves its baseline share. The margin is small: the run's falls bottomed out at 100.6 to
+  102.9 %, so a hotter run under the same load that fell below base speed would name `cpu_throttle` again, which a fall
+  below base is.
+- **B: only when background CPU fires**: rejected. The game's own all-core work lowers turbo the same way, and the
+  machine's whole load is what turbo answers to.
+- **C: only a fall below base speed counts**: rejected. At the same load, a hot laptop's turbo falling 20 % is the
+  throttling LC 4.5 names.
+- **Counting the explained moments as "did not coincide"**: rejected. "Only 0 of 12 coincided with the CPU slowing
+  down" for a CPU that slowed at all 12. The review weighed it: such a moment could still have shown a fall below base
+  speed and did not, so it is partly a miss; the line names the CPU slowing down, which it did there.
+
+A stutter the screen made (smooth's 36 ms: Windows left 8 of 17 frames unshown while LagLab drew on time):
+- **A: no cause of the game's, when nothing else moved (chosen)**: the game presented at least half the frames its
+  usual rate gives, at least two of them, 25 points over its usual share, never reached the screen, and Windows had a
+  whole refresh to show at least one of those before the game's next present. Its why-line says the screen held. A
+  long stall of the game's own presents almost nothing until it ends (0.05-0.18 of its rate in the run's 100-160 ms
+  hitches), but more where the stutter outlasts it (0.76, a 104 ms hitch in a 371 ms stutter) or where it is short or
+  spread out (pace 0.99-1.16, hitch-io's 34 ms one 0.73), so the frames left off decide; and a game catching up after a
+  stall presents a burst whose frames composition drops by design, which the refresh test leaves out. Its side line
+  names the slowest frame the game presented, never "the CPU side was slow" beside "the screen held". Besides both smooth stutters it cleared one in pace on 2026-11-11, where
+  LagLab's own frame starts kept their 4/20 ms rhythm while Windows' display latency climbed from 25 to 56 ms, and the
+  2026-11-09 hog's, 0.6 s after its window came back in front.
+- **The game's longest present gap against the hold, as the burst test**: rejected in review. The four real held
+  screens read 0.11 to 0.75 and a stall with its catch-up burst about 0.9: too thin a margin.
+- Known limits: above the refresh rate a held screen cannot clear, since the game's frames are under one refresh apart
+  (backlog); in composed GPU-bound play most dropped frames pass the refresh test (240 of 245 in the 2026-11-09 gpu
+  mode), so there the share decides, as before.
+- **B: a cause of its own**: deferred, worth trying (backlog).
+- **C: judged before the measured signals**: rejected. Other programs on every CPU can hold up Windows' composition
+  too, and such a signal then explains it.
+
+The e2e judge's smooth control, which failed on any stutter (the owner's choice, asked with AskUserQuestion):
+- **"Pass screen-side ones (Recommended)" (chosen by the owner)**: a stutter passes only where LagLab's own frame
+  starts span it and held no gap there as big as a stutter (LC 2.4), and the doctor named no cause of the game's for
+  it; its verdict may then say "stutter". A log without usable frame starts fails every stutter. On the run LagLab's
+  longest gap was 16.4 ms against its usual 8.3. Which causes blame the game is a list every cause of the doctor's
+  must take a side in (`GAME_CAUSES`, `NOT_GAME`), as review found `vram_overflow` on neither; and nothing of another
+  kind blamed on the game may sit beside those stutters (an FPS drop blamed on it passed under a "stutter" verdict in
+  review). The pacing of a 120 FPS cap on a 144 Hz screen, which names no cause, passes: failing every event of
+  another kind failed the owner's smooth run on it.
+- **"Keep \"no stutters\""**: not chosen. Smooth would stay red whenever Windows itself hitches.
+
+Also: "only 1 stutters and FPS drops", "only 1 stutter and FPS drops" and "only 1 stutters came from the game's own
+work" now take the singular. Revisit hook: `attribute._residual`
+(the frozen frame and the held screen), `attribute._turbo_veto` (the clock), `e2e_truth.own_gaps` and the smooth
+branch of `judge` (the control).
 
 ## 2026-11-11: Time behind another window is left out, and not_focused names only a cost it measured
 

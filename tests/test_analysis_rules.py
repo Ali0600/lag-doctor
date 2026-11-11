@@ -1373,6 +1373,63 @@ def test_throttling_held_all_the_time_is_never_contradicted_by_stutters_it_canno
         [e.text for e in res.evidence]
 
 
+def test_the_lift_line_says_how_many_moments_the_load_explained_and_left_out():
+    # attribute._turbo_veto: where the clock came down only as every CPU filled, the moment leaves the count, and the
+    # line says so, not "4 of 8" over a capture with 20 drops
+    events = [stutter(i, 1.0 + i) for i in range(1, 21)]
+    entry = lift("supports", a=4, n=8, left_out=12, left_out_why=attribute.TURBO_LEFT_OUT)
+    res = run("cpu_throttle", make(system=cpu_sys(), duration=60.0), bound={"verdict": "cpu_main", "busiest_thread": 0.95},
+              events=events, causes={"cpu_throttle": entry})
+    assert ("4 of 8 stutters and FPS drops coincided with the CPU slowing down (lift 20.0); 12 more are left out: there "
+            "the CPU's clock fell only as the PC's CPU use rose, which turbo does by design.") in [e.text for e in res.evidence]
+    one = lift("supports", a=4, n=8, left_out=1, left_out_why=attribute.TURBO_LEFT_OUT)
+    res = run("cpu_throttle", make(system=cpu_sys(), duration=60.0), bound={"verdict": "cpu_main", "busiest_thread": 0.95},
+              events=events, causes={"cpu_throttle": one})
+    assert any(e.text.endswith("(lift 20.0); 1 more is left out: there the CPU's clock fell only as the PC's CPU use "
+                               "rose, which turbo does by design.") for e in res.evidence)
+
+
+def test_a_causes_example_keeps_a_long_why_line_whole():
+    # a frozen frame's waiting line runs to about 230 characters, and a 200-character cut ended one "so the g"
+    line = ("nothing else moved: in a frame held 160 ms the game's busiest thread ran 5 ms more than usual, nearer the "
+            "27 ms less of waiting than the 133 ms more of working through it; the GPU was idle, so the game waited on "
+            "itself")
+    assert 200 < len(line) < 320
+    events = [LagEvent(id=i, kind="stutter", t_start=1.0 + i, t_end=1.15 + i, severity=150.0,
+                       detail={"side": "cpu", "why": ["side line", line]}, causes=["game_stall"]) for i in range(1, 7)]
+    res = run("game_stall", make(), events=events, causes={"game_stall": lift("supports", a=6, n=6, lift_=None)})
+    assert f"For example at 2.0 s: {line}." in [e.text for e in res.evidence]
+
+
+def test_one_stutter_is_said_as_one():
+    one = [stutter(1, 5.0, "game_cpu_spike")]
+    few = {k: lift("too_few_events", a=0, n=1) for k in ("background_cpu", "background_disk", "background_gpu")}
+    res = run("background_hogs", make(system=synth.system_table(30)), events=one, causes=few)
+    assert isinstance(res, rules.Unchecked) and res.text == ("only 1 stutter or FPS drop: linking them to another "
+                                                             "program needs at least 5")
+    res = run("shader_compile", make(), events=one)
+    assert isinstance(res, rules.Unchecked) and res.text == ("only 1 stutter came from the game's own work: too few to "
+                                                             "tell whether they bunch up at the start")
+
+
+@pytest.mark.parametrize("residual, worked, counts", [(5, 5, True), (1, 1, False), (5, 0, False)])
+def test_the_games_own_work_counts_the_stutters_the_residual_named(residual, worked, counts):
+    # attribute._residual names game_cpu_spike where nothing else moved and the thread was saturated or worked through
+    # the frozen frame, which the lift test's 1 s means could not see: the finding said "(8 of 8)" while its only count
+    # was "3 of 8 coincided". Only frames the ticks showed worked through weigh: a thread saturated all along says
+    # nothing of the moment, and too few say little.
+    events = [stutter(i, 1.0 + i, "game_cpu_spike") for i in range(1, 4 + residual)]
+    entry = lift("neutral", a=0, n=3 + residual, lift_=None, residual=residual, worked=worked)   # the family's
+    res = run("game_cpu_spike", make(), events=events, causes={"game_cpu_spike": entry})      # strongest item counts
+    line = (f"In {residual} of {3 + residual} stutters and FPS drops nothing else moved, and the game's busiest thread "
+            "was saturated or worked through the frozen frame.")
+    assert line in [e.text for e in res.evidence], [e.text for e in res.evidence]
+    # where that line counts, "best explained by ..., too few to be sure" would sit under it
+    assert any("too few to be sure" in e.text for e in res.evidence) is not counts
+    without = run("game_cpu_spike", make(), events=events, causes={"game_cpu_spike": dict(entry, residual=0, worked=0)})
+    assert (res.score > without.score) is counts         # too few alone add nothing: they count in "best explained"
+
+
 @pytest.mark.parametrize("later, kind", [(80.0, Finding), (80.1, rules.Cleared)])
 def test_cpu_throttle_counts_a_speed_drop_of_twenty_percent_from_the_start(later, kind):
     perf = (lambda t: 100.0 if t <= 20.0 else later)
@@ -2580,6 +2637,13 @@ def test_a_cause_the_marks_named_is_listed_even_with_too_few_marks():
     res = run("asset_streaming", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0},
               events=marked(3, {1, 3}, "asset_streaming"), causes=few)
     assert isinstance(res, rules.Unchecked) and res.text == "only 3 marked moments: blaming a cause needs at least 5"
+    one = {"asset_streaming": lift("too_few_events", a=1, n=1, weight=0.5, half_weight=True)}
+    res = run("asset_streaming", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0},
+              events=marked(1, {1}, "asset_streaming"), causes=one)
+    assert isinstance(res, rules.Unchecked) and res.text == "only 1 marked moment: blaming a cause needs at least 5"
+    res = run("asset_streaming", make(), events=[stutter(1, 5.0, "asset_streaming")],
+              causes={"asset_streaming": lift("too_few_events", a=1, n=1)})
+    assert isinstance(res, rules.Unchecked) and res.text == "only 1 stutter or FPS drop: blaming a cause needs at least 5"
     none = {"asset_streaming": lift("too_few_events", a=0, n=3, weight=0.5, half_weight=True)}
     assert run("asset_streaming", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0},
                events=marked(3), causes=none) is None                              # none of them named it: silent

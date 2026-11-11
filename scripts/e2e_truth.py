@@ -41,6 +41,17 @@ EXPECTATIONS: dict[str, Expectation] = {
 
 
 FRONT = "LagLab's window stayed in front"
+WINDOWS_ONLY = "no stutters in the control but those Windows made"
+# The causes that blame the game itself for a stutter: its own CPU or GPU work, its waiting, its reading from disk,
+# its spill out of VRAM. Every other cause attribute.py names is in NOT_GAME (tests/test_e2e_truth.py holds the two
+# together equal to attribute.CAUSE_ORDER, so a new cause has to take a side).
+GAME_CAUSES = ("game_cpu_spike", "game_stall", "gpu_spike", "asset_streaming", "vram_overflow")
+NOT_GAME = ("not_focused", "memory_paging", "gpu_throttle", "cpu_throttle", "background_disk", "background_gpu",
+            "background_cpu", "driver_dpc")
+# LC 2.4's stutter: a frame at least 2.5 times the usual and at least 8 ms over it, asked of LagLab's own frame starts
+OWN_GAP_X = 2.5
+OWN_GAP_MS = 8.0
+OWN_MIN_FRAMES = 10           # fewer frame starts than this say nothing of LagLab's pace
 
 
 @dataclass
@@ -112,6 +123,30 @@ def front_check(log: dict[str, Any], clock_origin: float, capture_s: float) -> C
                                "PC alone meanwhile")
 
 
+def own_frames(log: dict[str, Any], clock_origin: float) -> list[float] | None:
+    """LagLab's own frame starts (its log["frames"]) on the capture clock, sorted, or None when the log holds fewer
+    than OWN_MIN_FRAMES of them or any that is no finite number."""
+    frames = log.get("frames")
+    if not isinstance(frames, list) or len(frames) < OWN_MIN_FRAMES or not all(
+            isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x) for x in frames):
+        return None
+    return sorted(float(x) - clock_origin for x in frames)
+
+
+def own_gaps(log: dict[str, Any], clock_origin: float) -> list[tuple[float, float]] | None:
+    """(from, to) on the capture clock of each gap between LagLab's own frame starts as big as a stutter, or None
+    without usable frame starts (own_frames). These are LagLab's own: a frame Windows held on screen while LagLab kept
+    drawing is not among them (the owner's smooth run of 2026-11-11 held one frame 36 ms, while LagLab's longest gap
+    was 16.4 ms against its usual 8.3)."""
+    fs = own_frames(log, clock_origin)
+    if fs is None:
+        return None
+    steps = sorted(b - a for a, b in zip(fs, fs[1:]))
+    usual = steps[len(steps) // 2]
+    return [(a, b) for a, b in zip(fs, fs[1:])
+            if b - a >= OWN_GAP_X * usual and (b - a - usual) * 1000.0 >= OWN_GAP_MS]
+
+
 def truth_moments(log: dict[str, Any], clock_origin: float) -> list[tuple[float, float]]:
     """When LagLab deliberately lagged, on the capture clock."""
     if log.get("hitches"):
@@ -163,8 +198,28 @@ def judge(mode: str, log: dict[str, Any], clock_origin: float, d: Diagnosis,
         v.checks.append(Check(f"blamed {exp.event_cause}", bool(matched) and right / len(matched) >= 0.7,
                               f"{right}/{len(matched)} matched events name {exp.event_cause} first"))
     elif mode == "smooth":
-        n = sum(1 for e in d.events if e.kind == "stutter")
-        v.checks.append(Check("no stutters in the control", n == 0, f"{n} stutter events"))
-        # LagLab's control never lags on purpose, so the verdict must name no lag of any kind
-        v.checks.append(Check("no lag in the control", d.lag_type == "none", f"lag type {d.lag_type!r}"))
+        # LagLab's control never lags on purpose, but Windows can still hold its window's frames off the screen (the
+        # owner chose, 2026-11-11, to pass such a stutter): one passes only where LagLab's own frame starts span it and
+        # held no gap as big as a stutter there, and the doctor blamed nothing of the game's for it. A log without
+        # frame starts cannot show that, so every stutter then fails, and so does one past the frames it logged.
+        stutters = [e for e in d.events if e.kind == "stutter"]
+        fs, gaps = own_frames(log, clock_origin), own_gaps(log, clock_origin)
+        own = [e for e in stutters if fs is None or gaps is None or not fs[0] <= e.t_start <= e.t_end <= fs[-1]
+               or any(_overlaps(g, (e.t_start, e.t_end), 0.15) for g in gaps)]
+        blamed = [e for e in stutters if any(c in GAME_CAUSES for c in e.causes)]
+        windows_only = [e for e in stutters if e not in own and e not in blamed]
+        n = len(stutters)
+        none_logged = " (its log has no usable frame starts)" if gaps is None and stutters else ""
+        v.checks.append(Check(WINDOWS_ONLY, len(windows_only) == n,
+                              f"{n} stutter{'' if n == 1 else 's'}: {len(own)} where LagLab's own frame starts held a "
+                              f"gap that big or do not cover it{none_logged}, {len(blamed)} blamed on the game"))
+        # nor may the verdict name lag of any kind, but for those stutters Windows made, with nothing of another kind
+        # blamed on the game beside them (an FPS drop it was blamed for once passed under a "stutter" verdict). The
+        # pacing a 120 FPS cap gives on a 144 Hz screen names no cause, and the verdict leaves it out.
+        others = [e for e in d.events if e.kind not in ("stutter", "mark") and any(c in GAME_CAUSES for c in e.causes)]
+        v.checks.append(Check("no lag in the control",
+                              d.lag_type == "none" or (d.lag_type == "stutter" and bool(stutters)
+                                                       and len(windows_only) == n and not others),
+                              f"lag type {d.lag_type!r}" + (f", beside {len(others)} events of other kinds blamed on "
+                                                            "the game" if others and d.lag_type == "stutter" else "")))
     return v
