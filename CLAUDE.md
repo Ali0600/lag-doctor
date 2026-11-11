@@ -105,8 +105,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `file` or tests the change touches, picked by path from all of `tests/redfirst/`, never from a list kept by hand
   (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). A shared fixture
   such as `tests/synth.py` touches every test built on it, so pick the mutations those tests guard too (PR #43 refit
-  synth's hog mode and reran the 7 whose tests build it); to rerun a picked set, copy its entries byte for byte into a
-  spec under the short `TEMP` folder and pass that file to `redfirst.py`. Most specs (`report.json`, `user_text.json` and `session.json` among them) are laid out by hand: change their
+  synth's hog mode and reran the 7 whose tests build it). A change that leaves every call the old tests make giving
+  the same output needs no rerun once that is shown: wrap the fixture's function for one run of those tests, compare
+  each call's output with the old version's (`git show <base>:tests/synth.py`), and first see a planted change read
+  as different (PR #44's `covered` knob: 319 calls, all identical, 2026-11-11). To rerun a picked set, copy its
+  entries byte for byte into a spec under the short `TEMP` folder and pass that file to `redfirst.py`. Most specs (`report.json`, `user_text.json` and `session.json` among them) are laid out by hand: change their
   values in place, never by rewriting the file through `json.dumps`. A script may rewrite a spec only after checking
   it is byte for byte `json.dumps(indent=1)` plus a newline (`first_capture.json` and `power_plan.json` are), and with
   `write_bytes`: Python's `write_text` writes CRLF on Windows. The copy holds `lagdoctor/`, `laglab/`, `tests/`,
