@@ -2099,7 +2099,7 @@
   "old": "return [x for x, _ in vals] if all(v == 0 for _, v in vals) else None",
   "new": "return [x for x, _ in vals] if all(v != 1 for _, v in vals) else None",
   "tests": [
-   "tests/test_analysis_covered.py::test_a_frozen_screen_in_front_stays_a_freeze_and_so_does_one_nobody_can_place"
+   "tests/test_analysis_covered.py::test_the_shown_bursts_and_short_runs_of_a_cover_belong_to_it"
   ]
  },
  {
@@ -2126,7 +2126,7 @@
   "old": "            out[p[5]] = True",
   "new": "            pass",
   "tests": [
-   "tests/test_analysis_covered.py::test_a_covered_window_is_never_judged_and_the_time_left_out_is_said"
+   "tests/test_analysis_covered.py::test_the_time_in_front_at_a_covers_end_is_one_frozen_screen_and_the_rest_is_left_out"
   ]
  },
  {
