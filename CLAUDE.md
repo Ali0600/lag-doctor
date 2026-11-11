@@ -142,7 +142,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   (`html.powershell_path`). `charts.py` escapes its own labels without that, so pass a chart only fixed words and
   numbers. Tests use a made-up profile (`C:\Users\Jo Tester` in `tests/test_report.py`). The console summary keeps
   real paths on purpose (DESIGN.md, Report).
-- **Column names come from `lagdoctor/model.py`** (`F`, `S`, `G`, `N`); `SeriesBuilder` rejects unknown names.
+- **Column names come from `lagdoctor/model.py`** (`F`, `S`, `G`, `N`); `SeriesBuilder` rejects unknown names. The
+  dict `frames.main_chain` returns also holds two per-row lists that are no capture column, `frames.HIDDEN` and
+  `FRONT` (time behind another window, DESIGN.md "Frames and stats"): copy or cut it by its own items, never by
+  `F.ALL`, which drops them and judges a covered window's frames again. A frame test builds its capture and goes
+  through `main_chain`, since a dict built by hand has no `HIDDEN` and hides nothing.
 - **A measured part keeps the recording's own times** (`lagdoctor/analysis/crop.py`, DESIGN.md "The measured part").
   On a cropped capture `duration_s` is the part's length, never an end time: code that counts from the start counts
   from `_Env.start`, and text that names a share or a time of the recording names `_Env.part` ("the capture" until
