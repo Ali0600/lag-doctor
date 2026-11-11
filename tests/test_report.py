@@ -924,6 +924,26 @@ def test_the_frame_charts_scale_and_note_follow_the_part():
     assert "the worst took" not in html_report.render(_part(cap, 10.0, 25.0), cap)
 
 
+def test_the_frame_charts_note_never_names_a_frame_behind_another_window():
+    """A game that stops drawing while covered shows one frame as long as the time behind: the analysis leaves it out,
+    and so do the chart's scale and its "the worst took" note."""
+    def stopped(focus_behind):
+        cap = synth.laglab("smooth").cap
+        fr = cap.frames
+        keep = [i for i, x in enumerate(fr[F.T]) if not 10.0 < x < 13.0]
+        cap.frames = {k: [v[i] for i in keep] for k, v in fr.items()}
+        k = next(i for i, x in enumerate(cap.frames[F.T]) if x >= 13.0)
+        gap = 1000.0 * (cap.frames[F.T][k] - cap.frames[F.T][k - 1])
+        cap.frames[F.FRAME_MS][k] = cap.frames[F.DISPLAY_MS][k] = gap
+        cap.system[S.GAME_FOCUSED] = [(0 if 10.0 <= t <= 13.0 and focus_behind else 1) if v is not None else None
+                                      for t, v in zip(cap.system[S.T], cap.system[S.GAME_FOCUSED])]
+        return cap
+    cap = stopped(True)
+    assert "the worst took" not in html_report.render(diagnose(cap), cap)
+    cap = stopped(False)                                  # in front: a frozen screen, named
+    assert re.search(r"the worst took 30\d\d ms", html_report.render(diagnose(cap), cap))
+
+
 def test_presses_outside_the_part_are_counted_as_the_recording_keeps_them():
     """A part that ends with the recording keeps a press up to 1 s past its end, as the recording does."""
     to_end = {"from_s": 10.0, "to_s": 25.0, "recorded_s": 25.0, "how": "set"}

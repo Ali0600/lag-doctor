@@ -78,8 +78,10 @@ def find_events(cap: Capture, fr: dict[str, list], stats: dict[str, Any] | None)
     """
     stutters = _stutters(cap, fr)
     spans = fa._merged_spans(stutters, ("stutter",))
-    tick_spans = fa._merged_spans(stutters, ("stutter",), pad=fa.TICK_PAD_S)
-    pace = fa._classify(cap, fr, fa._steady_rows(fr, spans), tick_spans)
+    # the cap and VSync verdict that sets the FPS-drop target leaves time behind another window out too: a game that
+    # slows itself down there would set a target of its background rate (bound() does the same)
+    pace = fa._classify(cap, fr, fa._steady_rows(fr, fa.not_steady_spans(stutters, fr)),
+                        fa.not_steady_spans(stutters, fr, pad=fa.TICK_PAD_S))
     evs = (stutters + _fps_drops(fr, pace) + _pacing(cap, fr, spans) + _net_spikes(cap) + _net_losses(cap)
            + _net_gaps(cap) + _marks(cap))
     evs = _finite(evs)
@@ -237,14 +239,20 @@ def fps_target(pace: dict[str, Any], fps: list[float]) -> tuple[float | None, st
 
 def _fps_drops(fr: dict[str, list], pace: dict[str, Any]) -> list[LagEvent]:
     grid, fps = rolling_fps(_displayed_times(fr))
-    target, origin = fps_target(pace, fps)
+    # a 1 s window reaching into a stretch behind another window counts the frames Windows did not show there: it is
+    # no reading, so it never sets the target and it ends a drop (one never spans time behind another window)
+    half = FPS_WINDOW_S / 2.0
+    behind = [(a - half, b + half) for a, b in fa.hidden_spans(fr)]
+    starts = [a for a, _ in behind]
+    blind = [fa._in_spans(g, behind, starts) for g in grid]
+    target, origin = fps_target(pace, [v for v, x in zip(fps, blind) if not x])
     if not grid or not target:
         return []
     step = grid[1] - grid[0] if len(grid) > 1 else FPS_STEP_S
     limit = FPS_DROP_FRAC * target
     out, run = [], []
-    for g, v in zip(grid + [math.inf], fps + [math.inf]):
-        if v < limit:
+    for g, v, x in zip(grid + [math.inf], fps + [math.inf], blind + [True]):
+        if v < limit and not x:
             run.append((g, v))
             continue
         if run and run[-1][0] - run[0][0] + step >= FPS_DROP_MIN_S - 1e-9:
@@ -298,11 +306,17 @@ def _pacing(cap: Capture, fr: dict[str, list], spans: list[tuple[float, float]])
         if uneven or jerky:
             flagged.append((k, js, uneven, jerky))
 
+    behind = fa.hidden_spans(fr)
+
+    def apart(x0: float, x1: float) -> bool:          # time behind another window between them: nobody saw it
+        return any(x0 < b and a < x1 for a, b in behind)
+
     out = []
     i = 0
-    while i < len(flagged):                  # adjacent flagged windows are one episode
+    while i < len(flagged):                  # adjacent flagged windows are one episode, never across time behind
         js, by_swing, by_anim = list(flagged[i][1]), flagged[i][2], flagged[i][3]
-        while i + 1 < len(flagged) and flagged[i + 1][0] == flagged[i][0] + 1:
+        while (i + 1 < len(flagged) and flagged[i + 1][0] == flagged[i][0] + 1
+               and not apart(t[js[-1]], t[flagged[i + 1][1][0]])):
             i += 1
             js += flagged[i][1]
             by_swing, by_anim = by_swing or flagged[i][2], by_anim or flagged[i][3]
@@ -514,13 +528,17 @@ def _link_marks(evs: list[LagEvent], frames_measured: bool) -> None:
 
 # ------------------------------------------------------------------ stats keys ---
 
-def summary_stats(cap: Capture, events: Iterable[LagEvent]) -> dict[str, Any]:
+def summary_stats(cap: Capture, events: Iterable[LagEvent], hidden_s: Any = None) -> dict[str, Any]:
     """The Diagnosis.stats keys that need events or the network table (DESIGN, Diagnosis.stats keys):
     stutters, stutters_per_min, swap_chains, ping_gw_ms / ping_inet_ms / ping_server_ms (medians),
-    jitter_ms (internet anchor: mean consecutive difference, NE 2.1) and loss_pct (internet: lost / sent)."""
+    jitter_ms (internet anchor: mean consecutive difference, NE 2.1) and loss_pct (internet: lost / sent).
+    Stutters a minute count the time judged: `hidden_s` (frame_stats) behind another window is not."""
     out: dict[str, Any] = {}
     n = sum(1 for e in events if e.kind == "stutter")
     dur = fa._bounded(cap.duration_s)
+    away = fa._bounded(hidden_s)
+    if dur is not None and away is not None and away > 0:
+        dur -= away
     out["stutters"] = n
     out["stutters_per_min"] = 60.0 * n / dur if dur is not None and dur > 0 else None
     chains = {fa._chain_key(v) for v, t in zip(fa._col(cap.frames, F.SWAP_CHAIN), fa._col(cap.frames, F.T))

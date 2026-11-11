@@ -94,6 +94,8 @@ class Knobs:
     server_gaps: Sequence[tuple[float, float, str]] = ()    # net_flows gaps (t, ms, kind)
     marks: Sequence[float] = ()                             # hotkey presses
     unfocused: Sequence[tuple[float, float]] = ()           # spans when another window was in front
+    covered: Sequence[tuple[float, float]] = ()             # spans when another window was in front and covered the
+                                                            # game's: Windows showed none of its frames (PM 2.4)
     decoy_chain: bool = False     # add a few rows of a second, mostly-dropped swap chain (PM 8.3)
     hags: bool | None = False     # HAGS on the game's (Intel) adapter: off on this laptop (PM V10)
     gpu_other_pct: float | None = None   # other programs on the game's adapter; None: the 1-3 % seen on the Intel GPU
@@ -150,7 +152,7 @@ def laglab(mode: str = "smooth", **kw: Any) -> Synth:
 def _front(k: Knobs) -> list[list]:
     """LagLab's log["front"] (laglab.app.FrontWatch): in front from its first frame, away in each `unfocused` span."""
     spans: list[list[float]] = []
-    for a, b in sorted(k.unfocused):
+    for a, b in sorted((*k.unfocused, *k.covered)):
         if spans and a <= spans[-1][1]:
             spans[-1][1] = max(spans[-1][1], b)
         else:
@@ -274,6 +276,7 @@ def _presentmon(game: _Game, k: Knobs, rng: random.Random) -> dict[str, list]:
             screen.append(None if replaced else phase + s * period)
     else:
         screen = [f.gpu_ready + 0.0003 for f in fs]
+    screen = [None if any(a < f.present < b for a, b in k.covered) else s for f, s in zip(fs, screen)]
     shown = [i for i, s in enumerate(screen) if s is not None]
     last = shown[-1] if shown else -1          # PresentMon holds the last displayed frame back (PM 2.4)
 
@@ -386,7 +389,7 @@ def _system(game: _Game, k: Knobs, rng: random.Random) -> tuple[dict[str, list],
         gpu_other = rng.uniform(1.0, 3.0)
         if k.gpu_other_pct is not None:                    # the default draws above are unchanged by the knob
             gpu_other = k.gpu_other_pct * rng.uniform(0.97, 1.03)
-        focused = 0 if any(a <= s <= bb for a, bb in k.unfocused) else 1
+        focused = 0 if any(a <= s <= bb for a, bb in (*k.unfocused, *k.covered)) else 1
         system_pct = rng.uniform(15.0, 35.0)
         row.update(cpu_total_pct=min(100.0, (game_cpu + others_cpu + system_pct) / LOGICAL_CPUS),
                    cpu_max_core_pct=min(100.0, max(row.get("game_top_thread_pct") or 0.0, 100.0 if hog_on else

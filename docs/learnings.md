@@ -1165,3 +1165,34 @@ CSV" while LagLab drew 120 FPS, and the hog capture's rows began 7.4 s in: LagLa
 modes (`IntelPresentMon/CommonUtilities/mc/UnifiedSwapChain.cpp`, `Enqueue`, at v2.6.0).
 **Takeaway**: no frame timing from PresentMon while the game runs means its frames are not reaching the screen; check
 whether its window was covered or minimized before suspecting the tracing.
+
+### Judge a sampled state from readings well inside an event, never at its edges
+When the state you sample changes at the same moment as the event you are delimiting, the reading just before the
+event and the one just after it come from the other side: they say what the state was before it changed. Ask only the
+readings at least one sample period inside the event, and give the event a minimum length so that some exist.
+**Why it came up**: the first design for leaving covered time out asked every foreground reading from the last one
+before a cover to the first one after it. An Alt+Tab covers the game as it takes the foreground, so with 4 Hz
+readings both of those said "in front", and a critique estimated that about 93 % of real covers would have stayed
+read as freezes. The test fixtures had passed because LagLab never had the foreground at all.
+**Takeaway**: when a sample and an event share a cause, pad the event by a sample period before reading the sample,
+and build the test fixture with the state flipping exactly at the event's edges.
+
+### A contrast test is blind when the baseline already sits at the signal's ceiling
+A lift test counts the moments at which a signal rose above its quiet level. When the quiet level is already the most
+the signal can read, no moment can rise, so a count of 0 is no evidence that the moments lacked the cause, though it
+reads as "only 0 of 12 coincided". Check that a rise was possible before reporting its absence.
+**Why it came up**: a game behind another window in most quiet seconds has its "behind another window" signal at 1.0
+there, so the not_focused lift test said "only 0 of 12 stutters coincided with another window being in front" while
+all 12 came behind it. A signal that never moved off 0 is the opposite case: there "0 of 12" is true.
+**Takeaway**: a test that compares moments with a baseline says nothing either way when the baseline is the signal's
+ceiling; label it blind rather than contradicting.
+
+### A median of times that alternate between two values lands on one of them
+With frame times split near 50/50 between two values (VSync judder at two and three refreshes, uneven pacing), the
+median is whichever value holds just over half, so 1000 / median can be 2x off the real frame rate either way, and
+a shift of a few frames between the two flips it. The rate of a run of frames is their count over their summed time.
+**Why it came up**: not_focused's first measured cost compared 1000 / median frame time behind another window and in
+front; a review found that 4 / 20 ms frames at 51/49 in front and 49/51 behind read as 250 against 50 FPS, a 5x
+"cost" where the real rates differ by 3 %.
+**Takeaway**: never quote a rate from a median interval; use count over total time, and keep medians for typical
+values that are not summed.

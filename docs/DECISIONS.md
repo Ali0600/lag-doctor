@@ -142,12 +142,81 @@
   today the inventory is read once, before the recording starts, and the start key may come 20 minutes later; a mode
   switched during the startup would be described for the part. Revisit hook: the start key's press in
   `capture/session.py` (M5's second half) and `_collect_inventory` (DECISIONS 2026-11-09, the measured part).
+- **A window-visibility reading per sampler tick** (the game's window minimized, cloaked, or covered by the visible
+  windows above it in z-order), so time behind another window is told by visibility, not by the foreground: a game
+  visible on a second monitor that freezes while not in front would stay a freeze, and one covered by a topmost
+  window while in front would be left out. Revisit hook: `frames.hidden_rows`'s foreground test, and a column read
+  through `lagdoctor/winapi/windows.py` in `capture/sysmon.py` (DECISIONS 2026-11-11).
 - **Keep LagLab's window topmost during the end-to-end run**, so a click elsewhere cannot cover it: its frames would
   keep coming and the other checks would still say something, though the run would still fail its front check (a
   change of focus makes LagLab hitch). Revisit hook: right after pyglet makes the window in `laglab/app.py` `main()`
   (DECISIONS 2026-11-10, the end-to-end failures).
 
 ---
+
+## 2026-11-11: Time behind another window is left out, and not_focused names only a cost it measured
+
+A covered window read as lag: in the e2e run of 2026-11-09, LagLab drew 120 FPS behind another window while the doctor
+said "2 stutters (worst 9483 ms) and low frame rate (13 FPS average)" and, at medium, that Windows gave the game less
+CPU time. Windows showed almost none of its frames, and the few it did show carried display gaps of 1.3, 9.5 and
+2.1 s (PresentMon holds each frame it did not show behind the next shown one, PM 2.4). The owner asked for the fix
+("start the covered-window fix"); where it forked, the implementing session chose, after a three-lens critique of
+the first design and a five-lens review of the change, and the owner has not weighed in.
+
+What time behind another window is judged by:
+- **A: nothing; it is left out and said (chosen)**: nobody saw those frames. The headline gives the seconds left out;
+  a capture with every frame in it reads "frame timing was not measured" with that reason.
+- **B: the game's own presents**: rejected. It read the e2e capture right (about 118 FPS), but many games slow
+  themselves down behind other windows (NVIDIA's background frame limit, in-game options), which would read as FPS
+  drops and as a hitch at each Alt+Tab against the in-front baseline, and PresentMon loses and mistimes frames it
+  holds back (the rows after its lost stretch carried 34 and 42 ms where LagLab drew 8.3).
+
+How a stretch is told from a frozen screen:
+- **A: frames unshown for 1 s, every foreground reading a tick or more inside it "another window" (chosen)**: shorter
+  unshown runs within a tick of one, every reading between them "another window", join it, and two stretches with
+  every reading between "another window" and at most half the frames between shown are one (the e2e capture showed
+  bursts of 1-12 frames between its runs).
+- **B: the readings bracketing the run too**: rejected. An Alt+Tab covers the game as it takes the foreground, so
+  the reading just before a cover and the one just after it read "in front": about 93 % of real covers would have
+  been missed (the critique's estimate, one tick against one or two frames).
+- **C: any unshown run with a reading inside**: rejected. Whether a frame or two went unshown at a tick was luck, so
+  real hitches on a visible window would have been hidden at random.
+- **D: a window-visibility reading instead of the foreground**: deferred, worth trying (backlog): it needs a new
+  sampler column, and would tell a covered window from one visible on a second screen.
+
+Readings "in front" at only one end of a run:
+- **A: cut the run there (chosen)**: the part read "in front" is one frozen screen of its own length, from the last
+  frame to the last such reading, or from the first one to the frame ending the run (a freeze before an Alt+Tab; the
+  foreground back before a frame shows, as a game restored from minimized can be). A reading "in front" in the middle
+  still leaves the whole run judged.
+- **B: judge the whole run**: rejected. One such reading made a 6 s cover one 6 s stutter, the bug again.
+
+A gap with no frame in it:
+- **A: a run like any other (chosen)**: many games stop drawing while minimized or covered, and the frame after the
+  gap read as a freeze of that length. The cost: a game visible on a second monitor that hangs for 1 s or more while
+  not in front is hidden too.
+- **B: always judged, as a stall is**: rejected for the minimized games; option D above would remove the cost.
+
+What `not_focused` needs:
+- **A: a cost it measured (chosen)**: the game's frame rate behind another window (its frames' count over their summed
+  frame times) at least 10 % under its rate in front supports; no such cost clears, and so does, with too few frames,
+  CPU use behind at 90 % or more of its use in front; less CPU behind with too few frames is no cost by itself (a game
+  may slow itself down there), so that stays unchecked, and so does nothing to compare. In all five e2e modes where
+  the old rule fired (cpu, hitch, hitch-io, hitch-wait and hog, 2026-11-09), nothing backed it: in the three with
+  frames LagLab's own log shows it drew at its usual rate behind the window (39-40 a second in cpu both before and
+  after its window went behind; 107-120 in hitch-io and hog), and the other two had no frames at all.
+- **B: the share of time behind, on the CPU side (the old rule)**: rejected for that reason.
+- **The frame rate from a median frame time**: rejected in review. Frame times that alternate between two values
+  (judder, uneven pacing) put the median on one of them, 2x off either way.
+
+Also: with no frames, PresentMon's own warning ("overflowed present events") is kept, and the status says why it
+writes nothing for a window covered from the start. The lift test's "contradicts" is dropped where the cause's quiet
+level is already its top (`attribute._blind`), as for a game behind another window most of the time. Left for later:
+a measured part re-judges a cover cut by its edge on the cut length (carrying the whole recording's stretches into
+the part needs `crop.py`), and the time a cover keeps no PresentMon row before the first or after the last.
+
+Revisit hook: `frames.hidden_rows` (the stretch), `rules._not_focused` and `_focus_split` (the cost); the backlog's
+window-visibility reading would replace the foreground as the stretch's second witness.
 
 ## 2026-11-10: Why five end-to-end modes failed, and what a LagLab run must now show
 
@@ -207,6 +276,7 @@ Forks:
 Also found, left for a change of their own: the doctor reads a covered window's unshown frames as lag (hog's capture
 reads "2 stutters (worst 9483 ms) and low frame rate (13 FPS average)" while LagLab drew 120 FPS), and the frame
 source said only "PresentMon ran but wrote no CSV", leaving out PresentMon's own warning (overflowed present events).
+Both were fixed on 2026-11-11 (the entry above).
 
 ## 2026-11-10: A red-first run that hangs is a TIMEOUT, ended with every process under it
 

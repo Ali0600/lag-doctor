@@ -174,6 +174,11 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
   frame held one refresh longer than usual as a stutter.
 - **The low-frame-rate threshold** (80 % of the refresh rate) comes from a study of 60–120 Hz screens and is
   not tuned above that.
+- **Time behind another window is not judged.** While another window is in front and covers the game's, Windows
+  shows almost none of its frames, so lag-doctor leaves that time out, and the verdict says how long it was (or, if
+  that was all of it, that frame timing could not be judged). Only which window is in front is recorded, not what
+  is visible, so a game left visible on a second screen that freezes for a second or more while another window is
+  in front is left out too, and a window kept on top of the game while the game stays in front still reads as lag.
 - **Long recordings use RAM**: about 0.7 KB per frame, so a 3-hour evening at 240 FPS needs about 1.8 GiB.
 - **Recording costs about 5–10 % of one logical CPU**, plus 1–2 % for the game-server tracker, which may take 10–40 %
   while something else on the PC downloads fast. On a test game, recording without admin rights (no frame timing, no
@@ -334,13 +339,13 @@ connection to Microsoft, as the runtime does on its own.
   says how far off the next limit is (the CPU, the GPU or the screen, and how
   many times faster the limiting part must get), from thread CPU time rather than PresentMon's CPU Busy, which
   read 16.55 ms of a 16.9 ms GPU-bound frame.
-- **Testing that proves itself**: 4,588 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 4,625 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 43 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 3,186 deliberate
+  there, failing rather than skipping if they go missing; plus a mutation harness of 3,253 deliberate
   sabotages in 58 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes, and a settings sweep that edits a game's settings file
   between runs and puts it back byte for byte, all behind a write-ahead journal, readback verification, undo and

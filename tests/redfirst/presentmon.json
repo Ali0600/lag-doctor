@@ -481,8 +481,8 @@
  {
   "name": "lost events not reported",
   "file": "lagdoctor/capture/presentmon.py",
-  "old": "problems += [ln.strip() for ln in stderr if re.search(r\"were lost|overflowed present events\", ln)]",
-  "new": "problems += []",
+  "old": "        problems += lost",
+  "new": "        problems += []",
   "tests": [
    "tests/test_presentmon_source.py::test_lost_events_make_the_capture_partial"
   ]
@@ -853,6 +853,24 @@
   "new": "LIVE_ONLY = (\"--session_name\", SESSION_NAME, \"--stop_existing_session\", \"--terminate_on_proc_exit\", \"-Track_PC_Latency\")",
   "tests": [
    "tests/test_presentmon_source.py::test_pc_latency_tracking_stays_off"
+  ]
+ },
+ {
+  "name": "PresentMon's warning dropped when it wrote nothing",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "\"; \".join([why, *notes, *lost])",
+  "new": "\"; \".join([why, *notes])",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_window_covered_from_the_start_says_why_presentmon_wrote_nothing"
+  ]
+ },
+ {
+  "name": "no CSV says nothing of why",
+  "file": "lagdoctor/capture/presentmon.py",
+  "old": "                why = (\"PresentMon ran but wrote no CSV (it holds back frames Windows did not show until one is: most \"\n                       \"likely the game's window stayed covered or minimized, or the game drew nothing)\")",
+  "new": "                why = \"PresentMon ran but wrote no CSV\"",
+  "tests": [
+   "tests/test_presentmon_source.py::test_a_window_covered_from_the_start_says_why_presentmon_wrote_nothing"
   ]
  }
 ]

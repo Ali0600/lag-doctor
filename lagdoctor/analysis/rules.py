@@ -103,6 +103,10 @@ DROPPED_PCT = 100.0 * JUDDER_SHARE   # [inferred, LC 2.4's 10 % judder share] fr
 # ---- background, focus, disk, shaders (DESIGN; LC 4.6, 4.8, 4.9, 4.19) ---------------------------
 HOG_MIN_CPU_PCT = 25.0       # DESIGN: non-game processes summing >= 25 % of one CPU across the lag events
 UNFOCUSED_SHARE = 0.10       # [inferred] not the foreground window for >= 10 % of the capture
+NOT_FOCUSED_DROP = 0.10      # [inferred] behind another window the game made frames >= 10 % slower than with its own
+                             # window in front: a cost, not noise (its CPU use that much lower is no cost by itself)
+NOT_FOCUSED_MIN_FRAMES = 100 # [inferred] a side (behind, in front) is compared from 100 frames ...
+NOT_FOCUSED_MIN_S = 2.0      # [inferred] ... and 2 s (eight sampler ticks for the CPU) of it
 SIDE_SHARE = 0.70            # [inferred] the CPU side was slow in >= 70 % of a cause's events
 EARLY_FRACTION = 1.0 / 3.0   # LC 4.9: shader stutter bunches up early ("first minutes") ...
 EARLY_SHARE = 0.60           # [inferred] ... here: >= 60 % of the game's own stutters in the first third
@@ -217,6 +221,17 @@ def _dict(v: Any) -> dict:
     return v if isinstance(v, dict) else {}
 
 
+def no_frames_why(stats: dict) -> str:
+    """Why frame timing that ran judged no frame: the rules and the Not measured list (diagnose.measured) say the same.
+    Frames behind another window are left out (frames.HIDDEN), so a capture taken that way has frames yet none judged;
+    a measured part (stats["span"], analysis/crop.py) says so of itself, never of the whole recording."""
+    if (_fin(stats.get("hidden_s")) or 0.0) > 0:
+        noun = "measured part" if isinstance(stats.get("span"), dict) else "capture"
+        return (f"every frame of the {noun} came while another window was in front, and Windows showed almost none of "
+                "them")
+    return "PresentMon ran but recorded no frames from the game"
+
+
 class _Env:
     """What every rule reads, derived once per capture."""
 
@@ -238,7 +253,7 @@ class _Env:
         self.half = any(isinstance(v, dict) and v.get("half_weight") for v in self.causes.values())
         self.judged = [e for e in self.events if e.kind == "mark"] if self.half and not self.attributed \
             else self.attributed
-        self.tick_spans = fa._merged_spans(self.events, fa.FRAME_EVENT_KINDS, pad=fa.TICK_PAD_S)
+        self.tick_spans = fa.not_steady_spans(self.events, self.fr, pad=fa.TICK_PAD_S)   # what bound() leaves out too
         dur = fa._bounded(cap.duration_s)
         self.duration = float(dur) if dur is not None and dur > 0 else None
         # A capture cut to the measured part (analysis/crop.py) keeps the recording's own times: a rule that counts
@@ -277,7 +292,7 @@ class _Env:
         if s is None:
             return "not recorded in this capture"
         if getattr(s, "state", None) in OK_STATES:
-            return "it ran but recorded nothing" if name != "frames" else "PresentMon ran but recorded no frames from the game"
+            return "it ran but recorded nothing" if name != "frames" else no_frames_why(self.stats)
         return _text(getattr(s, "detail", None), 300) or str(getattr(s, "state", "not measured"))
 
     def need(self, name: str) -> str:
@@ -2187,26 +2202,91 @@ def _not_focused(cap: Capture, ctx: dict) -> Any:
         return Unchecked("not_focused", f"the game was the active window {100 * (1 - share):.0f}% of the time, but "
                                         f"{a:.0f} of the {n:.0f} {what} came while another window was in front: too "
                                         f"few to tell (at least {MIN_EVENTS} needed)")
-    if share >= UNFOCUSED_SHARE and (e.verdict in GATES["cpu"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e)):
-        c.support("foreground", W_STEADY, f"the game was not the active window for {100 * share:.0f}% of {e.part} "
-                                          f"({100 * UNFOCUSED_SHARE:.0f}% or more)", 100 * share, "%", 100 * UNFOCUSED_SHARE)
-    elif share >= UNFOCUSED_SHARE:
+    if share >= UNFOCUSED_SHARE:
         # A9 (LC 5.1): less CPU time for a window behind others costs frames only on the CPU side; the
-        # event-linked item below still counts on any side
-        c.neutral("foreground", f"the game was not the active window for {100 * share:.0f}% of {e.part}, but the "
-                                f"frame rate is limited by {labels.BOUND.get(e.verdict, e.verdict)}, so less CPU time "
-                                "is not what holds it back", 100 * share, "%", 100 * UNFOCUSED_SHARE)
+        # event-linked item below still counts on any side. Time behind is no cost by itself: the game's own frame
+        # rate and CPU use, behind and in front, say whether there was one (none, in the e2e runs' LagLab)
+        cpu_side = e.verdict in GATES["cpu"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e)
+        fps, cpu = _focus_split(e)
+        behind_pct = f"for {100 * share:.0f}% of {e.part}"
+        if fps[0] is not None and fps[1] is not None:
+            floor = (1.0 - NOT_FOCUSED_DROP) * fps[1]
+            made = (f"with another window in front the game made {fps[0]:.0f} frames a second, against {fps[1]:.0f} "
+                    "with its own window in front")
+            if fps[0] > floor:
+                c.against("foreground", W_STEADY, f"{made}, so being behind another window ({behind_pct}) cost it no "
+                                                  "frames", fps[0], "FPS", floor)
+            elif cpu_side:
+                c.support("foreground", W_STEADY, f"{made} ({behind_pct})", fps[0], "FPS", floor)
+            else:
+                c.neutral("foreground", f"{made}, but the frame rate is limited by "
+                                        f"{labels.BOUND.get(e.verdict, e.verdict)}, so less CPU time is not what holds "
+                                        "it back", fps[0], "FPS", floor)
+        elif cpu[0] is not None and cpu[1] is not None and cpu[0] >= (1.0 - NOT_FOCUSED_DROP) * cpu[1]:
+            c.against("foreground", W_STEADY, f"with another window in front ({behind_pct}) the game used "
+                                              f"{cpu[0]:.0f}% of a CPU, against {cpu[1]:.0f}% with its own window in "
+                                              "front, so it did not get less CPU time", cpu[0], "%",
+                      (1.0 - NOT_FOCUSED_DROP) * cpu[1])
+        elif not cpu_side:
+            c.neutral("foreground", f"the game was not the active window {behind_pct}, but the frame rate is limited "
+                                    f"by {labels.BOUND.get(e.verdict, e.verdict)}, so less CPU time is not what holds it "
+                                    "back", 100 * share, "%", 100 * UNFOCUSED_SHARE)
+        elif not linked:
+            if share >= 1.0:
+                why = (f"the game was behind another window for all of {e.part}, so how it ran has no time with its "
+                       "own window in front to be compared with")
+            elif cpu[0] is not None and cpu[1] is not None:     # a game may slow itself down behind a window
+                why = (f"the game used {cpu[0]:.0f}% of a CPU behind another window ({behind_pct}) against "
+                       f"{cpu[1]:.0f}% with its own window in front, but too few of its frames were recorded there to "
+                       "tell whether that cost it frames")
+            else:
+                why = (f"the game was behind another window {behind_pct}, but too few of its frames were recorded "
+                       "there or in front to compare how it ran")
+            return Unchecked("not_focused", why)
     elif not linked and not behind:   # mostly in front is no evidence against lag that came while it was behind
         c.against("foreground", W_STEADY, f"the game was the active window {100 * (1 - share):.0f}% of the time",
                   100 * share, "%", 100 * UNFOCUSED_SHARE)
     _event_link(c, "not_focused", "foreground", "another window being in front")
     battery = e.power.get("on_battery") is True
-    fixes = [_advice("Keep the game in front while you play", "Click into its window; Windows gives background "
-                                                              "windows a lower priority"
+    fixes = [_advice("Keep the game in front while you play", "Click into its window: Windows gives a program whose "
+                                                              "window is not in front a lower performance level"
                      + (", and on battery an even lower speed." if battery else "."))]
     ids = _first_cause_ids(e, ("not_focused",))
-    return c.conclude("The game was not the active window", "Windows lowers the priority of windows that are not in "
-                                                            "front, so the game got less CPU time.", fixes, ids)
+    return c.conclude("The game was not the active window", "While another window was in front the game ran worse: "
+                                                            "Windows gives a program whose window is not in front a "
+                                                            "lower performance level, and some games slow themselves "
+                                                            "down then.", fixes, ids)
+
+
+def _focus_split(e: _Env) -> tuple[tuple[float | None, float | None], tuple[float | None, float | None]]:
+    """((frames a second behind another window, in front), (% of a CPU behind, in front)) of the game, each None
+    without NOT_FOCUSED_MIN_S of it. The frame rate is what its app frames made, shown on screen or not: their count
+    over their summed MsBetweenPresents (a median of frame times that alternate between two values lands on one of
+    them, 2x off). A frame takes the side of the first foreground reading at or after it, and a sampler tick its own:
+    the few placed on the wrong side at each change of window are a tick's worth against 2 s or more."""
+    if "focus_split" not in e.memo:
+        readings = fa.focus_readings(e.cap)
+        rt = [x for x, _ in readings]
+        t, fm = e.fr.get(F.T) or [], e.fr.get(F.FRAME_MS) or []
+        ms: dict[int, list[float]] = {0: [], 1: []}
+        for i in range(len(t)):
+            ti, f = fa._bounded(fa._at(t, i)), fa._bounded(fa._at(fm, i))
+            if ti is None or f is None or f <= 0 or not fa._is_app(e.fr, i):
+                continue
+            k = bisect.bisect_left(rt, ti)
+            if k < len(rt) and readings[k][1] is not None:
+                ms[readings[k][1]].append(float(f))
+        fps = tuple(1000.0 * len(ms[side]) / math.fsum(ms[side]) if len(ms[side]) >= NOT_FOCUSED_MIN_FRAMES
+                    and math.fsum(ms[side]) / 1000.0 >= NOT_FOCUSED_MIN_S else None for side in (0, 1))
+        cpu_at = dict(e.sys_rows(S.GAME_CPU_PCT))
+        pct: dict[int, list[float]] = {0: [], 1: []}
+        for x, f in readings:
+            if f is not None and cpu_at.get(x) is not None:
+                pct[f].append(cpu_at[x])
+        cpu = tuple(st.median(pct[side]) if len(pct[side]) * fa.TICK_PAD_S >= NOT_FOCUSED_MIN_S else None
+                    for side in (0, 1))
+        e.memo["focus_split"] = (fps, cpu)
+    return e.memo["focus_split"]
 
 
 # ------------------------------------------------------------------------- background, disk ---
@@ -2221,8 +2301,8 @@ def _event_link(c: _Case, cause: str, family: str, phrase: str, contradict: bool
     if label == "not_measured":
         c.lack(family, W_STEADY, _text(entry.get("why"), 200) or f"{phrase} was not measured")
         return False
-    if a is None or not n:
-        return False
+    if a is None or not n or entry.get("blind"):     # blind: no moment could rise above the rest, so no count says
+        return False                                # anything (attribute._blind)
     half = bool(entry.get("half_weight"))
     what = "marked moments" if half else "stutters and FPS drops"
     lift = _fin(entry.get("lift"))

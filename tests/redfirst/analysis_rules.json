@@ -1109,8 +1109,8 @@
  {
   "name": "not focused counted on the GPU side",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if share >= UNFOCUSED_SHARE and (e.verdict in GATES[\"cpu\"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e)):",
-  "new": "    if share >= UNFOCUSED_SHARE:",
+  "old": "        cpu_side = e.verdict in GATES[\"cpu\"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e)",
+  "new": "        cpu_side = True",
   "tests": [
    "tests/test_analysis_rules.py::test_not_focused_steady_share_counts_only_while_the_cpu_side_limits_the_game"
   ]
@@ -1976,8 +1976,8 @@
  {
   "name": "not_focused rules out a CPU that cannot be ruled out",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "(e.verdict in GATES[\"cpu\"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e))",
-  "new": "(e.verdict in GATES[\"cpu\"] or _gpu_by_engine(e))",
+  "old": "_gpu_by_engine(e) or _cpu_not_ruled_out(e)\n        fps, cpu = _focus_split(e)",
+  "new": "_gpu_by_engine(e)\n        fps, cpu = _focus_split(e)",
   "tests": [
    "tests/test_analysis_rules.py::test_a_cpu_that_cannot_be_ruled_out_is_never_cleared_by_any_cpu_side_rule",
    "tests/test_analysis_rules.py::test_an_old_capture_past_vsyncs_work_edge_on_its_upper_bound_is_never_called_fine"
@@ -2118,6 +2118,187 @@
   "new": "        used = round(100 * busiest)",
   "tests": [
    "tests/test_analysis_rules.py::test_cpu_throttle_never_says_cpu_speed_is_not_what_holds_back_a_cpu_that_is_not_ruled_out"
+  ]
+ },
+ {
+  "name": "not_focused names time behind as its own cost",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            if fps[0] > floor:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_the_cost_it_measured_and_never_a_cost_it_did_not"
+  ]
+ },
+ {
+  "name": "not_focused needs a 12 % drop",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NOT_FOCUSED_DROP = 0.10 ",
+  "new": "NOT_FOCUSED_DROP = 0.12 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_the_cost_it_measured_and_never_a_cost_it_did_not"
+  ]
+ },
+ {
+  "name": "not_focused takes an 8 % drop",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NOT_FOCUSED_DROP = 0.10 ",
+  "new": "NOT_FOCUSED_DROP = 0.08 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_the_cost_it_measured_and_never_a_cost_it_did_not"
+  ]
+ },
+ {
+  "name": "not_focused never reads the CPU",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "elif cpu[0] is not None and cpu[1] is not None and cpu[0] >= (1.0 - NOT_FOCUSED_DROP) * cpu[1]:",
+  "new": "elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window"
+  ]
+ },
+ {
+  "name": "less CPU behind a window clears not_focused",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "elif cpu[0] is not None and cpu[1] is not None and cpu[0] >= (1.0 - NOT_FOCUSED_DROP) * cpu[1]:",
+  "new": "elif cpu[0] is not None and cpu[1] is not None:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window"
+  ]
+ },
+ {
+  "name": "nothing compared is silence",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif not linked:\n            if share >= 1.0:",
+  "new": "        elif False:\n            if share >= 1.0:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_never_behind_and_in_front_at_once_cannot_be_told_and_counts_no_moments",
+   "tests/test_analysis_rules.py::test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window"
+  ]
+ },
+ {
+  "name": "a blind lift test still counts",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if a is None or not n or entry.get(\"blind\"):",
+  "new": "    if a is None or not n:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_never_behind_and_in_front_at_once_cannot_be_told_and_counts_no_moments"
+  ]
+ },
+ {
+  "name": "not_focused compares from 50 frames",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NOT_FOCUSED_MIN_FRAMES = 100 ",
+  "new": "NOT_FOCUSED_MIN_FRAMES = 50 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window"
+  ]
+ },
+ {
+  "name": "not_focused compares from 400 frames",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NOT_FOCUSED_MIN_FRAMES = 100 ",
+  "new": "NOT_FOCUSED_MIN_FRAMES = 400 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_needs_ten_percent_of_the_capture_behind_another_window"
+  ]
+ },
+ {
+  "name": "not_focused compares from 4 s",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NOT_FOCUSED_MIN_S = 2.0 ",
+  "new": "NOT_FOCUSED_MIN_S = 4.0 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_needs_ten_percent_of_the_capture_behind_another_window"
+  ]
+ },
+ {
+  "name": "not_focused still claims less CPU time",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "\"lower performance level, and some games slow themselves \"",
+  "new": "\"lower priority, so it got less CPU time, and some games slow themselves \"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_the_cost_it_measured_and_never_a_cost_it_did_not"
+  ]
+ },
+ {
+  "name": "a covered capture recorded no frames",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if (_fin(stats.get(\"hidden_s\")) or 0.0) > 0:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_capture_covered_throughout_names_why_nothing_was_judged"
+  ]
+ },
+ {
+  "name": "the rules' reason forgets the time behind",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "else no_frames_why(self.stats)",
+  "new": "else no_frames_why({})",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_capture_covered_throughout_names_why_nothing_was_judged"
+  ]
+ },
+ {
+  "name": "the rules' steady means judge time behind",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        self.tick_spans = fa.not_steady_spans(self.events, self.fr, pad=fa.TICK_PAD_S)",
+  "new": "        self.tick_spans = fa._merged_spans(self.events, fa.FRAME_EVENT_KINDS, pad=fa.TICK_PAD_S)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_is_never_steady"
+  ]
+ },
+ {
+  "name": "not_focused from a median frame time",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "1000.0 * len(ms[side]) / math.fsum(ms[side])",
+  "new": "1000.0 / st.median(ms[side])",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_counts_frames_not_a_median_frame_time"
+  ]
+ },
+ {
+  "name": "not_focused counts generated frames",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "or f <= 0 or not fa._is_app(e.fr, i):",
+  "new": "or f <= 0:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_never_counts_generated_frames_or_a_side_too_short"
+  ]
+ },
+ {
+  "name": "not_focused compares the CPU from two readings",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "len(pct[side]) * fa.TICK_PAD_S >= NOT_FOCUSED_MIN_S",
+  "new": "len(pct[side]) >= 2",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window"
+  ]
+ },
+ {
+  "name": "not_focused compares from 1 s",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NOT_FOCUSED_MIN_S = 2.0 ",
+  "new": "NOT_FOCUSED_MIN_S = 1.0 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_never_counts_generated_frames_or_a_side_too_short"
+  ]
+ },
+ {
+  "name": "less CPU behind a window said as nothing compared",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            elif cpu[0] is not None and cpu[1] is not None:     # a game may slow itself down behind a window",
+  "new": "            elif False:     # a game may slow itself down behind a window",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window"
+  ]
+ },
+ {
+  "name": "the reason names the whole recording in a part",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        noun = \"measured part\" if isinstance(stats.get(\"span\"), dict) else \"capture\"",
+  "new": "        noun = \"capture\"",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_part_cut_inside_a_cover_hides_what_the_whole_recording_hides"
   ]
  }
 ]

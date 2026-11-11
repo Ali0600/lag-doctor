@@ -294,16 +294,18 @@ def _main_frames(d: Diagnosis, cap: Capture) -> tuple[list, list]:
     return xs, ys
 
 
-def _analysed_frames(d: Diagnosis, cap: Capture, part: dict) -> list[float]:
+def _analysed_frames(d: Diagnosis, cap: Capture, part: dict, behind: list[tuple[float, float]]) -> list[float]:
     """The main chain's frame times (ms) that the analysis of a measured part counted: its rows in the part, less those
-    analysis/crop.frames_inside leaves out (a frame whose own interval began before the part). So the chart's scale
-    and its note never name a frame the analysis did not count."""
+    analysis/crop.frames_inside leaves out (a frame whose own interval began before the part) and those in `behind`
+    (time behind another window). So the chart's scale and its note never name a frame the analysis did not count."""
+    from lagdoctor.analysis import frames as fa
     from lagdoctor.analysis.crop import frames_inside
     t, chains = _column(cap.frames, F.T), _column(cap.frames, F.SWAP_CHAIN)
     chain = _dict(d.stats).get("main_chain")
     one = bool(chain is not None and chains and len(chains) == len(t))     # as _main_frames picks the chain
+    starts = [a for a, _ in behind]
     rows = [i for i, ti in enumerate(t) if (x := number(ti)) is not None and part["from_s"] <= x <= part["to_s"]
-            and (not one or chains[i] == chain)]
+            and (not one or chains[i] == chain) and not fa._in_spans(x, behind, starts)]
     table = {}
     for name in (F.T, F.FRAME_MS, F.DISPLAY_MS, F.SWAP_CHAIN):
         col = _column(cap.frames, name)
@@ -319,9 +321,14 @@ def _frame_chart(d: Diagnosis, cap: Capture) -> str:
         return _not_measured_note(cap, "frames")
     part = labels.measured_part(d.stats)
     # The scale and the note follow the frames the analysis counted: a loading screen's long frame is drawn, clamped at
-    # the top, and never named the worst. A part without frames of its own takes the whole recording's scale and says
-    # nothing of frames cut off.
-    vals = _analysed_frames(d, cap, part) if part else every
+    # the top, and never named the worst, and neither is one behind another window (frames.HIDDEN: a game that stops
+    # drawing there shows one frame as long as the time behind). A part without frames of its own takes the whole
+    # recording's scale and says nothing of frames cut off.
+    from lagdoctor.analysis import frames as fa
+    behind = fa.hidden_spans(fa.main_chain(cap))
+    starts = [a for a, _ in behind]
+    seen = [v for x, v in zip(t, ms) if v is not None and not fa._in_spans(x, behind, starts)]
+    vals = _analysed_frames(d, cap, part, behind) if part else seen
     scale = vals or every
     refresh = number(_dict(d.stats).get("refresh_hz"))
     ref_ms = 1000.0 / refresh if refresh and refresh > 0 else None
