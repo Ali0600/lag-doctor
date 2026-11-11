@@ -426,6 +426,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   M6c's branch, which touches nothing the sweep imports: exit 2, so the settings were not all put back), then passed
   3 of 3 alone and twice in its file. Its fake world's journal waits 0.3 s for its lock, which a loaded PC may
   outrun (not measured); rerun it alone before blaming a change.
+  `tests/test_redfirst.py::test_the_job_counts_every_process_under_pytest_and_ending_it_ends_them_all` failed once on
+  main's push run (2026-11-11, 5ea3f80; the PR's run of the same tree and the rerun passed): right after `job.end()` a
+  process of the tree was still listed, and gone when the assertion built its message. It looks once instead of
+  waiting with a bound for the tree to leave the snapshot; rerun it before blaming a change.
   Never run two pytest processes here at once (a review agent's tests beside the suite): they share
   `%TEMP%\pytest-of-<user>` and its keep-three cleanup, and on 2026-11-08
   `tests/test_downloads.py::test_fetch_gold_takes_the_pinned_commits_gold_folder_byte_for_byte` failed twice that way
