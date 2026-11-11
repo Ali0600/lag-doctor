@@ -403,5 +403,10 @@
    "file": "lagdoctor/report/html.py",
    "old": "lagdoctor analyze {e(powershell_path(capture_path))}{e(part_args(part))}\"",
    "new": "lagdoctor analyze &quot;{e(capture_path)}&quot;{e(part_args(part))}\"",
-   "tests": ["tests/test_report.py::test_the_html_report_never_shows_the_user_folder"]}
+   "tests": ["tests/test_report.py::test_the_html_report_never_shows_the_user_folder"]},
+  {"name": "the frame chart names a frame behind another window",
+   "file": "lagdoctor/report/html.py",
+   "old": "    seen = [v for x, v in zip(t, ms) if v is not None and not fa._in_spans(x, behind, starts)]",
+   "new": "    seen = [v for v in ms if v is not None]",
+   "tests": ["tests/test_report.py::test_the_frame_charts_note_never_names_a_frame_behind_another_window"]}
 ]

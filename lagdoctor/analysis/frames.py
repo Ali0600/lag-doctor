@@ -13,7 +13,7 @@ from __future__ import annotations
 import bisect
 import math
 from collections import Counter
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Iterator, Sequence
 
 from lagdoctor.analysis import stats as st
 from lagdoctor.model import F, S, Capture, LagEvent
@@ -70,11 +70,26 @@ IQR_TO_SD = 1.349            # the interquartile range of normal data is 1.349 s
 # ---- headroom: how far each side is from its own limit (DESIGN, Headroom) -------------------------
 STEP_MIN_FPS = 20.0          # [inferred] a quantised screen's even steps (refresh / k) under 20 FPS are no one's target
 
+# ---- time behind another window (DESIGN, "Time behind another window"; PM 2.4) ------------------------
+HIDDEN = "hidden"            # main_chain's list beside the F columns: True for each frame of a stretch in which another
+                             # window was in front and Windows showed almost none of the game's frames; [] where that
+                             # cannot be told (no display tracking, no foreground readings). Such frames are never judged.
+FRONT = "front"              # main_chain's list beside them: on the frame ending a stretch, (from, to) of its run spent
+                             # in front with no frame shown, judged as one frozen screen; else None
+HIDDEN_MIN_S = 1.0           # [inferred] a stretch is a run of frames not shown lasting >= 1 s (four sampler ticks) ...
+HIDDEN_PAD_S = TICK_PAD_S    # ... judged by the foreground readings at least one tick inside it: a window loses the
+                             # foreground as it is covered, a tick and a frame's way to the screen apart ...
+HIDDEN_READ_GAP_S = 1.0      # [inferred] ... read at least once a second there, every reading "another window" ...
+HIDDEN_JOIN_S = TICK_PAD_S   # ... and a shorter run within one tick of one, every reading between "another window", is
+                             # part of it (a covered window's frames show in bursts: 1-12 frames between runs of seconds)
+HIDDEN_SHOWN_MAX = 0.5       # [inferred] two stretches with every reading between "another window" are one when at most
+                             # half the frames between them were shown (bursts); a visible window shows nearly all
+
 FRAME_EVENT_KINDS = ("stutter", "fps_drop")   # what "steady" excludes (DESIGN, bound)
 
 FRAME_STAT_KEYS = ("frames", "duration_s", "avg_fps", "low1_fps", "low01_fps", "p1_fps", "median_frame_ms",
                    "p99_frame_ms", "worst_frame_ms", "hitches", "severe_hitches", "freezes", "time_beyond_50_ms",
-                   "hitch_rate_bound", "dropped_pct", "present_mode", "runtime", "frames_source")
+                   "hitch_rate_bound", "dropped_pct", "present_mode", "runtime", "frames_source", "hidden_s")
 
 _TEXT_COLS = frozenset({F.PRESENT_MODE, F.RUNTIME, F.SWAP_CHAIN, F.FRAME_TYPE})
 
@@ -141,7 +156,7 @@ def main_chain(cap: Capture) -> dict[str, list]:
 
     A game can have a few-row `0x0`/`Other` key next to its real chain, so rows are never the measure.
     Ties go to the chain with more rows, then to the one seen first. Rows are returned in time order
-    with every value checked (junk becomes None).
+    with every value checked (junk becomes None), and with HIDDEN beside them (hidden_rows).
     """
     t = _col(cap.frames, F.T)
     chains = _col(cap.frames, F.SWAP_CHAIN)
@@ -156,13 +171,181 @@ def main_chain(cap: Capture) -> dict[str, list]:
         if _num(_at(shown_col, i)) == 1:
             shown[key] = shown.get(key, 0) + 1
     if not rows:
-        return {c: [] for c in F.ALL}
+        return {**{c: [] for c in F.ALL}, HIDDEN: [], FRONT: []}
     best = max(rows, key=lambda k: (shown.get(k, 0), len(rows[k])))   # max() keeps the first of equals
     pick = sorted(rows[best], key=lambda i: t[i])
     out: dict[str, list] = {}
     for name in F.ALL:
         col = _col(cap.frames, name)
         out[name] = [_clean(name, _at(col, i)) for i in pick]
+    out[HIDDEN], out[FRONT] = hidden_rows(out[F.T], out[F.DISPLAYED], focus_readings(cap))
+    return out
+
+
+def focus_readings(cap: Capture) -> list[tuple[float, int | None]]:
+    """(time, 1 the game's window in front / 0 another window / None unknown) of each sampler tick, in time order."""
+    t, v = _col(cap.system, S.T), _col(cap.system, S.GAME_FOCUSED)
+    out = []
+    for i, ti in enumerate(t):
+        x, f = _bounded(ti), _num(_at(v, i))
+        if x is not None:
+            out.append((float(x), f if f in (0, 1) else None))
+    out.sort(key=lambda p: p[0])
+    return out
+
+
+def hidden_rows(t: Sequence[Any], shown: Sequence[Any],
+                readings: list[tuple[float, int | None]]) -> tuple[list[bool], list[tuple[float, float] | None]]:
+    """(HIDDEN, FRONT) for one chain's rows in time order. HIDDEN marks the stretches in which another window was in
+    front and Windows showed almost none of the game's frames, so no frame there says anything the player saw (PM
+    2.4: PresentMon holds the frames it did not show behind the next shown one, whose display change then spans the
+    whole stretch). FRONT holds, on the frame ending such a stretch, the part of its run spent in front with nothing
+    shown: a frozen screen the player did see, judged as one (stall_gaps).
+
+    A run is the frames not shown (DISPLAYED 0) between two shown ones, p and q, or the chain's first or last row; a
+    gap of HIDDEN_MIN_S with no frame in it is one too (a game may stop drawing while it is behind). It is a stretch
+    when it lasts HIDDEN_MIN_S and every foreground reading from HIDDEN_PAD_S after its start to HIDDEN_PAD_S before
+    its end says another window, two at least and none more than HIDDEN_READ_GAP_S apart; readings nearer its ends are
+    never asked, since an Alt+Tab covers the game as it takes the foreground. Readings "in front" (or unknown) only at
+    its start or only at its end cut it there: the game froze in front, then went behind, or came back to the front
+    before a frame was shown, and that part is FRONT. A shorter run within HIDDEN_JOIN_S of a stretch, every reading
+    between them "another window", is part of it, and so are the shown bursts between two stretches when every
+    reading between says another window, read at least once a second, and at most HIDDEN_SHOWN_MAX of the frames
+    there were shown.
+
+    A frozen screen while the game is in front reads the same but for the foreground: so without foreground readings,
+    or with one "in front" or unknown in the middle of a run, nothing of it is hidden. ([], []) when the chain has no
+    display tracking or no reading says either way."""
+    n = len(t)
+    known = [r for r in readings if r[1] is not None]
+    if not n or not known or not any(_num(v) in (0, 1) for v in shown):
+        return [], []
+    tf = [float(x) for x in t]
+    rt = [x for x, _ in readings]
+    flags = [_num(_at(shown, i)) for i in range(n)]
+
+    def runs() -> Iterator[tuple[int, int, float, float]]:
+        """(first row not shown, the row ending it or n, from, to) of each run in time order, made as they are read:
+        a long capture holds a run for every frame Windows dropped (a million at 240 FPS on a 144 Hz screen)."""
+        i = 0
+        while i < n:
+            if flags[i] == 0:
+                j = i
+                while j < n and flags[j] == 0:
+                    j += 1
+                yield i, j, tf[i - 1] if i > 0 else tf[i], tf[j] if j < n else tf[j - 1]
+                i = j
+                continue
+            if i > 0 and flags[i - 1] == 1 and flags[i] == 1 and tf[i] - tf[i - 1] >= HIDDEN_MIN_S:
+                yield i, i, tf[i - 1], tf[i]                     # two shown frames, none between: it stopped drawing
+            i += 1
+
+    def all_behind(lo: float, hi: float) -> list[float] | None:
+        """The readings in [lo, hi] when every one says another window, else None."""
+        k0, k1 = bisect.bisect_left(rt, lo), bisect.bisect_right(rt, hi)
+        vals = readings[k0:k1]
+        return [x for x, _ in vals] if all(v == 0 for _, v in vals) else None
+
+    def vouched(lo: float, hi: float, least: int) -> bool:
+        """[lo, hi] read "another window" at least `least` times, every time, never HIDDEN_READ_GAP_S without one."""
+        xs = all_behind(lo, hi)
+        if xs is None or len(xs) < least:
+            return False
+        edges = [lo] + xs + [hi]
+        return all(y - x <= HIDDEN_READ_GAP_S for x, y in zip(edges, edges[1:]))
+
+    def stretch(a: float, b: float) -> tuple[float, float] | None:
+        """The time of a run (a, b) behind another window: all of it, or the part after the last reading "in front"
+        at its start, or before the first at its end; None when that is not HIDDEN_MIN_S vouched from a tick inside."""
+        if b - a < HIDDEN_MIN_S:
+            return None
+        k0, k1 = bisect.bisect_left(rt, a + HIDDEN_PAD_S), bisect.bisect_right(rt, b - HIDDEN_PAD_S)
+        bad = [k for k in range(k0, k1) if readings[k][1] != 0]
+        if bad and bad == list(range(k0, k0 + len(bad))):
+            a = rt[bad[-1]]
+        elif bad and bad == list(range(k1 - len(bad), k1)):
+            b = rt[bad[0]]
+        elif bad:
+            return None
+        return (a, b) if b - a >= HIDDEN_MIN_S and vouched(a + HIDDEN_PAD_S, b - HIDDEN_PAD_S, 2) else None
+
+    # items: (first row, last row, from, to, front, the row FRONT goes on), the rows marked first..last
+    items: list[tuple[int, int, float, float, tuple[float, float] | None, int]] = []
+    for i, j, a, b in runs():
+        s = stretch(a, b)
+        if s is None:
+            continue
+        x0, x1 = s
+        last = min(j, n - 1)                          # the shown frame ending it, or the chain's last row
+        if x0 > a:                                    # in front at its start: frozen there from p, then behind
+            items.append((bisect.bisect_right(tf, x0, i, j), last, x0, b, (a, x0) if i > 0 else None, last))
+        elif x1 < b:                                  # back in front before a frame was shown: frozen until q
+            end = bisect.bisect_left(tf, x1, i, j) - 1
+            if end >= i or j < n:                     # at the chain's end there is no frame to end it on
+                items.append((i, end, a, x1, (x1, b) if j < n else None, last if j < n else end))
+        else:
+            items.append((i, last, a, b, None, last))
+    if not items:
+        return [False] * n, [None] * n
+    starts = [it[2] for it in items]
+    pieces = list(items)
+    for i, j, a, b in runs():
+        if b - a >= HIDDEN_MIN_S:          # a run that long is a stretch by its own readings or none: a near stretch
+            continue                       # never vouches for time the sampler did not read (a gap with no frame too)
+        k = bisect.bisect_right(starts, a)            # runs never overlap: items[k - 1] ends by a, items[k] after b
+        for it in items[max(0, k - 1):k + 1]:
+            near = (0.0 <= a - it[3] <= HIDDEN_JOIN_S) or (0.0 <= it[2] - b <= HIDDEN_JOIN_S)
+            if near and all_behind(min(a, it[3]), max(b, it[2])) is not None:
+                pieces.append((i, min(j, n - 1), a, b, None, min(j, n - 1)))
+                break
+    pieces.sort(key=lambda p: p[2])
+
+    def bridged(prev: tuple, nxt: tuple) -> bool:
+        """Two pieces are one stretch: every reading between says another window (read at least once a second), and
+        the gap is a tick at most or at most HIDDEN_SHOWN_MAX of its frames were shown."""
+        g0, g1 = prev[3], nxt[2]
+        if not vouched(g0, g1, 0):
+            return False
+        between = flags[prev[1] + 1:nxt[0]]
+        return g1 - g0 <= HIDDEN_JOIN_S or sum(1 for f in between if f == 1) <= HIDDEN_SHOWN_MAX * len(between)
+
+    out, front = [False] * n, [None] * n
+    groups: list[list[tuple]] = []
+    for p in pieces:
+        if groups and bridged(groups[-1][-1], p):
+            groups[-1].append(p)
+        else:
+            groups.append([p])
+    for g in groups:
+        for r in range(g[0][0], g[-1][1] + 1):
+            out[r] = True
+        for p in g:
+            out[p[5]] = True                          # the frame ending a run spans it: never judged by itself
+            if p[4] is not None:
+                front[p[5]] = p[4]
+    return out, front
+
+
+def hidden_spans(fr: dict[str, list]) -> list[tuple[float, float]]:
+    """(from, to) of each stretch HIDDEN marks: from the last frame before it (the last one shown before the game went
+    behind another window), or its first row, to its last row; a part of it FRONT judges as a frozen screen is not."""
+    t, hid, front = fr.get(F.T) or [], fr.get(HIDDEN) or [], fr.get(FRONT) or []
+    out: list[tuple[float, float]] = []
+    i = 0
+    while i < len(t):
+        if _at(hid, i) is not True or _bounded(t[i]) is None:
+            i += 1
+            continue
+        j = i
+        while j + 1 < len(t) and _at(hid, j + 1) is True and _bounded(t[j + 1]) is not None:
+            j += 1
+        a = _bounded(t[i - 1]) if i > 0 else None
+        a = float(a) if a is not None else float(t[i])
+        iv = _at(front, j)
+        if isinstance(iv, tuple) and iv[0] <= a < iv[1]:
+            a = min(float(iv[1]), float(t[j]))
+        out.append((a, float(t[j])))
+        i = j + 1
     return out
 
 
@@ -170,13 +353,16 @@ def display_series(fr: dict[str, list]) -> tuple[list[int], list[float], list[fl
     """(row indexes, times, frame times D, source) of the series stutters are judged on (LC 2.1, 2.4).
 
     D = MsBetweenDisplayChange over displayed frames ("display"); when display tracking is missing
-    altogether, MsBetweenPresents over every frame ("present").
+    altogether, MsBetweenPresents over every frame ("present"). Frames of a stretch behind another window
+    (HIDDEN) are left out, the shown frame ending it included: its display change spans the whole stretch.
     """
     t = fr.get(F.T) or []
     disp = fr.get(F.DISPLAY_MS) or []
     shown = fr.get(F.DISPLAYED) or []
-    rows = [i for i in range(len(t)) if _bounded(t[i]) is not None and _pos(_at(disp, i)) and _at(shown, i) != 0]
-    if rows:
+    hid = fr.get(HIDDEN) or []
+    rows = [i for i in range(len(t)) if _bounded(t[i]) is not None and _pos(_at(disp, i)) and _at(shown, i) != 0
+            and _at(hid, i) is not True]
+    if rows or any(x is True for x in hid):
         return rows, [float(t[i]) for i in rows], [float(disp[i]) for i in rows], "display"
     fm = fr.get(F.FRAME_MS) or []
     rows = [i for i in range(len(t)) if _bounded(t[i]) is not None and _pos(_at(fm, i))]
@@ -212,11 +398,11 @@ def stall_gaps(fr: dict[str, list]) -> list[tuple[float, float, float, float]]:
         return []
     m = baseline(d)
     tail = st.median(d[-baseline_frames(st.median(d)):])     # the baseline after the last displayed frame
-    tt, fm = fr.get(F.T) or [], fr.get(F.FRAME_MS) or []
+    tt, fm, hid = fr.get(F.T) or [], fr.get(F.FRAME_MS) or [], fr.get(HIDDEN) or []
     out = []
     for i in range(1, len(tt)):
         a, b = _bounded(tt[i - 1]), _bounded(tt[i])
-        if a is None or b is None:
+        if a is None or b is None or _at(hid, i) is True:     # behind another window: nobody saw it (PM 2.4)
             continue
         gap_ms = (b - a) * 1000.0
         k = bisect.bisect_left(t, b)
@@ -227,6 +413,16 @@ def stall_gaps(fr: dict[str, list]) -> list[tuple[float, float, float, float]]:
         if own is not None and own >= STALL_COVER * gap_ms:
             continue      # a long frame of its own: the display series judges it
         out.append((float(a), float(b), gap_ms, float(mk)))
+    for iv in fr.get(FRONT) or []:     # the part of a stretch spent in front with nothing shown: a frozen screen
+        if not isinstance(iv, tuple):
+            continue
+        a, b = iv
+        gap_ms = (b - a) * 1000.0
+        k = bisect.bisect_left(t, b)
+        mk = m[k] if k < len(m) else tail
+        if mk is not None and gap_ms >= STUTTER_X * mk and gap_ms - mk >= STUTTER_MIN_MS:
+            out.append((float(a), float(b), gap_ms, float(mk)))
+    out.sort()
     return out
 
 
@@ -279,10 +475,13 @@ def frame_stats(fr: dict[str, list], duration_s: float) -> dict[str, Any]:
     dur = _bounded(duration_s)
     out["duration_s"] = float(dur) if dur is not None and dur >= 0 else None
 
-    shown = [_num(v) for v in fr.get(F.DISPLAYED) or []]
+    hid = fr.get(HIDDEN) or []
+    shown = [_num(v) for i, v in enumerate(fr.get(F.DISPLAYED) or []) if _at(hid, i) is not True]
     known = [v for v in shown if v in (0, 1)]
     if known:
         out["dropped_pct"] = 100.0 * sum(1 for v in known if v == 0) / len(known)
+    if hid:       # the stretches' own time: rows PresentMon lost inside one are part of it all the same
+        out["hidden_s"] = math.fsum(b - a for a, b in hidden_spans(fr))
     for key, col in (("present_mode", F.PRESENT_MODE), ("runtime", F.RUNTIME)):
         vals = Counter(v for v in fr.get(col) or [] if isinstance(v, str))
         out[key] = vals.most_common(1)[0][0] if vals else None
@@ -368,8 +567,13 @@ def _logical_cpus(cap: Capture) -> int | None:
 # ------------------------------------------------------------------ time spans ---
 
 def _merged_spans(events: Iterable[LagEvent], kinds: Sequence[str], pad: float = 0.0) -> list[tuple[float, float]]:
-    spans = sorted((float(e.t_start) - pad, float(e.t_end) + pad) for e in events
-                   if e.kind in kinds and _num(e.t_start) is not None and _num(e.t_end) is not None)
+    return _merge([(float(e.t_start) - pad, float(e.t_end) + pad) for e in events
+                   if e.kind in kinds and _num(e.t_start) is not None and _num(e.t_end) is not None])
+
+
+def _merge(spans: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Overlapping or touching spans as one, in time order."""
+    spans = sorted(spans)
     out: list[tuple[float, float]] = []
     for a, b in spans:
         if out and a <= out[-1][1]:
@@ -377,6 +581,12 @@ def _merged_spans(events: Iterable[LagEvent], kinds: Sequence[str], pad: float =
         else:
             out.append((a, b))
     return out
+
+
+def not_steady_spans(events: Iterable[LagEvent], fr: dict[str, list], pad: float = 0.0) -> list[tuple[float, float]]:
+    """The stutters, FPS drops and stretches behind another window (hidden_spans), merged and padded: what neither
+    the bound nor a rule's steady 1 s means may judge."""
+    return _merge(_merged_spans(events, FRAME_EVENT_KINDS, pad) + [(a - pad, b + pad) for a, b in hidden_spans(fr)])
 
 
 def _in_spans(x: float, spans: list[tuple[float, float]], starts: list[float]) -> bool:
@@ -516,8 +726,8 @@ def bound(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent]) -> dict
     sides are from their limits (headroom()).
     """
     events = list(events)
-    spans = _merged_spans(events, FRAME_EVENT_KINDS)
-    tick_spans = _merged_spans(events, FRAME_EVENT_KINDS, pad=TICK_PAD_S)
+    spans = not_steady_spans(events, fr)
+    tick_spans = not_steady_spans(events, fr, pad=TICK_PAD_S)
     out = _classify(cap, fr, _steady_rows(fr, spans), tick_spans)
     # item 1: without frame timing the whole-capture median is only a verdict; the seconds say where the GPU limited
     out["gpu_probable"] = (probable_gpu(cap, events, tick_spans) if not fr.get(F.T) and out["verdict"] == "unknown"
@@ -571,6 +781,8 @@ def _classify(cap: Capture, fr: dict[str, list], rows: list[int],
     if len(frame_ms) < BOUND_MIN_FRAMES or out["steady_s"] < BOUND_MIN_S:
         if frame_ms:
             notes.append(_too_short_note(len(frame_ms), out["steady_s"]))
+        elif fr.get(F.T) and any(x is True for x in fr.get(HIDDEN) or []):
+            notes.append("no steady frames: the ones outside lag events came while another window was in front")
         elif fr.get(F.T):
             notes.append("no steady frames: every frame was inside a lag event")
         else:

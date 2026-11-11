@@ -897,7 +897,8 @@ tagged *inferred* there and are tuned against LagLab, never silently).
 
 ```python
 # analysis/frames.py
-def main_chain(cap) -> dict[str, list]              # F columns of the swap chain with the most displayed frames
+def main_chain(cap) -> dict[str, list]              # F columns of the swap chain with the most displayed frames, and
+                                                    # HIDDEN beside them (time behind another window, below)
 def frame_stats(fr, duration_s) -> dict             # the frame keys of Diagnosis.stats
 def bound(cap, fr, events) -> dict                  # LC 3.4, steady windows only (event frames excluded):
 # {verdict: "gpu"|"cpu_main"|"cpu_all"|"waiting"|"vsync"|"capped"|"mixed"|"unknown", r, ft_ms, gpu_ms,
@@ -985,6 +986,32 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
   half of (PresentMon can leave only such a gap when several chains exist, PM 10 rule 7). One helper,
   `frames.stall_gaps`, feeds both the events and the stats: each stall is one interval of the series behind
   `avg_fps`, the lows, the worst frame, the hitch/severe/freeze counts and `time_beyond_50_ms`.
+- **Time behind another window** (`frames.HIDDEN`, `FRONT`, `hidden_rows`): while another window covers the game's,
+  Windows shows almost none of its frames, and PresentMon holds each frame it did not show behind the next shown one,
+  whose display change then spans the whole stretch (PM 2.4): the e2e run of 2026-11-09 read a covered LagLab
+  drawing 120 FPS as "2 stutters (worst 9483 ms) and low frame rate (13 FPS average)". `main_chain` marks a stretch
+  where frames go unshown for `HIDDEN_MIN_S` (1 s) and every foreground reading from a tick after its start to a tick
+  before its end (`HIDDEN_PAD_S`) says another window, two at least and none more than `HIDDEN_READ_GAP_S` (1 s)
+  apart. The readings nearer its ends are never asked: an Alt+Tab covers the game as it takes the foreground, so the
+  reading just before reads "in front". Readings "in front" (or unknown) only at a run's start or only at its end cut
+  it there: the game froze in front and then went behind, or came back to the front before a frame was shown. That
+  part is `FRONT`, judged as one frozen screen (`stall_gaps`), from the last frame to the last reading "in front", or
+  from the first one to the frame that ends it; a reading "in front" in a run's middle leaves the whole run judged. A
+  shorter unshown run within a tick of a stretch (`HIDDEN_JOIN_S`), every reading between them "another window", is
+  part of it, and two stretches are one when every reading between says another window (read at least once a second)
+  and at most half the frames between were shown (`HIDDEN_SHOWN_MAX`: a covered window's frames show in bursts of
+  1-12, a visible one shows nearly all); a gap of a second with no frame in it counts as a run (a game that stops
+  drawing behind another window). Its frames, and the shown frames ending its runs, are left out of everything the
+  frames judge: the display series (so the stats, the stutters, the refresh holds, pacing and the bound's VSync test),
+  stalls, the FPS-drop grid (a 1 s window reaching into it is no reading: it never sets the target and ends a drop),
+  the cap and VSync verdict behind the FPS-drop target, pacing episodes (none spans one), `dropped_pct`, and the
+  steady windows of the bound and the rules (`frames.not_steady_spans`). Nobody saw those frames, and many games slow
+  themselves down behind other windows, so they are not judged by when the game presented them either. `hidden_s` is
+  the stretches' own time (rows PresentMon lost inside one count), less any `FRONT` part; time behind another window
+  before PresentMon's first row or after its last is not in it, since there is no row to place it. Stutters a minute
+  count the capture less `hidden_s`; the headline says how much was left out, and with every frame in it frame timing
+  reads not measured, with that reason (`rules.no_frames_why`, naming the part). Without display tracking or
+  foreground readings nothing is hidden: a frozen screen while the game is in front looks the same, and is lag.
 - `low1_fps` / `low01_fps` = FPS of the average of exactly `ceil(p·n)` slowest frames (never "all frames ≥ the
   quantile", which sweeps in ties, LC 2.5); `p1_fps` = 1000 / P99 frame time, reported separately and labelled.
   Below 1,000 frames the 1% figures are `None` ("not enough frames"), below 10,000 the 0.1% figure (LC 2.6).
@@ -1002,8 +1029,12 @@ stutters, stutters_per_min                 int, float      stutter events (any c
 hitches, severe_hitches, freezes           int             frames >= 50 / 150 / 500 ms (LC 2.4 classes, nested)
 time_beyond_50_ms                          float           sum of (D - 50) over D > 50
 hitch_rate_bound                           float | None    3/n when zero hitches and no stall in n > 30 frames
-dropped_pct                                float           % of frames never displayed
+dropped_pct                                float           % of frames never displayed (outside time behind another window)
 frames_source                              str             "display" or "present"
+hidden_s                                   float           seconds behind another window with almost none of the game's
+                                                           frames shown, left out of every frame figure (only where
+                                                           PresentMon has rows); None without display tracking or
+                                                           foreground readings
 bound, bound_r, gpu_busy_pct               str, float, float   verdict; r; 100 x median GPU busy / median frame time
 steady_fps                                 float           the frame rate outside stutters and FPS drops (bound)
 bound_gpu_ms, bound_frame_ms               float           G and FT of r: median GPU busy less the HAGS margin, median
@@ -1032,8 +1063,8 @@ span                                       dict            {from_s, to_s, record
 ```
 
 ### The bound verdict (LC 3.4)
-`bound()` judges steady stretches only (frames outside stutters and FPS drops, at least 10 s and 300 app
-frames), in order: VSync (displayed intervals quantised on whole refresh periods, SyncInterval not 0 and
+`bound()` judges steady stretches only (frames outside stutters, FPS drops and time behind another window, at
+least 10 s and 300 app frames), in order: VSync (displayed intervals quantised on whole refresh periods, SyncInterval not 0 and
 AllowsTearing not 1; with k = round(FT/P) >= 2 the hardware is tested against one period: GPU busy past
 (k-1)·P gives `gpu`; a busiest thread that is saturated, or whose own CPU time a frame (its share times FT, on the
 lead thread only: a capture saved before it says this could not be told when its per-tick figure passes)
@@ -1113,7 +1144,8 @@ is not idle.
 - **fps_drop**: 1 s rolling displayed FPS below 80 % of the target for ≥ 2 s; target = the cap if one is
   detected, else the refresh rate (refresh/k) if VSync-locked, else the run's p90 FPS, and never above the
   refresh rate on a fixed-refresh display. `severity` = % below target; `detail` `{target_fps, target_from, fps,
-  min_fps}`.
+  min_fps}`. A 1 s window reaching into time behind another window is no reading: it never sets the target, and it
+  ends a drop, so none spans that time.
 - **pacing**: over 2 s, more than 10 % of `|D_i − D_(i−1)| ≥ 4 ms`, or p95 `|anim_error_ms|` > 2 ms, with frames
   inside stutter and stall spans left out (a hitch must not create the pacing that outranks it).
   `detail["criterion"]` = "swing" / "anim" / "both"; `severity` = the median swing ≥ 4 ms, or the animation-error
@@ -1145,6 +1177,10 @@ test: a cause *supports* when `a ≥ 3`, `a/n ≥ 0.30` and `lift ≥ 2` (n ≥ 
 stretch as long as each event's window (judged, like the event, on its busiest 1 s) holds an active second,
 averaged over the events (`attribute._expected`; a length too few quiet stretches reach is taken at the longest
 that 8 do): a mark's 4.25 s window once met a plain 1 s share, 0.36 where its own length gave 0.64.
+A cause is *blind* (`blind: true`, never "contradicts") when every measured part's quiet level is already at its
+floor or past it, and that level plus the floor is past the most its signal ever read: no moment could rise. A game
+behind another window in most quiet seconds has its "behind" signal at 1.0, so "only 0 of 12 coincided with another
+window being in front" would be false; a signal that never moved off nothing is not blind.
 Each event is then attributed to its single best cause (explaining away), first in `ev.causes`; when nothing
 moved, the residual is `gpu_spike` (GPU side), `game_cpu_spike` (a saturated thread) or `game_stall`, and no
 cause at all when the sampler did not measure that moment.
@@ -1257,9 +1293,18 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   refresh, uneven presents stay `uneven_pacing`'s, as before.
 - `game_dvr`: background recording known off concludes against; unknown is advice only (no auto-fix);
   `game_dvr_off` is offered only when background recording is known on.
-- `not_focused`: the share of the capture behind another window (>= 10 %, on the CPU side), or the lift test.
-  "The active window most of the time" counts against only when the lag moments did not come while the game was
-  behind more often than that share says; with too few of them for the lift test it is unchecked, with the counts
+- `not_focused`: behind another window for >= 10 % of the part, a cost it measured. The game's own frame rate there
+  (its app frames' count over their summed MsBetweenPresents, shown or not: a median of frame times that alternate
+  between two values lands on one of them; a frame takes the side of the next foreground reading) at least 10 %
+  under its rate with its own window in front supports it, on the CPU side; a smaller drop clears it ("cost it no
+  frames"). Without 100 frames and 2 s on each side, its CPU use behind at 90 % or more of its use in front (eight
+  readings a side) clears it ("did not get less CPU time"); a lower one is no cost by itself (a game may slow itself
+  down behind a window) and leaves it unchecked, saying so. With nothing compared it is unchecked on the CPU side and
+  silent on the GPU side. The time behind is no cost by itself: the e2e runs' LagLab kept its frame rate there, yet
+  the share alone named "the game got less CPU time" at medium. Or the lift test, which never counts against it when
+  it is blind (`attribute._blind`: behind another window in most quiet seconds, the signal sits at its top, so no
+  moment can rise above it). "The active window most of the time" counts against only when the lag
+  moments did not come while the game was behind more often than that share says; with too few of them for the lift test it is unchecked, with the counts
   (2 of the first real capture's 3 marks fell in its one stretch behind other windows).
 - With marks standing in for the frames, the marks are the events the rules judge (`_Env.judged`): a stutter
   cause they named first is unchecked with fewer than 5 ("only 3 marked moments"), and one they support is titled
@@ -1850,7 +1895,8 @@ typed on the player's PC, and the game is never started, stopped or opened by la
   `smooth` run also exercises the real ping and Kernel-Network ETW paths. Every mode's first check is that LagLab's
   window was the foreground window for the whole capture (LagLab logs each change, `log["front"]`): Windows shows
   nothing of a covered window, and PresentMon's default metrics hold every frame that was not shown behind the last
-  one that was, so a covered LagLab gives few rows or none; and a change of focus makes it hitch. Hog mode does a
+  one that was, so a covered LagLab gives few rows or none (the analysis leaves such time out, `frames.HIDDEN`, but
+  a mode judged on it would have nothing to judge); and a change of focus makes it hitch. Hog mode does a
   fixed amount of work per frame, measured in its warmup (`laglab.app.FixedWork`), because a timed busy-wait ends on
   time whatever else runs; its bursts are whole ones only, and the run gives it 40 s, so that at least
   `attribute.LIFT_MIN_EVENTS` bursts fall inside the capture (`tests/test_e2e_schedule.py`).

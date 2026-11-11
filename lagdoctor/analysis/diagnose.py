@@ -36,7 +36,7 @@ def diagnose(cap: Capture) -> Diagnosis:
     stats.update(bound=b["verdict"], bound_r=b["r"], gpu_busy_pct=b["gpu_busy_pct"], refresh_hz=b["refresh_hz"])
     stats.update(headroom_stats(b))
     stats.update(attribute.nvidia_stats(cap))
-    stats.update(events.summary_stats(cap, evs))
+    stats.update(events.summary_stats(cap, evs, stats.get("hidden_s")))
     stats["main_chain"] = next((c for c in fr.get(F.SWAP_CHAIN) or [] if isinstance(c, str)), None)
     span = getattr(cap, "span", None)
     if isinstance(span, dict):              # a measured part (analysis/crop.py): diagnosis.json says which one
@@ -92,7 +92,9 @@ def measured(cap: Capture, stats: dict[str, Any]) -> dict[str, str]:
     for name in STANDARD_SOURCES:
         out.setdefault(name, "not recorded in this capture")
     if out.get("frames") == "ok" and not stats.get("frames"):
-        out["frames"] = "PresentMon ran but recorded no frames from the game"
+        out["frames"] = rules.no_frames_why(stats)
+    elif out.get("frames", "").startswith("partial") and not stats.get("frames"):   # PresentMon's own problem after it
+        out["frames"] = f"{rules.no_frames_why(stats)}; {out['frames']}"
     for name, table in (("system", cap.system), ("gpu", cap.gpu), ("network", cap.network)):
         if out.get(name) == "ok" and not frames._col(table, "t"):   # the rules point here for why (rules._Env.need)
             out[name] = "it ran but recorded nothing"
@@ -402,4 +404,8 @@ def headline(lag_type: str, findings: list[Finding], stats: dict[str, Any], evs:
         text += "; frame timing was not measured, so stutter could not be checked"
     if three:
         text += f"; {three}"
+    away = rules._fin(stats.get("hidden_s"))
+    if env.frames_measured and away is not None and away > 0:    # without frames, the reason above says it already
+        text += (f"; for {fmt_elapsed(away)} of {env.part} another window was in front and Windows showed almost none "
+                 "of the game's frames, so that time is not judged")
     return rules._sentence(text)

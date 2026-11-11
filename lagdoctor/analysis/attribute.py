@@ -912,6 +912,9 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
         lift = (a_cnt / n) / max(b, LIFT_B_FLOOR) if b is not None else None
         ever = any(c.name in m for *_, m in acts)
         label = _label(a_cnt, n, lift, measured=ever)
+        blind = _blind(c, bases[c.name])
+        if blind and label == "contradicts":      # no moment could rise: "only 0 of n" would be false, not evidence
+            label = "neutral"
         w = (3.0 if lift is not None and lift >= LIFT_STRONG else 2.0) if label == "supports" else 1.0
         if c.name in CAPPED_AT_POSSIBLE:
             w = min(w, 1.0)
@@ -919,6 +922,8 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
         summary[c.name] = {"a": a_cnt, "n": n, "share": 0.0, "lift": lift, "label": label, "b": b,
                            "weight": weight[c.name], "time_share": 0.0, "baseline_guard_s": guard,
                            "why": "" if ever else c.why_missing}
+        if blind:
+            summary[c.name]["blind"] = True
         if c.name in CAPPED_AT_POSSIBLE:
             summary[c.name]["cap"] = "possible"
 
@@ -974,6 +979,22 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
         if half:
             entry["half_weight"] = True
     return summary
+
+
+def _blind(c: _Cause, bases: dict[int, _Baseline | None]) -> bool:
+    """No moment could have counted although the cause was there: every measured part's quiet level is itself a rise
+    from nothing (at its floor or past it), and that level plus the floor is past the most its signal ever read. A
+    game behind another window in most quiet seconds has its "behind" signal at the top, 1.0, so a moment behind it
+    cannot stand out. A signal that never moved off nothing is no such case: "0 of n coincided" is then true."""
+    seen = False
+    for k, p in enumerate(c.parts):
+        base, vals = bases.get(k), [x for x in p.series.v if x is not None]
+        if base is None or not vals:
+            continue
+        if p.direction < 0 or base.med < p.floor(base.med) or base.med + p.floor(base.med) <= max(vals):
+            return False
+        seen = True
+    return seen
 
 
 def _label(a: int, n: int, lift: float | None, measured: bool) -> str:

@@ -42,6 +42,7 @@ MAX_PID = 0xFFFFFFFF
 FLAGS = ("--output_stdout", "--no_console_stats", "--qpc_time", "--track_frame_type", "--track_hybrid_present")
 LIVE_ONLY = ("--session_name", SESSION_NAME, "--stop_existing_session", "--terminate_on_proc_exit")
 KNOWN_EXIT_CODES = frozenset(range(8))   # 0-7, PM 5 "Exit codes"; anything else is a crash
+LOST_EVENTS = re.compile(r"were lost|overflowed present events")   # PresentMon's stderr warnings of frames it dropped
 
 
 def check_pid(pid: object) -> int:
@@ -769,16 +770,20 @@ class PresentMonSource(Collector):
         if self._parser.missing:
             problems.append(f"PresentMon's CSV header lacks {', '.join(self._parser.missing)}, so the rows "
                             "under it could not be used")
+        lost = [ln.strip() for ln in stderr if LOST_EVENTS.search(ln)]     # PresentMon's own words: they say why
         if rows == 0:
             if problems:
                 why = problems[0]
             elif self._parser.headers == 0:
-                why = "PresentMon ran but wrote no CSV"
+                # PM 2.4: a frame Windows did not show waits behind the next shown one, so a window covered from
+                # the start leaves PresentMon nothing to write, and its queue overflows (two e2e modes, 2026-11-09)
+                why = ("PresentMon ran but wrote no CSV (it holds back frames Windows did not show until one is: most "
+                       "likely the game's window stayed covered or minimized, or the game drew nothing)")
             elif self.etl_file is not None:
                 why = f"PresentMon ran but no frames came from {target}"
             else:
                 why = f"PresentMon ran but no frames came from {target} (is it the process that draws the game?)"
-            self.set_status("failed", "; ".join([why, *notes]), tool=TOOL)
+            self.set_status("failed", "; ".join([why, *notes, *lost]), tool=TOOL)   # its own words last: the longest
             return
         if path == "kill":
             problems.append("PresentMon had to be killed, so its last frames may be missing")
@@ -804,7 +809,7 @@ class PresentMonSource(Collector):
             problems.append(f"{self._parser.malformed} malformed CSV row(s) skipped")
         if self._row_errors:
             problems.append(f"{self._row_errors} row(s) could not be stored")
-        problems += [ln.strip() for ln in stderr if re.search(r"were lost|overflowed present events", ln)]
+        problems += lost
         if any("is already running and it will be stopped" in ln for ln in stderr):
             notes.append(f"an earlier {SESSION_NAME!r} trace session was still running and was replaced")
         detail = "; ".join([f"{rows} frames from {chains} swap chain(s) of {target}", *problems, *notes])

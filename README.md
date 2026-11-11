@@ -174,6 +174,11 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
   frame held one refresh longer than usual as a stutter.
 - **The low-frame-rate threshold** (80 % of the refresh rate) comes from a study of 60–120 Hz screens and is
   not tuned above that.
+- **Time behind another window is not judged.** While another window is in front and covers the game's, Windows
+  shows almost none of its frames, so lag-doctor leaves that time out, and the verdict says how long it was (or, if
+  that was all of it, that frame timing could not be judged). Only which window is in front is recorded, not what
+  is visible, so a game left visible on a second screen that freezes for a second or more while another window is
+  in front is left out too, and a window kept on top of the game while the game stays in front still reads as lag.
 - **Long recordings use RAM**: about 0.7 KB per frame, so a 3-hour evening at 240 FPS needs about 1.8 GiB.
 - **Recording costs about 5–10 % of one logical CPU**, plus 1–2 % for the game-server tracker, which may take 10–40 %
   while something else on the PC downloads fast. On a test game, recording without admin rights (no frame timing, no

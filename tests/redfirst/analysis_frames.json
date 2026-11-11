@@ -380,7 +380,7 @@
  {
   "name": "display series ignored",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "    if rows:\n        return rows, [float(t[i]) for i in rows], [float(disp[i]) for i in rows], \"display\"",
+  "old": "    if rows or any(x is True for x in hid):\n        return rows, [float(t[i]) for i in rows], [float(disp[i]) for i in rows], \"display\"",
   "new": "    if False:\n        return rows, [float(t[i]) for i in rows], [float(disp[i]) for i in rows], \"display\"",
   "tests": [
    "tests/test_analysis_frames.py::test_display_series_falls_back_to_presents_when_display_tracking_is_missing",
@@ -390,8 +390,8 @@
  {
   "name": "dropped frames in the display series",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "and _pos(_at(disp, i)) and _at(shown, i) != 0]",
-  "new": "and _pos(_at(disp, i))]",
+  "old": "and _pos(_at(disp, i)) and _at(shown, i) != 0\n",
+  "new": "and _pos(_at(disp, i))\n",
   "tests": [
    "tests/test_analysis_frames.py::test_dropped_share_mode_and_runtime"
   ]
@@ -2019,6 +2019,359 @@
   "new": "busy (median of 1 s windows; \"",
   "tests": [
    "tests/test_analysis_rules_diagnose.py::test_a_steady_rate_other_programs_gpu_work_may_set_is_no_cap_and_counts_as_low_fps"
+  ]
+ },
+ {
+  "name": "a cover shorter than a second",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "HIDDEN_MIN_S = 1.0 ",
+  "new": "HIDDEN_MIN_S = 0.8 ",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_stretch_lasts_a_second"
+  ]
+ },
+ {
+  "name": "a cover needs more than a second",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "HIDDEN_MIN_S = 1.0 ",
+  "new": "HIDDEN_MIN_S = 1.2 ",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_stretch_lasts_a_second"
+  ]
+ },
+ {
+  "name": "the readings at a cover's ends asked",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "HIDDEN_PAD_S = TICK_PAD_S ",
+  "new": "HIDDEN_PAD_S = 0.0 ",
+  "tests": [
+   "tests/test_analysis_covered.py::test_an_alt_tab_hides_the_cover_at_any_sampler_phase"
+  ]
+ },
+ {
+  "name": "a starved sampler vouches for a cover",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "HIDDEN_READ_GAP_S = 1.0 ",
+  "new": "HIDDEN_READ_GAP_S = 3.0 ",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_sampler_that_did_not_read_the_foreground_inside_a_cover_hides_nothing"
+  ]
+ },
+ {
+  "name": "a cover read twice a second",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "HIDDEN_READ_GAP_S = 1.0 ",
+  "new": "HIDDEN_READ_GAP_S = 0.5 ",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_sampler_that_did_not_read_the_foreground_inside_a_cover_hides_nothing"
+  ]
+ },
+ {
+  "name": "one reading vouches for a cover",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "vouched(a + HIDDEN_PAD_S, b - HIDDEN_PAD_S, 2)",
+  "new": "vouched(a + HIDDEN_PAD_S, b - HIDDEN_PAD_S, 1)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_sampler_that_did_not_read_the_foreground_inside_a_cover_hides_nothing"
+  ]
+ },
+ {
+  "name": "no short run joins a cover",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "HIDDEN_JOIN_S = TICK_PAD_S ",
+  "new": "HIDDEN_JOIN_S = 0.0 ",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_shown_bursts_and_short_runs_of_a_cover_belong_to_it"
+  ]
+ },
+ {
+  "name": "a run joins a cover across a reading in front",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "if near and all_behind(min(a, it[3]), max(b, it[2])) is not None:",
+  "new": "if near:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_shown_bursts_and_short_runs_of_a_cover_belong_to_it"
+  ]
+ },
+ {
+  "name": "an unknown reading counts as another window",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "return [x for x, _ in vals] if all(v == 0 for _, v in vals) else None",
+  "new": "return [x for x, _ in vals] if all(v != 1 for _, v in vals) else None",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_frozen_screen_in_front_stays_a_freeze_and_so_does_one_nobody_can_place"
+  ]
+ },
+ {
+  "name": "a game that stops drawing behind a window is a freeze",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "if i > 0 and flags[i - 1] == 1 and flags[i] == 1 and tf[i] - tf[i - 1] >= HIDDEN_MIN_S:",
+  "new": "if False:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_game_that_stops_drawing_behind_another_window_is_no_freeze"
+  ]
+ },
+ {
+  "name": "a near stretch vouches for a long run",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        if b - a >= HIDDEN_MIN_S:          # a run that long",
+  "new": "        if False:          # a run that long",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_sampler_that_did_not_read_the_foreground_inside_a_cover_hides_nothing"
+  ]
+ },
+ {
+  "name": "the frame ending a cover judged",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "            out[p[5]] = True",
+  "new": "            pass",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_covered_window_is_never_judged_and_the_time_left_out_is_said"
+  ]
+ },
+ {
+  "name": "main_chain marks nothing",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    out[HIDDEN], out[FRONT] = hidden_rows(out[F.T], out[F.DISPLAYED], focus_readings(cap))",
+  "new": "    out[HIDDEN], out[FRONT] = [], []",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_covered_window_is_never_judged_and_the_time_left_out_is_said"
+  ]
+ },
+ {
+  "name": "a cover told without display tracking or readings",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if not n or not known or not any(_num(v) in (0, 1) for v in shown):",
+  "new": "    if not n:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_hidden_rows_need_display_tracking_and_a_foreground_reading"
+  ]
+ },
+ {
+  "name": "covered frames in the display series",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "\n            and _at(hid, i) is not True]",
+  "new": "]",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_covered_window_is_never_judged_and_the_time_left_out_is_said"
+  ]
+ },
+ {
+  "name": "a capture covered throughout judged by presents",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if rows or any(x is True for x in hid):",
+  "new": "    if rows:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_capture_covered_throughout_names_why_nothing_was_judged"
+  ]
+ },
+ {
+  "name": "a stall inside a cover",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "if a is None or b is None or _at(hid, i) is True:",
+  "new": "if a is None or b is None:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_frames_missing_inside_a_cover_are_no_stall"
+  ]
+ },
+ {
+  "name": "covered frames counted as dropped",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "for i, v in enumerate(fr.get(F.DISPLAYED) or []) if _at(hid, i) is not True]",
+  "new": "for i, v in enumerate(fr.get(F.DISPLAYED) or [])]",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_covered_window_is_never_judged_and_the_time_left_out_is_said"
+  ]
+ },
+ {
+  "name": "the time behind summed from its rows' frame times",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        out[\"hidden_s\"] = math.fsum(b - a for a, b in hidden_spans(fr))",
+  "new": "        out[\"hidden_s\"] = math.fsum(float(x) / 1000.0 for x, h in zip(fr.get(F.FRAME_MS) or [], hid) if h is True and x)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_counts_the_games_own_frames_once",
+   "tests/test_analysis_covered.py::test_frames_presentmon_lost_inside_a_cover_are_time_behind_it_all_the_same"
+  ]
+ },
+ {
+  "name": "time behind another window steady",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "+ [(a - pad, b + pad) for a, b in hidden_spans(fr)])",
+  "new": "+ [])",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_is_never_steady"
+  ]
+ },
+ {
+  "name": "a cover's span starts at its first hidden frame",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "a = _bounded(t[i - 1]) if i > 0 else None",
+  "new": "a = None",
+  "tests": [
+   "tests/test_analysis_covered.py::test_an_alt_tab_hides_the_cover_at_any_sampler_phase"
+  ]
+ },
+ {
+  "name": "the FPS target read from a cover",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "target, origin = fps_target(pace, [v for v, x in zip(fps, blind) if not x])",
+  "new": "target, origin = fps_target(pace, fps)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_fps_target_is_never_read_from_a_cover"
+  ]
+ },
+ {
+  "name": "an FPS drop spans a cover",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        if v < limit and not x:",
+  "new": "        if v < limit:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_an_fps_drop_never_spans_a_cover"
+  ]
+ },
+ {
+  "name": "stutters a minute over the time behind too",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "        dur -= away",
+  "new": "        pass",
+  "tests": [
+   "tests/test_analysis_covered.py::test_stutters_a_minute_count_the_time_judged"
+  ]
+ },
+ {
+  "name": "the readings at a stretch's ends never asked to be read",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        edges = [lo] + xs + [hi]",
+  "new": "        edges = xs",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_sampler_that_did_not_read_the_foreground_inside_a_cover_hides_nothing"
+  ]
+ },
+ {
+  "name": "a short run before a stretch never joins",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "            near = (0.0 <= a - it[3] <= HIDDEN_JOIN_S) or (0.0 <= it[2] - b <= HIDDEN_JOIN_S)",
+  "new": "            near = (0.0 <= a - it[3] <= HIDDEN_JOIN_S)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_cover_shown_in_several_bursts_is_one_stretch"
+  ]
+ },
+ {
+  "name": "the bursts between two stretches judged",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        return g1 - g0 <= HIDDEN_JOIN_S or sum(1 for f in between if f == 1) <= HIDDEN_SHOWN_MAX * len(between)",
+  "new": "        return g1 - g0 <= HIDDEN_JOIN_S",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_cover_shown_in_several_bursts_is_one_stretch"
+  ]
+ },
+ {
+  "name": "two stretches merge across a reading in front",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        if not vouched(g0, g1, 0):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_cover_shown_in_several_bursts_is_one_stretch"
+  ]
+ },
+ {
+  "name": "stretches bridged only with few frames shown",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "HIDDEN_SHOWN_MAX = 0.5 ",
+  "new": "HIDDEN_SHOWN_MAX = 0.2 ",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_cover_shown_in_several_bursts_is_one_stretch"
+  ]
+ },
+ {
+  "name": "a freeze before an Alt+Tab is the whole cover",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        if bad and bad == list(range(k0, k0 + len(bad))):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_time_in_front_at_a_covers_end_is_one_frozen_screen_and_the_rest_is_left_out"
+  ]
+ },
+ {
+  "name": "the foreground back early is the whole cover",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        elif bad and bad == list(range(k1 - len(bad), k1)):",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_time_in_front_at_a_covers_end_is_one_frozen_screen_and_the_rest_is_left_out"
+  ]
+ },
+ {
+  "name": "an unknown reading never cuts a run",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        bad = [k for k in range(k0, k1) if readings[k][1] != 0]",
+  "new": "        bad = [k for k in range(k0, k1) if readings[k][1] == 1]",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_time_in_front_at_a_covers_end_is_one_frozen_screen_and_the_rest_is_left_out"
+  ]
+ },
+ {
+  "name": "the frozen part of a cover never judged",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    for iv in fr.get(FRONT) or []:",
+  "new": "    for iv in []:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_time_in_front_at_a_covers_end_is_one_frozen_screen_and_the_rest_is_left_out"
+  ]
+ },
+ {
+  "name": "the frozen part counted as time behind",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "            a = min(float(iv[1]), float(t[j]))",
+  "new": "            pass",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_time_in_front_at_a_covers_end_is_one_frozen_screen_and_the_rest_is_left_out"
+  ]
+ },
+ {
+  "name": "the bound blames lag events for time behind",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        elif fr.get(F.T) and any(x is True for x in fr.get(HIDDEN) or []):",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_partial_presentmon_with_every_frame_covered_names_the_cover_first"
+  ]
+ },
+ {
+  "name": "the FPS target's cap read from a cover",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    pace = fa._classify(cap, fr, fa._steady_rows(fr, fa.not_steady_spans(stutters, fr)),\n                        fa.not_steady_spans(stutters, fr, pad=fa.TICK_PAD_S))",
+  "new": "    pace = fa._classify(cap, fr, fa._steady_rows(fr, spans),\n                        fa._merged_spans(stutters, (\"stutter\",), pad=fa.TICK_PAD_S))",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_fps_targets_cap_is_never_read_from_a_cover",
+   "tests/test_analysis_covered.py::test_the_fps_target_is_never_read_from_a_cover"
+  ]
+ },
+ {
+  "name": "a pacing episode spans a cover",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "               and not apart(t[js[-1]], t[flagged[i + 1][1][0]])):",
+  "new": "               and True):",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_pacing_episode_never_spans_a_cover"
+  ]
+ },
+ {
+  "name": "a lift test that cannot rise contradicts",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if blind and label == \"contradicts\":",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_lift_test_never_says_no_moment_came_behind_a_window_it_was_behind_most_of_the_time"
+  ]
+ },
+ {
+  "name": "a signal that never moved is blind",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if p.direction < 0 or base.med < p.floor(base.med) or base.med + p.floor(base.med) <= max(vals):",
+  "new": "        if p.direction < 0 or base.med + p.floor(base.med) <= max(vals):",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_lift_test_never_says_no_moment_came_behind_a_window_it_was_behind_most_of_the_time"
   ]
  }
 ]
