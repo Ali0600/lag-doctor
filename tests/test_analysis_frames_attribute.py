@@ -6,7 +6,7 @@ import pytest
 from lagdoctor.analysis import attribute as at
 from lagdoctor.analysis import events as ev
 from lagdoctor.analysis import frames as fa
-from lagdoctor.model import F, G, S, Capture, SeriesBuilder, SourceStatus
+from lagdoctor.model import F, G, S, Capture, LagEvent, SeriesBuilder, SourceStatus
 
 TIMES = (4.0, 8.0, 12.0, 16.0, 20.0, 24.0)
 BASE = {S.GAME_TOP_THREAD_PCT: 25.0, S.GAME_CPU_PCT: 30.0, S.CPU_TOTAL_PCT: 10.0, S.GAME_IO_READ_BPS: 0.0,
@@ -437,6 +437,70 @@ def test_background_cpu_from_many_small_processes():
     assert any("other programs used" in w for w in events[0].detail["why"])
 
 
+TURBO = dict(BASE, **{S.CPU_PERF_PCT: 145.0})          # this laptop's clock with its CPUs nearly idle (2026-11-11)
+EVERY_CPU = {S.CPU_TOTAL_PCT: 95.0}                       # every CPU busy, the game's 30 % of one included
+WHOLE_S = (-0.6, 0.6)                                     # the readings of the stutter's whole window
+
+
+def test_a_clock_coming_down_to_base_speed_as_every_cpu_fills_is_turbo_not_throttling():
+    # The owner's end-to-end hog (2026-11-11): 102 % of base speed against 144 % with the hogs on all 16 CPUs, and
+    # Windows' % Performance Limit at 100 throughout; every FPS drop named cpu_throttle first
+    events, summary = analyse(lag_cap(base=TURBO, during={S.CPU_PERF_PCT: 102.0, **EVERY_CPU}, hot=WHOLE_S))
+    assert firsts(events) == ["background_cpu"] * 6
+    assert all("cpu_throttle" not in e.causes for e in events)
+    assert ("the CPU's clock came down to 102% of its base speed (normally 145%) as the PC's CPU use rose to 1520% of "
+            "a CPU (normally 160%): turbo runs slower when more cores are busy, so that is not throttling"
+            in events[0].detail["why"])
+    assert summary["cpu_throttle"]["left_out"] == 6 and summary["cpu_throttle"]["n"] == 0
+    # last, after the blame line: the rules quote why[1] as a cause's example
+    assert events[0].detail["why"][-1].startswith("the CPU's clock came down to 102%")
+    assert summary["cpu_throttle"]["left_out_why"] == at.TURBO_LEFT_OUT
+
+
+def test_a_clock_at_exactly_base_speed_as_every_cpu_fills_is_turbo_too():
+    events, _ = analyse(lag_cap(base=TURBO, during={S.CPU_PERF_PCT: 100.0, **EVERY_CPU}, hot=WHOLE_S))
+    assert all("cpu_throttle" not in e.causes for e in events)
+
+
+def set_spans(cap, spans, values):
+    sy = cap.system
+    for col, v in values.items():
+        sy[col] = [v if any(a <= s <= b for a, b in spans) else x for s, x in zip(sy[S.T], sy[col])]
+    return cap
+
+
+def test_quiet_windows_the_load_explains_leave_the_lift_baselines_share_too():
+    # quiet time with the clock down to base only as every CPU filled is no time a throttle could show either way:
+    # counted as quiet seconds without one, it lowered the baseline share and so raised the lift
+    def capture(bursts):
+        cap = lag_cap(base=TURBO, during={S.CPU_PERF_PCT: 80.0}, hot=WHOLE_S, duration=60.0)
+        set_spans(cap, [(40.0, 40.5), (50.0, 50.5)], {S.CPU_PERF_PCT: 60.0})      # a throttle in quiet time, twice
+        if bursts:
+            set_spans(cap, [(33.0, 34.0), (45.0, 46.0)], {S.CPU_PERF_PCT: 102.0, **EVERY_CPU})
+        return analyse(cap)[1]["cpu_throttle"]
+    plain, loaded = capture(False), capture(True)
+    assert plain["b"] > 0 and loaded["b"] > plain["b"]
+
+
+@pytest.mark.parametrize("label, during", [
+    ("below base speed, every CPU busy", {S.CPU_PERF_PCT: 80.0, **EVERY_CPU}),
+    ("above base speed, the load as usual", {S.CPU_PERF_PCT: 102.0})])
+def test_a_clock_drop_the_load_does_not_explain_still_counts(label, during):
+    events, summary = analyse(lag_cap(base=TURBO, during=during, hot=WHOLE_S))
+    assert all("cpu_throttle" in e.causes for e in events), label
+    assert "left_out" not in summary["cpu_throttle"], label
+
+
+def test_moments_the_load_explains_leave_the_lift_test_instead_of_counting_against_it():
+    # 12 stutters, the clock coming down with the load at each: "only 0 of 12 coincided with the CPU slowing down"
+    # would say a CPU that did slow at every one never did
+    times = tuple(4.0 * k for k in range(1, 13))
+    _, summary = analyse(lag_cap(times, base=TURBO, during={S.CPU_PERF_PCT: 102.0, **EVERY_CPU}, hot=WHOLE_S,
+                                 duration=52.0))
+    entry = summary["cpu_throttle"]
+    assert entry["left_out"] == 12 and entry["a"] == 0 and entry["label"] == "too_few_events"
+
+
 def test_why_lines_carry_numbers():
     events, _ = analyse(lag_cap(during={S.GAME_TOP_THREAD_PCT: 95.0}))
     why = events[0].detail["why"]
@@ -491,6 +555,265 @@ def test_the_side_comes_from_the_slowest_presented_frame_not_the_displayed_one()
     events, _ = analyse(lag_cap(follow_gpu_ms=0.6))
     assert len(events) == 6 and {e.detail["side"] for e in events} == {"cpu"}
     assert firsts(events) == ["game_stall"] * 6
+
+
+# ------------------------------------------------- the residual: working, waiting or the screen ---
+
+def thread_ticks(cap, pattern, extra=0.0, times=TIMES):
+    """The busiest thread's 4 Hz readings cycling through `pattern`, with `extra` more (a {time: extra} dict for one per
+    stutter) on the one tick that holds each stutter: lag_cap's stutter at h is a frozen frame from h on, inside the
+    tick ending at h + 0.25."""
+    sy = cap.system
+    more = extra if isinstance(extra, dict) else {h: extra for h in times}
+    sy[S.GAME_TOP_THREAD_PCT] = [pattern[round(s / 0.25) % len(pattern)]
+                                 + sum(x for h, x in more.items() if abs(s - (h + 0.25)) < 1e-6) for s in sy[S.T]]
+    return cap
+
+
+DRIFT = (18.0,) * 4 + (32.0,) * 4      # 1 s at 18 % of a CPU, then 1 s at 32 %: quiet 1 s means spread as a real one's
+WORKED = ("nothing else moved, and in a frame held 160 ms the game's busiest thread ran 99 ms more than usual, nearer "
+          "working through it (118 ms more) than waiting (42 ms less): the game's own work")
+
+
+def test_a_long_frozen_frame_the_thread_worked_through_is_the_games_own_work_though_its_1_s_mean_hardly_rose():
+    # The owner's end-to-end hitch (2026-11-11): a 150 ms busy wait read 23-33 % of a CPU over 1 s against 17 %, under
+    # the z cut, so 5 of 8 stutters read "the game waited on itself". The tick that held it ran about 100 ms more.
+    events, summary = analyse(thread_ticks(lag_cap(), DRIFT, 48.0))
+    assert firsts(events) == ["game_cpu_spike"] * 6
+    assert all("game_cpu_spike" not in e.detail["signals"] for e in events)      # no 1 s z test named it
+    assert summary["game_cpu_spike"]["residual"] == 6 and summary["game_cpu_spike"]["a"] == 0
+    assert events[0].detail["why"][-1] == WORKED
+
+
+def test_frozen_frames_worked_through_never_leave_the_lift_test_contradicting_the_cause():
+    # 12 of them, none of which the 1 s means could show: "only 0 of 12 coincided with the game's own CPU work" would
+    # deny what the ticks showed at each one
+    times = tuple(4.0 * k for k in range(1, 13))
+    events, summary = analyse(thread_ticks(lag_cap(times, duration=52.0), DRIFT, 36.0, times))
+    assert firsts(events) == ["game_cpu_spike"] * 12
+    assert summary["game_cpu_spike"]["a"] == 0 and summary["game_cpu_spike"]["label"] == "neutral"
+    # one frame worked through among twelve still leaves "only 1 of 12" a contradiction (LC 5.2: 10 % or less)
+    one = {h: (36.0 if h == times[0] else -16.0) for h in times}
+    events, summary = analyse(thread_ticks(lag_cap(times, duration=52.0), DRIFT, one, times))
+    assert firsts(events) == ["game_cpu_spike"] + ["game_stall"] * 11
+    assert summary["game_cpu_spike"]["worked"] == 1 and summary["game_cpu_spike"]["label"] == "contradicts"
+    # only those: a thread saturated throughout is the lift test's own case, left as it was
+    events, summary = analyse(thread_ticks(lag_cap(times, duration=52.0), (93.0, 100.0), 0.0, times))
+    assert summary["game_cpu_spike"]["residual"] == 12 and summary["game_cpu_spike"]["label"] == "contradicts"
+
+
+@pytest.mark.parametrize("extra", [-16.0, 0.0, 12.0])
+def test_a_long_frozen_frame_the_thread_did_not_work_through_is_the_game_waiting_on_itself(extra):
+    # -16: it slept through the frame (the end-to-end hitch-wait), 0 and 12: no more than its usual work
+    events, _ = analyse(thread_ticks(lag_cap(), DRIFT, extra))
+    assert firsts(events) == ["game_stall"] * 6
+    line = events[0].detail["why"][-1]
+    assert line.startswith("nothing else moved: in a frame held 160 ms the game's busiest thread ran ")
+    assert line.endswith(", nearer waiting (42 ms less) than working through it (118 ms more); the GPU was idle, so "
+                         "the game waited on itself")
+
+
+def test_a_busy_thread_at_its_usual_level_through_a_frozen_frame_names_neither_answer():
+    # at 60 % of a CPU the midpoint of working (+64 ms) and waiting (-96 ms) is below nothing, so its usual level read
+    # as worked through; working through it needs a rise past the noise and two accounting ticks too, and a reading
+    # between the two answers says that neither was measured
+    events, _ = analyse(lag_cap(base=dict(BASE, **{S.GAME_TOP_THREAD_PCT: 60.0})))
+    assert firsts(events) == [None] * 6
+    assert events[0].detail["why"][-1] == (
+        "nothing else moved: in a frame held 160 ms the game's busiest thread ran no more than usual, nearer working "
+        "through it (64 ms more) than waiting (96 ms less) but within what its readings vary by, so whether the game "
+        "worked or waited is unknown")
+
+
+def test_a_thread_that_usually_does_nothing_waits_with_no_change():
+    events, _ = analyse(lag_cap(base=dict(BASE, **{S.GAME_TOP_THREAD_PCT: 0.0})))
+    assert firsts(events) == ["game_stall"] * 6
+    assert ", nearer waiting (no change) than working through it (160 ms more); " in events[0].detail["why"][-1]
+
+
+def test_a_frozen_frame_too_short_to_tell_working_from_waiting_keeps_the_1_s_reading():
+    # 40 ms, with readings that never move: half of it is under two 15.625 ms accounting ticks
+    events, _ = analyse(lag_cap(stutter_ms=40.0))
+    assert firsts(events) == ["game_stall"] * 6
+    assert "the busiest game thread was not busy" in events[0].detail["why"][-1]
+
+
+def test_a_thread_whose_readings_swing_from_tick_to_tick_cannot_tell_a_frozen_frame():
+    # Windows charges a thread one 15.625 ms clock tick at a time, so its 4 Hz readings can swing while its 1 s means
+    # hardly move: here 0 % and 50 % in turns, its 1 s means (five readings) 20 or 30 %. Judged on the 1 s spread alone,
+    # every frozen frame read as worked through (its tick read 50 %); one reading's own spread says the tick cannot tell.
+    events, _ = analyse(thread_ticks(lag_cap(), (0.0, 50.0)))
+    assert firsts(events) == ["game_stall"] * 6
+    assert all("the busiest game thread was not busy" in e.detail["why"][-1] for e in events)
+
+
+def test_a_thread_whose_level_wanders_over_seconds_cannot_tell_a_frozen_frame():
+    # 4 s at 15 % of a CPU, then 4 s at 35 %: its 1 s means spread wider than one reading does around their median,
+    # so here the 1 s spread is the larger guess of one tick's noise, and it bars the tick test
+    events, _ = analyse(thread_ticks(lag_cap(), (15.0,) * 16 + (35.0,) * 16))
+    assert firsts(events) == ["game_stall"] * 6
+    assert all("the busiest game thread was not busy" in e.detail["why"][-1] for e in events)
+
+
+def test_one_readings_spread_needs_as_many_readings_as_a_baseline():
+    base = at._Baseline(25.0, 0.0, 0.0)
+    few = at._Series([0.25 * k for k in range(1, 8)], [20.0, 30.0] * 3 + [20.0])
+    assert at._tick_spread(few, [(0.0, 2.0)], base) is None                       # 7 readings
+    enough = at._Series([0.25 * k for k in range(1, 9)], [20.0, 30.0] * 4)
+    assert at._tick_spread(enough, [(0.0, 2.0)], base) == pytest.approx(5.0 * at.MEAN_AD_TO_SD)
+
+
+def test_the_tick_test_needs_readings_over_the_whole_frozen_frame():
+    thread = at._Series([0.25, 0.5, 0.75, 1.0], [25.0, 65.0, 25.0, 25.0])
+    assert at._work_during(thread, 25.0, 0.3, 0.6) == (100.0, 0.125)    # 40 % over a 250 ms tick is 100 ms
+    gap = at._Series([0.25, 0.5, 0.75, 1.0], [25.0, None, 25.0, 25.0])
+    assert at._work_during(gap, 25.0, 0.3, 0.6) is None                  # the tick holding most of it is missing
+    assert at._work_during(gap, 25.0, 0.55, 0.7) == (0.0, 0.0625)
+
+
+def test_only_a_stutters_frozen_frame_is_judged_by_the_ticks():
+    worst = {"worst_ms": 160.0, "worst_t": 4.16}
+    assert at._worst_hold(LagEvent(1, "stutter", 4.0, 4.16, 160.0, dict(worst))) == (160.0, 4.16)
+    assert at._worst_hold(LagEvent(2, "fps_drop", 4.0, 7.0, 30.0, dict(worst))) is None    # frames kept coming
+    assert at._worst_hold(LagEvent(3, "stutter", 4.0, 4.16, 160.0, {})) is None            # it says nothing of one
+    assert at._worst_hold(LagEvent(4, "stutter", 4.0, 4.16, 160.0, {"worst_ms": True, "worst_t": 4.16})) is None
+    for ms in (float("inf"), float("nan"), 0.0, -5.0):
+        assert at._worst_hold(LagEvent(5, "stutter", 4.0, 4.16, 160.0, {"worst_ms": ms, "worst_t": 4.16})) is None, ms
+    assert at._worst_hold(LagEvent(6, "stutter", 4.0, 4.16, 160.0, {"worst_ms": 160.0, "worst_t": float("inf")})) is None
+
+
+def held_screen_cap(game="presented"):
+    """lag_cap's system rows, with 100 FPS frames all shown, but at each of TIMES the screen holds one frame for 60 ms:
+    while the game kept presenting ("presented": five frames Windows never showed, then one it did), because it
+    presented nothing for 60 ms ("stalled"), or because it stalled 50 ms and caught up with four frames 1 ms apart, of
+    which Windows showed the newest, as composition does ("caught_up")."""
+    cap = lag_cap()
+    b = SeriesBuilder(F.ALL)
+    t, todo = 0.5, sorted(TIMES)
+
+    def frame(ms, shown, display_ms=None):
+        b.add(t=t, frame_ms=ms, cpu_busy_ms=ms, gpu_busy_ms=0.5, displayed=1 if shown else 0, display_ms=display_ms,
+              frame_type="Application")
+
+    while t < cap.duration_s - 0.2:
+        t += 0.010
+        if todo and t >= todo[0]:
+            todo.pop(0)
+            if game == "presented":
+                for _ in range(5):
+                    frame(10.0, False)
+                    t += 0.010
+                frame(10.0, True, 60.0)
+            elif game == "stalled":
+                t += 0.050
+                frame(60.0, True, 60.0)
+            else:
+                t += 0.040
+                frame(50.0, False)
+                for _ in range(3):
+                    t += 0.001
+                    frame(1.0, False)
+                t += 0.001
+                frame(1.0, True, 60.0)
+            continue
+        frame(10.0, True, 10.0)
+    cap.frames = b.build()
+    return cap
+
+
+def test_a_screen_held_while_the_game_kept_presenting_is_no_cause_of_the_games():
+    # The owner's end-to-end control (2026-11-11): Windows left 8 of 17 frames off the screen and held one for 36 ms
+    # while LagLab kept drawing on time; nothing else moved, so it read "the game waited on itself"
+    events, summary = analyse(held_screen_cap())
+    assert len(events) == 6 and all(e.causes == [] for e in events)
+    why = events[0].detail["why"]
+    assert why[-1].startswith("nothing else moved: the game kept presenting through it (")
+    assert why[-1].endswith("but Windows showed only 2 of them: the screen held, not the game, so Windows or the "
+                            "display kept its frames back")
+    # and its side line never says one side of the game was slow beside that
+    assert why[0] == "the slowest frame the game presented in it took 10 ms, where the screen held one for 60 ms"
+    assert summary["game_stall"]["a"] == 0 and summary["game_cpu_spike"]["residual"] == 0
+
+
+@pytest.mark.parametrize("game", ["stalled", "caught_up"])
+def test_a_screen_held_because_the_game_stopped_presenting_is_still_the_games(game):
+    # caught_up: four of the frames went unshown, but each was replaced within 1 ms, which composition drops by design
+    events, _ = analyse(held_screen_cap(game))
+    assert firsts(events) == ["game_stall"] * 6
+
+
+def presents(shown, step_ms=10.0, t0=1.0, hidden=None):
+    """A chain of the game's own presents step_ms apart, `shown` saying which reached the screen."""
+    b = SeriesBuilder(F.ALL)
+    for k, s in enumerate(shown):
+        b.add(t=t0 + k * step_ms / 1000.0, frame_ms=step_ms, displayed=s, display_ms=step_ms if s else None,
+              frame_type="Application")
+    fr = b.build()
+    if hidden is not None:
+        fr[fa.HIDDEN] = list(hidden)
+    return fr
+
+
+@pytest.mark.parametrize("label, shown, step_ms, span_ms, usual_unshown, period_ms, held", [
+    ("kept presenting, one of six shown", (0, 0, 0, 0, 0, 1), 10.0, 60.0, 0.0, None, True),
+    ("on a 144 Hz screen", (0, 0, 0, 0, 0, 1), 10.0, 60.0, 0.0, 6.94, True),
+    ("but it usually leaves 60 % off the screen", (0, 0, 0, 0, 0, 1), 10.0, 60.0, 0.6, None, False),
+    ("one unshown, though a third of them", (1, 0, 1), 10.0, 30.0, 0.0, None, False),
+    ("three presents where its rate gives twelve", (0, 0, 1), 10.0, 120.0, 0.0, None, False),
+    ("five presents where its rate gives twelve", (0, 0, 0, 0, 1), 10.0, 120.0, 0.0, None, False),
+    ("each replaced within 1 ms", (0, 0, 0, 0, 0, 1), 1.0, 60.0, 0.0, None, False),
+    ("each replaced before a 60 Hz refresh", (0, 0, 0, 0, 0, 1), 10.0, 60.0, 0.0, 16.7, False)])
+def test_a_held_screen_needs_the_game_presenting_and_windows_leaving_off_frames_it_had_time_to_show(
+        label, shown, step_ms, span_ms, usual_unshown, period_ms, held):
+    fr = presents(shown, step_ms)
+    usual = (10.0, usual_unshown)
+    stutter = LagEvent(1, "stutter", 0.9995, 0.9995 + span_ms / 1000.0, span_ms, {})
+    assert (at._screen_hold(fr, stutter, usual, period_ms) is not None) is held, label
+    drop = LagEvent(2, "fps_drop", 0.9995, 0.9995 + span_ms / 1000.0, 30.0, {})
+    assert at._screen_hold(fr, drop, usual, period_ms) is None              # a stutter's hold only
+    assert at._screen_hold(fr, LagEvent(3, "stutter", 1.0, 1.0, 0.0, {}), usual, period_ms) is None   # no span
+
+
+def test_a_stutter_with_no_span_is_never_a_held_screen():
+    # two frames Windows never showed at one instant, the next a refresh later: the rate over no time divided by zero
+    b = SeriesBuilder(F.ALL)
+    for t, shown in ((1.0, 0), (1.0, 0), (1.02, 1)):
+        b.add(t=t, frame_ms=10.0, displayed=shown, display_ms=20.0 if shown else None, frame_type="Application")
+    assert at._screen_hold(b.build(), LagEvent(1, "stutter", 1.0, 1.0, 0.0, {}), (10.0, 0.0)) is None
+
+
+def test_a_held_screen_with_none_of_the_frames_shown_says_none():
+    held = at._screen_hold(presents((0,) * 6), LagEvent(1, "stutter", 0.9995, 1.0595, 60.0, {}), (10.0, 0.0))
+    assert held is not None and "but Windows showed none of them: " in held[1]
+
+
+def test_frames_a_driver_generated_are_not_the_games_presents():
+    # PM 2.1: a generated frame names its generator; it says nothing of whether the game kept presenting
+    fr = presents((0, 0, 0, 0, 0, 1))
+    fr[F.FRAME_TYPE] = ["Application", "AMD_AFMF", "AMD_AFMF", "AMD_AFMF", "AMD_AFMF", "Application"]
+    stutter = LagEvent(1, "stutter", 0.9995, 1.0595, 60.0, {})
+    assert at._screen_hold(fr, stutter, (10.0, 0.0)) is None                       # 2 of the game's own: too few
+    fr = presents((1, 1, 1, 1, 0, 0))
+    fr[F.FRAME_TYPE] = ["Application"] * 4 + ["AMD_AFMF"] * 2
+    assert at._usual_presents(fr) == (10.0, 0.0)
+
+
+def test_the_usual_share_left_off_the_screen_leaves_out_time_behind_another_window():
+    # a covered window shows almost none of its frames (frames.HIDDEN): counted, the owner's 2026-11-09 hog capture
+    # (14 s covered) "usually" left so many off that a held screen in front could not stand out
+    fr = presents((1,) * 10 + (0,) * 10, hidden=(False,) * 10 + (True,) * 10)
+    assert at._usual_presents(fr) == (10.0, 0.0)
+    assert at._usual_presents(presents((1,) * 10 + (0,) * 10)) == (10.0, 0.5)
+
+
+def test_a_screen_held_while_the_game_kept_presenting_is_judged_only_when_nothing_else_moved():
+    # a moved signal still explains it: here hard page faults with RAM nearly full
+    cap = held_screen_cap()
+    cap.system[S.HARD_FAULTS_PS] = [5000.0 if any(h - 0.5 <= s <= h + 0.5 for h in TIMES) else 5.0
+                                    for s in cap.system[S.T]]
+    cap.system[S.RAM_AVAIL_MB] = [1000.0] * len(cap.system[S.T])
+    events, _ = analyse(cap)
+    assert firsts(events) == ["memory_paging"] * 6
 
 
 def diagnosed(cap):

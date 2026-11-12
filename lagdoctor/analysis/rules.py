@@ -2307,19 +2307,23 @@ def _event_link(c: _Case, cause: str, family: str, phrase: str, contradict: bool
     what = "marked moments" if half else "stutters and FPS drops"
     lift = _fin(entry.get("lift"))
     share = 100 * a / n
+    left = _num(entry.get("left_out"))       # moments where its move had another explanation (attribute._turbo_veto)
+    why_left = _text(entry.get("left_out_why"), 200) or "something else explained its move there"
+    more = f"; {left:.0f} more {'is' if left == 1 else 'are'} left out: {why_left}" if left else ""
     if label == "supports":
         w = _fin(entry.get("weight")) or W_STEADY
         if entry.get("cap") == "possible":   # DESIGN: at most possible. Its lift weight stays 1 so it ranks last when
             w = W_STEADY * (HALF if half else 1.0)    # explaining away, but 1 point alone could never reach possible
         c.support(family, w, f"{a:.0f} of {n:.0f} {what} coincided with {phrase}"
-                  + (f" (lift {lift:.1f})" if lift is not None else ""), share, "%", 100 * attribute.LIFT_MIN_SHARE)
+                  + (f" (lift {lift:.1f})" if lift is not None else "") + more, share, "%",
+                  100 * attribute.LIFT_MIN_SHARE)
         return True
     if label == "contradicts" and contradict:
         c.against(family, CONTRA_WEIGHT * (HALF if half else 1.0),
-                  f"only {a:.0f} of {n:.0f} {what} coincided with {phrase}", share, "%",
+                  f"only {a:.0f} of {n:.0f} {what} coincided with {phrase}{more}", share, "%",
                   100 * attribute.CONTRA_MAX_SHARE)
     else:
-        c.neutral(family, f"{a:.0f} of {n:.0f} {what} coincided with {phrase}", share, "%",
+        c.neutral(family, f"{a:.0f} of {n:.0f} {what} coincided with {phrase}{more}", share, "%",
                   100 * attribute.LIFT_MIN_SHARE)
     return False
 
@@ -2419,8 +2423,9 @@ def _background_hogs(cap: Capture, ctx: dict) -> Any:
     entries = {k: e.causes.get(k) for k in kinds if isinstance(e.causes.get(k), dict)}
     if entries and all(v.get("label") == "too_few_events" for v in entries.values()):
         n = len(e.attributed)
-        return Unchecked("background_hogs", f"only {n} stutter{'s' if n != 1 else ''} and FPS drops: linking them to "
-                                            f"another program needs at least {MIN_EVENTS}")
+        what = "stutters and FPS drops" if n != 1 else "stutter or FPS drop"
+        return Unchecked("background_hogs", f"only {n} {what}: linking them to another program needs at least "
+                                            f"{MIN_EVENTS}")
     if not entries or all(v.get("label") == "not_measured" for v in entries.values()):
         c.lack("background", W_EVENT_STRONG, "no CPU, disk or GPU readings for other programs")
         return c.conclude()
@@ -2619,8 +2624,8 @@ def _shader_compile(cap: Capture, ctx: dict) -> Any:
     if not own:
         return None
     if len(own) < MIN_EVENTS:
-        return Unchecked("shader_compile", f"only {len(own)} stutters came from the game's own work: too few to tell "
-                                           "whether they bunch up at the start")
+        return Unchecked("shader_compile", f"only {len(own)} stutter{'s' if len(own) != 1 else ''} came from the "
+                                           "game's own work: too few to tell whether they bunch up at the start")
     if e.duration is None:
         c.lack("frame_timing", W_STEADY, "the capture's length is unknown")
         return c.conclude()
@@ -2688,21 +2693,36 @@ def _stutter_cause(cap: Capture, ctx: dict, cause: str) -> Any:
     if label == "not_measured":
         return Unchecked(cause, _text(entry.get("why"), 200) or "its signal was not measured")
     if label == "too_few_events":
-        return (Unchecked(cause, f"only {n:.0f} {what}: blaming a cause needs at least {MIN_EVENTS}") if ids else None)
+        one = {"stutters and FPS drops": "stutter or FPS drop", "marked moments": "marked moment"}[what]
+        return (Unchecked(cause, f"only {n:.0f} {one if n == 1 else what}: blaming a cause needs at least {MIN_EVENTS}")
+                if ids else None)
     if cause in RESIDUAL_CAUSES:
         if half:
             return None                      # attribute.py works out no residual for marks: nothing was judged
         _residual_items(c, entry, ids, phrase, what)
     else:
         _event_link(c, cause, family, phrase)
-        if label not in ("supports", "contradicts") and ids:
+        residual = (_num(entry.get("residual")) or 0) if cause == "game_cpu_spike" else 0
+        worked = _num(entry.get("worked")) or 0
+        steady = False
+        if residual:      # named by attribute._residual, which the lift test's 1 s means could not see
+            line = (f"in {residual:.0f} of {n:.0f} {what} nothing else moved, and the game's busiest thread was "
+                    "saturated or worked through the frozen frame")
+            # only the frames the ticks showed worked through are evidence of extra work: a thread saturated all along
+            # says nothing of the moment
+            steady = worked >= attribute.LIFT_MIN_A and bool(n) and worked / n >= attribute.LIFT_MIN_SHARE
+            if steady:
+                c.support(family, W_STEADY, line, 100 * worked / n, "%", 100 * attribute.LIFT_MIN_SHARE)
+            else:          # they already count in "best explained by", below
+                c.neutral(family, line, 100 * residual / n if n else None, "%", 100 * attribute.LIFT_MIN_SHARE)
+        if label not in ("supports", "contradicts") and ids and not steady:
             c.support(family, W_STATIC, f"{len(ids)} of {n:.0f} {what} were best explained by {phrase}, too few to be "
                                         "sure")
     if cpu_side and not half:
         _cpu_side_item(c, ids)
     for ev in e.judged:
         if ev.id in ids and isinstance(ev.detail.get("why"), list) and len(ev.detail["why"]) > 1:
-            c.neutral(family, f"for example at {ev.t_start:.1f} s: {_text(ev.detail['why'][1], 200)}")
+            c.neutral(family, f"for example at {ev.t_start:.1f} s: {_text(ev.detail['why'][1], 320)}")
             break
     fixes = [_advice(t, d) for t, d in advice]
     share = _fin(entry.get("share")) or 0.0

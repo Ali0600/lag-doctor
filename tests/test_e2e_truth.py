@@ -8,7 +8,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from e2e_truth import FRONT, judge, match_events, time_away  # noqa: E402
+from e2e_truth import FRONT, WINDOWS_ONLY, judge, match_events, time_away  # noqa: E402
 
 from lagdoctor.model import Diagnosis, Finding, LagEvent  # noqa: E402
 
@@ -69,13 +69,107 @@ def test_wrong_gpu_is_required_only_when_laglab_ran_on_intel_with_a_discrete_gpu
     assert judge("hitch", nvidia_log, ORIGIN, d, has_discrete_gpu=True, capture_s=CAPTURE_S).ok
 
 
-def test_the_smooth_control_fails_on_any_stutter_or_limit_finding():
-    log = {"gl_renderer": "NVIDIA", "front": IN_FRONT}
+def steady_frames(*gaps, fps=120.0, until=CAPTURE_S):
+    """LagLab's own frame starts at `fps` from before the capture to `until` s into it, each (t, ms) of `gaps` a longer
+    one at t."""
+    out, t = [], ORIGIN - 1.0
+    todo = sorted(gaps)
+    while t < ORIGIN + until:
+        out.append(t)
+        if todo and t - ORIGIN >= todo[0][0]:
+            t += todo.pop(0)[1] / 1000.0
+        else:
+            t += 1 / fps
+    return out
+
+
+def held(i, t):
+    """A stutter the doctor named no cause of the game's for: Windows held the screen (attribute._screen_hold)."""
+    return LagEvent(id=i, kind="stutter", t_start=t, t_end=t + 0.17, severity=36, causes=[])
+
+
+def control(events, lag_type, frames=None):
+    log = {"gl_renderer": "NVIDIA", "front": IN_FRONT, **({} if frames is None else {"frames": frames})}
+    return judge("smooth", log, ORIGIN, diag(events, lag_type=lag_type), has_discrete_gpu=True, capture_s=CAPTURE_S)
+
+
+def failed(v):
+    return [c.name for c in v.checks if not c.ok]
+
+
+def test_the_smooth_control_fails_on_a_stutter_blamed_on_the_game_or_a_limit_finding():
+    log = {"gl_renderer": "NVIDIA", "front": IN_FRONT, "frames": steady_frames()}
     assert judge("smooth", log, ORIGIN, diag(lag_type="none"), has_discrete_gpu=True, capture_s=CAPTURE_S).ok
-    assert not judge("smooth", log, ORIGIN, diag([stutter(1, 5.0, "game_stall")], lag_type="none"),
-                     has_discrete_gpu=True, capture_s=CAPTURE_S).ok
+    v = judge("smooth", log, ORIGIN, diag([stutter(1, 5.0, "game_stall")], lag_type="none"),
+              has_discrete_gpu=True, capture_s=CAPTURE_S)
+    assert failed(v) == [WINDOWS_ONLY]                  # blamed on the game
     assert not judge("smooth", log, ORIGIN, diag(findings=["gpu_limit"], lag_type="none"), has_discrete_gpu=True,
                      capture_s=CAPTURE_S).ok
+
+
+def test_the_smooth_control_passes_a_stutter_windows_made_and_only_that():
+    # The owner chose (2026-11-11) to pass a stutter the doctor names nothing of the game's for, where LagLab's own
+    # frame starts held no gap that big: their smooth run held one frame 36 ms while LagLab's longest gap was 16.4 ms
+    assert control([held(1, 5.0)], "stutter", steady_frames((5.05, 16.4))).ok
+    # LagLab's own frames stopped there: a stutter of its own, whatever the doctor said of it
+    assert failed(control([held(1, 5.0)], "stutter", steady_frames((5.05, 150.0)))) == [
+        WINDOWS_ONLY, "no lag in the control"]
+    # a log without frame starts cannot show that, so the stutter fails
+    assert failed(control([held(1, 5.0)], "stutter")) == [WINDOWS_ONLY,
+                                                           "no lag in the control"]
+    # any cause of the game's among its causes fails it
+    blamed = LagEvent(id=1, kind="stutter", t_start=5.0, t_end=5.17, severity=36, causes=["driver_dpc", "gpu_spike"])
+    assert failed(control([blamed], "stutter", steady_frames())) == [WINDOWS_ONLY,
+                                                                      "no lag in the control"]
+    # and a verdict naming another kind of lag still fails beside one
+    assert failed(control([held(1, 5.0)], "mixed", steady_frames())) == ["no lag in the control"]
+    # a stutter past the last frame LagLab logged cannot be shown not to be its own (its log stopped at 4 s), nor one
+    # before its first
+    assert failed(control([held(1, 5.0)], "stutter", steady_frames(until=4.0))) == [
+        WINDOWS_ONLY, "no lag in the control"]
+    assert failed(control([held(1, 5.0)], "stutter", [t for t in steady_frames() if t > ORIGIN + 5.05])) == [
+        WINDOWS_ONLY, "no lag in the control"]
+    # a gap of LagLab's own just before the stutter is close enough to be its cause (0.15 s, as the moments match)
+    assert failed(control([held(1, 5.0)], "stutter", steady_frames((4.80, 150.0)))) == [
+        WINDOWS_ONLY, "no lag in the control"]
+    # nor may lag of another kind blamed on the game sit beside it: a "stutter" verdict once let it pass
+    drop = LagEvent(id=2, kind="fps_drop", t_start=8.0, t_end=9.75, severity=20, causes=["game_cpu_spike"])
+    assert failed(control([held(1, 5.0), drop], "stutter", steady_frames())) == ["no lag in the control"]
+    # the pacing of a 120 FPS cap on a 144 Hz screen names no cause (the owner's smooth run), and passes beside it
+    pace = LagEvent(id=3, kind="pacing", t_start=0.1, t_end=21.5, severity=5, causes=[])
+    assert control([held(1, 5.0), pace], "stutter", steady_frames()).ok
+
+
+def test_every_cause_the_doctor_names_is_on_one_side_of_the_control():
+    # a cause added to attribute.CAUSE_ORDER must say whether it blames the game: left off both lists, a stutter it
+    # named would pass the control unasked (vram_overflow, the game's spill out of VRAM, once did)
+    from e2e_truth import GAME_CAUSES, NOT_GAME
+
+    from lagdoctor.analysis import attribute
+    assert set(GAME_CAUSES) | set(NOT_GAME) == set(attribute.CAUSE_ORDER)
+    assert not set(GAME_CAUSES) & set(NOT_GAME) and "vram_overflow" in GAME_CAUSES
+
+
+def test_laglabs_own_gaps_are_those_as_big_as_a_stutter():
+    from e2e_truth import own_gaps
+    frames = steady_frames((5.0, 20.8), (9.0, 21.0), (12.0, 16.4))
+    gaps = own_gaps({"frames": frames}, ORIGIN)
+    assert [round(b - a, 4) for a, b in gaps] == [0.021]            # 2.5 x 8.33 ms = 20.83 ms: 21.0 only
+    assert own_gaps({"frames": frames[::-1]}, ORIGIN) == own_gaps({"frames": frames}, ORIGIN)   # in any order
+    # at 240 FPS 2.5 times its 4.2 ms is 10.4 ms, and the 8 ms over it decides: 13 ms is a stutter, 11 ms is not
+    gaps = own_gaps({"frames": steady_frames((5.0, 11.0), (9.0, 13.0), fps=240.0)}, ORIGIN)
+    assert [round(b - a, 4) for a, b in gaps] == [0.013]
+
+
+def test_a_log_with_too_few_or_unreadable_frame_starts_shows_nothing():
+    from e2e_truth import OWN_MIN_FRAMES, own_frames, own_gaps
+    ok = [ORIGIN + k / 120 for k in range(OWN_MIN_FRAMES)]
+    assert own_frames({"frames": ok}, ORIGIN) is not None
+    assert own_frames({"frames": ok[:-1]}, ORIGIN) is None           # too few to say what its pace was
+    for junk in ("x", float("nan"), float("inf"), True, None):
+        assert own_frames({"frames": ok + [junk]}, ORIGIN) is None, junk
+    assert own_frames({}, ORIGIN) is None and own_frames({"frames": "x"}, ORIGIN) is None
+    assert own_gaps({"frames": ok[:-1]}, ORIGIN) is None
 
 
 @pytest.mark.parametrize("lag_type", ["stutter", "pacing", "low_fps", "network", "mixed", "unknown"])

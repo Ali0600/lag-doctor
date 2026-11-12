@@ -1196,3 +1196,37 @@ front; a review found that 4 / 20 ms frames at 51/49 in front and 49/51 behind r
 "cost" where the real rates differ by 3 %.
 **Takeaway**: never quote a rate from a median interval; use count over total time, and keep medians for typical
 values that are not summed.
+
+### Judge a short burst in the readings that hold it, against its own length
+A 4 Hz CPU reading is a counter's delta over its tick, so a 150 ms burst of work shows whole in the one or two ticks
+that hold it, while a 1 s mean spreads it over four ticks and the quieter ones around it. Sum the extra time in just
+those ticks, compare it with what working through the burst would add, and size the noise from those ticks' own
+spread: a counter charged one 15.625 ms clock tick at a time can swing from tick to tick while its 1 s means stay
+flat, so twice the 1 s spread can understate one tick's.
+**Why it came up**: the e2e hitch, a 150 ms busy wait every 3 s, read 23-33 % of a CPU over 1 s against 17 %, under
+the z cut in 5 of 8, so those read "the game waited on itself". The ticks that held it ran 85-101 ms more than usual,
+and a 150 ms sleep's -42 to +5 ms.
+**Takeaway**: to ask whether a thread worked through a short event, read the ticks that hold the event and weigh the
+extra time against the event's length, never a mean wider than the event.
+
+### Turbo runs slower as more cores work, so a clock drop is throttling only at a similar load
+A CPU's top speed depends on how many cores are busy: with one or two working it boosts far past its base clock, with
+all of them working it settles near base. `% Processor Performance` falling as the load spreads to every core is that
+design, not heat or a power limit; a fall below base speed, or one at the same load, is the throttling to name.
+**Why it came up**: the e2e hog filled all 16 CPUs in bursts; the clock went from about 137-156 % of base to 100-105 % at
+each one, with Windows' % Performance Limit at 100 throughout, and every FPS drop named "the CPU slowing down" first.
+**Takeaway**: compare a CPU's speed only between moments of a similar load, and read a fall that stays at or above
+base speed under rising load as turbo.
+
+### PresentMon tells a game that stopped from a screen that held
+PresentMon lists every frame the game presented and whether Windows showed it. In a long stall of the game's own,
+nothing is presented until it ends; when the screen holds while the game keeps presenting at its usual rate and
+Windows leaves frames off the screen that it had a whole refresh to show, the hold came after the game, in Windows'
+composition or the display. A frame replaced before the next refresh is dropped by design, so the burst a game
+catches up with after a stall proves nothing.
+**Why it came up**: the e2e smooth control's one stutter, a frame held 36 ms, read "the game waited on itself", yet
+the game presented 17 frames through it (83 % of its rate) and Windows showed 9, while LagLab's own log showed its
+frames on time; the game's own 100-160 ms hitches presented 5-18 % of their rate, though a short stall of its own can
+keep its rate. A review then found a stall followed by a 1 ms catch-up burst passing the frame count alone.
+**Takeaway**: before blaming the game for a frozen screen, count the frames it presented through the freeze and which
+of them Windows had time to show and did not.

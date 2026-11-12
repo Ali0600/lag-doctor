@@ -2300,5 +2300,104 @@
   "tests": [
    "tests/test_analysis_covered.py::test_a_part_cut_inside_a_cover_hides_what_the_whole_recording_hides"
   ]
+ },
+ {
+  "name": "the lift line never says what it left out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    more = f\"; {left:.0f} more {'is' if left == 1 else 'are'} left out: {why_left}\" if left else \"\"",
+  "new": "    more = \"\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_lift_line_says_how_many_moments_the_load_explained_and_left_out"
+  ]
+ },
+ {
+  "name": "one moment left out is said as several",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "{'is' if left == 1 else 'are'} left out",
+  "new": "{'are'} left out",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_lift_line_says_how_many_moments_the_load_explained_and_left_out"
+  ]
+ },
+ {
+  "name": "one stutter is said as stutters",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "{one if n == 1 else what}",
+  "new": "{what}",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cause_the_marks_named_is_listed_even_with_too_few_marks"
+  ]
+ },
+ {
+  "name": "the hogs' rule says one stutter as stutters",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        what = \"stutters and FPS drops\" if n != 1 else \"stutter or FPS drop\"",
+  "new": "        what = \"stutters and FPS drops\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_one_stutter_is_said_as_one"
+  ]
+ },
+ {
+  "name": "shader compiles say one stutter as stutters",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"only {len(own)} stutter{'s' if len(own) != 1 else ''} came from the \"",
+  "new": "f\"only {len(own)} stutters came from the \"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_one_stutter_is_said_as_one"
+  ]
+ },
+ {
+  "name": "the stutters the residual named go uncounted",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if residual:      # named by attribute._residual, which the lift test's 1 s means could not see",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_work_counts_the_stutters_the_residual_named"
+  ]
+ },
+ {
+  "name": "a few stutters the residual named count as enough",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            steady = worked >= attribute.LIFT_MIN_A and bool(n) and worked / n >= attribute.LIFT_MIN_SHARE",
+  "new": "            steady = True",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_work_counts_the_stutters_the_residual_named"
+  ]
+ },
+ {
+  "name": "enough stutters the residual named never count",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            steady = worked >= attribute.LIFT_MIN_A and bool(n) and worked / n >= attribute.LIFT_MIN_SHARE",
+  "new": "            steady = False",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_work_counts_the_stutters_the_residual_named"
+  ]
+ },
+ {
+  "name": "a thread saturated all along weighs as worked through",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            steady = worked >= attribute.LIFT_MIN_A and bool(n) and worked / n >= attribute.LIFT_MIN_SHARE",
+  "new": "            steady = residual >= attribute.LIFT_MIN_A and bool(n) and residual / n >= attribute.LIFT_MIN_SHARE",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_work_counts_the_stutters_the_residual_named"
+  ]
+ },
+ {
+  "name": "a counted residual line keeps \"too few to be sure\" under it",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if label not in (\"supports\", \"contradicts\") and ids and not steady:",
+  "new": "        if label not in (\"supports\", \"contradicts\") and ids:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_work_counts_the_stutters_the_residual_named"
+  ]
+ },
+ {
+  "name": "a cause's example is cut at 200 characters",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "{_text(ev.detail['why'][1], 320)}",
+  "new": "{_text(ev.detail['why'][1], 200)}",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_causes_example_keeps_a_long_why_line_whole"
+  ]
  }
 ]

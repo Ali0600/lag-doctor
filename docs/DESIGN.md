@@ -1181,9 +1181,40 @@ A cause is *blind* (`blind: true`, never "contradicts") when every measured part
 floor or past it, and that level plus the floor is past the most its signal ever read: no moment could rise. A game
 behind another window in most quiet seconds has its "behind" signal at 1.0, so "only 0 of 12 coincided with another
 window being in front" would be false; a signal that never moved off nothing is not blind.
+A move that something else explains does not count: the CPU's clock (`cpu_perf_pct`) falling while it stays at or
+above base speed, at a moment the whole machine's CPU use (`cpu_total_pct` times the logical CPUs, the game's
+included) rose by background_cpu's floor for all programs and its z test, is turbo, which runs slower the more cores
+work (LC 4.5 compares speeds "at a similar load"; on the 2026-11-11 e2e hog run this laptop ran at about 137-156 % of
+base with its CPUs nearly idle and at 100-105 % with all of them busy, its % Performance Limit at 100 throughout, and
+every FPS drop had named `cpu_throttle` first). The event's why-lines say so, last, and the moment leaves that cause's
+lift test (`left_out`, `left_out_why`; `n` is then the rest), as a rubric drops what had no chance to show; so does a
+quiet window where the clock moved only that way, from the baseline share. A fall below base speed, or one at the
+usual load, still counts. The run's falls bottomed out at 100.6-102.9 %, close to base: a hotter run under the same
+load that fell below it would name `cpu_throttle` again, as it should.
 Each event is then attributed to its single best cause (explaining away), first in `ev.causes`; when nothing
-moved, the residual is `gpu_spike` (GPU side), `game_cpu_spike` (a saturated thread) or `game_stall`, and no
-cause at all when the sampler did not measure that moment.
+moved, the residual (`attribute._residual`), in order: `gpu_spike` on the GPU side; no cause of the game's when the
+screen held while the game kept presenting (`_screen_hold`: at least half the frames its usual rate gives over the
+stutter, at least two of them never shown, a share 25 points over its usual one away from time behind another window,
+and at least one of those with a whole refresh before the game's next present, since composition drops a frame
+replaced sooner by design, as the burst a game catches up with after a stall of its own): Windows' composition or
+the display held it, and the e2e smooth control's 36 ms stutter (8 of 17 frames unshown while LagLab drew on time)
+had read "the game waited on itself" (its side line then names the slowest frame the game presented, never a slow
+side); `game_cpu_spike` for a busiest thread saturated over 1 s, or for a stutter's
+long frozen frame it worked through; else `game_stall`. A stutter's frozen frame (its worst hold; an FPS drop holds
+none) is judged by the thread's extra CPU time in the 4 Hz ticks that cover it (`_work_during`; a tick reads the delta
+since the one before, and a missing tick there leaves the frame unjudged), against the midpoint of working through it
+(about the hold times one minus the thread's usual share) and waiting (minus the hold times that share), where 2
+spreads of those ticks' noise fit in half the distance and two 15.625 ms accounting ticks too: a 1 s mean dilutes a
+150 ms busy wait to a few points, so on the e2e hitch run 5 of 8 had read `game_stall`. Working through it also
+needs a rise past that bar, since for a thread usually past half a CPU the midpoint is below nothing. One tick's
+spread is the larger of twice the 1 s means' and the quiet ticks' own (each guess fell short of the real spread on
+some e2e capture). A frame too short to tell keeps the 1 s reading; a reading nearer working through it but within
+the bar names no cause and says neither answer was measured. A lift test that reads "contradicts" for
+`game_cpu_spike` reads "neutral" where counting the frames the ticks showed worked through (`worked`) ends the
+contradiction, and the rule counts every stutter the residual named for it on a line of its own, weighed only by the
+frames worked through (a thread saturated all along says nothing of the moment). Above the refresh rate a held screen
+cannot clear (the game's frames are under one refresh apart), and in composed GPU-bound play most dropped frames pass
+the refresh test, so there the share decides. No cause at all when the sampler did not measure that moment.
 
 | side | signal that moved | cause id |
 |---|---|---|
@@ -1198,6 +1229,8 @@ cause at all when the sampler did not measure that moment.
 | GPU | VRAM near full and `game_shared_mb` rising (within 5 s, not a plateau over the median) | `vram_overflow` |
 | GPU | GPU busy long, nothing else moved | `gpu_spike` |
 | none | game not focused (`game_focused` = 0) | `not_focused` |
+| none | nothing moved, the game kept presenting and Windows left its frames off the screen | none (the screen held) |
+| none | nothing moved, the thread worked through a long frozen frame | `game_cpu_spike` |
 | none | nothing moved, thread idle | `game_stall` (the game waited on itself) |
 
 Blame for the background causes names the processes whose own rise clears the cause's floor (CPU: 25 % of a
@@ -1258,7 +1291,9 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   "full speed". Its line on a busiest thread under 70 % of a CPU (LC 4.5), the share rounded down, is left out
   under the CPU verdicts (every core busy is CPU-bound too) and an older capture past VSync's work edge, and where
   the CPU is not ruled out it says the thread is under the 70 % at which CPU speed starts to matter, never that CPU
-  speed is not what holds it back.
+  speed is not what holds it back. Its event-linked line, shown when the lift test supports, counts only the moments
+  the load did not explain (Attribution: turbo) and says how many it left out; each of those moments' own why-lines
+  says the load explained it.
 - `ram_pressure`: free RAM under 10 % (5 % or 64 MB critical), hard faults, the commit charge over 80 / 90 %. A
   commit charge over 90 % while RAM stays free is the page file running short: free RAM is no evidence against it
   then (nor hard faults for it, being file reads, nor the paging lift test, which counts paging only while RAM is
@@ -1896,7 +1931,14 @@ typed on the player's PC, and the game is never started, stopped or opened by la
   window was the foreground window for the whole capture (LagLab logs each change, `log["front"]`): Windows shows
   nothing of a covered window, and PresentMon's default metrics hold every frame that was not shown behind the last
   one that was, so a covered LagLab gives few rows or none (the analysis leaves such time out, `frames.HIDDEN`, but
-  a mode judged on it would have nothing to judge); and a change of focus makes it hitch. Hog mode does a
+  a mode judged on it would have nothing to judge); and a change of focus makes it hitch. The smooth control passes a
+  stutter only where LagLab's own frame starts (`log["frames"]`, at least 10) span it and held no gap there as big as
+  a stutter (LC 2.4: 2.5 times their usual and 8 ms over it), and the doctor named no cause of the game's for it
+  (`GAME_CAUSES`; every other cause is in `NOT_GAME`, and a test holds the two equal to `attribute.CAUSE_ORDER`), and
+  its verdict may then say "stutter" while nothing of another kind blamed on the game sits beside them (the pacing a
+  120 FPS cap gives on a 144 Hz screen names no cause): Windows can hold a window's frames
+  off the screen while LagLab draws on time (the owner's choice, 2026-11-11). A log without usable frame starts fails
+  every stutter. Hog mode does a
   fixed amount of work per frame, measured in its warmup (`laglab.app.FixedWork`), because a timed busy-wait ends on
   time whatever else runs; its bursts are whole ones only, and the run gives it 40 s, so that at least
   `attribute.LIFT_MIN_EVENTS` bursts fall inside the capture (`tests/test_e2e_schedule.py`).
