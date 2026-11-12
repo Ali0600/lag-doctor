@@ -129,6 +129,19 @@ def _alive(procs: set[tuple[int, int]], snap: ntquery.Snapshotter) -> set[tuple[
     return procs & {(p.pid, p.create_time) for p in snap.snapshot().values()}
 
 
+def _still_listed(procs: set[tuple[int, int]], snap: ntquery.Snapshotter,
+                  seconds: float) -> dict[tuple[int, int], str]:
+    """(pid, create time) -> image name of each of procs still in the snapshot, once none is or `seconds` have
+    passed since the call. A process the job no longer counts can stay listed a moment longer (CI, 2026-11-11)."""
+    deadline = time.monotonic() + seconds
+    while True:
+        listed = {(p.pid, p.create_time): p.name for p in snap.snapshot().values()}
+        left = {key: listed[key] for key in procs if key in listed}
+        if not left or time.monotonic() >= deadline:
+            return left
+        time.sleep(0.05)
+
+
 def _end_leftovers(procs: set[tuple[int, int]], snap: ntquery.Snapshotter) -> None:
     # Only when a run got it wrong: end what it left running, each one checked to be the process recorded.
     for pid, _ in _alive(procs, snap):
@@ -324,6 +337,7 @@ subprocess.Popen([sys.executable, "-c", sys.argv[2], sys.argv[1], str(os.getpid(
                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 time.sleep(300)
 """
+TREE_GONE_S = 10.0           # how long the ended tree may stay in the snapshot (60 runs here: never listed after end)
 
 
 def test_the_job_counts_every_process_under_pytest_and_ending_it_ends_them_all(tmp_path):
@@ -341,7 +355,9 @@ def test_the_job_counts_every_process_under_pytest_and_ending_it_ends_them_all(t
         assert job.active() == len(tree), (job.active(), tree)
         job.end()
         assert job.active() == 0
-        assert not _alive(tree, snap), sorted(_alive(tree, snap))
+        # The job counts none, yet Windows may list one a moment longer: wait for the tree to leave, with a bound.
+        left = _still_listed(tree, snap, TREE_GONE_S)
+        assert not left, f"still listed {TREE_GONE_S:g} s after the job ended them: {sorted(left.items())}"
     finally:
         _end_leftovers(tree, snap)
         job.close()
