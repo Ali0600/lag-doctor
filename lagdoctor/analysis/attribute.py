@@ -1231,7 +1231,8 @@ def _residual(side: str | None, source: str | None, thread: _Series, base: _Base
     if level is not None and level >= 100.0 * THREAD_BUSY:
         return "game_cpu_spike", (f"nothing else moved, and the game's busiest thread was saturated "
                                   f"({level:.0f}% of a CPU): the game's own work")
-    gpu = " and the GPU was idle" if side == "cpu" and source == "frames" else "; the GPU's share of it is unknown"
+    gpu_idle = side == "cpu" and source == "frames"          # only the event's own frames can show it (A3)
+    gpu = " and the GPU was idle" if gpu_idle else "; the GPU's share of it is unknown"
     # A long frozen frame is judged between the thread working through it, about (1 - its usual share) of the frame
     # in extra CPU time, and waiting, about minus its usual share: at their midpoint, where the noise of those ticks'
     # readings cannot carry one answer past it. One tick's spread is the larger of two guesses, since on the owner's
@@ -1253,7 +1254,7 @@ def _residual(side: str | None, source: str | None, thread: _Series, base: _Base
             if extra >= hold * (0.5 - share) and extra >= bar:
                 return "game_cpu_spike", f"nothing else moved, and {ran}, nearer {work} than {wait}: the game's own work"
             if extra < hold * (0.5 - share):
-                where = "the GPU was idle" if side == "cpu" and source == "frames" else "the GPU's share of it is unknown"
+                where = "the GPU was idle" if gpu_idle else "the GPU's share of it is unknown"
                 return "game_stall", (f"nothing else moved: {ran}, nearer {wait} than {work}; {where}, so the game "
                                       "waited on itself")
             # nearer working through it, but not by more than its readings vary: neither answer was measured

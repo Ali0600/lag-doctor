@@ -1560,8 +1560,8 @@
  {
   "name": "the GPU called idle without its timing",
   "file": "lagdoctor/analysis/attribute.py",
-  "old": "    gpu = \" and the GPU was idle\" if side == \"cpu\" and source == \"frames\" else \"; the GPU's share of it is unknown\"",
-  "new": "    gpu = \" and the GPU was idle\"",
+  "old": "    gpu_idle = side == \"cpu\" and source == \"frames\"          # only the event's own frames can show it (A3)",
+  "new": "    gpu_idle = True",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_a_stall_with_the_thread_idle_says_the_gpus_share_is_unknown"
   ]
@@ -2635,7 +2635,7 @@
   "old": "    if not span_ms > 0:\n        return None\n",
   "new": "",
   "tests": [
-   "tests/test_analysis_frames_attribute.py::test_a_held_screen_needs_the_game_presenting_and_windows_leaving_off_frames_it_had_time_to_show"
+   "tests/test_analysis_frames_attribute.py::test_a_stutter_with_no_span_is_never_a_held_screen"
   ]
  },
  {

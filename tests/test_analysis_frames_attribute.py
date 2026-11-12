@@ -774,6 +774,14 @@ def test_a_held_screen_needs_the_game_presenting_and_windows_leaving_off_frames_
     assert at._screen_hold(fr, LagEvent(3, "stutter", 1.0, 1.0, 0.0, {}), usual, period_ms) is None   # no span
 
 
+def test_a_stutter_with_no_span_is_never_a_held_screen():
+    # two frames Windows never showed at one instant, the next a refresh later: the rate over no time divided by zero
+    b = SeriesBuilder(F.ALL)
+    for t, shown in ((1.0, 0), (1.0, 0), (1.02, 1)):
+        b.add(t=t, frame_ms=10.0, displayed=shown, display_ms=20.0 if shown else None, frame_type="Application")
+    assert at._screen_hold(b.build(), LagEvent(1, "stutter", 1.0, 1.0, 0.0, {}), (10.0, 0.0)) is None
+
+
 def test_a_held_screen_with_none_of_the_frames_shown_says_none():
     held = at._screen_hold(presents((0,) * 6), LagEvent(1, "stutter", 0.9995, 1.0595, 60.0, {}), (10.0, 0.0))
     assert held is not None and "but Windows showed none of them: " in held[1]
