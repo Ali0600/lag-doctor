@@ -682,6 +682,64 @@ def test_only_a_stutters_frozen_frame_is_judged_by_the_ticks():
     assert at._worst_hold(LagEvent(6, "stutter", 4.0, 4.16, 160.0, {"worst_ms": 160.0, "worst_t": float("inf")})) is None
 
 
+# ------------------------------------------------- another program's disk use at a frame the game worked through ---
+
+DISK = OTHERS + [[4242, "backup.exe", 2.0, 50e6, 0.0]]          # a made-up program reading 50 MB/s
+CPU_HOG = [[4343, "hog.exe", 250.0, 0.0, 0.0]]          # 150 % past python.exe's 100
+DISK_LINE = ("another program did 50.0 MB/s of I/O (normally 0.0 MB/s), but in a frame held 160 ms the game's busiest "
+             "thread ran {} ms more than usual, nearer working through it ({} ms more) than waiting ({} ms less): the "
+             "game was busy, not waiting on the disk")
+
+
+def test_another_programs_disk_use_never_explains_a_frozen_frame_the_games_thread_worked_through():
+    # The owner's second end-to-end hitch of 2026-11-11: over three of the 150 ms busy waits another program read 32-521
+    # MB/s, and "another program did 48.8 MB/s of I/O" came first, its z past the cap off a near-zero normal against the
+    # busy wait's 5 to 9. The game's thread ran 105 to 137 ms more in those 160 ms frames: it was not waiting on a disk.
+    events, summary = analyse(lag_cap(during={S.GAME_TOP_THREAD_PCT: 95.0}, others_during=DISK, hot=WHOLE_S))
+    assert firsts(events) == ["game_cpu_spike"] * 6
+    assert all("background_disk" not in e.causes for e in events)
+    assert events[0].detail["why"][-1] == DISK_LINE.format(175, 120, 40)
+    entry = summary["background_disk"]
+    assert entry["left_out"] == 6 and entry["n"] == 0 and entry["a"] == 0
+    assert entry["left_out_why"] == at.WAIT_LEFT_OUT.format("the disk") == (
+        "there the game's busiest thread worked through the frozen frame, so the game was not waiting on the disk")
+
+
+def test_only_the_disk_is_ruled_out_at_a_frame_the_thread_worked_through():
+    # a program hogging the CPU can still slow a thread that runs: it competes for the core while the thread works
+    events, _ = analyse(lag_cap(during={S.GAME_TOP_THREAD_PCT: 95.0}, others_during=DISK + CPU_HOG, hot=WHOLE_S))
+    assert all("background_cpu" in e.causes and "background_disk" not in e.causes for e in events)
+    waits = {name for name, c in parts_of().items() if any(p.waits for p in c.parts)}
+    assert waits == {"background_disk"}
+    # rules says why a cause's moments are left out by the one veto its parts answer to
+    assert not any(any(p.waits for p in c.parts) and any(p.turbo for p in c.parts) for c in parts_of().values())
+
+
+def test_a_frame_worked_through_that_only_the_ticks_show_is_the_games_own_work_with_the_disk_ruled_out():
+    # the 1 s mean hardly rose, so nothing counted but the disk: once it is ruled out the ticks name the game's work,
+    # and the line no longer says "nothing else moved" above the disk that did
+    events, summary = analyse(thread_ticks(lag_cap(others_during=DISK, hot=WHOLE_S), DRIFT, 48.0))
+    assert firsts(events) == ["game_cpu_spike"] * 6
+    assert summary["game_cpu_spike"]["worked"] == 6 and summary["background_disk"]["left_out"] == 6
+    why = events[0].detail["why"]
+    assert why[-2] == at.RULED_OUT + WORKED[len(at.NOTHING_MOVED):] == (
+        "nothing else that moved explains it, and in a frame held 160 ms the game's busiest thread ran 99 ms more than "
+        "usual, nearer working through it (118 ms more) than waiting (42 ms less): the game's own work")
+    assert why[-1] == DISK_LINE.format(99, 118, 42)
+
+
+@pytest.mark.parametrize("label, cap", [
+    ("it slept through the frame", lambda: thread_ticks(lag_cap(others_during=DISK, hot=WHOLE_S), DRIFT, -16.0)),
+    ("too short to tell", lambda: lag_cap(stutter_ms=40.0, others_during=DISK, hot=WHOLE_S)),
+    ("between the two answers",
+     lambda: lag_cap(base=dict(BASE, **{S.GAME_TOP_THREAD_PCT: 60.0}), others_during=DISK, hot=WHOLE_S))])
+def test_another_programs_disk_use_still_counts_where_the_ticks_cannot_show_the_frame_worked_through(label, cap):
+    events, summary = analyse(cap())
+    assert firsts(events) == ["background_disk"] * 6, label
+    assert "left_out" not in summary["background_disk"], label
+    assert not any(w.startswith(at.RULED_OUT) for e in events for w in e.detail["why"]), label
+
+
 def held_screen_cap(game="presented"):
     """lag_cap's system rows, with 100 FPS frames all shown, but at each of TIMES the screen holds one frame for 60 ms:
     while the game kept presenting ("presented": five frames Windows never showed, then one it did), because it

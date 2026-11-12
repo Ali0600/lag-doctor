@@ -1191,6 +1191,15 @@ lift test (`left_out`, `left_out_why`; `n` is then the rest), as a rubric drops 
 quiet window where the clock moved only that way, from the baseline share. A fall below base speed, or one at the
 usual load, still counts. The run's falls bottomed out at 100.6-102.9 %, close to base: a hotter run under the same
 load that fell below it would name `cpu_throttle` again, as it should.
+Another program's disk use (`background_disk`, whose one part names what the game would wait on, `_Part.waits`) is
+ruled out the same way at a stutter whose longest frozen frame the game's busiest thread worked through
+(`_hold_reading`, the residual's own tick test below, reading "worked"): a thread that ran through the frame was not
+waiting on a disk. On the second 2026-11-11 e2e run another program read 32-521 MB/s over three of hitch's busy waits,
+and its z, past the cap off a near-zero normal, put it first over the busy wait's 5 to 9, which the ticks showed
+running 105-137 ms more than usual in those 160 ms frames. A frame read as waiting or in between, one too short or
+noisy to tell, and an FPS drop keep it; a program hogging the CPU still counts there, since it competes for the core
+while the thread works. Where a move was ruled out and nothing else counted, the residual's line starts "nothing else
+that moved explains it", never "nothing else moved" above the move its last line names.
 Each event is then attributed to its single best cause (explaining away), first in `ev.causes`; when nothing
 moved, the residual (`attribute._residual`), in order: `gpu_spike` on the GPU side; no cause of the game's when the
 screen held while the game kept presenting (`_screen_hold`: at least half the frames its usual rate gives over the
@@ -1222,7 +1231,7 @@ the refresh test, so there the share decides. No cause at all when the sampler d
 | CPU | game reads up that the disks' own reads match (the game's counter also counts what the file cache served from memory, so each tick is capped at `disk_read_bps`), or disk busy or read latency up | `asset_streaming` |
 | CPU | hard page faults up, RAM low | `memory_paging` |
 | CPU | another process's CPU up (or machine-wide CPU beyond the game) | `background_cpu` |
-| any | another process's disk or GPU up | `background_disk` / `background_gpu` |
+| any | another process's disk (never at a frozen frame the game's thread worked through) or GPU up | `background_disk` / `background_gpu` |
 | any | DPC/interrupt time up on the busiest CPU | `driver_dpc` (capped at "possible": PDH cannot name the driver) |
 | CPU | `cpu_perf_pct` or `cpu_perf_limit_pct` down | `cpu_throttle` |
 | GPU | GPU busy long and `nv_throttle_pct` up | `gpu_throttle` |

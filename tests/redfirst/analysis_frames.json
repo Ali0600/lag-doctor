@@ -2413,8 +2413,8 @@
  {
   "name": "a reading between the two answers is the game waiting",
   "file": "lagdoctor/analysis/attribute.py",
-  "old": "            return None, f\"nothing else moved: {ran}, nearer {work} than {wait} but within what its readings vary \" \\",
-  "new": "            return \"game_stall\", f\"nothing else moved: {ran}, nearer {work} than {wait} but within what its readings vary \" \\",
+  "old": "        return None, f\"nothing else moved: {ran}, nearer {work} than {wait} but within what its readings vary \" \\",
+  "new": "        return \"game_stall\", f\"nothing else moved: {ran}, nearer {work} than {wait} but within what its readings vary \" \\",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_a_busy_thread_at_its_usual_level_through_a_frozen_frame_names_neither_answer"
   ]
@@ -2422,8 +2422,8 @@
  {
   "name": "a thread that usually does nothing waits by 0 ms",
   "file": "lagdoctor/analysis/attribute.py",
-  "old": "            wait = f\"waiting ({idle:.0f} ms less)\" if round(idle) else \"waiting (no change)\"",
-  "new": "            wait = f\"waiting ({idle:.0f} ms less)\"",
+  "old": "        return f\"waiting ({self.idle:.0f} ms less)\" if round(self.idle) else \"waiting (no change)\"",
+  "new": "        return f\"waiting ({self.idle:.0f} ms less)\"",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_a_thread_that_usually_does_nothing_waits_with_no_change"
   ]
@@ -2743,6 +2743,89 @@
   "file": "lagdoctor/analysis/attribute.py",
   "old": "        why += [explained[k] for k in sorted(explained)]     # last: rules quote why[1] as a cause's example",
   "new": "        why[1:1] = [explained[k] for k in sorted(explained)]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_clock_coming_down_to_base_speed_as_every_cpu_fills_is_turbo_not_throttling"
+  ]
+ },
+ {
+  "name": "another program's disk use explains a frame the game worked through",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if why or not part.waits or reading is None or reading.outcome != \"worked\":",
+  "new": "        if True:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_another_programs_disk_use_never_explains_a_frozen_frame_the_games_thread_worked_through",
+   "tests/test_analysis_frames_attribute.py::test_a_frame_worked_through_that_only_the_ticks_show_is_the_games_own_work_with_the_disk_ruled_out"
+  ]
+ },
+ {
+  "name": "the disk is ruled out at a frame the thread waited through",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "reading is None or reading.outcome != \"worked\":",
+  "new": "reading is None or reading.outcome == \"unknown\":",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_another_programs_disk_use_still_counts_where_the_ticks_cannot_show_the_frame_worked_through"
+  ]
+ },
+ {
+  "name": "the disk's part answers to no wait veto",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "\"another program did {v} of I/O (normally {n})\", _mbps, waits=\"the disk\")],",
+  "new": "\"another program did {v} of I/O (normally {n})\", _mbps)],",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_another_programs_disk_use_never_explains_a_frozen_frame_the_games_thread_worked_through",
+   "tests/test_analysis_frames_attribute.py::test_only_the_disk_is_ruled_out_at_a_frame_the_thread_worked_through"
+  ]
+ },
+ {
+  "name": "a program hogging the CPU is ruled out at a frame worked through too",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "\"one other program used {v} of a CPU (normally {n})\",\n                  _pct)],",
+  "new": "\"one other program used {v} of a CPU (normally {n})\",\n                  _pct, waits=\"the CPU\")],",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_only_the_disk_is_ruled_out_at_a_frame_the_thread_worked_through"
+  ]
+ },
+ {
+  "name": "a line says nothing else moved where a move was ruled out",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if explained and line.startswith(NOTHING_MOVED):",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_frame_worked_through_that_only_the_ticks_show_is_the_games_own_work_with_the_disk_ruled_out"
+  ]
+ },
+ {
+  "name": "a line says a move was ruled out where nothing moved",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if explained and line.startswith(NOTHING_MOVED):",
+  "new": "            if line.startswith(NOTHING_MOVED):",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_long_frozen_frame_the_thread_worked_through_is_the_games_own_work_though_its_1_s_mean_hardly_rose"
+  ]
+ },
+ {
+  "name": "the disk's left-out moments say turbo",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    return WAIT_LEFT_OUT.format(waits) if waits and not any(p.turbo for p in cause.parts) else TURBO_LEFT_OUT",
+  "new": "    return TURBO_LEFT_OUT",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_another_programs_disk_use_never_explains_a_frozen_frame_the_games_thread_worked_through"
+  ]
+ },
+ {
+  "name": "an event is judged without the frozen frame's veto",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            hit, was, why_not = _evaluate(c, bases[c.name], a, b, ev_veto)",
+  "new": "            hit, was, why_not = _evaluate(c, bases[c.name], a, b, veto)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_another_programs_disk_use_never_explains_a_frozen_frame_the_games_thread_worked_through"
+  ]
+ },
+ {
+  "name": "the frozen frame's veto drops the turbo veto",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        why = veto(part, x, normal, a, b)\n        if why or not part.waits",
+  "new": "        why = None\n        if why or not part.waits",
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_a_clock_coming_down_to_base_speed_as_every_cpu_fills_is_turbo_not_throttling"
   ]

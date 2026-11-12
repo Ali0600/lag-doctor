@@ -2307,7 +2307,8 @@ def _event_link(c: _Case, cause: str, family: str, phrase: str, contradict: bool
     what = "marked moments" if half else "stutters and FPS drops"
     lift = _fin(entry.get("lift"))
     share = 100 * a / n
-    left = _num(entry.get("left_out"))       # moments where its move had another explanation (attribute._turbo_veto)
+    left = _num(entry.get("left_out"))       # moments where its move had another explanation (attribute._turbo_veto,
+                                             # attribute._wait_veto)
     why_left = _text(entry.get("left_out_why"), 200) or "something else explained its move there"
     more = f"; {left:.0f} more {'is' if left == 1 else 'are'} left out: {why_left}" if left else ""
     if label == "supports":
@@ -2706,8 +2707,8 @@ def _stutter_cause(cap: Capture, ctx: dict, cause: str) -> Any:
         worked = _num(entry.get("worked")) or 0
         steady = False
         if residual:      # named by attribute._residual, which the lift test's 1 s means could not see
-            line = (f"in {residual:.0f} of {n:.0f} {what} nothing else moved, and the game's busiest thread was "
-                    "saturated or worked through the frozen frame")
+            line = (f"in {residual:.0f} of {n:.0f} {what} nothing else explained them, and the game's busiest thread "
+                    "was saturated or worked through the frozen frame")   # what moved there may have been ruled out
             # only the frames the ticks showed worked through are evidence of extra work: a thread saturated all along
             # says nothing of the moment
             steady = worked >= attribute.LIFT_MIN_A and bool(n) and worked / n >= attribute.LIFT_MIN_SHARE
