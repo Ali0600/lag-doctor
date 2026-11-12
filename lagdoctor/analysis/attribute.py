@@ -754,6 +754,12 @@ def _wait_veto(veto: Callable[[_Part, float, float, float, float], str | None], 
     return both
 
 
+def _lone_frame(ev: LagEvent) -> bool:
+    """A stutter of one frozen frame and no stall (events._stutters merges those under 250 ms apart into one episode
+    and keeps only the longest as its worst hold): what _hold_reading judges is then the whole stutter."""
+    return ev.kind == "stutter" and ev.detail.get("frames") == 1 and ev.detail.get("stall") is False
+
+
 def _left_out_why(cause: _Cause) -> str:
     """Why rules says a cause's moments a veto explained are left out of its lift test: the veto its parts answer
     to (no cause has parts that answer to both)."""
@@ -1010,7 +1016,8 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
         hits: dict[str, _Hit] = {}
         measured: set[str] = set()
         explained: dict[str, str] = {}      # cause -> why its move does not count here (_turbo_veto, _wait_veto)
-        reading = _hold_reading(thread, thread_base, ev, thread_tick)
+        # a merged episode's reading judges its longest frozen frame alone, so only a lone frame can rule a wait out
+        reading = _hold_reading(thread, thread_base, ev, thread_tick) if _lone_frame(ev) else None
         ev_veto = _wait_veto(veto, reading)
         for c in causes:
             hit, was, why_not = _evaluate(c, bases[c.name], a, b, ev_veto)

@@ -2829,5 +2829,41 @@
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_a_clock_coming_down_to_base_speed_as_every_cpu_fills_is_turbo_not_throttling"
   ]
+ },
+ {
+  "name": "a merged episode's longest frame rules the disk out for the whole episode",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        reading = _hold_reading(thread, thread_base, ev, thread_tick) if _lone_frame(ev) else None",
+  "new": "        reading = _hold_reading(thread, thread_base, ev, thread_tick)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_merged_episode_keeps_another_programs_disk_use_since_only_its_longest_frame_is_judged"
+  ]
+ },
+ {
+  "name": "every stutter is judged on the first one's frozen frame",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        reading = _hold_reading(thread, thread_base, ev, thread_tick) if _lone_frame(ev) else None",
+  "new": "        reading = _hold_reading(thread, thread_base, targets[0], thread_tick) if _lone_frame(targets[0]) else None",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_each_stutter_is_judged_on_its_own_frozen_frame"
+  ]
+ },
+ {
+  "name": "quiet windows are judged with a stutter's frozen-frame veto",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        judged = [(k, _evaluate(c, bases[c.name], wa, wb, veto)) for k, (wa, wb) in zip(index, windows)]",
+  "new": "        judged = [(k, _evaluate(c, bases[c.name], wa, wb, ev_veto)) for k, (wa, wb) in zip(index, windows)]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_quiet_time_keeps_counting_another_programs_disk_use"
+  ]
+ },
+ {
+  "name": "only the worked-through line says a ruled-out move moved",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if explained and line.startswith(NOTHING_MOVED):",
+  "new": "            if explained and line.startswith(WORKED_LINE):",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_move_the_turbo_veto_rules_out_never_reads_nothing_else_moved_either"
+  ]
  }
 ]

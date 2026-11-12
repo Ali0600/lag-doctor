@@ -2754,8 +2754,9 @@ def _residual_items(c: _Case, entry: dict, ids: list[int], phrase: str, what: st
     e = c.env
     label, a, n = entry.get("label"), _num(entry.get("a")) or 0, _num(entry.get("n")) or 0
     if label == "supports":
-        c.support("frame_timing", W_STEADY, f"in {a:.0f} of {n:.0f} {what} no other measured cause moved, which "
-                                            f"leaves {phrase}", 100 * a / n if n else None, "%",
+        # "explained", not "moved": a move a veto ruled out there still moved (attribute._wait_veto, _turbo_veto)
+        c.support("frame_timing", W_STEADY, f"in {a:.0f} of {n:.0f} {what} no other measured cause explained them, "
+                                            f"which leaves {phrase}", 100 * a / n if n else None, "%",
                   100 * attribute.LIFT_MIN_SHARE)
     elif label == "contradicts":
         c.against("frame_timing", CONTRA_WEIGHT, f"only {a:.0f} of {n:.0f} {what} were left unexplained like this")

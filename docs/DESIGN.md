@@ -1196,10 +1196,14 @@ ruled out the same way at a stutter whose longest frozen frame the game's busies
 (`_hold_reading`, the residual's own tick test below, reading "worked"): a thread that ran through the frame was not
 waiting on a disk. On the second 2026-11-11 e2e run another program read 32-521 MB/s over three of hitch's busy waits,
 and its z, past the cap off a near-zero normal, put it first over the busy wait's 5 to 9, which the ticks showed
-running 105-137 ms more than usual in those 160 ms frames. A frame read as waiting or in between, one too short or
-noisy to tell, and an FPS drop keep it; a program hogging the CPU still counts there, since it competes for the core
-while the thread works. Where a move was ruled out and nothing else counted, the residual's line starts "nothing else
-that moved explains it", never "nothing else moved" above the move its last line names.
+running 105-137 ms more than usual in those 160 ms frames. Only a stutter of one frozen frame and no stall is judged
+so: a merged episode's reading judges its longest frame alone, and another of its frames may have waited. A frame read
+as waiting or in between, one too short or noisy to tell, and an FPS drop keep the disk; quiet windows have no frozen
+frame and keep counting it in the baseline share; a program hogging the CPU still counts there, since it competes for
+the core while the thread works. Where a move was ruled out and nothing else counted, the residual's line starts
+"nothing else that moved explains it", never "nothing else moved" above the move its last line names, and the rules'
+count lines for `game_cpu_spike`, `gpu_spike` and `game_stall` say nothing else "explained" those stutters, not that
+nothing moved.
 Each event is then attributed to its single best cause (explaining away), first in `ev.causes`; when nothing
 moved, the residual (`attribute._residual`), in order: `gpu_spike` on the GPU side; no cause of the game's when the
 screen held while the game kept presenting (`_screen_hold`: at least half the frames its usual rate gives over the

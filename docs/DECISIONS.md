@@ -190,7 +190,12 @@ Another program's disk use at a frozen frame the game's busiest thread worked th
 - **A: ruled out, as the turbo veto rules out a clock that load explains (chosen)**: the residual's tick test
   (`_hold_reading`, now one function both use) reading "worked" leaves the disk out of that stutter's causes and its
   lift test, and its last why-line says why. A thread that ran through the frame was not waiting on a disk. A frame
-  read as waiting or in between, one too short or noisy to tell, and an FPS drop keep it.
+  read as waiting or in between, one too short or noisy to tell, and an FPS drop keep it, and so does a stutter of
+  more than one frozen frame (added in review): its reading judges the longest alone, and another may have waited.
+  Known limits: the reading is the busiest game thread's, whichever thread that is, so a worker's burst through the
+  frame would rule the disk out while another thread waited (the capture names no thread that held the frame; review
+  found no case where that read wrong); and its "ran N ms more" sums the whole ticks that hold the frame, so it can
+  pass the frame's length where the thread also worked around it.
 - **B: listed after the game's own work, not left out**: rejected. It would still name a mechanism the reading rules
   out, and still count in the lift test: on this run that count made a medium "background programs" finding.
 - **C: rank by evidence differently** (z rescaled, or ties at the cap broken by how far past it): rejected. A signal
@@ -202,8 +207,9 @@ Another program's disk use at a frozen frame the game's busiest thread worked th
   competes for the core), so it can explain a frame worked through. GPU use and paging are in the backlog.
 
 Where a move was ruled out and nothing else counted, the residual's line now starts "nothing else that moved explains
-it", never "nothing else moved" above the disk its last line names, and the rule's count line says "nothing else
-explained them" (which the turbo veto needed too). Re-judged in memory, this run's hitch passes; across the six FF7
+it", never "nothing else moved" above the disk its last line names, and the count lines of `game_cpu_spike`,
+`gpu_spike` and `game_stall` say nothing else "explained them" (review found the latter two still saying "no other
+measured cause moved" above such an example; the turbo veto needed it too). Re-judged in memory, this run's hitch passes; across the six FF7
 captures and the e2e runs of 2026-11-09 and both of 2026-11-11, only that hitch's diagnosis changes: its three
 stutters name the game's own work, and its false "background programs" finding goes. Revisit hook: `_wait_veto` and
 `_Part.waits` in `attribute.py`.

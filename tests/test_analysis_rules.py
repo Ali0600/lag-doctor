@@ -2628,6 +2628,19 @@ def test_a_residual_cause_loses_coverage_when_another_cause_was_not_measured():
     assert is_finding(res, "medium")        # S = 4, but disk and DPCs unmeasured: coverage 4 / 8 < 0.6
 
 
+@pytest.mark.parametrize("cause, phrase, side", [("gpu_spike", "a moment of heavy GPU work", "gpu"),
+                                                 ("game_stall", "the game waiting on itself", "cpu")])
+def test_a_residual_causes_count_says_nothing_else_explained_them_never_that_nothing_moved(cause, phrase, side):
+    # a veto can rule a move out at those stutters (another program's disk use at a frame worked through, a clock
+    # that the load explains), and each one's example line then says what moved: "no other measured cause moved"
+    # sat above "For example at 4.0 s: nothing else that moved explains it"
+    evs = [stutter(i, 3.0 * i, cause, side=side) for i in range(1, 7)]
+    res = run(cause, make(system=synth.system_table(30, game_top_thread_pct=20.0)), events=evs,
+              causes={cause: lift("supports", a=6, n=6, weight=1.0, lift_=None)})
+    assert (f"In 6 of 6 stutters and FPS drops no other measured cause explained them, which leaves {phrase}."
+            in [e.text for e in res.evidence]), [e.text for e in res.evidence]
+
+
 def test_a_gpu_spike_is_never_reported_while_the_cpu_limits_the_game():
     evs = [stutter(i, 3.0 * i, "gpu_spike", side="gpu") for i in range(1, 10)]
     causes = {"gpu_spike": lift("supports", weight=1.0, lift_=None)}
