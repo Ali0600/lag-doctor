@@ -103,7 +103,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   new text). Renaming a test does the same to each mutation that names it: only a run of that spec notices, as
   BAD-BASE, so grep the specs for a test's old name when you rename it. Before merging, rerun every mutation whose
   `file` or tests the change touches, picked by path from all of `tests/redfirst/`, never from a list kept by hand
-  (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). A shared fixture
+  (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). An `old` that
+  still occurs once can still go dead: a change that sends its test down a new path leaves the sabotaged line
+  unreached, and only the gate's SURVIVED shows it (PR #45's tick test took a stall past the residual's GPU wording an
+  older sabotage changed, 2026-11-11), so read each survivor before assuming the new tests are at fault. A shared fixture
   such as `tests/synth.py` touches every test built on it, so pick the mutations those tests guard too (PR #43 refit
   synth's hog mode and reran the 7 whose tests build it). A change that leaves every call the old tests make giving
   the same output needs no rerun once that is shown: wrap the fixture's function for one run of those tests, compare
@@ -196,7 +199,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   and `appcache\appinfo.vdf`, read-only, show how a launch behaves (`docs/research/desktop-app.md`, section 14).
   `check` and `analyze` only print a note there, yet each writes a new folder under `paths.sessions_dir()`, into that
   private copy, where the owner never sees it: to re-run today's analysis on one of the owner's recordings, load it
-  and call `diagnose()` in memory (`Capture.load(path)`; the agent's shell reads the real sessions folder, as it did on
+  and call `diagnose()` in memory (`Capture.load(path)`; to diff a change against main, put a `git worktree add
+  --detach` of main under `%TEMP%` first on `PYTHONPATH` and check `lagdoctor.__file__`, as PR #45 did for every e2e
+  and FF7 capture; the agent's shell reads the real sessions folder, as it did on
   2026-11-09). Nor does an agent change a game's own files (its settings, saves or install folder): Documents is not
   moved, so an edit to a game's config there (FINAL FANTASY VII REBIRTH keeps its own under `Documents\My Games`)
   changes the owner's real game, while one under `%LOCALAPPDATA%` lands in the private copy yet reads back as applied
@@ -365,6 +370,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   goes the other way: a doubled backslash typed into a command, heredocs with a quoted delimiter included, arrives
   halved, so `\\localhost` landed as `\localhost` in a PR body and a doc, and `"..\\x"` broke a script (four times on
   2026-11-08). Write text that holds Windows paths with the Write tool, or build it from `chr(92)`, and read it back.
+  A Bash heredoc whose body holds a Python `'''` string failed outright (bash: "unexpected EOF while looking for
+  matching" quote, three times on 2026-11-11): write such a script with the Write tool and run the file.
 - To read one CI job's log while the rest of its run goes on (a fast job's verdict, such as the wheel job on a
   sabotage commit), use `gh api repos/Ali0600/lag-doctor/actions/jobs/<job id>/logs --allow-escape-sequences`:
   `gh run view <run> --log --job <job id>` refuses until the whole run has finished, and without the flag `gh api`
