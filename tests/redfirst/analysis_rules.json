@@ -2399,5 +2399,23 @@
   "tests": [
    "tests/test_analysis_rules.py::test_a_causes_example_keeps_a_long_why_line_whole"
   ]
+ },
+ {
+  "name": "a residual cause's count says nothing moved where a veto ruled a move out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"in {a:.0f} of {n:.0f} {what} no other measured cause explained them, \"",
+  "new": "f\"in {a:.0f} of {n:.0f} {what} no other measured cause moved, \"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_residual_causes_count_says_nothing_else_explained_them_never_that_nothing_moved"
+  ]
+ },
+ {
+  "name": "the game's own work's count says nothing moved where a veto ruled a move out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"in {residual:.0f} of {n:.0f} {what} nothing else explained them, and the game's busiest thread \"",
+  "new": "f\"in {residual:.0f} of {n:.0f} {what} nothing else moved, and the game's busiest thread \"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_work_counts_the_stutters_the_residual_named"
+  ]
  }
 ]

@@ -1230,3 +1230,15 @@ frames on time; the game's own 100-160 ms hitches presented 5-18 % of their rate
 keep its rate. A review then found a stall followed by a 1 ms catch-up burst passing the frame count alone.
 **Takeaway**: before blaming the game for a frozen screen, count the frames it presented through the freeze and which
 of them Windows had time to show and did not.
+
+### A z-score off a near-silent baseline says only that something moved
+A robust z divides a rise by how much the signal usually varies. A signal that sits near zero, such as other
+programs' disk reads when nothing is copying, has almost no spread, so any burst lands hundreds or thousands of
+spreads out and hits the cap. Comparing such a z with one from a busy, noisy signal ranks the causes by how quiet each
+signal usually is, not by which one could have made the moment happen.
+**Why it came up**: on the e2e hitch, other programs reading 32-521 MB/s over three of LagLab's
+150 ms busy waits scored z 554-9,129 against 0.3 MB/s normally, past the cap of 10, while the game's own busiest thread
+scored 5.4-8.9; "another program did 48.8 MB/s of I/O" came first, although the game's thread ran 105-137 ms more than
+usual in those 160 ms frames and so was not waiting on any disk.
+**Takeaway**: before letting the strongest z win, ask whether that cause could produce the effect at that moment (a
+busy thread was not waiting), and rule it out there when it could not.

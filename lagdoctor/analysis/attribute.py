@@ -85,6 +85,10 @@ CPU_BASE_PCT = 100.0         # LC 4.5: % Processor Performance is a share of the
 TURBO_LEFT_OUT = "there the CPU's clock fell only as the PC's CPU use rose, which turbo does by design"
 WORKED_LINE = "nothing else moved, and in a frame held"      # how _residual's "worked through it" line, and no
                                                              # other of its lines, starts
+NOTHING_MOVED = "nothing else moved"         # how _residual's lines that name what the game did start ...
+RULED_OUT = "nothing else that moved explains it"   # ... and how they start instead where a cause's move was ruled out
+                                             # there (_evaluate's veto): something did move
+WAIT_LEFT_OUT = "there the game's busiest thread worked through the frozen frame, so the game was not waiting on {}"
 # ---- the residual: working, waiting or the screen (the owner's end-to-end run, 2026-11-11) ----------
 BUSY_Z = 2.0                 # [inferred] a stall is judged between two named answers, the game's thread working
                              # through it or waiting, at their midpoint, so a misreading needs the noise to cover half
@@ -530,6 +534,8 @@ class _Part:
     fmt: Callable[[float], str]
     level: Callable[[float], bool] | None = None   # an extra condition on the level itself
     turbo: bool = False                            # the CPU's clock: a load that rose explains a fall to base or above
+    waits: str | None = None                       # what the game would wait on ("the disk"): a frozen frame its
+                                                   # busiest thread worked through rules the part out (_wait_veto)
 
 
 @dataclass
@@ -671,7 +677,7 @@ def _causes(cap: Capture, others: _Others) -> list[_Cause]:
                   _pct)],
                why_missing="no CPU readings for other processes"),
         _Cause("background_disk", [_Part(others.io_top, +1, lambda m: OTHERS_DISK_BPS,
-                                         "another program did {v} of I/O (normally {n})", _mbps)],
+                                         "another program did {v} of I/O (normally {n})", _mbps, waits="the disk")],
                why_missing="no I/O readings for other processes"),
         _Cause("background_gpu", [_Part(gpu_other, +1, lambda m: OTHERS_GPU_PCT,
                                         "other programs kept the game's GPU {v} busy (normally {n})", _pct)],
@@ -729,6 +735,36 @@ def _turbo_veto(load: _Part, base: _Baseline | None) -> Callable[[_Part, float, 
                 f"rose to {_pct(y)} of a CPU (normally {_pct(base.med)}): turbo runs slower when more cores are busy, "
                 "so that is not throttling")
     return veto
+
+
+def _wait_veto(veto: Callable[[_Part, float, float, float, float], str | None], reading: _Hold | None
+               ) -> Callable[[_Part, float, float, float, float], str | None]:
+    """`veto` (_turbo_veto), and the reason a part that acts only by making the game wait (_Part.waits) does not count
+    at a stutter whose longest frozen frame the game's busiest thread worked through (`reading`, _hold_reading): a
+    thread that ran through it was not waiting. On the owner's second end-to-end run of 2026-11-11 another program read
+    32 to 521 MB/s over three of hitch's 150 ms busy waits, and "another program did 48.8 MB/s of I/O" came first: its z
+    stood past the cap off a near-zero normal, the busy wait's at 5 to 9. A frame too short or noisy to tell, one read
+    as waiting or in between, and an FPS drop keep the part as it was."""
+    def both(part: _Part, x: float, normal: float, a: float, b: float) -> str | None:
+        why = veto(part, x, normal, a, b)
+        if why or not part.waits or reading is None or reading.outcome != "worked":
+            return why
+        return (f"{part.label.format(v=part.fmt(x), n=part.fmt(normal))}, but {reading.ran}, nearer {reading.work} "
+                f"than {reading.wait}: the game was busy, not waiting on {part.waits}")
+    return both
+
+
+def _lone_frame(ev: LagEvent) -> bool:
+    """A stutter of one frozen frame and no stall (events._stutters merges those under 250 ms apart into one episode
+    and keeps only the longest as its worst hold): what _hold_reading judges is then the whole stutter."""
+    return ev.kind == "stutter" and ev.detail.get("frames") == 1 and ev.detail.get("stall") is False
+
+
+def _left_out_why(cause: _Cause) -> str:
+    """Why rules says a cause's moments a veto explained are left out of its lift test: the veto its parts answer
+    to (no cause has parts that answer to both)."""
+    waits = next((p.waits for p in cause.parts if p.waits), None)
+    return WAIT_LEFT_OUT.format(waits) if waits and not any(p.turbo for p in cause.parts) else TURBO_LEFT_OUT
 
 
 def _align(series: _Series, times: list[float]) -> list[float | None]:
@@ -979,9 +1015,12 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
         allowed = _allowed(side[0])
         hits: dict[str, _Hit] = {}
         measured: set[str] = set()
-        explained: dict[str, str] = {}      # cause -> why its move does not count here (_turbo_veto)
+        explained: dict[str, str] = {}      # cause -> why its move does not count here (_turbo_veto, _wait_veto)
+        # a merged episode's reading judges its longest frozen frame alone, so only a lone frame can rule a wait out
+        reading = _hold_reading(thread, thread_base, ev, thread_tick) if _lone_frame(ev) else None
+        ev_veto = _wait_veto(veto, reading)
         for c in causes:
-            hit, was, why_not = _evaluate(c, bases[c.name], a, b, veto)
+            hit, was, why_not = _evaluate(c, bases[c.name], a, b, ev_veto)
             if was:
                 measured.add(c.name)
             if hit is not None and c.name in allowed:
@@ -1021,7 +1060,7 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
                            "why": "" if ever else c.why_missing}
         if left:
             summary[c.name]["left_out"] = left
-            summary[c.name]["left_out_why"] = TURBO_LEFT_OUT
+            summary[c.name]["left_out_why"] = _left_out_why(c)
         if blind:
             summary[c.name]["blind"] = True
         if c.name in CAPPED_AT_POSSIBLE:
@@ -1052,6 +1091,8 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
                 names = [res]
                 residual_counts[res] += 1
                 worked += 1 if res == "game_cpu_spike" and line.startswith(WORKED_LINE) else 0
+            if explained and line.startswith(NOTHING_MOVED):    # a move ruled out here still moved: never "nothing"
+                line = RULED_OUT + line[len(NOTHING_MOVED):]
             why.append(line)
         for h in ranked:
             blame = _blame_process(h.cause, others, windows, ev, blame_cache)
@@ -1213,6 +1254,58 @@ def _more_or_less(ms: float) -> str:
     return f"{abs(ms):.0f} ms {'more' if ms > 0 else 'less'} than usual"
 
 
+@dataclass(frozen=True)
+class _Hold:
+    """What the busiest game thread's ticks say of a stutter's longest frozen frame (_hold_reading)."""
+
+    outcome: str          # "worked" (through it), "waited", or "unknown": in between, by less than readings vary
+    hold: float           # the frame's ms
+    extra: float          # the thread's ms over its usual level in the ticks that hold it
+    busy: float           # what working through it would add, in ms
+    idle: float           # what waiting would take away, in ms
+
+    @property
+    def ran(self) -> str:
+        return f"in a frame held {self.hold:.0f} ms the game's busiest thread ran {_more_or_less(self.extra)}"
+
+    @property
+    def work(self) -> str:
+        return f"working through it ({self.busy:.0f} ms more)"
+
+    @property
+    def wait(self) -> str:
+        return f"waiting ({self.idle:.0f} ms less)" if round(self.idle) else "waiting (no change)"
+
+
+def _hold_reading(thread: _Series, base: _Baseline | None, ev: LagEvent, tick: float | None) -> _Hold | None:
+    """A stutter's longest frozen frame judged between the busiest thread working through it, about (1 - its usual
+    share) of the frame in extra CPU time, and waiting, about minus its usual share: at their midpoint, where the noise
+    of those ticks' readings cannot carry one answer past it. None where it cannot be judged: no frozen frame (an FPS
+    drop), no usual level, a tick missing inside it, or a frame too short for that noise. `tick` is one reading's quiet
+    spread (_tick_spread). One tick's spread is the larger of two guesses, since on the owner's end-to-end captures
+    (2026-11-09 and -11) each fell short of the real spread of 160 ms sums on some: twice the 1 s means' (independent
+    ticks, four to a second; 6.3 against 9.6 ms on one) and the quiet ticks' own (31 against 43 ms on another); the
+    larger came within 15 % on all ten. 1 % of a CPU for 1 s is 10 ms."""
+    worst = _worst_hold(ev)
+    if base is None:
+        return None
+    work = _work_during(thread, base.med, worst[1] - worst[0] / 1000.0, worst[1]) if worst else None
+    if worst and work is not None:
+        hold, (extra, sq) = worst[0], work
+        noise = 10.0 * max(2.0 * base.scale, tick or 0.0) * math.sqrt(sq)
+        share = base.med / 100.0
+        bar = max(BUSY_Z * noise, THREAD_EXTRA_MS)
+        busy, idle = hold * (1.0 - share), hold * share       # what working through it and waiting would add
+        if 0.5 * hold >= bar:
+            if extra >= hold * (0.5 - share) and extra >= bar:
+                return _Hold("worked", hold, extra, busy, idle)
+            if extra < hold * (0.5 - share):
+                return _Hold("waited", hold, extra, busy, idle)
+            # nearer working through it, but not by more than its readings vary: neither answer was measured
+            return _Hold("unknown", hold, extra, busy, idle)
+    return None
+
+
 def _residual(side: str | None, source: str | None, thread: _Series, base: _Baseline | None, ev: LagEvent,
               measured: set[str], screen: str | None = None, tick: float | None = None) -> tuple[str | None, str]:
     """When no signal moved: the GPU's own work (GPU side), no cause of the game's when the screen held while the game
@@ -1233,33 +1326,17 @@ def _residual(side: str | None, source: str | None, thread: _Series, base: _Base
                                   f"({level:.0f}% of a CPU): the game's own work")
     gpu_idle = side == "cpu" and source == "frames"          # only the event's own frames can show it (A3)
     gpu = " and the GPU was idle" if gpu_idle else "; the GPU's share of it is unknown"
-    # A long frozen frame is judged between the thread working through it, about (1 - its usual share) of the frame
-    # in extra CPU time, and waiting, about minus its usual share: at their midpoint, where the noise of those ticks'
-    # readings cannot carry one answer past it. One tick's spread is the larger of two guesses, since on the owner's
-    # end-to-end captures (2026-11-09 and -11) each fell short of the real spread of 160 ms sums on some: twice the
-    # 1 s means' (independent ticks, four to a second; 6.3 against 9.6 ms on one) and the quiet ticks' own (31 against
-    # 43 ms on another); the larger came within 15 % on all ten. 1 % of a CPU for 1 s is 10 ms.
-    worst = _worst_hold(ev)
-    work = _work_during(thread, base.med, worst[1] - worst[0] / 1000.0, worst[1]) if worst else None
-    if worst and work is not None:
-        hold, (extra, sq) = worst[0], work
-        noise = 10.0 * max(2.0 * base.scale, tick or 0.0) * math.sqrt(sq)
-        share = base.med / 100.0
-        bar = max(BUSY_Z * noise, THREAD_EXTRA_MS)
-        busy, idle = hold * (1.0 - share), hold * share       # what working through it and waiting would add
-        if 0.5 * hold >= bar:
-            ran = f"in a frame held {hold:.0f} ms the game's busiest thread ran {_more_or_less(extra)}"
-            work = f"working through it ({busy:.0f} ms more)"
-            wait = f"waiting ({idle:.0f} ms less)" if round(idle) else "waiting (no change)"
-            if extra >= hold * (0.5 - share) and extra >= bar:
-                return "game_cpu_spike", f"nothing else moved, and {ran}, nearer {work} than {wait}: the game's own work"
-            if extra < hold * (0.5 - share):
-                where = "the GPU was idle" if gpu_idle else "the GPU's share of it is unknown"
-                return "game_stall", (f"nothing else moved: {ran}, nearer {wait} than {work}; {where}, so the game "
-                                      "waited on itself")
-            # nearer working through it, but not by more than its readings vary: neither answer was measured
-            return None, f"nothing else moved: {ran}, nearer {work} than {wait} but within what its readings vary " \
-                         "by, so whether the game worked or waited is unknown"
+    h = _hold_reading(thread, base, ev, tick)       # a long frozen frame: working through it, waiting, or in between
+    if h is not None:
+        ran, work, wait = h.ran, h.work, h.wait
+        if h.outcome == "worked":
+            return "game_cpu_spike", f"nothing else moved, and {ran}, nearer {work} than {wait}: the game's own work"
+        if h.outcome == "waited":
+            where = "the GPU was idle" if gpu_idle else "the GPU's share of it is unknown"
+            return "game_stall", (f"nothing else moved: {ran}, nearer {wait} than {work}; {where}, so the game "
+                                  "waited on itself")
+        return None, f"nothing else moved: {ran}, nearer {work} than {wait} but within what its readings vary " \
+                     "by, so whether the game worked or waited is unknown"
     shown = f"{level:.0f}%" if level is not None else "unknown"
     return "game_stall", (f"nothing else moved: the busiest game thread was not busy ({shown} of a CPU, "
                           f"normally {base.med:.0f}%){gpu}, so the game waited on itself")

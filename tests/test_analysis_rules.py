@@ -1389,6 +1389,21 @@ def test_the_lift_line_says_how_many_moments_the_load_explained_and_left_out():
                                "rose, which turbo does by design.") for e in res.evidence)
 
 
+def test_the_disk_line_says_how_many_frozen_frames_the_game_worked_through_and_left_out():
+    # attribute._wait_veto: another program's disk use at a frozen frame the game's thread worked through leaves the
+    # count, and the line says why, in the words of the veto the disk answers to (never turbo's)
+    events = [stutter(i, 1.0 + i, "background_cpu") for i in range(1, 10)]
+    causes = {"background_cpu": lift("supports", a=6, n=9),
+              "background_disk": lift("neutral", a=0, n=6, left_out=3,
+                                      left_out_why=attribute._left_out_why(next(
+                                          c for c in attribute._causes(make(), attribute._others(make()))
+                                          if c.name == "background_disk")))}
+    res = run("background_hogs", make(system=synth.system_table(30)), events=events, causes=causes)
+    assert ("0 of 6 stutters and FPS drops coincided with another program's disk use rising; 3 more are left out: "
+            "there the game's busiest thread worked through the frozen frame, so the game was not waiting on the "
+            "disk.") in [e.text for e in res.evidence], [e.text for e in res.evidence]
+
+
 def test_a_causes_example_keeps_a_long_why_line_whole():
     # a frozen frame's waiting line runs to about 230 characters, and a 200-character cut ended one "so the g"
     line = ("nothing else moved: in a frame held 160 ms the game's busiest thread ran 5 ms more than usual, nearer the "
@@ -1421,8 +1436,8 @@ def test_the_games_own_work_counts_the_stutters_the_residual_named(residual, wor
     events = [stutter(i, 1.0 + i, "game_cpu_spike") for i in range(1, 4 + residual)]
     entry = lift("neutral", a=0, n=3 + residual, lift_=None, residual=residual, worked=worked)   # the family's
     res = run("game_cpu_spike", make(), events=events, causes={"game_cpu_spike": entry})      # strongest item counts
-    line = (f"In {residual} of {3 + residual} stutters and FPS drops nothing else moved, and the game's busiest thread "
-            "was saturated or worked through the frozen frame.")
+    line = (f"In {residual} of {3 + residual} stutters and FPS drops nothing else explained them, and the game's "
+            "busiest thread was saturated or worked through the frozen frame.")
     assert line in [e.text for e in res.evidence], [e.text for e in res.evidence]
     # where that line counts, "best explained by ..., too few to be sure" would sit under it
     assert any("too few to be sure" in e.text for e in res.evidence) is not counts
@@ -2611,6 +2626,19 @@ def test_a_residual_cause_loses_coverage_when_another_cause_was_not_measured():
               "driver_dpc": lift("not_measured", a=0, why="no DPC counters")}
     res = run("game_stall", make(system=synth.system_table(30, game_top_thread_pct=20.0)), events=evs, causes=causes)
     assert is_finding(res, "medium")        # S = 4, but disk and DPCs unmeasured: coverage 4 / 8 < 0.6
+
+
+@pytest.mark.parametrize("cause, phrase, side", [("gpu_spike", "a moment of heavy GPU work", "gpu"),
+                                                 ("game_stall", "the game waiting on itself", "cpu")])
+def test_a_residual_causes_count_says_nothing_else_explained_them_never_that_nothing_moved(cause, phrase, side):
+    # a veto can rule a move out at those stutters (another program's disk use at a frame worked through, a clock
+    # that the load explains), and each one's example line then says what moved: "no other measured cause moved"
+    # sat above "For example at 4.0 s: nothing else that moved explains it"
+    evs = [stutter(i, 3.0 * i, cause, side=side) for i in range(1, 7)]
+    res = run(cause, make(system=synth.system_table(30, game_top_thread_pct=20.0)), events=evs,
+              causes={cause: lift("supports", a=6, n=6, weight=1.0, lift_=None)})
+    assert (f"In 6 of 6 stutters and FPS drops no other measured cause explained them, which leaves {phrase}."
+            in [e.text for e in res.evidence]), [e.text for e in res.evidence]
 
 
 def test_a_gpu_spike_is_never_reported_while_the_cpu_limits_the_game():

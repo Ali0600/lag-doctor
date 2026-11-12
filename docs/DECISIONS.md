@@ -163,8 +163,56 @@
   left off passes `_screen_hold`'s refresh test, and such a stutter still reads as the game's. Asking whether a vblank
   passed between a frame's present and the next (from the shown frames' screen times) would judge it. Revisit hook:
   the refresh test in `attribute._screen_hold` (DECISIONS 2026-11-11, the e2e attribution).
+- **Rule out another program's GPU use, or paging, at a frozen frame the game's thread worked through**, as the disk
+  is: a thread that ran through the frame was not waiting. Not for the GPU yet, since a driver can spin on the CPU
+  while it waits on the GPU, so "worked through" may be a wait there; paging blocks the thread, so it would follow the
+  disk once a capture shows it. Revisit hook: `waits=` on the part in `attribute._causes` (DECISIONS 2026-11-12).
+- **Pass network lag in the e2e smooth control** when only ping events make it (nothing blamed on the game), since
+  the control asks whether the doctor invents game lag, and the Wi-Fi's own spikes fail it today (the second 2026-11-11 run:
+  the router itself answered in 120 ms). Revisit hook: the "no lag in the control" check in `e2e_truth.judge`
+  (DECISIONS 2026-11-12).
 
 ---
+
+## 2026-11-12: Another program's disk use never explains a frozen frame the game worked through
+
+The owner's second e2e run of 2026-11-11, on PR #45's code, passed 4 of 8. Smooth, hog and pace lost the window's
+focus partway (from 6.2, 15.4 and 2.6 s), so they cannot be judged; other programs were busy meanwhile, one reading up
+to 630 MB/s. Smooth's verdict,
+"network", was two real ping spikes (124 and 79 ms against 7 ms, the router itself at 120 and 74 ms): the Wi-Fi's, not
+the doctor's. Hitch kept the focus and found all 8 hitches, but 3 named `background_disk` first: another program read
+32-521 MB/s over them, and since both causes passed the lift test at weight 3, the ranking fell to each one's capped
+z: the disk's 554 to 9,129 off a near-zero normal (0.3 MB/s) against the busy wait's 5.4 to 8.9. The ticks showed the
+game's thread running 105-137 ms more than usual in those 160 ms frames. The owner said "Yes, fix it" to ruling the
+disk out there.
+
+Another program's disk use at a frozen frame the game's busiest thread worked through:
+- **A: ruled out, as the turbo veto rules out a clock that load explains (chosen)**: the residual's tick test
+  (`_hold_reading`, now one function both use) reading "worked" leaves the disk out of that stutter's causes and its
+  lift test, and its last why-line says why. A thread that ran through the frame was not waiting on a disk. A frame
+  read as waiting or in between, one too short or noisy to tell, and an FPS drop keep it, and so does a stutter of
+  more than one frozen frame (added in review): its reading judges the longest alone, and another may have waited.
+  Known limits: the reading is the busiest game thread's, whichever thread that is, so a worker's burst through the
+  frame would rule the disk out while another thread waited (the capture names no thread that held the frame; review
+  found no case where that read wrong); and its "ran N ms more" sums the whole ticks that hold the frame, so it can
+  pass the frame's length where the thread also worked around it.
+- **B: listed after the game's own work, not left out**: rejected. It would still name a mechanism the reading rules
+  out, and still count in the lift test: on this run that count made a medium "background programs" finding.
+- **C: rank by evidence differently** (z rescaled, or ties at the cap broken by how far past it): rejected. A signal
+  that is near zero normally saturates z on any burst; no scale says whether the burst could hold the frame. The
+  backlog's tie-break at `Z_CAP` is another question (this was no tie: 10 against 8.9).
+- **D: judge a mode only on a quiet PC**, as the front check does for focus: rejected. It would hide what this run
+  found, since a player's PC is busy too.
+- **E: the same for other programs' CPU use**: rejected. A program hogging the CPU slows a thread that runs (it
+  competes for the core), so it can explain a frame worked through. GPU use and paging are in the backlog.
+
+Where a move was ruled out and nothing else counted, the residual's line now starts "nothing else that moved explains
+it", never "nothing else moved" above the disk its last line names, and the count lines of `game_cpu_spike`,
+`gpu_spike` and `game_stall` say nothing else "explained them" (review found the latter two still saying "no other
+measured cause moved" above such an example; the turbo veto needed it too). Re-judged in memory, this run's hitch passes; across the six FF7
+captures and the e2e runs of 2026-11-09 and both of 2026-11-11, only that hitch's diagnosis changes: its three
+stutters name the game's own work, and its false "background programs" finding goes. Revisit hook: `_wait_veto` and
+`_Part.waits` in `attribute.py`.
 
 ## 2026-11-11: The e2e run's three misattributions: a busy hitch, turbo under load, a screen Windows held
 
