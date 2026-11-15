@@ -171,8 +171,58 @@
   the control asks whether the doctor invents game lag, and the Wi-Fi's own spikes fail it today (the second 2026-11-11 run:
   the router itself answered in 120 ms). Revisit hook: the "no lag in the control" check in `e2e_truth.judge`
   (DECISIONS 2026-11-12).
+- **Name the programs behind "close memory-heavy programs" and "close other GPU-heavy programs"** (`ram_pressure`,
+  `vram_overflow`), once the recorder keeps each process's private bytes (in every snapshot already,
+  `ntquery.ProcInfo`) and its dedicated video memory (PDH reads it for every process; only the game's is kept), the
+  top few of each about once a second. Revisit hook: `sysmon.top_others` and `rules._heavy` (DECISIONS 2026-11-15).
 
 ---
+
+## 2026-11-15: The advice to close other heavy programs names the ones the capture saw
+
+The owner, on the README's report: "Close other disk heavy programs" could post what else was disk heavy, "maybe
+posting the second highest disk reading", and the same for statements like it. The capture already holds every
+listed process's CPU and I/O (the others table, the 8 busiest on the CPU each tick) and the network talkers. Re-run in
+memory over the owner's 40 saved recordings, only these advice lines changed (no title, score or evidence); the
+largest other disk user at a real game's loading stutters averaged 7.5 MB/s, and one e2e run's CPU limit named two
+programs and said a third was Windows Security.
+
+Over which stretch a program counts as heavy:
+- **A: the windows attribution looked at around the finding's own stutters, as a mean over the table's ticks there,
+  a tick it was not listed on counting as 0 (chosen)**: what was busy when the game stalled, as a lower bound, with
+  the floor its cause already blames at (20 MB/s, 25 % of a CPU). `hdd_streaming` with no loading stutters, `cpu_limit`
+  and `bufferbloat` take the whole part; a talker counts only when its own process moved 1 MB/s, as `bandwidth_hog`
+  counts them, so the two never disagree in one report (found in review).
+- **B: the highest one-second reading anywhere in the part**: rejected. A single burst far from any stutter names a
+  program that had nothing to do with them.
+- **C: only the programs attribution blamed** (`detail["process"]`): rejected. A stutter names the program only when
+  its rise beat the game's own reading, so a steady heavy user is never named, and the README's own capture would
+  keep the old line.
+
+What the advice says when no program reaches the floor:
+- **A: the most any program did, by name, with the table's limit (chosen)**, which is the owner's "second highest
+  reading" (for example "the most was OneDrive.exe, at 3.1 MB/s"), and that a disk user with little CPU can be
+  missing.
+- **B: the figure without the name**: rejected. Under "close other disk-heavy programs" a name can read as blame, but
+  the sentence says no program reached the floor, and the name is what the owner asked for.
+- **C: drop the advice**: rejected. The game is still loading from disk, so the advice stays useful.
+
+Windows' own processes in a list of programs to close:
+- **A: said to be Windows by name, never told to close (chosen)**: `WINDOWS_ITSELF`, plus Defender, Windows Update,
+  Search, `svchost.exe`, `csrss.exe` and `audiodg.exe` by image name (`WINDOWS_PARTS`, from windows-telemetry.md
+  section 10). A look-alike under one of those names is only under-named here; the text says what the name "normally
+  is" and offers no fix. `dwm.exe` waits for a Microsoft source that names it. The same table could stop
+  `background_hogs` telling the player to close them, the open bug PR #32's reviewers found: worth trying with a
+  session or path check.
+- **B: leave them in the list**: rejected. "Pause or close MsMpEng.exe" would suggest turning off Windows Security,
+  which lag-doctor never offers.
+
+Which programs a capture can show:
+- **A: list the top 4 by I/O besides the top 8 by CPU in the recorder (next, its own pull request)**: a disk user with
+  little CPU is never listed today, so it can be neither named nor blamed. It changes what attribution sees on new
+  captures, so it lands apart from this. Revisit hook: `sysmon.top_others`.
+- **B: per-process memory and video memory**: deferred (backlog): not recorded, so `ram_pressure` and `vram_overflow`
+  keep their generic line.
 
 ## 2026-11-12: Another program's disk use never explains a frozen frame the game worked through
 

@@ -1364,6 +1364,22 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   without case) stay in the evidence, but here and in `gpu_contention` they never get a priority fix or "pause or
   close" advice: titles name them "Windows itself (System)", a lag only they explain is titled "Windows itself got
   busy", and the advice says what their work means (System: a driver's work; Memory Compression: RAM running short).
+- The advice to close other heavy programs names them (`rules._heavy`, `_disk_advice`, `_cpu_advice`,
+  `_net_advice`). `asset_streaming` and `hdd_streaming` name the other programs whose reads and writes averaged
+  `attribute.OTHERS_DISK_BPS` (20 MB/s) or more over the windows attribution looked at around the finding's own
+  stutters (`hdd_streaming` with none: over the whole part); `cpu_limit` those that averaged `HOG_MIN_CPU_PCT` (25 % of
+  a CPU) or more over the part; `bufferbloat` those with a `net_flows` talker that moved `TALKER_MIN_BPS` (1 MB/s) or
+  more on average on its own, as `bandwidth_hog` counts them. A mean sums each image name's readings in the others table and divides by the table's ticks there, so a
+  tick it was not listed on counts as 0 and the figure is a lower bound ("at least"). At most three are named, biggest
+  first, then by name, never by PID; the game, its helpers, lag-doctor's own processes and the game's image name never
+  are. Windows' own (`WINDOWS_ITSELF`, and `WINDOWS_PARTS` by name: Defender, Windows Update, Search, `svchost.exe`,
+  `csrss.exe`, `audiodg.exe`) are said to be Windows, never told to close: Memory Compression as RAM running short,
+  System on the CPU as a driver's work, the others by what the name normally is. Under the floor the disk advice says
+  the most any program did (a Windows one said to be Windows, a figure that rounds up to the floor "just under" it),
+  and that the table lists the 8 processes busiest on the CPU, so a disk user with little CPU can be missing; with no
+  I/O reading there it says that was not measured. `cpu_limit` and `bufferbloat` keep their old line when none passed
+  (a part has no talkers); talkers through the relay (`talkers_scope` "session") say only that session was seen. The names go only into the advice, so no score moves. Per-process memory
+  and video memory are not recorded, so `ram_pressure` and `vram_overflow` keep theirs.
 - `packet_loss`: loss events, and a steady overall loss ≥ 1 % from at least 2 lost probes; never "no ping was
   lost" when some were. `server_lag`: argued only when a server flow covers most of the capture; no server flow
   is unchecked (a TCP-only or offline game); an "open" gap is a lost connection; "local" gaps are the game
