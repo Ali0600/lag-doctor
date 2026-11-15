@@ -5,6 +5,7 @@ children); and one live run against a spinning child process with a spinning gra
 """
 from __future__ import annotations
 
+import os
 import statistics
 import subprocess
 import sys
@@ -18,6 +19,8 @@ from lagdoctor.capture import sysmon
 from lagdoctor.capture import target as tgt
 from lagdoctor.capture.sysmon import GpuSample, ProcessRates, SystemSampler
 from lagdoctor.model import S
+from lagdoctor.winapi import folders as winfolders
+from lagdoctor.winapi import ntquery
 from lagdoctor.winapi.ntquery import ProcInfo, ThreadInfo
 from lagdoctor.winapi.pdh import PdhError
 
@@ -200,8 +203,8 @@ TICK_100NS = 2_500_000
 
 
 def p(pid, total=0, ppid=4, create=None, threads=None, faults=0, rb=0, wb=0, rops=0, wops=0, ws=0, priv=0,
-      name="x.exe"):
-    return ProcInfo(pid, ppid, 1000 + pid if create is None else create, name, 1, total, 0, ws, priv, faults,
+      name="x.exe", session=1):
+    return ProcInfo(pid, ppid, 1000 + pid if create is None else create, name, session, total, 0, ws, priv, faults,
                     rb, wb, 0, rops, wops, 0, len(threads or []), threads)
 
 
@@ -313,17 +316,123 @@ def test_a_gone_or_replaced_game_has_no_game_columns():
 
 
 def test_top_others_keeps_the_8_busiest_that_did_anything():
-    rates = [(pid, f"p{pid}.exe", float(pid), 0.0, 1000 + pid) for pid in range(1, 13)]
+    rates = [(pid, f"p{pid}.exe", float(pid), 0.0, 1000 + pid, 1) for pid in range(1, 13)]
     rows = sysmon.top_others(rates, [], NV)
-    assert [r[0] for r in rows] == [12, 11, 10, 9, 8, 7, 6, 5]
-    assert rows[0] == [12, "p12.exe", 12.0, 0.0, None, 1012, None]    # the create time rides along
+    assert [r[0] for r in rows] == [12, 11, 10, 9, 8, 7, 6, 5]        # none used the disk: no more than the 8
+    assert rows[0] == [12, "p12.exe", 12.0, 0.0, None, 1012, None, 1, None]   # the create time and session ride along
     gpu = [GpuSample({}, {}, {}, {31: 5.0, 34: 9.0}, {(31, INTEL): 5.0, (34, NV): 9.0})]
-    rows = sysmon.top_others([(30, "idle.exe", 0.0, 0.0, 7), (31, "enc.exe", 0.0, 0.0, 8),
-                              (32, "io.exe", 0.0, 9e5, 9), (33, "busy.exe", 50.0, 0.0, 10),
-                              (34, "gpu.exe", 0.0, 0.0, 11)], gpu, NV)
+    rows = sysmon.top_others([(30, "idle.exe", 0.0, 0.0, 7, 1), (31, "enc.exe", 0.0, 0.0, 8, 1),
+                              (32, "io.exe", 0.0, 9e5, 9, 1), (33, "busy.exe", 50.0, 0.0, 10, 1),
+                              (34, "gpu.exe", 0.0, 0.0, 11, 1)], gpu, NV)
     assert [r[0] for r in rows] == [33, 32, 34, 31]                   # fields 0-5 and the ranking as before
-    assert rows[2] == [34, "gpu.exe", 0.0, 0.0, 9.0, 11, 9.0]         # busy on the game's GPU
-    assert rows[3] == [31, "enc.exe", 0.0, 0.0, 5.0, 8, None]         # busy, but only on the other GPU
+    assert rows[2] == [34, "gpu.exe", 0.0, 0.0, 9.0, 11, 9.0, 1, None]     # busy on the game's GPU
+    assert rows[3] == [31, "enc.exe", 0.0, 0.0, 5.0, 8, None, 1, None]     # busy, but only on the other GPU
+
+
+def test_top_others_adds_the_4_busiest_of_the_rest_by_reads_and_writes():
+    # A backup program reading 90 MB/s at 1 % of a CPU was never listed under 8 busier processes, so the disk advice
+    # could not name it and the lift test never saw it: the 4 busiest by I/O of the rest come after the 8 by CPU
+    cpu = [(pid, f"cpu{pid}.exe", 10.0 + pid, 1e3, 1000 + pid, 1) for pid in range(1, 11)]       # 10 CPU users
+    disk = [(100 + k, f"disk{k}.exe", 1.0, bps, 2000 + k, 0) for k, bps in enumerate((9e7, 5e7, 5e7, 3e7, 2e7, 0.0))]
+    rows = sysmon.top_others(cpu + disk, [], NV)
+    assert [r[0] for r in rows[:8]] == [10, 9, 8, 7, 6, 5, 4, 3]       # the 8 by CPU first, as before
+    # then by I/O among the rest, a tie going to the lower PID; the two CPU users left out read only 1 kB/s
+    assert [r[0] for r in rows[8:]] == [100, 101, 102, 103]
+    assert rows[8] == [100, "disk0.exe", 1.0, 9e7, None, 2000, None, 0, None]
+    assert len(rows) == 12 and len({r[0] for r in rows}) == 12        # nobody twice
+    # a process that read and wrote nothing is never an I/O pick, whatever else it did
+    idle = sysmon.top_others(cpu[:8] + [(200, "gpu.exe", 0.0, 0.0, 3000, 1), (201, "io.exe", 0.0, 5.0, 3001, 1)],
+                             [GpuSample({}, {}, {}, {200: 50.0}, {})], NV)
+    assert [r[0] for r in idle] == [8, 7, 6, 5, 4, 3, 2, 1, 201]
+    assert [r[0] for r in sysmon.top_others(cpu + disk, [], NV, n_io=0)] == [10, 9, 8, 7, 6, 5, 4, 3]
+
+
+def test_top_others_asks_where_each_listed_process_runs_and_only_those():
+    asked = []
+
+    def in_system(pid, created, name):
+        asked.append((pid, created, name))
+        return pid == 3
+
+    rates = [(pid, f"p{pid}.exe", float(pid), 0.0, 1000 + pid, pid % 2) for pid in range(1, 11)]
+    rows = sysmon.top_others(rates, [], NV, in_system=in_system)
+    assert sorted(asked) == sorted((r[0], r[5], r[1]) for r in rows) and len(asked) == 8   # never the unlisted 1, 2
+    where = {r[0]: (r[7], r[8]) for r in rows}
+    assert where[3] == (1, True) and where[4] == (0, False)
+
+
+SYS32, WOW = r"C:\Windows\System32", r"C:\Windows\SysWOW64"
+
+
+def test_system_folders_is_true_only_for_a_program_directly_in_system32_or_syswow64():
+    paths = {1: r"C:\WINDOWS\system32\svchost.exe", 2: r"C:\Windows\SysWOW64\SearchProtocolHost.exe",
+             3: r"C:\Windows\System32\spool\drivers\color\svchost.exe",      # a folder below it: not System32
+             4: r"C:\Users\Jo Tester\AppData\Local\Temp\svchost.exe", 5: r"C:\Windows\svchost.exe",
+             6: None, 7: "",
+             9: "Registry", 10: "MemCompression",                   # no program file: image_path gives the name
+             11: r"\Device\HarddiskVolume3\Windows\System32\csrss.exe",   # a volume Windows could not name
+             12: r"System32\svchost.exe",                             # no drive
+             13: rf"{SYS32}\cmd.exe"}
+
+    def path_of(pid):
+        if pid == 8:
+            raise OSError(0, "NtQuerySystemInformation failed")
+        return paths.get(pid)
+
+    folders = sysmon.SystemFolders([SYS32, WOW], path_of=path_of)
+    assert [folders(pid, 1000 + pid) for pid in range(1, 13)] == [True, True, False, False, False, None, None, None,
+                                                                  None, None, None, None]
+    # the snapshot's name must be the path's program: a PID reused since by a System32 program says nothing
+    assert folders(13, 1013, "svchost.exe") is None
+    assert folders(13, 1013, "cmd.exe") is True and folders(1, 2001, "SVCHOST.EXE") is True
+    assert sysmon.SystemFolders([], path_of=path_of)(1, 1001) is None           # folders unknown: never False
+    assert sysmon.SystemFolders([SYS32 + "\\"], path_of=path_of)(1, 1001) is True     # a trailing backslash
+
+
+def test_system_folders_reads_each_process_once_and_forgets_it_once_it_is_no_longer_listed():
+    reads = []
+    folders = sysmon.SystemFolders([SYS32], path_of=lambda pid: reads.append(pid) or rf"{SYS32}\p{pid}.exe")
+    for _ in range(3):
+        assert folders(10, 1) is True and folders(11, 2) is True
+    assert reads == [10, 11]
+    folders.keep([[10, "p10.exe", 0.0, 0.0, None, 1, None, 1, True]])
+    assert folders(11, 2) is True and reads == [10, 11, 11]            # 11 was forgotten, so it is read again
+    assert folders(10, 1) is True and reads == [10, 11, 11]            # 10 was kept
+    assert folders(10, 99) is True and reads[-1] == 10                 # a reused PID is another process: read anew
+    folders.keep([])
+    assert folders._seen == {}
+    # a failed read is never kept: the next tick reads again
+    tries = []
+    flaky = sysmon.SystemFolders([SYS32], path_of=lambda pid: tries.append(pid) or (
+        rf"{SYS32}\p.exe" if len(tries) > 1 else None))
+    assert flaky(5, 1) is None and flaky(5, 1) is True and flaky(5, 1) is True and tries == [5, 5]
+
+
+def test_a_system32_folder_that_cannot_be_read_is_said_and_checks_nothing(monkeypatch):
+    def boom():
+        raise OSError(0, "GetSystemDirectoryW failed")
+
+    monkeypatch.setattr(sysmon.winfolders, "system_folders", boom)
+    folders = sysmon.SystemFolders(path_of=lambda pid: rf"{SYS32}\svchost.exe")
+    assert folders(1, 1) is None
+    assert folders.problem.startswith("Windows' System32 folder could not be read (")
+    s = SystemSampler({"pid": GAME, "create_time": 1100}, pdh_factory=lambda paths: FakePdh(paths),
+                      snapshotter=FakeSnap(), layout_check=lambda snapshotter: None, system_folders=folders)
+    s._final_status()                                   # the status says so, without calling the source degraded
+    assert folders.problem in s.status().detail and s.status().state == "ok", s.status()
+
+
+def test_system_folders_on_this_pc_reads_a_real_svchost_as_system32_and_this_python_as_not():
+    # Live and handle-free: Windows runs its services' hosts from System32, and this interpreter is installed elsewhere
+    procs = ntquery.Snapshotter().snapshot()
+    hosts = [q for q in procs.values() if q.name.casefold() == "svchost.exe"]
+    me = procs[os.getpid()]
+    folders = sysmon.SystemFolders()
+    read = [folders(q.pid, q.create_time, q.name) for q in hosts]       # one may end before its path is read
+    assert True in read and set(read) <= {True, None}, read
+    assert folders(me.pid, me.create_time) is False, ntquery.image_path(me.pid)
+    assert os.path.join(os.environ["SystemRoot"], "System32").casefold() in {
+        f.casefold() for f in winfolders.system_folders()}
 
 
 def test_cost_stats_median_from_the_histogram():
@@ -410,7 +519,7 @@ class FakeSnap:
         k = self.calls
         return {GAME: p(GAME, k * 1_000_000, create=1100, threads=[th(1, 5, k * 1_000_000)], ws=100 * MIB),
                 CHILD: p(CHILD, k * 500_000, ppid=GAME, create=1200),
-                300: p(300, k * 100_000, create=1300, name="other.exe")}
+                300: p(300, k * 100_000, create=1300, name="other.exe", session=0)}     # a service
 
 
 def _run(sampler, ticks, period):
@@ -484,13 +593,17 @@ def test_others_rows_say_how_busy_each_process_kept_the_games_own_gpu():
     # competing with the game. Field 6 is the same on the game's adapter (the one game_gpu_pct uses).
     s = SystemSampler({"pid": GAME, "create_time": 1100}, period_s=0.05,
                       pdh_factory=lambda paths: TwoGpuPdh(paths), snapshotter=ThreeOthersSnap(),
-                      foreground=lambda: GAME, layout_check=lambda snapshotter: None)
+                      foreground=lambda: GAME, layout_check=lambda snapshotter: None,
+                      system_folders=sysmon.SystemFolders([SYS32], path_of=lambda pid: (
+                          rf"{SYS32}\other.exe" if pid == 300 else rf"C:\Games\{'trainer' if pid == 301 else 'x'}.exe")))
     r = _run(s, 6, 0.05)
     assert r["game_adapter_luid"] == INTEL and r["columns"][S.GAME_GPU_PCT][-1] == pytest.approx(30.0)
     assert r["others"]
     for _t, row in r["others"]:
         by_pid = {o[0]: o for o in row}
-        assert set(by_pid) == {CHILD, 300, 301} and all(len(o) == 7 for o in row)
+        assert set(by_pid) == {CHILD, 300, 301} and all(len(o) == 9 for o in row)
+        assert {pid: o[7] for pid, o in by_pid.items()} == {CHILD: 1, 300: 0, 301: 1}         # their session
+        assert {pid: o[8] for pid, o in by_pid.items()} == {CHILD: False, 300: True, 301: False}   # System32?
         assert {pid: o[5] for pid, o in by_pid.items()} == {CHILD: 1200, 300: 1300, 301: 1301}   # create times
         assert [by_pid[pid][4] for pid in (CHILD, 300, 301)] == [10.0, 80.0, 40.0]     # any adapter, unchanged
         assert [by_pid[pid][6] for pid in (CHILD, 300, 301)] == [10.0, 5.0, None]      # the game's adapter only
@@ -627,6 +740,9 @@ def test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild():
     rows = [row for row in r["others"] if t0 + 0.3 <= row[0] <= t1 - 0.05]
     gc = [next((o[2] for o in row[1] if o[0] == gpid), 0.0) for row in rows]
     assert abs(statistics.mean(gc) - g_share) <= 10.0, (gc, g_share)      # the grandchild is an "other"
+    # ... in this session (ProcessIdToSessionId, read apart from the snapshot), its program outside System32
+    listed = [o for row in rows for o in row[1] if o[0] == gpid]
+    assert listed and all(o[7] == ntquery._own_session() and o[8] is False for o in listed), listed[:2]
     assert {child.pid, gpid} <= set(r["game_pids"])
     assert cols[S.GAME_CPU_PCT][-1] is None and cols[S.GAME_THREADS][-1] is None
     assert all(cols[c][i] is not None for i in inside
@@ -640,3 +756,27 @@ def test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild():
     print(f"\nper-tick cost: median {cost['median_ms']} ms, mean {cost['mean_ms']} ms, max {cost['max_ms']} ms "
           f"over {cost['ticks']} ticks; status: {st.detail}")
     assert cost["median_ms"] < 50.0
+
+
+class ChurnSnap(FakeSnap):
+    """FakeSnap plus a new short-lived process every call: the others row lists a different one each tick."""
+
+    def snapshot(self, threads_for=()):
+        procs = super().snapshot(threads_for)
+        procs[5000 + self.calls] = p(5000 + self.calls, 400_000, create=9000 + self.calls, name="churn.exe")
+        return procs
+
+
+def test_the_sampler_keeps_where_each_process_runs_only_while_it_is_listed():
+    asked = []
+    names = {CHILD: "x.exe", 300: "other.exe"}
+    folders = sysmon.SystemFolders([SYS32], path_of=lambda pid: asked.append(pid) or (
+        rf"{SYS32}\{names.get(pid, 'churn.exe')}"))
+    s = SystemSampler({"pid": GAME, "create_time": 1100}, period_s=0.05,
+                      pdh_factory=lambda paths: FakePdh(paths), snapshotter=ChurnSnap(), foreground=lambda: GAME,
+                      layout_check=lambda snapshotter: None, system_folders=folders)
+    r = _run(s, 10, 0.05)
+    churned = {pid for pid in asked if pid >= 5000}
+    assert len(churned) >= 6, asked                       # a new process listed at nearly every tick
+    assert len(folders._seen) <= 3, folders._seen         # CHILD, 300 and this tick's: never every one seen
+    assert all(len(o) == 9 for _t, row in r["others"] for o in row)

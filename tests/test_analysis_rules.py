@@ -2568,6 +2568,91 @@ def test_gpu_contention_never_tells_the_player_to_close_windows_itself():
     assert not any(f.title.startswith("Pause or close") for f in res.fixes)
 
 
+def where_hog_capture(hogs_):
+    """kernel_hog_capture's rows as the sampler writes them since 2026-11-15: each (pid, name, times, session, folder)
+    with its Windows session and whether its program sits in System32 (fields 7 and 8)."""
+    cap, evs = kernel_hog_capture([(pid, prog, times) for pid, prog, times, _s, _f in hogs_])
+    where = {pid: (session, folder) for pid, _p, _t, session, folder in hogs_}
+    for _t, procs in cap.others:
+        for q in procs:
+            q.extend([None, *where.get(q[0], (1, False))])
+    return cap, evs
+
+
+def test_windows_own_programs_are_never_told_to_close_nor_offered_a_priority_fix_by_name_in_an_older_capture():
+    # PR #32 left Windows' user-mode processes in "Pause or close X" with a priority fix that fixes/priority.py
+    # refuses when run (services, session 0): an older capture holds names only, so the name decides
+    # blamed most: svchost.exe (5 stutters), then dwm.exe (4), then hog.exe (3), so the two fix slots meet them first
+    cap, evs = kernel_hog_capture([(1200, "svchost.exe", (2.5, 4.0, 5.5, 7.0, 8.5)),
+                                   (2656, "dwm.exe", (11.0, 13.0, 15.0, 17.0)), (20000, "hog.exe", (20.0, 23.0, 26.0))])
+    res = run("background_hogs", cap, events=evs, causes={"background_cpu": lift("supports", a=12, n=12)})
+    assert is_finding(res)
+    assert [f.params["pid"] for f in res.fixes if f.fix_id] == [20000]
+    titles = [f.title for f in res.fixes]
+    assert not any(t.startswith(("Pause or close svchost", "Pause or close dwm")) for t in titles), titles
+    svc = next(f for f in res.fixes if f.title == "svchost.exe (process 1200) is normally part of Windows, not a "
+                                                  "program to close")
+    assert svc.detail == ("That name is normally a host for Windows' own services, such as Windows Update, so "
+                          "lag-doctor does not suggest closing it.")
+    assert "dwm.exe (process 2656) is normally part of Windows, not a program to close" in titles
+    assert "Pause or close hog.exe while you play (process 20000)" in titles
+
+
+def test_where_a_blamed_process_runs_decides_whether_it_can_be_closed_or_lowered():
+    # A svchost.exe in the player's session from another folder is no Windows service host: it stays a program to
+    # close and to lower. Someone else's service (session 0) can be closed, never lowered: the fix refuses session 0.
+    cap, evs = where_hog_capture([(31000, "svchost.exe", (2.5, 5.0, 7.5, 10.0, 12.5), 1, False),
+                                  (1700, "BackupSvc.exe", (15.0, 17.5, 20.0), 0, False),
+                                  (1200, "svchost.exe", (22.5, 25.0), 0, True)])
+    res = run("background_hogs", cap, events=evs, causes={"background_cpu": lift("supports", a=10, n=10)})
+    assert is_finding(res)
+    assert [f.params["pid"] for f in res.fixes if f.fix_id] == [31000]
+    titles = [f.title for f in res.fixes]
+    # one name, two kinds: the look-alike is closable, the real one beside it is Windows' own
+    assert f"Pause or close svchost.exe{rules.LOOKALIKE} while you play (process 31000)" in titles, titles
+    assert "svchost.exe (process 1200) is normally part of Windows, not a program to close" in titles
+    assert "Pause or close BackupSvc.exe while you play (process 1700)" in titles
+    # the real one alone: Windows' own, by where it runs
+    cap, evs = where_hog_capture([(1200, "svchost.exe", (2.5, 5.0, 7.5, 10.0, 12.5), 0, True),
+                                  (20000, "hog.exe", (15.0, 17.5, 20.0), 1, False)])
+    res = run("background_hogs", cap, events=evs, causes={"background_cpu": lift("supports", a=8, n=8)})
+    assert is_finding(res) and [f.params["pid"] for f in res.fixes if f.fix_id] == [20000]
+    assert "svchost.exe (process 1200) is normally part of Windows, not a program to close" in [f.title for f in
+                                                                                                  res.fixes]
+
+
+def test_a_real_process_in_the_players_session_never_takes_its_look_alikes_priority_fix():
+    # dwm.exe runs in the player's session, so session 0 alone never kept the real one from a priority fix: the real
+    # one rose the most, so it came first among the name's processes
+    cap, evs = where_hog_capture([(2656, "dwm.exe", (2.5, 5.0, 7.5, 10.0, 12.5), 1, True),
+                                  (33000, "dwm.exe", (15.0, 17.5, 20.0), 1, False)])
+    res = run("background_hogs", cap, events=evs, causes={"background_cpu": lift("supports", a=8, n=8)})
+    assert is_finding(res)
+    assert [f.params["pid"] for f in res.fixes if f.fix_id] == [33000]
+    titles = [f.title for f in res.fixes]
+    assert f"Pause or close dwm.exe{rules.LOOKALIKE} while you play (process 33000)" in titles, titles
+    assert "dwm.exe (process 2656) is normally part of Windows, not a program to close" in titles
+
+
+def test_gpu_contention_says_the_desktop_window_manager_is_windows_and_a_look_alike_is_not():
+    res = run("gpu_contention", contention(80.0, others=on_the_games_adapter(12.0)), stats={"avg_fps": 58.0},
+              bound=STARVED)
+    assert res.fixes[0].title == "dwm.exe (process 2656) is normally part of Windows, not a program to close"
+    assert "Windows' Desktop Window Manager, which draws every window on the screen" in res.fixes[0].detail
+    assert len(res.fixes) == 1                          # Windows' own work cannot be moved to another GPU
+    rows = on_the_games_adapter(12.0)
+    for _t, procs in rows:
+        for q in procs:
+            q.extend([1, False])                        # dwm.exe in the player's session, outside System32
+    res = run("gpu_contention", contention(80.0, others=rows), stats={"avg_fps": 58.0}, bound=STARVED)
+    assert res.fixes[0].title == f"Pause or close dwm.exe{rules.LOOKALIKE} while you play"
+    assert res.fixes[1].title == "Or let that work run on another GPU, if this PC has one"
+    for _t, procs in rows:
+        procs[1][8] = True                              # ... and from System32: Windows' own
+    res = run("gpu_contention", contention(80.0, others=rows), stats={"avg_fps": 58.0}, bound=STARVED)
+    assert res.fixes[0].title == "dwm.exe (process 2656) is normally part of Windows, not a program to close"
+
+
 # --------------------------------------------------------------------------------- disks ---
 
 def test_hdd_streaming():

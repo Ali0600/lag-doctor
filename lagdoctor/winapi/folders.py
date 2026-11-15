@@ -1,7 +1,7 @@
 """The signed-in user's own folders from SHGetKnownFolderPath (shell32): where Windows keeps Documents and the local
 AppData, wherever they were moved (OneDrive moves Documents into its own folder, so %USERPROFILE%\\Documents can be
 the wrong place). No admin rights. Also a path's long form (GetLongPathNameW), for paths Windows gives with 8.3 short
-names.
+names, and Windows' own program folders (System32, SysWOW64), which the system sampler compares programs' paths with.
 
 FOLDERID values are from the SDK's um\\KnownFolders.h. The caller frees the returned string with CoTaskMemFree
 whether the call succeeds or not (the function's documentation).
@@ -87,3 +87,24 @@ def local_app_data() -> str:
 
 def program_data() -> str:
     return known_folder(FOLDERID_PROGRAM_DATA)
+
+
+_kernel32.GetSystemDirectoryW.argtypes = [wintypes.LPWSTR, wintypes.UINT]
+_kernel32.GetSystemDirectoryW.restype = wintypes.UINT
+_kernel32.GetSystemWow64DirectoryW.argtypes = [wintypes.LPWSTR, wintypes.UINT]
+_kernel32.GetSystemWow64DirectoryW.restype = wintypes.UINT
+
+
+def system_folders() -> tuple[str, ...]:
+    """Windows' own program folders: System32 (GetSystemDirectoryW) and, on 64-bit Windows, SysWOW64
+    (GetSystemWow64DirectoryW, which fails on 32-bit Windows: then only System32). OSError when System32 cannot be
+    read. Their paths as Windows gives them, never from an environment variable a caller could set."""
+    out = []
+    for call, required in ((_kernel32.GetSystemDirectoryW, True), (_kernel32.GetSystemWow64DirectoryW, False)):
+        buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH + 1)
+        n = call(buf, len(buf))
+        if 0 < n < len(buf):
+            out.append(buf.value)
+        elif required:
+            raise ctypes.WinError(ctypes.get_last_error())
+    return tuple(out)

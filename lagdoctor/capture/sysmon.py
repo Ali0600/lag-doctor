@@ -2,7 +2,8 @@
 
 Design: docs/research/windows-telemetry.md (WT) section 11, as corrected by its verification log. Each tick
 runs one PDH collect (the WT 11.1 counter list) and one NtQuerySystemInformation snapshot with the game's
-threads, and writes one row of S columns plus an `others` row (the top 8 other processes by CPU).
+threads, and writes one row of S columns plus an `others` row (the top 8 other processes by CPU, then the top 4 of
+the rest by reads and writes, each with its Windows session and whether its program sits in System32).
 
 - Process and thread CPU are the delta since the previous tick (about 250 ms), kept sharp so a short hitch
   shows in the tick that holds it. Thread times move in 15.625 ms steps (WT 3.5), so one tick is only good
@@ -20,6 +21,7 @@ threads, and writes one row of S columns plus an `others` row (the top 8 other p
 from __future__ import annotations
 
 import heapq
+import ntpath
 import re
 import time
 from collections import deque
@@ -29,6 +31,7 @@ from typing import Any, Callable, Iterable
 from lagdoctor.capture import target as tgt
 from lagdoctor.capture.base import Collector
 from lagdoctor.model import S, SeriesBuilder
+from lagdoctor.winapi import folders as winfolders
 from lagdoctor.winapi import ntquery, windows
 from lagdoctor.winapi.ntquery import ProcInfo
 from lagdoctor.winapi.pdh import PdhQuery, status_name
@@ -36,6 +39,7 @@ from lagdoctor.winapi.pdh import PdhQuery, status_name
 PERIOD_S = 0.25
 WINDOW_SAMPLES = 4            # the trailing 1 s at 4 Hz
 TOP_OTHERS = 8
+TOP_OTHERS_IO = 4            # besides the 8 by CPU, the 4 busiest by reads and writes: a disk user with little CPU
 MAX_GAME_PIDS = 4096
 MIB = float(1 << 20)
 TOOL = "PDH + NtQuerySystemInformation"
@@ -326,7 +330,8 @@ class ProcessRates:
         self._thread_hist: deque[dict[tuple[int, int], int]] = deque(maxlen=WINDOW_SAMPLES)   # recent deltas
 
     def update(self, procs: dict[int, ProcInfo] | None, t_ns: int) -> tuple[Values, list[tuple] | None]:
-        """(game_* columns, [(pid, name, cpu_pct, io_bps), ...] for every other process, or None)."""
+        """(game_* columns, [(pid, name, cpu_pct, io_bps, create_time, session_id), ...] for every other process, or
+        None)."""
         cols: Values = dict.fromkeys(GAME_COLUMNS)
         if procs is None:
             self._prev, self._prev_threads = None, None
@@ -397,26 +402,85 @@ class ProcessRates:
             d_io = (p.read_bytes + p.write_bytes) - ((old.read_bytes + old.write_bytes) if old else 0)
             if d_cpu < 0 or d_io < 0:
                 continue
-            others.append((p.pid, p.name, 100.0 * d_cpu / dt_100ns, d_io / dt_s, p.create_time))
+            others.append((p.pid, p.name, 100.0 * d_cpu / dt_100ns, d_io / dt_s, p.create_time, p.session_id))
         return cols, others
 
 
 def top_others(rates: list[tuple], gpu_window: list[GpuSample | None], adapter: str | None,
-               n: int = TOP_OTHERS) -> list[list]:
-    """The others row: the top `n` by CPU among processes that did anything,
-    as [pid, name, cpu, io, gpu, create_time, gpu_game]. gpu is the busiest engine on any adapter;
-    gpu_game the busiest on `adapter`, the game's (pid_gpu_pct_on: None when that adapter is unknown or the
-    process has no engine there). The create time (raw FILETIME ticks) lets a fix on that process prove
-    later that the PID was not reused."""
+               n: int = TOP_OTHERS, n_io: int = TOP_OTHERS_IO,
+               in_system: Callable[[int, int, str], bool | None] = lambda pid, created, name: None) -> list[list]:
+    """The others row: the top `n` by CPU among processes that did anything, then the top `n_io` of the rest by
+    reads and writes (a program that loads the disk with little CPU), as [pid, name, cpu, io, gpu, create_time,
+    gpu_game, session, system_folder]. gpu is the busiest engine on any adapter; gpu_game the busiest on `adapter`,
+    the game's (pid_gpu_pct_on: None when that adapter is unknown or the process has no engine there). The create
+    time (raw FILETIME ticks) lets a fix on that process prove later that the PID was not reused. session is its
+    Windows session (0: services and Windows' own); system_folder is `in_system(pid, create_time, name)` for the
+    listed processes only: True when its program sits in Windows' own System32 or SysWOW64 folder, None unread."""
     rows = []
-    for pid, name, cpu, io, created in rates:
+    for pid, name, cpu, io, created, session in rates:
         gpu = pid_gpu_pct(gpu_window, pid)
         if cpu > 0 or io > 0 or (gpu or 0) > 0:
-            rows.append((cpu, io, gpu or 0.0, pid, name, gpu, created, pid_gpu_pct_on(gpu_window, pid, adapter)))
+            rows.append((cpu, io, gpu or 0.0, pid, name, gpu, created, pid_gpu_pct_on(gpu_window, pid, adapter),
+                         session))
     best = heapq.nlargest(n, rows, key=lambda r: (r[0], r[1], r[2], -r[3]))
+    listed = {r[3] for r in best}
+    best += heapq.nlargest(n_io, (r for r in rows if r[3] not in listed and r[1] > 0),
+                           key=lambda r: (r[1], r[0], -r[3]))
     return [[pid, name, round(cpu, 2), round(io, 1), None if gpu is None else round(gpu, 2), created,
-             None if game_gpu is None else round(game_gpu, 2)]
-            for cpu, io, _g, pid, name, gpu, created, game_gpu in best]
+             None if game_gpu is None else round(game_gpu, 2), session, in_system(pid, created, name)]
+            for cpu, io, _g, pid, name, gpu, created, game_gpu, session in best]
+
+
+class SystemFolders:
+    """in_system for top_others: whether a process's program sits directly in one of Windows' own program folders
+    (System32, SysWOW64), where Windows and its drivers keep theirs. Each process's path is read handle-free
+    (ntquery.image_path); an answer is kept only while the process stays listed (`keep`), so the cache stays the size
+    of an others row, and a failed read is never kept. None when it cannot say: the path could not be read (the
+    process ended), is no drive path (System, Registry and Memory Compression have no program file; a volume Windows
+    could not name), names another program than the snapshot did (its PID was reused since), or the folders are
+    unknown (`problem` says why)."""
+
+    def __init__(self, folders: Iterable[str] | None = None,
+                 path_of: Callable[[int], str | None] = ntquery.image_path) -> None:
+        self.problem = ""
+        if folders is None:
+            try:
+                folders = winfolders.system_folders()
+            except OSError as exc:
+                folders = ()
+                self.problem = (f"Windows' System32 folder could not be read ({exc}), so no process was checked "
+                                "against it")
+        self._folders = frozenset(ntpath.normcase(ntpath.normpath(f)) for f in folders if f)
+        self._path_of = path_of
+        self._seen: dict[tuple[int, int], bool] = {}
+
+    def __call__(self, pid: int, created: int, name: str | None = None) -> bool | None:
+        key = (pid, created)
+        if key in self._seen:
+            return self._seen[key]
+        got = self._read(pid, name)
+        if got is not None:
+            self._seen[key] = got
+        return got
+
+    def _read(self, pid: int, name: str | None) -> bool | None:
+        if not self._folders:
+            return None
+        try:
+            path = self._path_of(pid)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(path, str) or not ntpath.splitdrive(path)[0] or not ntpath.isabs(path):
+            return None
+        path = ntpath.normpath(path)
+        if name is not None and ntpath.basename(path).casefold() != name.casefold():
+            return None
+        return ntpath.normcase(ntpath.dirname(path)) in self._folders
+
+    def keep(self, row: list[list]) -> None:
+        """Forget every process this others row does not list."""
+        listed = {(p[0], p[5]) for p in row}
+        self._seen = {k: v for k, v in self._seen.items() if k in listed}
 
 
 # ---------------------------------------------------------------- the collector ---
@@ -463,7 +527,8 @@ class SystemSampler(Collector):
                  pdh_factory: Callable[[list[str]], Any] = PdhQuery,
                  snapshotter: Any = None,
                  foreground: Callable[[], int | None] = windows.foreground_pid,
-                 layout_check: Callable[[Any], None] = ntquery.self_check) -> None:
+                 layout_check: Callable[[Any], None] = ntquery.self_check,
+                 system_folders: SystemFolders | None = None) -> None:
         super().__init__()
         pid, create_time = target.get("pid"), target.get("create_time")
         tgt._check_identity(pid, create_time)
@@ -486,6 +551,7 @@ class SystemSampler(Collector):
         self._cpu_window: deque = deque(maxlen=WINDOW_SAMPLES)
         self._gpu_window: deque = deque(maxlen=WINDOW_SAMPLES)
         self._rates = ProcessRates(pid, create_time)
+        self._system = system_folders if system_folders is not None else SystemFolders()
         self._read_failures: dict[str, int] = {}
         self._snapshot_failures = 0
         self._last_snapshot_error = ""
@@ -629,7 +695,9 @@ class SystemSampler(Collector):
         self._rows += 1
         if rates is not None:
             # the same adapter as game_gpu_pct, so gpu_game says what else loaded the game's own GPU
-            self.others.append([t, top_others(rates, window, adapter)])
+            listed = top_others(rates, window, adapter, in_system=self._system)
+            self._system.keep(listed)
+            self.others.append([t, listed])
         temps = [k for k in get(T_TEMP).values() if k is not None]
         self.publish(t=t, cpu_total_pct=row[S.CPU_TOTAL_PCT], cpu_max_core_pct=row[S.CPU_MAX_CORE_PCT],
                      game_cpu_pct=row[S.GAME_CPU_PCT], game_top_thread_pct=row[S.GAME_TOP_THREAD_PCT],
@@ -639,7 +707,7 @@ class SystemSampler(Collector):
                      perf_limit_flags=single(get(P_LIMIT_FLAGS)), adapter_luid=adapter)
 
     def _final_status(self) -> None:
-        notes = list(self.problems)
+        notes = list(self.problems) + ([self._system.problem] if self._system.problem else [])
         med = self.cost.median_ms()
         cost = (f"{self._rows} rows at {1 / self._period:g} Hz; median {med:.1f} ms per tick "
                 f"(max {self.cost.max_ms:.1f} ms)" if med is not None else "no ticks ran")

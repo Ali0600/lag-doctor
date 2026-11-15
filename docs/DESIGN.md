@@ -590,7 +590,7 @@ Rules every collector follows:
   with the reason (e.g. "PresentMon needs admin rights: access denied") and returns empty columns; it never
   raises into the session and never fakes data. A failed sample is `None`, never `0`.
 - **Bounded.** Fixed rates, bounded buffers, reused ctypes buffers, no unbounded growth per tick
-  (`others`: top 8 only).
+  (`others`: the top 8 by CPU and the top 4 of the rest by reads and writes).
 - **No handles to the game** (Principle 1).
 
 ### Who follows a recording (capture/session.py)
@@ -625,11 +625,18 @@ The session copies these into the `Capture`. Keys not listed here go nowhere, so
 | `network`, capture/netmon.py, `NetworkSampler(server_ip=None, *, steam_log=None)` | `columns` (N) → `network`; `targets` `{gateway, internet, server}` (IPs or None), `probes` `{target: {"sent", "lost", "from_t"}}`, `lost` `{target: [t, …]}`, `wifi_scans` `[t, …]`, `route` `{if_index, description, vpn: bool \| None, toward}` → `net_flows[…]` under the same keys; `interface` `{name, kind: "wifi"/"ethernet"/"other", band, channel}` → `inventory["network"]`; `downloads` `[{t, source, mbps}]` from the Steam log, or None when no download log was read, with `download_sources` (the logs read) → `net_flows[…]` |
 | `net_flows`, capture/netflows.py, `FlowTracker(game_pids or a callable, *, relay=None)` | `server` `{ip, port, proto, pid, rx_packets, tx_packets, rx_bytes, tx_bytes, tick_ms, first_rx_t, last_rx_t}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8, with `talkers_scope` "all" (its own ETW session) or "session" (through the relay: the programs in this Windows session only); `game_wire_bytes` `[rx, tx]` the game's bytes that crossed the network (one end this PC's), never its loopback traffic; `gaps` `[[t, ms, kind], …]` (t = the last packet before the silence; kind: "delay" burst after the gap / "loss" no burst / "local" our own tx paused too / "open" the server went silent for good while we kept sending / "unknown" a late delivery hides which); `server_rx` `[[t, pps], …]` (t = end of each 1 s bin); talkers, game_wire_bytes, gaps and server_rx are None when the session never ran; `layout` "verified"/"unverified"; `health` → `net_flows[…]` |
 
-`others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct, create_time, gpu_game_pct], …]]`: up to 8
-non-game processes that did something that tick, ranked by CPU, `cpu_pct` with 100 = one logical CPU, `io_bps`
-read + write bytes, `gpu_pct` their busiest engine on any adapter, `create_time` raw FILETIME ticks (so a fix can
-prove a PID was not reused), `gpu_game_pct` their busiest engine on the game's adapter (None while that adapter
-is unknown). lag-doctor's own process is included: its load is real, and `target["tool_pids"]` lets the analysis
+`others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct, create_time, gpu_game_pct, session, system_folder],
+…]]`: up to 8 non-game processes that did something that tick, ranked by CPU, then up to 4 of the rest that read or
+wrote, ranked by `io_bps` (since 2026-11-15: a disk user with little CPU was never listed before), `cpu_pct` with
+100 = one logical CPU, `io_bps` read + write bytes, `gpu_pct` their busiest engine on any adapter, `create_time` raw
+FILETIME ticks (so a fix can prove a PID was not reused), `gpu_game_pct` their busiest engine on the game's adapter
+(None while that adapter is unknown), `session` their Windows session (0: services and Windows' own), and
+`system_folder` True when their program sits directly in Windows' own System32 or SysWOW64 folder
+(`winapi.folders.system_folders`), False elsewhere, None when it cannot say: the path could not be read, is no drive
+path (System, Registry, Memory Compression), or names another program than the snapshot did (a reused PID)
+(`ntquery.image_path`, handle-free; an answer is kept while the process stays listed: `sysmon.SystemFolders`; a
+System32 that cannot be read is said in the status). The path itself is never kept.
+Older captures have 5 to 7 fields, and the analysis reads a row of 9 as one that lists the disk users too. lag-doctor's own process is included: its load is real, and `target["tool_pids"]` lets the analysis
 keep it out of the blame and out of the background-CPU signals (the listed totals, and the machine-wide reading
 minus the game): its sampling is the measurement's cost, never "another program using the CPU". The session writes
 it from handle-free snapshots, at every status tick from `TOOL_SIGHT_S` (0.5 s) on and once more just before the
@@ -1367,6 +1374,13 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   without case) stay in the evidence, but here and in `gpu_contention` they never get a priority fix or "pause or
   close" advice: titles name them "Windows itself (System)", a lag only they explain is titled "Windows itself got
   busy", and the advice says what their work means (System: a driver's work; Memory Compression: RAM running short).
+  The same goes for Windows' other own programs (`rules._windows_own`): a `WINDOWS_PARTS` name, by what it normally
+  is. Where the others row says where a process runs (fields 7 and 8), a `WINDOWS_PARTS` name counts only in session
+  0 or from System32, so one in the player's session from another folder is a look-alike, said so ("named like a
+  part of Windows, but not where Windows runs it") and kept closable and lowerable, apart from the real ones of its
+  name; a program on no list never counts by where it runs (a backup service's robocopy.exe stays closable). Defender's
+  scanner (`MpCmdRun.exe`), an older capture and an unread path decide by name. No priority fix goes to a session-0
+  process either: `fixes/priority.py` refuses those, and `gpu_contention` offers no other GPU for Windows' own work.
 - The advice to close other heavy programs names them (`rules._heavy`, `_disk_advice`, `_cpu_advice`,
   `_net_advice`). `asset_streaming` and `hdd_streaming` name the other programs whose reads and writes averaged
   `attribute.OTHERS_DISK_BPS` (20 MB/s) or more over the windows attribution looked at around the finding's own
@@ -1375,12 +1389,14 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   more on average on its own, as `bandwidth_hog` counts them. A mean sums each image name's readings in the others table and divides by the table's ticks there, so a
   tick it was not listed on counts as 0 and the figure is a lower bound ("at least"). At most three are named, biggest
   first, then by name, never by PID; the game, its helpers, lag-doctor's own processes and the game's image name never
-  are. Windows' own (`WINDOWS_ITSELF`, and `WINDOWS_PARTS` by name: Defender, Windows Update, Search, `svchost.exe`,
-  `csrss.exe`, `audiodg.exe`) are said to be Windows, never told to close: Memory Compression as RAM running short,
-  System on the CPU as a driver's work, the others by what the name normally is. Under the floor the disk advice says
-  the most any program did (a Windows one said to be Windows, a figure that rounds up to the floor "just under" it),
-  and that the table lists the 8 processes busiest on the CPU, so a disk user with little CPU can be missing; with no
-  I/O reading there it says that was not measured. `cpu_limit` and `bufferbloat` keep their old line when none passed
+  are. Windows' own (`WINDOWS_ITSELF`, and `rules._windows_own`: Defender, Windows Update, Search, `svchost.exe`,
+  `csrss.exe`, `audiodg.exe` and `dwm.exe`, by where they run when the capture says it, else by name) are said to
+  be Windows, never told to close: Memory Compression as RAM running short,
+  System on the CPU as a driver's work, the others by what the name normally is; a name's look-alikes are counted
+  apart and named as such. Under the floor the disk advice says the most any program did (a Windows one said to be
+  Windows, a figure that rounds up to the floor "just under" it), and, in an older capture, that the table lists the
+  8 processes busiest on the CPU, so a disk user with little CPU can be missing; with no I/O reading there it says
+  that was not measured. `cpu_limit` and `bufferbloat` keep their old line when none passed
   (a part has no talkers); talkers through the relay (`talkers_scope` "session") say only that session was seen. The names go only into the advice, so no score moves. Per-process memory
   and video memory are not recorded, so `ram_pressure` and `vram_overflow` keep theirs.
 - `packet_loss`: loss events, and a steady overall loss ≥ 1 % from at least 2 lost probes; never "no ping was

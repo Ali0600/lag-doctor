@@ -361,3 +361,143 @@ def test_bufferbloat_through_the_relay_says_only_this_windows_session_was_seen()
                                    "name is normally a host for Windows' own services, such as Windows Update, so "
                                    "lag-doctor does not suggest closing it. Programs outside your Windows session, "
                                    "Windows' own services among them, were not measured one by one.")
+
+
+# ------------------------------------------------------------ where each process runs (since 2026-11-15) ---
+
+LIKE = rules.LOOKALIKE
+
+
+def test_a_look_alike_is_said_to_be_one():
+    assert LIKE == " (named like a part of Windows, but not where Windows runs it)"
+
+
+def table9(*users, steady=()):
+    """An others table as the sampler writes it since 2026-11-15: each entry also says its Windows session and whether
+    its program sits in System32 (fields 7 and 8). Users are (pid, name, bytes/s, when, session, folder)."""
+    rows = []
+    for t in ticks():
+        procs = [[pid, name, cpu, 0.0, 0.0, 134000000000000000 + pid, None, session, folder]
+                 for pid, name, cpu, session, folder in (*steady, (8, "Quiet.exe", 0.5, 1, False))]
+        for pid, name, bps, when, session, folder in users:
+            if when(t):
+                procs.append([pid, name, 1.0, bps, 0.0, 134000000000000000 + pid, None, session, folder])
+        rows.append([t, procs])
+    return rows
+
+
+def test_where_a_process_runs_tells_windows_own_from_a_program_named_like_it():
+    # The table held names only, so a svchost.exe started from a user's Temp folder was said to be Windows' service
+    # host, and robocopy.exe, from System32, could have been too: Windows runs its services in session 0, and runs
+    # csrss.exe and dwm.exe from System32 in every session. A look-alike says so, and a System32 tool a player runs stays
+    # a program to close.
+    fix = disk_fix(streaming(table9((1200, "svchost.exe", 30 * MB, near, 0, True),
+                                    (31000, "svchost.exe", 40 * MB, near, 1, False),
+                                    (32000, "robocopy.exe", 25 * MB, near, 1, True))))
+    assert fix.title == f"Pause or close svchost.exe{LIKE} and robocopy.exe while you play"
+    assert fix.detail.startswith(f"At those stutters and FPS drops, besides the game, svchost.exe{LIKE} read and "
+                                 "wrote at least 40.0 MB/s on average, and robocopy.exe 25.0 MB/s.")
+    assert fix.detail.endswith(" svchost.exe read and wrote at least 30.0 MB/s too: that name is normally a host for "
+                               "Windows' own services, such as Windows Update, so lag-doctor does not suggest closing "
+                               "it.")
+
+
+@pytest.mark.parametrize("pid, name, session, folder, own", [
+    (1300, "MsMpEng.exe", 0, False, True),          # Defender: session 0, its program outside System32
+    (1300, "MsMpEng.exe", 1, False, False),         # the same name in a player's session: a look-alike
+    (1400, "dwm.exe", 1, True, True),               # one per session, from System32
+    (1400, "dwm.exe", 1, False, False),
+    (1500, "csrss.exe", 1, None, True),             # its path not read: by name, as an older capture
+    (1600, "WmiPrvSE.exe", 0, True, False),         # from System32 in session 0, but on no list: a backup service's
+    (1700, "BackupSvc.exe", 0, False, False),       # robocopy.exe would be too; someone else's service is closable
+    (1800, "cmd.exe", 1, True, False),              # a System32 tool the player ran
+    (1900, "MpCmdRun.exe", 1, False, True),         # Defender's scanner, which a player may start: by name
+])
+def test_windows_own_is_said_by_where_it_runs(pid, name, session, folder, own):
+    fix = disk_fix(streaming(table9((pid, name, 30 * MB, near, session, folder))))
+    assert fix.title.startswith("Pause or close") is not own, fix.title
+    if own:
+        assert fix.title == rules.DISK_ADVICE and "suggest closing it" in fix.detail, fix.detail
+    else:
+        like = LIKE if name.casefold() in rules.WINDOWS_PARTS else ""
+        assert fix.title == f"Pause or close {name}{like} while you play"
+
+
+def test_a_capture_that_lists_the_disk_users_too_says_no_more_that_one_can_be_missing():
+    old = disk_fix(streaming(table((310, "OneDrive.exe", 8 * MB, near))))
+    new = disk_fix(streaming(table9((310, "OneDrive.exe", 8 * MB, near, 1, False))))
+    assert "busiest on the CPU" in old.detail
+    assert new.detail == ("lag-doctor saw no other program read and write 20.0 MB/s or more on average at those "
+                          "stutters and FPS drops; the most was OneDrive.exe, at 8.0 MB/s.")
+    under = disk_fix(streaming(table9((31000, "svchost.exe", 8 * MB, near, 1, False))))
+    assert f"; the most was svchost.exe{LIKE}, at 8.0 MB/s." in under.detail
+    service = disk_fix(streaming(table9((1300, "MsMpEng.exe", 8 * MB, near, 0, False))))
+    assert "; the most was MsMpEng.exe (normally Windows Security's virus scan), at 8.0 MB/s." in service.detail
+
+
+def test_where_a_process_runs_is_read_only_from_well_formed_fields_and_a_reading_never_unsays_one():
+    # field 7 a session number (never a bool, never past 32 bits), field 8 a bool; a tick that could not read the
+    # path (None) never undoes another tick's reading of the same process
+    def rows(session, folder, later=None):
+        out = table9((31000, "svchost.exe", 30 * MB, near, session, folder))
+        if later is not None:
+            for t, procs in out[60:]:
+                for q in procs:
+                    if q[0] == 31000:
+                        q[7], q[8] = later
+        return out
+
+    def named(others):
+        return disk_fix(streaming(others)).title.startswith("Pause or close")
+
+    assert named(rows(1, False))                                    # a look-alike
+    assert named(rows(1, False, later=(1, None)))                   # a later None keeps "outside System32"
+    assert named(rows(1, False, later=(None, None)))
+    assert not named(rows(True, True))                              # a bool is no session; System32 decides
+    assert named(rows(True, False))
+    assert named(rows(False, False))                                # False == 0, but no session 0
+    assert not named(rows(2 ** 32, None))                           # no session, no folder: by name
+    assert not named(rows(1, "yes"))                                # a folder that is no bool: by name
+    eight = [[t, [q[:8] for q in procs]] for t, procs in rows(1, False)]
+    assert not named(eight)                                         # fewer than 9 fields: an older capture
+
+
+def test_a_talker_the_others_table_never_listed_is_judged_by_its_name_and_a_bad_pid_breaks_nothing():
+    cap = loaded(60.0)
+    cap.others = [[0.25 * k, [[8, "Quiet.exe", 0.5, 0.0, 0.0, 134000000000000008, None, 1, False]]]
+                  for k in range(1, 241)]
+    cap.net_flows = {"talkers": [talker(5555, "svchost.exe", 900.0), talker(900, "steam.exe", 900.0),
+                                 {"pid": [1], "name": "svchost.exe", "rx_bytes": 900 * MB, "tx_bytes": 0.0}],
+                     "talkers_scope": "all"}
+    cap.sources["net_flows"] = SourceStatus("ok")
+    res = run("bufferbloat", cap)
+    assert is_finding(res), res                                     # a pid that is no number crashed the rule
+    assert res.fixes[0].title == "Pause or limit the downloads and uploads of steam.exe while playing"
+    assert " svchost.exe (2 processes) moved 1,800 MB too: that name is normally a host" in res.fixes[0].detail
+
+
+def test_a_measured_part_of_a_capture_that_says_where_each_runs_still_tells_them_apart():
+    cap = make(system=synth.system_table(30), others=table9((31000, "svchost.exe", 40 * MB, near, 1, False),
+                                                            (1200, "svchost.exe", 30 * MB, near, 0, True)))
+    part = crop.crop(cap, 2.0, 22.0)
+    evs = [stutter(i, t, "asset_streaming") for i, t in enumerate(STREAMS[:4], 1)]
+    res = run("asset_streaming", part, events=evs, causes={"asset_streaming": lift("supports", a=4, n=4)})
+    fix = disk_fix(res)
+    assert fix.title == f"Pause or close svchost.exe{LIKE} while you play"
+    assert "svchost.exe read and wrote at least 30.0 MB/s too: that name is normally" in fix.detail
+
+
+def test_bufferbloat_reads_where_a_talker_runs_from_the_others_table():
+    cap = loaded(60.0)
+    cap.others = [[0.25 * k, [[1200, "svchost.exe", 1.0, 0.0, 0.0, 134000000000001200, None, 0, True],
+                              [31000, "svchost.exe", 1.0, 0.0, 0.0, 134000000000031000, None, 1, False]]]
+                  for k in range(1, 241)]
+    cap.net_flows = {"talkers": [talker(1200, "svchost.exe", 900.0), talker(31000, "svchost.exe", 600.0)],
+                     "talkers_scope": "all"}
+    cap.sources["net_flows"] = SourceStatus("ok")
+    res = run("bufferbloat", cap)
+    assert is_finding(res)
+    fix = res.fixes[0]
+    assert fix.title == f"Pause or limit the downloads and uploads of svchost.exe{LIKE} while playing"
+    assert fix.detail.startswith(f"During the capture, besides the game, svchost.exe{LIKE} moved 600 MB")
+    assert " svchost.exe moved 900 MB too: that name is normally a host for Windows' own services" in fix.detail

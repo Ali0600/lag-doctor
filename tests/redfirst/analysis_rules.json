@@ -1504,7 +1504,7 @@
  {
   "name": "Windows' own processes take a priority-fix slot again",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    for n in [n for n in named[:3] if not _windows_itself(n.name)][:2]:",
+  "old": "    for n in [n for n in named[:3] if not _all_own(e, n)][:2]:",
   "new": "    for n in named[:2]:",
   "tests": [
    "tests/test_analysis_rules.py::test_windows_own_processes_are_never_offered_a_priority_fix_nor_told_to_close"
@@ -1513,8 +1513,8 @@
  {
   "name": "a priority fix reaches past the programs the title names",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    for n in [n for n in named[:3] if not _windows_itself(n.name)][:2]:",
-  "new": "    for n in [n for n in named if not _windows_itself(n.name)][:2]:",
+  "old": "    for n in [n for n in named[:3] if not _all_own(e, n)][:2]:",
+  "new": "    for n in [n for n in named if not _all_own(e, n)][:2]:",
   "tests": [
    "tests/test_analysis_rules.py::test_a_priority_fix_goes_only_to_a_program_the_title_names"
   ]
@@ -2421,8 +2421,8 @@
  {
   "name": "a program is named from the floor, inclusive",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    over = [r for r in rows if r[1] >= floor]\n",
-  "new": "    over = [r for r in rows if r[1] > floor]\n",
+  "old": "    over = [r for r in rows if r[2] >= floor]\n",
+  "new": "    over = [r for r in rows if r[2] > floor]\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_a_program_is_named_from_20_mb_a_second_and_under_it_the_most_is_still_said"
   ]
@@ -2430,8 +2430,8 @@
  {
   "name": "a process with the game's image name is never named",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "        if _image_name(name) is None or _same_image(name, game_name):\n",
-  "new": "        if _image_name(name) is None:\n",
+  "old": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None or _same_image(name, game_name):\n",
+  "new": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None:\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_the_game_its_helpers_lag_doctor_and_bad_names_are_never_named"
   ]
@@ -2439,8 +2439,8 @@
  {
   "name": "a name no advice may show is never named",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "        if _image_name(name) is None or _same_image(name, game_name):\n            continue\n        total",
-  "new": "        if _same_image(name, game_name):\n            continue\n        total",
+  "old": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None or _same_image(name, game_name):\n",
+  "new": "        if o.roles.get((pid, name)) != \"background\" or _same_image(name, game_name):\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_the_game_its_helpers_lag_doctor_and_bad_names_are_never_named"
   ]
@@ -2448,8 +2448,8 @@
  {
   "name": "Windows' own programs by name are never told to close",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    return _windows_itself(name) or name.casefold() in WINDOWS_PARTS\n",
-  "new": "    return _windows_itself(name)\n",
+  "old": "    if key not in WINDOWS_PARTS:\n        return False\n",
+  "new": "    if True:\n        return False\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_windows_own_processes_are_said_to_be_windows_and_never_told_to_close",
    "tests/test_analysis_named_programs.py::test_bufferbloat_says_svchost_is_windows"
@@ -2458,8 +2458,8 @@
  {
   "name": "Windows itself is never told to close",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    return _windows_itself(name) or name.casefold() in WINDOWS_PARTS\n",
-  "new": "    return name.casefold() in WINDOWS_PARTS\n",
+  "old": "    if _windows_itself(name):\n        return True\n    key = name.casefold()",
+  "new": "    if False:\n        return True\n    key = name.casefold()",
   "tests": [
    "tests/test_analysis_named_programs.py::test_windows_own_processes_are_said_to_be_windows_and_never_told_to_close",
    "tests/test_analysis_named_programs.py::test_cpu_limit_says_windows_itself_is_windows"
@@ -2486,8 +2486,8 @@
  {
   "name": "an unlisted tick counts as 0 (a lower bound)",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "            rows.append((name, total / ticks, max(1, count.get(name, 0))))\n",
-  "new": "            rows.append((name, total / max(1, sum(1 for t in cols[col].t if inside(t))), max(1, count.get(name, 0))))\n",
+  "old": "    rows = [(name, own, math.fsum(v) / ticks, max(1, count.get((name, own), 0)))",
+  "new": "    rows = [(name, own, math.fsum(v) / max(1, len(v)), max(1, count.get((name, own), 0)))",
   "tests": [
    "tests/test_analysis_named_programs.py::test_the_disk_advice_names_the_programs_that_read_and_wrote_most_at_the_stutters_biggest_first"
   ]
@@ -2495,8 +2495,8 @@
  {
   "name": "no reading there is not measured, never none",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if not ticks:\n        return None\n    game_name = _image_name(e.target.get(\"name\"))\n    count",
-  "new": "    if not ticks:\n        ticks = 1\n    game_name = _image_name(e.target.get(\"name\"))\n    count",
+  "old": "    if not ticks:\n        return None\n    game_name = _image_name(e.target.get(\"name\"))\n    sums",
+  "new": "    if not ticks:\n        ticks = 1\n    game_name = _image_name(e.target.get(\"name\"))\n    sums",
   "tests": [
    "tests/test_analysis_named_programs.py::test_with_no_others_table_which_programs_read_or_wrote_was_not_measured"
   ]
@@ -2513,8 +2513,8 @@
  {
   "name": "the biggest user comes first",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    rows.sort(key=lambda r: (-r[1], r[0].casefold()))\n",
-  "new": "    rows.sort(key=lambda r: (r[1], r[0].casefold()))\n",
+  "old": "    rows.sort(key=lambda r: (-r[2], r[0].casefold(), r[1]))\n",
+  "new": "    rows.sort(key=lambda r: (r[2], r[0].casefold(), r[1]))\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_the_disk_advice_names_the_programs_that_read_and_wrote_most_at_the_stutters_biggest_first"
   ]
@@ -2522,8 +2522,8 @@
  {
   "name": "a name's processes are counted",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "            rows.append((name, total / ticks, max(1, count.get(name, 0))))\n",
-  "new": "            rows.append((name, total / ticks, 1))\n",
+  "old": "    rows = [(name, own, math.fsum(v) / ticks, max(1, count.get((name, own), 0)))",
+  "new": "    rows = [(name, own, math.fsum(v) / ticks, 1)",
   "tests": [
    "tests/test_analysis_named_programs.py::test_the_disk_advice_names_the_programs_that_read_and_wrote_most_at_the_stutters_biggest_first"
   ]
@@ -2541,8 +2541,8 @@
  {
   "name": "\"saw no\" carries the table's limit",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    missing = (\" lag-doctor lists the 8 processes",
-  "new": "    missing = \"\" and (\" lag-doctor lists the 8 processes",
+  "old": "    missing = \"\" if _where(e)[1] else (\" lag-doctor lists the 8 processes",
+  "new": "    missing = \"\" if True else (\" lag-doctor lists the 8 processes",
   "tests": [
    "tests/test_analysis_named_programs.py::test_a_program_is_named_from_20_mb_a_second_and_under_it_the_most_is_still_said"
   ]
@@ -2613,8 +2613,8 @@
  {
   "name": "a name's processes count only background ones",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "        if o.roles.get((pid, name)) == \"background\" and any(",
-  "new": "        if any(",
+  "old": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None",
+  "new": "        if _image_name(name) is None",
   "tests": [
    "tests/test_analysis_named_programs.py::test_a_names_processes_count_only_background_ones_that_used_it_there"
   ]
@@ -2622,8 +2622,8 @@
  {
   "name": "a name's processes count only ones that used it",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "any(x > 0 and inside(t) for t, x in zip(cols[col].t, cols[col].v)):",
-  "new": "any(inside(t) for t, x in zip(cols[col].t, cols[col].v)):",
+  "old": "        if any(x > 0 for x in vals):\n",
+  "new": "        if vals:\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_a_names_processes_count_only_background_ones_that_used_it_there"
   ]
@@ -2631,8 +2631,8 @@
  {
   "name": "a name's processes count only ones that used it there",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "any(x > 0 and inside(t) for t, x in zip(cols[col].t, cols[col].v)):",
-  "new": "any(x > 0 for t, x in zip(cols[col].t, cols[col].v)):",
+  "old": "        if any(x > 0 for x in vals):\n",
+  "new": "        if any(x > 0 for x in cols[col].v):\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_a_names_processes_count_only_background_ones_that_used_it_there"
   ]
@@ -2640,8 +2640,8 @@
  {
   "name": "at most three programs are named",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    return _Heavy([r for r in over if not _windows_part(r[0])][:3],",
-  "new": "    return _Heavy([r for r in over if not _windows_part(r[0])][:4],",
+  "old": "    return _Heavy([(n, v, k) for n, own, v, k in over if not own][:3],",
+  "new": "    return _Heavy([(n, v, k) for n, own, v, k in over if not own][:4],",
   "tests": [
    "tests/test_analysis_named_programs.py::test_at_most_three_are_named_and_a_tie_goes_by_name"
   ]
@@ -2649,8 +2649,8 @@
  {
   "name": "a tie goes by name",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    rows.sort(key=lambda r: (-r[1], r[0].casefold()))\n",
-  "new": "    rows.sort(key=lambda r: -r[1])\n",
+  "old": "    rows.sort(key=lambda r: (-r[2], r[0].casefold(), r[1]))\n",
+  "new": "    rows.sort(key=lambda r: -r[2])\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_at_most_three_are_named_and_a_tie_goes_by_name"
   ]
@@ -2685,8 +2685,8 @@
  {
   "name": "a Windows program under the floor says what it normally is",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "            shown += f\" (normally {WINDOWS_PARTS[name.casefold()][0]})\"\n",
-  "new": "            pass\n",
+  "old": "            shown += f\" (normally {WINDOWS_PARTS[name.casefold()][0]})\" if own else LOOKALIKE\n",
+  "new": "            shown += \"\" if own else LOOKALIKE\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_under_the_floor_a_windows_process_is_said_to_be_windows"
   ]
@@ -2739,8 +2739,8 @@
  {
   "name": "a program's talkers are added up",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "            moved[name] = moved.get(name, 0.0) + b\n",
-  "new": "            moved[name] = b\n",
+  "old": "            moved[key] = moved.get(key, 0.0) + b\n",
+  "new": "            moved[key] = b\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_bufferbloat_names_a_program_only_when_one_of_its_processes_was_busy_as_bandwidth_hog_counts_them"
   ]
@@ -2748,8 +2748,8 @@
  {
   "name": "a program's talkers are counted",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "            moved[name] = moved.get(name, 0.0) + b\n            count[name] = count.get(name, 0) + 1\n",
-  "new": "            moved[name] = moved.get(name, 0.0) + b\n            count[name] = 1\n",
+  "old": "            moved[key] = moved.get(key, 0.0) + b\n            count[key] = count.get(key, 0) + 1\n",
+  "new": "            moved[key] = moved.get(key, 0.0) + b\n            count[key] = 1\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_bufferbloat_names_a_program_only_when_one_of_its_processes_was_busy_as_bandwidth_hog_counts_them"
   ]
@@ -2779,6 +2779,216 @@
   "new": "    if not isinstance(talkers, list):\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_bufferbloat_survives_malformed_talkers_and_an_unknown_length"
+  ]
+ },
+ {
+  "name": "a look-alike's marker says what it is",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "LOOKALIKE = \" (named like a part of Windows, but not where Windows runs it)\"",
+  "new": "LOOKALIKE = \"\"",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_look_alike_is_said_to_be_one"
+  ]
+ },
+ {
+  "name": "session 0 makes a Windows name Windows' own",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return session == 0 or folder is not False or key in PLAYER_STARTS",
+  "new": "    return folder is not False or key in PLAYER_STARTS",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_windows_own_is_said_by_where_it_runs",
+   "tests/test_analysis_named_programs.py::test_a_capture_that_lists_the_disk_users_too_says_no_more_that_one_can_be_missing"
+  ]
+ },
+ {
+  "name": "a Windows name from another folder in a player's session is a look-alike",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return session == 0 or folder is not False or key in PLAYER_STARTS",
+  "new": "    return session == 0 or True or key in PLAYER_STARTS",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_tells_windows_own_from_a_program_named_like_it",
+   "tests/test_analysis_named_programs.py::test_windows_own_is_said_by_where_it_runs"
+  ]
+ },
+ {
+  "name": "Defender's scanner is judged by its name",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "PLAYER_STARTS = frozenset({\"mpcmdrun.exe\"})",
+  "new": "PLAYER_STARTS = frozenset()",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_windows_own_is_said_by_where_it_runs"
+  ]
+ },
+ {
+  "name": "a reading of None never unsays where a process runs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "out[(q[0], q[1])] = (old[0] if session is None else session, old[1] if folder is None else folder)",
+  "new": "out[(q[0], q[1])] = (session, folder)",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_is_read_only_from_well_formed_fields_and_a_reading_never_unsays_one"
+  ]
+ },
+ {
+  "name": "a bool is no session",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "session = q[7] if isinstance(q[7], int) and not isinstance(q[7], bool)",
+  "new": "session = q[7] if isinstance(q[7], int)",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_is_read_only_from_well_formed_fields_and_a_reading_never_unsays_one"
+  ]
+ },
+ {
+  "name": "only a 9-field row says where it runs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                if not (isinstance(q, (list, tuple)) and len(q) >= 9 and attribute._is_pid(q[0])",
+  "new": "                if not (isinstance(q, (list, tuple)) and len(q) >= 8 and attribute._is_pid(q[0])",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_is_read_only_from_well_formed_fields_and_a_reading_never_unsays_one"
+  ]
+ },
+ {
+  "name": "an older capture keeps the table's limit",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    missing = \"\" if _where(e)[1] else (\" lag-doctor lists the 8 processes",
+  "new": "    missing = \"\" if False else (\" lag-doctor lists the 8 processes",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_capture_that_lists_the_disk_users_too_says_no_more_that_one_can_be_missing"
+  ]
+ },
+ {
+  "name": "a look-alike named among programs to close says so",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "{LOOKALIKE if n.casefold() in WINDOWS_PARTS else ''}{_procs(k)} ",
+  "new": "{_procs(k)} ",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_tells_windows_own_from_a_program_named_like_it"
+  ]
+ },
+ {
+  "name": "a look-alike in the title says so",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    names = [(_text(n, 80) or \"\") + (LOOKALIKE if n.casefold() in WINDOWS_PARTS else \"\") for n, _, _ in h.named]",
+  "new": "    names = [(_text(n, 80) or \"\") for n, _, _ in h.named]",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_tells_windows_own_from_a_program_named_like_it"
+  ]
+ },
+ {
+  "name": "_heavy asks where each process runs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        key = (name, _windows_own(e, pid, name))\n        vals",
+  "new": "        key = (name, _windows_own(e, None, name))\n        vals",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_tells_windows_own_from_a_program_named_like_it"
+  ]
+ },
+ {
+  "name": "a talker is judged by where the others table says it runs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            key = (name, _windows_own(e, pid, name))     # where it runs",
+  "new": "            key = (name, _windows_own(e, None, name))     # where it runs",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_bufferbloat_reads_where_a_talker_runs_from_the_others_table"
+  ]
+ },
+ {
+  "name": "a talker's pid that is no number breaks nothing",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "(pid if attribute._is_pid(pid) else None, name)",
+  "new": "(pid, name)",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_talker_the_others_table_never_listed_is_judged_by_its_name_and_a_bad_pid_breaks_nothing"
+  ]
+ },
+ {
+  "name": "no priority fix for a session-0 process",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            if _windows_own(e, pid, n.name) or where.get((pid, n.name), (None, None))[0] == 0:",
+  "new": "            if _windows_own(e, pid, n.name):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_where_a_blamed_process_runs_decides_whether_it_can_be_closed_or_lowered"
+  ]
+ },
+ {
+  "name": "no priority fix for a Windows-own pid of a program",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            if _windows_own(e, pid, n.name) or where.get((pid, n.name), (None, None))[0] == 0:",
+  "new": "            if where.get((pid, n.name), (None, None))[0] == 0:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_real_process_in_the_players_session_never_takes_its_look_alikes_priority_fix"
+  ]
+ },
+ {
+  "name": "a program is Windows' own only when all its processes are",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "return all(_windows_own(e, pid, n.name) for pid in n.pids)",
+  "new": "return any(_windows_own(e, pid, n.name) for pid in n.pids)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_where_a_blamed_process_runs_decides_whether_it_can_be_closed_or_lowered"
+  ]
+ },
+ {
+  "name": "the fix slots skip Windows' own programs, not only Windows itself",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    for n in [n for n in named[:3] if not _all_own(e, n)][:2]:",
+  "new": "    for n in [n for n in named[:3] if not _windows_itself(n.name)][:2]:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_programs_are_never_told_to_close_nor_offered_a_priority_fix_by_name_in_an_older_capture"
+  ]
+ },
+ {
+  "name": "Windows' own programs get what they are, not 'pause or close'",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif _all_own(e, n):\n            fixes.append(_part_advice(name, procs))",
+  "new": "        elif False:\n            fixes.append(_part_advice(name, procs))",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_programs_are_never_told_to_close_nor_offered_a_priority_fix_by_name_in_an_older_capture"
+  ]
+ },
+ {
+  "name": "a look-alike and the real one of a name get their own advice",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif mixed := [pid for pid in n.pids if _windows_own(e, pid, n.name)]:",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_where_a_blamed_process_runs_decides_whether_it_can_be_closed_or_lowered"
+  ]
+ },
+ {
+  "name": "gpu_contention says what Windows' own GPU user is",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif name and _windows_own(e, pid, name):         # the Desktop Window Manager",
+  "new": "    elif False:         # the Desktop Window Manager",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_says_the_desktop_window_manager_is_windows_and_a_look_alike_is_not"
+  ]
+ },
+ {
+  "name": "gpu_contention never offers another GPU for Windows' own work",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    fixes = [first] + ([] if own else [",
+  "new": "    fixes = [first] + ([] if False else [",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_says_the_desktop_window_manager_is_windows_and_a_look_alike_is_not"
+  ]
+ },
+ {
+  "name": "gpu_contention names a look-alike as one",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        like = LOOKALIKE if name and _lookalike(e, pid, name) else \"\"",
+  "new": "        like = \"\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_says_the_desktop_window_manager_is_windows_and_a_look_alike_is_not"
+  ]
+ },
+ {
+  "name": "dwm.exe is Windows' own by name",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    \"dwm.exe\": (\"Windows' Desktop Window Manager, which draws every window on the screen\", \"\"),\n",
+  "new": "",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_programs_are_never_told_to_close_nor_offered_a_priority_fix_by_name_in_an_older_capture",
+   "tests/test_analysis_rules.py::test_gpu_contention_says_the_desktop_window_manager_is_windows_and_a_look_alike_is_not"
   ]
  },
  {
