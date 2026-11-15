@@ -1259,7 +1259,9 @@ evidence either way, silent), declares the sources it `needs`, its family and ca
 causes a `gate` on the bound verdict (`gpu`: "gpu" or "mixed"; `cpu`: "cpu_main", "cpu_all", "mixed" or
 "unknown", LC 5.1; `gpu_event`: anything but CPU-bound). A gate failure turns a Finding into Cleared (a definite
 verdict) or Unchecked (verdict unknown, or for a CPU-side cause the 3D engine's "gpu" with no r,
-`rules._gpu_by_engine`, which says nothing of the CPU), except that without frame timing a `gpu`-gated Finding
+`rules._gpu_by_engine`, which says nothing of the CPU). At the display's rate a `cpu`-gated Finding clears under every
+verdict the gate lets through and under the engine's "gpu": the display sets the pace, as `cpu_limit` clears itself
+there (`rules._display_paces`). Without frame timing, a `gpu`-gated Finding still
 passes where
 `bound.gpu_probable` holds, with that reading as its last evidence line (`rules._probable_gpu`); when it does not
 hold, the Unchecked reason gives the seconds and marks. A rule whose source was not measured is `unchecked` with
@@ -1345,7 +1347,8 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   (its app frames' count over their summed MsBetweenPresents, shown or not: a median of frame times that alternate
   between two values lands on one of them; a frame takes the side of the next foreground reading) at least 10 %
   under its rate with its own window in front supports it, on the CPU side; a smaller drop clears it ("cost it no
-  frames"). Without 100 frames and 2 s on each side, its CPU use behind at 90 % or more of its use in front (eight
+  frames"), and so does a rate behind it within 10 % of the display's (0.9 x refresh or more: "cost nothing you could
+  see"), judged on the rate behind, never the part's average. Without 100 frames and 2 s on each side, its CPU use behind at 90 % or more of its use in front (eight
   readings a side) clears it ("did not get less CPU time"); a lower one is no cost by itself (a game may slow itself
   down behind a window) and leaves it unchecked, saying so. With nothing compared it is unchecked on the CPU side and
   silent on the GPU side. The time behind is no cost by itself: the e2e runs' LagLab kept its frame rate there, yet
