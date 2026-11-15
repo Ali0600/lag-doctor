@@ -1495,8 +1495,8 @@
  {
   "name": "a gated verdict escapes the hold",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "            res = _gated(rule, env, res)\n        held = _holds_open(",
-  "new": "            return _gated(rule, env, res)\n        held = _holds_open(",
+  "old": "            res = _gated(rule, env, res)\n        elif isinstance(res, Finding) and rule.gate == \"cpu\"",
+  "new": "            return _gated(rule, env, res)\n        elif isinstance(res, Finding) and rule.gate == \"cpu\"",
   "tests": [
    "tests/test_analysis_rules.py::test_a_shared_gpu_holds_the_gated_verdict_open_too"
   ]
@@ -2989,6 +2989,61 @@
   "tests": [
    "tests/test_analysis_rules.py::test_windows_own_programs_are_never_told_to_close_nor_offered_a_priority_fix_by_name_in_an_older_capture",
    "tests/test_analysis_rules.py::test_gpu_contention_says_the_desktop_window_manager_is_windows_and_a_look_alike_is_not"
+  ]
+ },
+ {
+  "name": "cpu_limit clears the engine fallback at the display's rate",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if (v in (\"cpu_main\", \"cpu_all\", \"mixed\", \"unknown\") or _gpu_by_engine(e)) and _fps_reaches_display(e):",
+  "new": "    if v in (\"cpu_main\", \"cpu_all\", \"mixed\", \"unknown\") and _fps_reaches_display(e):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_engine_fallback_at_the_displays_rate_clears_the_cpu_as_any_verdict_does_there"
+  ]
+ },
+ {
+  "name": "the cpu gate clears the engine fallback at the display's rate",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if fallback and _fps_reaches_display(env):",
+  "new": "    if False and fallback and _fps_reaches_display(env):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_engine_fallback_at_the_displays_rate_clears_the_cpu_as_any_verdict_does_there"
+  ]
+ },
+ {
+  "name": "not_focused: behind another window at the display's rate is no cost",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            elif e.refresh and fps[0] >= LIMIT_FPS_FRAC * e.refresh:",
+  "new": "            elif e.refresh and fps[0] >= e.refresh:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_no_cost_where_the_game_still_reached_the_display_behind_another_window[cpu_main-0.4]",
+   "tests/test_analysis_rules.py::test_not_focused_names_no_cost_where_the_game_still_reached_the_display_behind_another_window[gpu-0.97]"
+  ]
+ },
+ {
+  "name": "not_focused: the display's rate starts at 0.9 x refresh",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            elif e.refresh and fps[0] >= LIMIT_FPS_FRAC * e.refresh:",
+  "new": "            elif e.refresh and fps[0] > 1.005 * LIMIT_FPS_FRAC * e.refresh:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_no_cost_where_the_game_still_reached_the_display_behind_another_window[cpu_main-0.4]"
+  ]
+ },
+ {
+  "name": "not_focused: the rate behind counts, never the average",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            elif e.refresh and fps[0] >= LIMIT_FPS_FRAC * e.refresh:",
+  "new": "            elif e.refresh and (e.avg_fps or 0) >= LIMIT_FPS_FRAC * e.refresh:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_no_cost_where_the_game_still_reached_the_display_behind_another_window[cpu_main-0.4]"
+  ]
+ },
+ {
+  "name": "the cpu gate clears every verdict it lets through at the display's rate",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif isinstance(res, Finding) and rule.gate == \"cpu\" and _fps_reaches_display(env):",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_engine_fallback_at_the_displays_rate_clears_the_cpu_as_any_verdict_does_there"
   ]
  }
 ]

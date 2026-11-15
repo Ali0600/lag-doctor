@@ -563,6 +563,41 @@ def test_the_engine_fallback_never_rules_the_cpu_out():
     assert isinstance(res, rules.Unchecked) and res.text.startswith("whether the CPU limits the frame rate"), res
 
 
+def test_the_engine_fallback_at_the_displays_rate_clears_the_cpu_as_any_verdict_does_there():
+    # At 140 FPS on 144 Hz cpu_limit read "already reaches the display" under a CPU verdict, while under the 3D
+    # engine's "gpu" (too few steady frames for r) it and cpu_throttle read "whether the CPU limits the frame rate
+    # could not be judged": at the display's rate the display sets the pace, whatever the verdict says of the CPU
+    note = "only 240 steady frames over 8.0 s; a verdict needs 300 frames and 10 s"
+    bound = {"verdict": "gpu", "r": None, "notes": [note], "busiest_thread": 0.95}
+    throttled = make(system=cpu_sys(limit=80.0, busiest=95.0), duration=60.0)
+    for fps, cleared in ((140.0, True), (130.0, True), (129.0, False)):      # 0.9 x 144 Hz = 129.6
+        limit = run("cpu_limit", make(system=engine(99.0)), stats={"avg_fps": fps}, bound=bound)
+        held = run("cpu_throttle", throttled, stats={"avg_fps": fps}, bound=bound)
+        if cleared:
+            assert isinstance(limit, rules.Cleared) and limit.text == (
+                f"At {fps:.0f} FPS the game already reaches the 144 Hz display."), (fps, limit)
+            assert isinstance(held, rules.Cleared) and held.text == (
+                "The CPU is not what limits the frame rate: at "
+                f"{fps:.0f} FPS the game already reaches the 144 Hz display."), (fps, held)
+        else:
+            for res in (limit, held):
+                assert isinstance(res, rules.Unchecked) and res.text.startswith(
+                    "whether the CPU limits the frame rate could not be judged"), (fps, res)
+    # every verdict the cpu gate lets through clears there too: under "unknown", the nearest to the fallback, CPU heat
+    # was a finding at 140 FPS while the fallback cleared it; below the display's rate it still is one
+    for verdict in ("unknown", "cpu_main", "cpu_all", "mixed"):
+        through = {"verdict": verdict, "r": 0.40 if verdict != "unknown" else None, "busiest_thread": 0.95}
+        fast = run("cpu_throttle", throttled, stats={"avg_fps": 140.0}, bound=through)
+        assert isinstance(fast, rules.Cleared) and fast.text == (
+            "The CPU is not what limits the frame rate: at 140 FPS the game already reaches the 144 Hz display."), \
+            (verdict, fast)
+        assert is_finding(run("cpu_throttle", throttled, stats={"avg_fps": 120.0}, bound=through)), verdict
+    # frame timing's own "gpu" (r measured) keeps its own clear: the gate's text names the GPU there
+    timed = run("cpu_throttle", throttled, stats={"avg_fps": 140.0}, bound={"verdict": "gpu", "r": 0.97,
+                                                                             "busiest_thread": 0.95})
+    assert isinstance(timed, rules.Cleared) and "it is limited by" in timed.text, timed
+
+
 def test_a_cpu_that_cannot_be_ruled_out_is_never_cleared_by_any_cpu_side_rule():
     # LC 3.2's grey zone and an older capture past VSync's work edge held cpu_limit open, while the cpu gate cleared
     # cpu_throttle ("the CPU is not what limits the frame rate") and not_focused ruled the CPU out in the same report
@@ -2147,6 +2182,31 @@ def test_not_focused_names_the_cost_it_measured_and_never_a_cost_it_did_not():
         "being behind another window (for 20% of the capture) cost it no frames."), res
     assert is_finding(run("not_focused", make(system=sys_), bound={"verdict": "cpu_main"},
                           frames=behind_frames(6.0, 8.9, 8.0)), "medium")                    # 112.4 FPS: past 10 %
+
+
+@pytest.mark.parametrize("verdict, r", [("cpu_main", 0.40), ("gpu", 0.97), ("gpu", None)])
+def test_not_focused_names_no_cost_where_the_game_still_reached_the_display_behind_another_window(verdict, r):
+    # At 135 FPS behind another window against 154 in front on a 144 Hz screen, a medium finding said the game "ran
+    # worse": the frames it lost there were frames the screen never shows (LIMIT_FPS_FRAC, as cpu_limit clears at
+    # that rate). The rate behind is what counts, never the capture's average: a game visible on a second screen
+    # while another window has the focus shows what it makes there
+    sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 6.0 else 1)       # 20 % behind another window
+    bound = {"verdict": verdict, "r": r, "refresh_hz": 144.0}      # r None: the 3D engine's "gpu", the CPU side
+    res = run("not_focused", make(system=sys_), stats={"avg_fps": 150.0}, bound=bound,
+              frames=behind_frames(6.0, 7.4, 6.5))
+    assert isinstance(res, rules.Cleared) and res.text == (
+        "With another window in front the game made 135 frames a second, against 154 with its own window in front, but "
+        "135 is within 10% of the 144 Hz display's rate, so its lower frame rate behind another window (for 20% of the "
+        "capture) cost nothing you could see."), res
+    # 0.9 x 144 Hz = 129.6: 130 FPS behind reaches the display, 129 does not (both are 10 % or more under 154)
+    assert isinstance(run("not_focused", make(system=sys_), stats={"avg_fps": 150.0}, bound=bound,
+                          frames=behind_frames(6.0, 1000 / 130.0, 6.5)), rules.Cleared)
+    slower = run("not_focused", make(system=sys_), stats={"avg_fps": 150.0}, bound=bound,
+                 frames=behind_frames(6.0, 1000 / 129.0, 6.5))
+    assert is_finding(slower, "medium") if r != 0.97 else slower is None, slower
+    # the capture's average at the display's rate is not the test: 62 FPS behind is a cost the screen showed
+    assert is_finding(run("not_focused", make(system=sys_), stats={"avg_fps": 140.0}, bound={"verdict": "cpu_main"},
+                          frames=behind_frames(6.0)), "medium")
 
 
 def test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window():
