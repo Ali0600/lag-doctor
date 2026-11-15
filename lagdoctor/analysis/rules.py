@@ -1174,14 +1174,19 @@ def _gpu_contention(cap: Capture, ctx: dict) -> Any:
                                     f"(process {pid}, its busiest engine there {pct:.0f}% busy, median)",
                       pct, "%", OTHER_GPU_PCT)
     else:
-        c.neutral("background", "which program it was is not in the process table (it lists the 8 busiest by CPU)")
+        c.neutral("background", "which program it was is not in the process table (it lists the 8 busiest by CPU"
+                                + (" and the 4 busiest of the rest by disk)" if _where(e)[1] else ")"))
     if name and _windows_itself(name):
         first = _windows_advice(name, f" (process {pid})")
+    elif name and _windows_own(e, pid, name):         # the Desktop Window Manager draws every window, for one
+        first = _part_advice(name, f" (process {pid})")
     else:
-        first = _advice(f"Pause or close {name} while you play" if name else "Find and pause the GPU-heavy program",
+        like = LOOKALIKE if name and _lookalike(e, pid, name) else ""
+        first = _advice(f"Pause or close {name}{like} while you play" if name else "Find and pause the GPU-heavy program",
                         "Training, rendering, mining or video encoding on the same GPU takes time the game needs; "
                         "lag-doctor never closes programs itself.")
-    fixes = [first, _advice("Or let that work run on another GPU, if this PC has one")]
+    own = bool(name) and _windows_own(e, pid, name)            # Windows' own work cannot move to another GPU
+    fixes = [first] + ([] if own else [_advice("Or let that work run on another GPU, if this PC has one")])
     return c.conclude(f"Another program kept the game's GPU {m:.0f}% busy" + (f": {_shown_as(name)}" if name else ""),
                       "Other programs used the same GPU as the game, so the game's frames had to wait for it.", fixes)
 
@@ -2516,9 +2521,10 @@ def _windows_advice(name: str, procs: str) -> FixSuggestion:
 # ---- naming the programs behind "close other X-heavy programs" ------------------------------------------------------
 
 # Windows' own programs that a list of programs to close may meet, by image name: what each name normally is, and what
-# to do instead (WT 10's background-hog table; csrss.exe and audiodg.exe from Microsoft's own pages, WT 10 too). The
-# others table holds names only, so a look-alike can carry one of them: the text says what the name normally is, never
-# that it is safe, and nothing here offers a fix.
+# to do instead (WT 10's background-hog table; csrss.exe, audiodg.exe and dwm.exe from Microsoft's own pages, WT 10
+# too). A capture since 2026-11-15 says where each listed process runs (its session, and whether its program sits in
+# System32), so a look-alike of one of these names stays a program to close (_windows_own); an older one holds names
+# only, so the text says what the name normally is, never that it is safe, and nothing here offers a fix.
 _DEFENDER = ("Windows Security's virus scan", "If it is, leave it on.")
 _UPDATE = ("Windows Update installing updates", "If it is, let it finish before you play.")
 _SEARCH = ("Windows Search indexing files", "")
@@ -2530,6 +2536,7 @@ WINDOWS_PARTS: dict[str, tuple[str, str]] = {
     "svchost.exe": ("a host for Windows' own services, such as Windows Update", ""),
     "csrss.exe": ("a core part of Windows", ""),
     "audiodg.exe": ("Windows' audio engine, which runs sound effects", ""),
+    "dwm.exe": ("Windows' Desktop Window Manager, which draws every window on the screen", ""),
 }
 CLOSE_CHECK = "not something you need first; lag-doctor never closes programs itself."
 DISK_ADVICE = "Close other disk-heavy programs while playing"
@@ -2538,8 +2545,67 @@ NET_ADVICE = "Pause or limit the download or upload while playing"
 EVERYWHERE = [(-math.inf, math.inf)]     # spans covering the whole analysed part (a cropped capture holds only it)
 
 
-def _windows_part(name: str) -> bool:
-    return _windows_itself(name) or name.casefold() in WINDOWS_PARTS
+LOOKALIKE = " (named like a part of Windows, but not where Windows runs it)"
+
+
+def _where(e: _Env) -> tuple[dict[tuple[int, str], tuple[int | None, bool | None]], bool]:
+    """((pid, image name) -> (its Windows session, whether its program sits in System32 or SysWOW64), whether the
+    others table also lists the busiest by reads and writes): both from rows of 9 fields, recorded since 2026-11-15
+    (sysmon.top_others). A reading that is None never replaces one that is not."""
+    if "where" not in e.memo:
+        out: dict[tuple[int, str], tuple[int | None, bool | None]] = {}
+        new = False
+        for row in e.cap.others if isinstance(e.cap.others, list) else []:
+            if not (isinstance(row, (list, tuple)) and len(row) == 2 and isinstance(row[1], (list, tuple))):
+                continue
+            for q in row[1]:
+                if not (isinstance(q, (list, tuple)) and len(q) >= 9 and attribute._is_pid(q[0])
+                        and isinstance(q[1], str)):
+                    continue
+                new = True
+                session = q[7] if isinstance(q[7], int) and not isinstance(q[7], bool) and 0 <= q[7] < 2 ** 32 \
+                    else None
+                folder = q[8] if isinstance(q[8], bool) else None
+                old = out.get((q[0], q[1]), (None, None))
+                out[(q[0], q[1])] = (old[0] if session is None else session, old[1] if folder is None else folder)
+        e.memo["where"] = (out, new)
+    return e.memo["where"]
+
+
+# Windows' own programs a player may start in their own session from outside System32: Defender's command-line
+# scanner lives in Defender's own folder (WT 10), so where it runs says nothing, and its name decides
+PLAYER_STARTS = frozenset({"mpcmdrun.exe"})
+
+
+def _windows_own(e: _Env, pid: Any, name: str) -> bool:
+    """Whether a listed process is Windows' own, never a program to close or lower: the kernel's minimal processes
+    (WINDOWS_ITSELF), and a WINDOWS_PARTS name where Windows runs it: in session 0, where Windows runs its services and
+    nothing a player starts runs (Defender keeps its programs outside System32), or from System32 (csrss.exe and
+    dwm.exe run one in each player's session). A WINDOWS_PARTS name in a player's session from another folder is a
+    look-alike, so it stays a program to close. An older capture, or a process whose path was not read: by name alone.
+    A program from System32 on no list is never Windows' own by where it runs: a backup service's robocopy.exe, or a
+    player's cmd.exe, is closable. A service someone installed under a Windows name runs in session 0 and reads as
+    Windows': installing one takes an administrator, and the priority fix refuses session 0 whatever it is."""
+    if _windows_itself(name):
+        return True
+    key = name.casefold()
+    if key not in WINDOWS_PARTS:
+        return False
+    session, folder = _where(e)[0].get((pid if attribute._is_pid(pid) else None, name), (None, None))
+    return session == 0 or folder is not False or key in PLAYER_STARTS
+
+
+def _lookalike(e: _Env, pid: Any, name: str) -> bool:
+    return name.casefold() in WINDOWS_PARTS and not _windows_own(e, pid, name)
+
+
+def _part_advice(name: str, procs: str) -> FixSuggestion:
+    """What one of Windows' own programs (a WINDOWS_PARTS name) is, in place of advice to pause, close or lower it;
+    _windows_advice for the kernel's own."""
+    role, tail = WINDOWS_PARTS[name.casefold()]
+    return _advice(f"{name}{procs} is normally part of Windows, not a program to close",
+                   f"That name is normally {role}, so lag-doctor does not suggest closing it." + (f" {tail}" if tail
+                                                                                                  else ""))
 
 
 @dataclass
@@ -2548,7 +2614,8 @@ class _Heavy:
 
     named: list[tuple[str, float, int]]     # at or past the floor: programs the player may close (3 at most)
     windows: list[tuple[str, float, int]]   # at or past the floor: Windows' own, never told to close (2 at most)
-    most: tuple[str, float] | None          # the biggest mean of any program, under the floor too (None: none used any)
+    most: tuple[str, float, bool] | None    # the biggest mean of any program, under the floor too, and whether it is
+                                            # Windows' own (None: none used any)
 
 
 def _merge(spans: Iterable[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -2572,9 +2639,11 @@ def _heavy(e: _Env, col: str, spans: list[tuple[float, float]], floor: float) ->
     """Which other programs used `col` most over `spans` (the recording's own times): "cpu" in % of one logical CPU,
     "io" in bytes/s. Each image name's readings in the others table are summed over the table's ticks inside the spans
     and divided by those ticks. A tick a program was not listed on counts as 0 (the table lists the 8 processes busiest
-    on the CPU), so the mean is a lower bound, and the text says "at least". None when no tick there read `col`: not
-    measured, never "none". The game, its own child processes, lag-doctor's own processes (attribute._others' roles) and
-    any process with the game's image name are left out; the order is by mean, then name, never by PID."""
+    on the CPU, and since 2026-11-15 the 4 busiest of the rest by reads and writes), so the mean is a lower bound, and
+    the text says "at least". None when no tick there read `col`: not measured, never "none". The game, its own child
+    processes, lag-doctor's own processes (attribute._others' roles) and any process with the game's image name are
+    left out; a name's processes that are Windows' own (_windows_own) are counted apart from a look-alike's; the order
+    is by mean, then name, never by PID."""
     if "others" not in e.memo:
         e.memo["others"] = attribute._others(e.cap)
     o = e.memo["others"]
@@ -2590,21 +2659,22 @@ def _heavy(e: _Env, col: str, spans: list[tuple[float, float]], floor: float) ->
     if not ticks:
         return None
     game_name = _image_name(e.target.get("name"))
-    count: dict[str, int] = {}
+    sums: dict[tuple[str, bool], list[float]] = {}
+    count: dict[tuple[str, bool], int] = {}
     for (pid, name), cols in o.per.items():
-        if o.roles.get((pid, name)) == "background" and any(x > 0 and inside(t) for t, x in zip(cols[col].t, cols[col].v)):
-            count[name] = count.get(name, 0) + 1
-    rows = []
-    for name, cols in o.by_name.items():
-        if _image_name(name) is None or _same_image(name, game_name):
+        if o.roles.get((pid, name)) != "background" or _image_name(name) is None or _same_image(name, game_name):
             continue
-        total = math.fsum(x for t, x in zip(cols[col].t, cols[col].v) if inside(t))
-        if total > 0:
-            rows.append((name, total / ticks, max(1, count.get(name, 0))))
-    rows.sort(key=lambda r: (-r[1], r[0].casefold()))
-    over = [r for r in rows if r[1] >= floor]
-    return _Heavy([r for r in over if not _windows_part(r[0])][:3], [r for r in over if _windows_part(r[0])][:2],
-                  (rows[0][0], rows[0][1]) if rows else None)
+        key = (name, _windows_own(e, pid, name))
+        vals = [x for t, x in zip(cols[col].t, cols[col].v) if inside(t)]
+        sums.setdefault(key, []).extend(vals)
+        if any(x > 0 for x in vals):
+            count[key] = count.get(key, 0) + 1
+    rows = [(name, own, math.fsum(v) / ticks, max(1, count.get((name, own), 0)))
+            for (name, own), v in sums.items() if math.fsum(v) > 0]
+    rows.sort(key=lambda r: (-r[2], r[0].casefold(), r[1]))
+    over = [r for r in rows if r[2] >= floor]
+    return _Heavy([(n, v, k) for n, own, v, k in over if not own][:3], [(n, v, k) for n, own, v, k in over if own][:2],
+                  (rows[0][0], rows[0][2], rows[0][1]) if rows else None)
 
 
 def _and(items: list[str]) -> str:
@@ -2616,8 +2686,10 @@ def _procs(n: int) -> str:
 
 
 def _named_text(rows: list[tuple[str, float, int]], first: Callable[[float], str], rest: Callable[[float], str]) -> str:
-    """"A (2 processes) <first>, and B <rest>": the first program's figure in full, the others' by their number."""
-    parts = [f"{_text(n, 80)}{_procs(k)} {(first if i == 0 else rest)(v)}" for i, (n, v, k) in enumerate(rows)]
+    """"A (2 processes) <first>, and B <rest>": the first program's figure in full, the others' by their number. Rows
+    are programs to close (_Heavy.named), so a WINDOWS_PARTS name among them is a look-alike, and says so."""
+    parts = [f"{_text(n, 80)}{LOOKALIKE if n.casefold() in WINDOWS_PARTS else ''}{_procs(k)} "
+             f"{(first if i == 0 else rest)(v)}" for i, (n, v, k) in enumerate(rows)]
     return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + ", and " + parts[-1]
 
 
@@ -2656,7 +2728,7 @@ def _cap(lead: str) -> str:
 def _close_named(h: _Heavy, lead: str, first: Callable[[float], str], rest: Callable[[float], str],
                  did: Callable[[float], str], note: str = "", cpu: bool = False) -> FixSuggestion:
     """The advice once programs passed the floor: "Pause or close A and B while you play", with their figures."""
-    names = [_text(n, 80) or "" for n, _, _ in h.named]
+    names = [(_text(n, 80) or "") + (LOOKALIKE if n.casefold() in WINDOWS_PARTS else "") for n, _, _ in h.named]
     them = "it is" if len(names) == 1 else "they are"
     return _advice(f"Pause or close {_and(names)} while you play",
                    f"{_cap(lead)}, besides the game, {_named_text(h.named, first, rest)}.{note} Check {them} "
@@ -2684,21 +2756,22 @@ def _disk_advice(e: _Env, spans: list[tuple[float, float]], at: str) -> FixSugge
     if h.named:
         return _close_named(h, at, lambda v: f"{did(v)} on average", attribute._mbps, did,
                             " Windows counts network transfers and files read from memory in this too.")
-    # the table lists the 8 busiest on the CPU, so "saw no" needs its limit next to it
-    missing = (" lag-doctor lists the 8 processes busiest on the CPU at each moment, so one that used the disk with "
-               "little CPU can be missing.")
+    # an older capture's table lists the 8 busiest on the CPU only, so "saw no" needs its limit next to it; since
+    # 2026-11-15 it lists the 4 busiest of the rest by reads and writes too (_where)
+    missing = "" if _where(e)[1] else (" lag-doctor lists the 8 processes busiest on the CPU at each moment, so one "
+                                       "that used the disk with little CPU can be missing.")
     if h.windows:
         return _windows_only(DISK_ADVICE, h, at, f"read and wrote {floor} or more on average", did, missing)
     most = ""
     if h.most:
-        name, v = h.most
+        name, v, own = h.most
         fig = attribute._mbps(v)
         fig = ("under 0.1 MB/s" if v < 0.05e6 else f"just under {floor}" if fig == floor else f"at {fig}")
         shown = _text(name, 80)
         if _windows_itself(name):
             shown = f"Windows itself ({shown})"
         elif name.casefold() in WINDOWS_PARTS:
-            shown += f" (normally {WINDOWS_PARTS[name.casefold()][0]})"
+            shown += f" (normally {WINDOWS_PARTS[name.casefold()][0]})" if own else LOOKALIKE
         most = f"; the most was {shown}, {fig}"
     return _advice(DISK_ADVICE, f"lag-doctor saw no other program read and write {floor} or more on average "
                                 f"{at}{most}.{missing}")
@@ -2729,8 +2802,8 @@ def _net_advice(e: _Env) -> FixSuggestion:
     game = attribute.game_pids(e.cap)
     tool_pids, tool_names = attribute.tool_processes(e.cap)
     game_name = _image_name(e.target.get("name"))
-    moved: dict[str, float] = {}
-    count: dict[str, int] = {}
+    moved: dict[tuple[str, bool], float] = {}
+    count: dict[tuple[str, bool], int] = {}
     for tk in talkers:
         name = _image_name(tk.get("name")) if isinstance(tk, dict) else None
         pid = tk.get("pid") if isinstance(tk, dict) else None
@@ -2739,10 +2812,13 @@ def _net_advice(e: _Env) -> FixSuggestion:
             continue
         b = max(0.0, _fin(tk.get("rx_bytes")) or 0.0) + max(0.0, _fin(tk.get("tx_bytes")) or 0.0)
         if b / e.duration >= TALKER_MIN_BPS:      # each process on its own, as bandwidth_hog counts them
-            moved[name] = moved.get(name, 0.0) + b
-            count[name] = count.get(name, 0) + 1
-    over = sorted(((n, b, count[n]) for n, b in moved.items()), key=lambda r: (-r[1], r[0].casefold()))
-    h = _Heavy([r for r in over if not _windows_part(r[0])][:3], [r for r in over if _windows_part(r[0])][:2], None)
+            key = (name, _windows_own(e, pid, name))     # where it runs, from the others table when it listed it
+            moved[key] = moved.get(key, 0.0) + b
+            count[key] = count.get(key, 0) + 1
+    over = sorted(((n, own, b, count[(n, own)]) for (n, own), b in moved.items()),
+                  key=lambda r: (-r[2], r[0].casefold(), r[1]))
+    h = _Heavy([(n, b, k) for n, own, b, k in over if not own][:3], [(n, b, k) for n, own, b, k in over if own][:2],
+               None)
     did = lambda b: f"moved {b / 1e6:,.0f} MB"
     if not h.named:
         if not h.windows:
@@ -2755,7 +2831,8 @@ def _net_advice(e: _Env) -> FixSuggestion:
         return _windows_only(NET_ADVICE, h, f"during {e.part}", f"moved {TALKER_MIN_BPS / 1e6:.0f} MB a second or "
                              "more on average", did)
     rate = lambda b: f"{b / 1e6:,.0f} MB ({8 * b / e.duration / 1e6:.0f} Mbit/s on average)"
-    title = f"Pause or limit the downloads and uploads of {_and([_text(n, 80) or '' for n, _, _ in h.named])} " \
+    title = "Pause or limit the downloads and uploads of " \
+            f"{_and([(_text(n, 80) or '') + (LOOKALIKE if n.casefold() in WINDOWS_PARTS else '') for n, _, _ in h.named])} " \
             "while playing"
     detail = _close_named(h, f"during {e.part}", lambda b: f"moved {rate(b)}", rate, did).detail
     return FixSuggestion(title=title, detail=detail)
@@ -2765,8 +2842,9 @@ def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
     game = attribute.game_pids(e.cap)
     game_name = _image_name(e.target.get("name"))
     offer = _offerable(e)
+    where = _where(e)[0]
     fixes: list[FixSuggestion] = []
-    for n in [n for n in named[:3] if not _windows_itself(n.name)][:2]:     # programs the title names, never Windows
+    for n in [n for n in named[:3] if not _all_own(e, n)][:2]:      # programs the title names, never Windows' own
         # SEC-2, A10: never the game or its children (the PID check below), nor a process with the game's own
         # image name (a sibling of a multi-process game is no child of the chosen process); the fix needs the PIDs
         if not game or _same_image(n.name, game_name):
@@ -2774,6 +2852,9 @@ def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
         for pid in n.pids:
             ct = offer.get((pid, n.name))
             if pid in game or ct is None or not 0 < pid <= 0xFFFFFFFF:     # DESIGN: a valid, non-game PID
+                continue
+            # fixes/priority.py refuses Windows' own and every session-0 process (services): never offered then
+            if _windows_own(e, pid, n.name) or where.get((pid, n.name), (None, None))[0] == 0:
                 continue
             rise = n.rise.get(pid)
             up = f", up {RISE_TEXT[n.col](rise)} when the game lagged" if rise is not None else ""
@@ -2789,8 +2870,7 @@ def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
                                                "game_name": game_name}))
             break
     for n in named[:3]:
-        shown = ", ".join(str(p) for p in n.pids[:4]) + (" ..." if len(n.pids) > 4 else "")
-        procs = f" (process {shown})" if shown else ""
+        procs = _pids_text(n.pids)
         name = _text(n.name, 80)
         if n.role == "game_helper":
             fixes.append(_advice(f"{name}{procs} is the game's own helper process",
@@ -2799,15 +2879,34 @@ def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
                                  "game's own settings and forums."))
         elif _windows_itself(n.name):
             fixes.append(_windows_advice(name, procs))
+        elif _all_own(e, n):
+            fixes.append(_part_advice(name, procs))
+        elif mixed := [pid for pid in n.pids if _windows_own(e, pid, n.name)]:     # a look-alike beside the real one
+            fake = [pid for pid in n.pids if pid not in mixed]
+            fixes.append(_advice(f"Pause or close {name}{LOOKALIKE} while you play{_pids_text(fake)}",
+                                 "Check it is not something you need first; lag-doctor never closes programs itself."))
+            fixes.append(_part_advice(name, _pids_text(mixed)))
         elif _same_image(n.name, game_name):
             fixes.append(_advice(f"Check what {name}{procs} is before closing anything",
                                  "It has the game's own name, so it may be part of the game (a renderer or a launcher "
                                  "process); lag-doctor never closes programs itself."))
         else:
-            fixes.append(_advice(f"Pause or close {name} while you play{procs}",
+            like = LOOKALIKE if n.name.casefold() in WINDOWS_PARTS else ""
+            fixes.append(_advice(f"Pause or close {name}{like} while you play{procs}",
                                  "Check it is not something you need first; lag-doctor never closes programs itself."))
     fixes.append(_advice("Pause downloads and updates while playing", "Steam, Epic, the browser, Windows Update."))
     return fixes
+
+
+def _pids_text(pids: list[int]) -> str:
+    shown = ", ".join(str(p) for p in pids[:4]) + (" ..." if len(pids) > 4 else "")
+    return f" (process {shown})" if shown else ""
+
+
+def _all_own(e: _Env, n: _Named) -> bool:
+    """A program background_hogs names is Windows' own when each of its processes is (_windows_own); without PIDs (an
+    older capture), by its name."""
+    return all(_windows_own(e, pid, n.name) for pid in n.pids) if n.pids else _windows_own(e, None, n.name)
 
 
 def _offerable(e: _Env) -> dict[tuple[int, str], int]:

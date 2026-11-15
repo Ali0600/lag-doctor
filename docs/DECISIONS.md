@@ -178,6 +178,53 @@
 
 ---
 
+## 2026-11-15: The recorder lists the disk users too, and says where each process runs
+
+The named-program advice (the entry below) could name only what the others table listed: the 8 busiest on the CPU
+each tick, by image name. A program reading the disk hard with little CPU was never listed, and a name could not tell
+Windows' own `svchost.exe` from one started out of a user's Temp folder, so `background_hogs` and `gpu_contention`
+still told the player to "pause or close" Windows' own user-mode processes (`dwm.exe`, `csrss.exe`, a real
+`svchost.exe`) and offered a priority fix that `fixes/priority.py` refuses when run (PR #32's reviewers' bug). The
+owner said "do 1-3" to the list that named both.
+
+Which processes a tick lists:
+- **A: the top 8 by CPU as before, then the top 4 of the rest by reads and writes (chosen)**: the 8 by CPU stay the
+  same processes, and a disk user with little CPU is listed. 12 entries a tick at most. The 4 extra entries' CPU now
+  counts in the listed totals (`attribute._others`' total, `rules._others_steady`) too: a disk user's little CPU.
+- **B: one ranking by CPU and I/O together**: rejected. It would change the 8 by CPU that the background CPU signals
+  and their tests rest on, for a gain the 4 extra entries already give.
+
+How a capture tells Windows' own from a look-alike:
+- **A: each entry's Windows session and whether its program sits directly in System32 or SysWOW64 (chosen)**: both
+  handle-free (the snapshot's SessionId; `ntquery.image_path`, read once per listed process), and only the one bit of
+  the path is kept.
+- **B: the name alone (the entry below)**: rejected now that the recorder can say more. It read a look-alike as
+  Windows', and could not tell a System32 tool the player runs from Windows' own work.
+- **C: keep each listed process's image path**: rejected. A path can hold the user's folder names, and the check needs
+  one bit of it.
+- **D: the priority fix's own checks (a protected process, the service list)**: rejected for the recorder. The
+  protected check opens a handle (`winapi/process.py` only), and session 0 already marks every service.
+
+What counts as Windows' own, given those (`rules._windows_own`):
+- **A: a `WINDOWS_PARTS` name in session 0 or from System32 (chosen)**: Windows runs its services in session 0
+  (Defender's programs sit outside System32) and runs `csrss.exe` and `dwm.exe` from System32 in each player's
+  session. A `WINDOWS_PARTS` name in the player's session from another folder is a look-alike: named as such ("named
+  like a part of Windows, but not where Windows runs it"), closable and lowerable; when one name has both, each gets
+  its own advice. Defender's scanner (`MpCmdRun.exe`), which a player may start from Defender's own folder, an older
+  capture, and a process whose path was not read decide by name. Known limits: a service someone installs under a
+  Windows name runs in session 0 and reads as Windows' (installing one takes an administrator, and the priority fix
+  refuses session 0 whatever it is); Windows' own programs on no list (`winlogon.exe`, `fontdrvhost.exe`,
+  `sihost.exe`, `taskhostw.exe`) are still told to close, and the first two still get a priority fix that refuses
+  them when run ("another user"), until a source names each.
+- **B: also any program from System32 in session 0**: rejected in review. A backup service's `robocopy.exe` child or
+  a scheduled task run as SYSTEM is no Windows service, and "pause that backup" would be lost.
+- **C: any program from System32**: rejected. `robocopy.exe` or `cmd.exe` running a backup in the player's session are
+  the player's own, and closable.
+
+Also: `dwm.exe` joins `WINDOWS_PARTS`, now that Microsoft's DirectComposition page names it (windows-telemetry.md
+section 10), and no priority fix goes to a session-0 process, as `fixes/priority.py` refuses those. Revisit hook:
+`sysmon.top_others` and `sysmon.SystemFolders` (the recorder), `rules._windows_own` (the analysis).
+
 ## 2026-11-15: The advice to close other heavy programs names the ones the capture saw
 
 The owner, on the README's report: "Close other disk heavy programs" could post what else was disk heavy, "maybe
@@ -213,12 +260,13 @@ Windows' own processes in a list of programs to close:
   section 10). A look-alike under one of those names is only under-named here; the text says what the name "normally
   is" and offers no fix. `dwm.exe` waits for a Microsoft source that names it. The same table could stop
   `background_hogs` telling the player to close them, the open bug PR #32's reviewers found: worth trying with a
-  session or path check.
+  session or path check (since built with both, and `dwm.exe` sourced: the entry above).
 - **B: leave them in the list**: rejected. "Pause or close MsMpEng.exe" would suggest turning off Windows Security,
   which lag-doctor never offers.
 
 Which programs a capture can show:
-- **A: list the top 4 by I/O besides the top 8 by CPU in the recorder (next, its own pull request)**: a disk user with
+- **A: list the top 4 by I/O besides the top 8 by CPU in the recorder (chosen; built as its own pull request, the entry
+  above)**: a disk user with
   little CPU is never listed today, so it can be neither named nor blamed. It changes what attribution sees on new
   captures, so it lands apart from this. Revisit hook: `sysmon.top_others`.
 - **B: per-process memory and video memory**: deferred (backlog): not recorded, so `ram_pressure` and `vram_overflow`
