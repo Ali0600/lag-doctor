@@ -557,6 +557,8 @@ def run_rule(rule: Rule, cap: Capture, ctx: dict, env: _Env | None = None) -> An
         res = rule.fn(cap, ctx)
         if isinstance(res, Finding) and rule.gate and env.verdict not in GATES[rule.gate]:
             res = _gated(rule, env, res)
+        elif isinstance(res, Finding) and rule.gate == "cpu" and _fps_reaches_display(env):
+            res = _display_paces(rule, env)          # any verdict the gate lets through: the display sets the pace
         held = _holds_open(rule.cause, env) if isinstance(res, Cleared) and not res.firm else None
     except Exception as exc:  # noqa: BLE001 - one broken rule must not hide the rest; it says it failed
         return Unchecked(rule.cause, f"the check failed ({type(exc).__name__}: {exc})")
@@ -636,6 +638,8 @@ def _gated(rule: Rule, env: _Env, finding: Finding) -> Any:
         finding.evidence.append(Evidence(_sentence(probable[1])))
         return finding
     fallback = rule.gate == "cpu" and _gpu_by_engine(env)        # the 3D engine named the GPU: no CPU verdict
+    if fallback and _fps_reaches_display(env):     # the display sets the pace, as cpu_limit clears it at that rate
+        return _display_paces(rule, env)
     if v == "unknown" or fallback:
         notes = [n for n in env.bound.get("notes") or [] if isinstance(n, str)]
         why = notes[:1] + ([probable[1]] if probable is not None else [])
@@ -647,6 +651,13 @@ def _gated(rule: Rule, env: _Env, finding: Finding) -> Any:
         return Unchecked(rule.cause, held)
     return Cleared(rule.cause, _sentence(f"{side} is not what limits the frame rate: "
                                          f"it is limited by {labels.BOUND.get(v, v)}"))
+
+
+def _display_paces(rule: Rule, env: _Env) -> Cleared:
+    """A CPU-side finding at the display's rate (LIMIT_FPS_FRAC), whatever the verdict says of the CPU: the display
+    sets the pace, so the CPU costs nothing the player sees, as cpu_limit clears itself there."""
+    return Cleared(rule.cause, _sentence(f"the CPU is not what limits the frame rate: at {env.avg_fps:.0f} FPS the "
+                                         f"game already reaches the {env.refresh:.0f} Hz display"))
 
 
 def _probable_gpu(e: _Env) -> tuple[bool, str] | None:
@@ -882,7 +893,8 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
     c = _Case(cap, ctx, "cpu_limit")
     e = c.env
     b, v = e.bound, e.verdict
-    if v in ("cpu_main", "cpu_all", "mixed", "unknown") and _fps_reaches_display(e):
+    # the 3D engine's "gpu" too: it says nothing of the CPU, and at this rate nothing the CPU does is seen
+    if (v in ("cpu_main", "cpu_all", "mixed", "unknown") or _gpu_by_engine(e)) and _fps_reaches_display(e):
         return Cleared("cpu_limit", _sentence(f"at {e.avg_fps:.0f} FPS the game already reaches the "
                                               f"{e.refresh:.0f} Hz display"))    # _cpu_not_ruled_out holds none here
     r, busiest = _fin(b.get("r")), _fin(b.get("busiest_thread"))
@@ -2216,6 +2228,12 @@ def _not_focused(cap: Capture, ctx: dict) -> Any:
             if fps[0] > floor:
                 c.against("foreground", W_STEADY, f"{made}, so being behind another window ({behind_pct}) cost it no "
                                                   "frames", fps[0], "FPS", floor)
+            elif e.refresh and fps[0] >= LIMIT_FPS_FRAC * e.refresh:   # the frames it lost there never reach a screen
+                c.against("foreground", W_STEADY, f"{made}, but {fps[0]:.0f} is within "
+                                                  f"{100 * (1 - LIMIT_FPS_FRAC):.0f}% of the {e.refresh:.0f} Hz "
+                                                  "display's rate, so its lower frame rate behind another window "
+                                                  f"({behind_pct}) cost nothing you could see", fps[0], "FPS",
+                          LIMIT_FPS_FRAC * e.refresh)
             elif cpu_side:
                 c.support("foreground", W_STEADY, f"{made} ({behind_pct})", fps[0], "FPS", floor)
             else:
