@@ -1242,3 +1242,12 @@ scored 5.4-8.9; "another program did 48.8 MB/s of I/O" came first, although the 
 usual in those 160 ms frames and so was not waiting on any disk.
 **Takeaway**: before letting the strongest z win, ask whether that cause could produce the effect at that moment (a
 busy thread was not waiting), and rule it out there when it could not.
+
+### A headless browser's screenshot follows the system's dark mode
+Headless Chrome and Edge report the operating system's colour scheme to the page, so a page with a
+`prefers-color-scheme: dark` style is shot dark on a PC set to dark mode, whatever the picture it replaces looked like.
+`--blink-settings=preferredColorScheme=1` makes the page see light (0 is dark).
+**Why it came up**: retaking the README's report picture with `msedge --headless=new --screenshot`, the first shot came
+out dark against the light one it replaced.
+**Takeaway**: when a headless browser takes a picture for the docs, set the colour scheme on the command line, and give
+it its own `--user-data-dir` so it never touches the user's profile.

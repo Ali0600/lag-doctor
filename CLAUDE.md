@@ -103,7 +103,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   new text). Renaming a test does the same to each mutation that names it: only a run of that spec notices, as
   BAD-BASE, so grep the specs for a test's old name when you rename it. Before merging, rerun every mutation whose
   `file` or tests the change touches, picked by path from all of `tests/redfirst/`, never from a list kept by hand
-  (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). An `old` that
+  (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). Every mutation on
+  `lagdoctor/analysis/rules.py` (367 on 2026-11-15) takes about 50 minutes here: start it in the background as soon as
+  the code is settled, and review meanwhile with agents that run no tests. An `old` that
   still occurs once can still go dead: a change that sends its test down a new path leaves the sabotaged line
   unreached, and only the gate's SURVIVED shows it (PR #45's tick test took a stall past the residual's GPU wording an
   older sabotage changed, 2026-11-11), so read each survivor before assuming the new tests are at fault. A shared fixture
@@ -147,12 +149,22 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   or `%USERPROFILE%\...` (`html.user_neutral`), and a command the page offers names it as `"$env:LOCALAPPDATA\..."`
   (`html.powershell_path`). `charts.py` escapes its own labels without that, so pass a chart only fixed words and
   numbers. Tests use a made-up profile (`C:\Users\Jo Tester` in `tests/test_report.py`). The console summary keeps
-  real paths on purpose (DESIGN.md, Report).
+  real paths on purpose (DESIGN.md, Report). The README's picture of it (`docs/images/report.png`, 2026-11-15) is
+  `tests.synth.laglab("hitch-io")` with a made-up `BackupSync.exe` reading and writing about 31 MB/s added to every
+  `others` row (keeping the 8 busiest by CPU), through `diagnose` and `html.write`, shot by headless Edge
+  (`--headless=new --hide-scrollbars --user-data-dir=<a folder under %TEMP%> --blink-settings=preferredColorScheme=1
+  --window-size=1100,2400 --screenshot=<png> file:///<html>`; without the colour-scheme flag it follows Windows' dark
+  mode) and cropped to 1100x1690, just below the third finding. Never shoot one of the owner's own recordings.
 - **Column names come from `lagdoctor/model.py`** (`F`, `S`, `G`, `N`); `SeriesBuilder` rejects unknown names. The
   dict `frames.main_chain` returns also holds two per-row lists that are no capture column, `frames.HIDDEN` and
   `FRONT` (time behind another window, DESIGN.md "Frames and stats"): copy or cut it by its own items, never by
   `F.ALL`, which drops them and judges a covered window's frames again. A frame test builds its capture and goes
   through `main_chain`, since a dict built by hand has no `HIDDEN` and hides nothing.
+- **A rule test asserts the kind it expects.** `rules.run_rule` turns a rule that raises into Unchecked ("the check
+  failed"), so `assert not is_finding(res) or ...` passes on a crash: a sabotage that crashed `bufferbloat` survived
+  that way (PR #48). Assert `is_finding(res)` (or the Cleared/Unchecked you mean) first. A hand-built `others` table
+  lists some process on every tick: attribution reads a row listing nothing as not read (`_Others.total` and `io_top`
+  None), so a table holding only the program under test reads "not measured" on its quiet ticks.
 - **A measured part keeps the recording's own times** (`lagdoctor/analysis/crop.py`, DESIGN.md "The measured part").
   On a cropped capture `duration_s` is the part's length, never an end time: code that counts from the start counts
   from `_Env.start`, and text that names a share or a time of the recording names `_Env.part` ("the capture" until
