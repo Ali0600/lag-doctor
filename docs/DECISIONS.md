@@ -171,14 +171,67 @@
   the control asks whether the doctor invents game lag, and the Wi-Fi's own spikes fail it today (the second 2026-11-11 run:
   the router itself answered in 120 ms). Revisit hook: the "no lag in the control" check in `e2e_truth.judge`
   (DECISIONS 2026-11-12).
-- **The store app's own programs in `background_hogs` and `gpu_contention`**, which can still tell a Steam game's
-  player to pause `steamwebhelper.exe` for a CPU or GPU rise; the "close heavy programs" advice says what they are since
-  2026-11-16. Revisit hook: `rules._store_of` in `_hog_fixes` and `_gpu_contention` (DECISIONS 2026-11-16).
-- **`explorer.exe` said to be Windows' shell** rather than a program to close. It runs from the Windows folder itself,
-  not System32, so `rules._windows_own` would read the real one as a look-alike: it needs a folder rule of its own.
-  Revisit hook: `sysmon.SystemFolders` and `rules._windows_own` (DECISIONS 2026-11-16).
-- **Name the programs that held memory in `background_hogs`' Memory Compression advice**, which still says "close
-  memory-heavy programs" without names. Revisit hook: `rules._itself_means` (DECISIONS 2026-11-16).
+- **Name the programs that held memory where the disk or CPU advice meets Memory Compression**: its one sentence
+  there (`rules._itself_means`, inside `_windows_text`) still says "close memory-heavy programs" without names, while
+  `background_hogs` names them since 2026-11-16. Revisit hook: `_cpu_advice` and `_disk_advice` would add
+  `_compression_holders`' advice beside theirs (DECISIONS 2026-11-16, the store app and Windows' shell).
+- **Something to do about the store app's own GPU or CPU use**: `gpu_contention` and `background_hogs` now say only
+  that `steamwebhelper.exe` is part of Steam, never to close it. Steam's own setting for its web views' GPU use, or
+  closing its window while it keeps running, would give the player a step, once a primary source states what each
+  does. Revisit hook: `rules._store_advice` (DECISIONS 2026-11-16, the store app and Windows' shell).
+- **An explorer.exe look-alike in a capture recorded before the folder check covered the Windows folder** is judged
+  by its name, as Windows' shell: such a capture cannot tell it from the real one. Revisit hook: none needed unless a
+  recording from 2026-11-15 or 2026-11-16 shows one (DECISIONS 2026-11-16, the store app and Windows' shell).
+
+---
+
+## 2026-11-16: The store app that started the game and Windows' shell are never told to close; Memory Compression names who held the RAM
+
+The owner chose "PR #51's leftovers" (2026-11-16), the three backlog items its entry left: `background_hogs` and
+`gpu_contention` could still tell a Steam game's player to pause `steamwebhelper.exe`; `background_hogs`' Memory
+Compression advice said "close memory-heavy programs" without a name; and `explorer.exe`, Windows' shell, was a
+program to close.
+
+**The store app's programs.** They are treated as Windows' own programs are in those two rules (`rules._store_advice`): said to be part
+of the store app, which the game may need, never told to pause or close, never given a priority fix, and in
+`gpu_contention` no "run it on another GPU". A priority fix would not close Steam, but lowering the program a game
+talks to while it plays is a change the game did not ask for, and the memory, disk and CPU advice already never named
+them as programs to close. `bufferbloat`'s "pause or limit the downloads of steam.exe" stays: pausing a download is
+what helps, and it closes nothing.
+
+**Memory Compression.** `background_hogs` adds, right after what Memory Compression is, the advice `ram_pressure`
+gives (`rules._compression_holders` through `_held_advice`): the other programs that held the most RAM around the
+stutters it rose at, from 500 MB on average, else the most any program held. The stutters' windows (half a second
+before, a quarter after) reach `MEMORY_NEAR_S` further each side, since memory is read once a second. Memory
+Compression itself is left out (`_heavy`'s `leave_out`): its own store is what the advice explains, and counting it
+made a figure under the floor read "only Windows' own processes held 500 MB or more". An older capture keeps its old
+advice alone. The disk and CPU advice's one sentence on Memory Compression still names nobody (backlog). Where every program the
+line would tell to close is already one `background_hogs` names, it is left out, as the same advice twice (found in
+review).
+
+**explorer.exe: where Windows runs it**
+- **A: the folder check also covers the Windows folder, and the capture says so (chosen)**: `SystemFolders` adds
+  GetSystemWindowsDirectoryW's folder (the one every user shares; GetWindowsDirectoryW can give a private one per user,
+  Microsoft's page says) for `explorer.exe` alone (`sysmon.WINDOWS_FOLDER_PROGRAMS`), so the real one reads
+  `system_folder` True, and `target["windows_folder"]` marks the capture. Only an administrator writes directly to
+  that folder (a folder below it, such as `Temp`, is not it). Counting every program there, as the first version did,
+  turned a `svchost.exe` look-alike dropped in `C:\Windows`, a usual place for one, into Windows' own (found in
+  review).
+  Without the marker, a False meant "not System32", which the real one also is, so the analysis decides by name there,
+  as it does in a capture of names only.
+- **B: judge `explorer.exe` by name alone, like Defender's scanner**: rejected: the real one and a look-alike would read
+  the same, which is what the folder check exists to tell apart.
+- **C: a 13th field per entry for the Windows folder**: rejected: the same answer in a field of its own on every entry
+  of every row, where one key per capture says which question field 9 answered.
+- **D: widen field 9 without a marker**: rejected: a capture from 2026-11-15 or 2026-11-16 says False for the real
+  one, so it would read as a look-alike, worse than before this change.
+Revisit hook: `rules.WINDOWS_FOLDER_PARTS` for another program Windows runs from its own folder.
+
+Checked: new tests for each (the store app in both rules with Steam and Epic and when another store started the game;
+Memory Compression above and under the floor, between two memory readings and in an older capture; explorer.exe by
+where it runs, with and without the marker, in a capture of names only; the folder check with and without the Windows
+folder, a failed read of it, the sampler's result and the session's target; a live check of the folder against
+`%SystemRoot%` and of this PC's explorer.exe).
 
 ---
 

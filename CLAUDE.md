@@ -173,8 +173,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   System32 (`rules._where`), so a Windows name is judged by where it runs and the "8 busiest on the CPU" caveat goes;
   12 fields (since 2026-11-16) add each process's RAM, memory committed and video memory, which alone let
   `ram_pressure` and `vram_overflow` name programs (fewer keep their old line word for word); 5 to 7 fields are an
-  older capture, judged by name. A memory figure is read at the system rows' own ticks (`rules._when`), so a hand-built
-  others table must carry the system table's times (`synth.system_table`'s 0.25 s steps). The sampler reads memory
+  older capture, judged by name. `explorer.exe` is judged by where it runs only when `target["windows_folder"]` is
+  True (since 2026-11-16 the folder check covers the Windows folder itself, where Windows runs it); without it, by
+  name. A memory figure is read at the system rows' own ticks (`rules._when`), so a hand-built others table must carry the system table's times (`synth.system_table`'s 0.25 s steps). The sampler reads memory
   once a second (`memory_every_s`): a `SystemSampler` test at `period_s=0.05` sees it on every 20th row unless it
   passes `memory_every_s` too. A `SystemSampler` test with a fake snapshotter calls the real
   `ntquery.image_path` on its made-up PIDs unless it passes `system_folders=sysmon.SystemFolders(...)`, whose fake

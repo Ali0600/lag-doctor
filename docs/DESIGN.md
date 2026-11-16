@@ -621,7 +621,7 @@ The session copies these into the `Capture`. Keys not listed here go nowhere, so
 | collector (`name`), module, class | `result()` keys → Capture field |
 |---|---|
 | `frames`, capture/presentmon.py, `PresentMonSource(pid, exe=None, etl_file=None, *, is_alive=None, forward=None)` (relayed: relay/client.py `RelayedFrames`) | `columns` (F, every swap chain of the target) → `frames`; `swap_chains` `{"0x…": {"frames", "displayed", "runtime"}}` (an unfiltered replay keys them `"<pid>:0x…"`), `main_chain` (most displayed frames), `presentmon` `{version, exe, args, exit_code, stop_path, rows, malformed, rejoined, headers, stderr_tail}` → `target["presentmon"]`; `live()` = `{frames, fps, malformed}` |
-| `system`, capture/sysmon.py, `SystemSampler(target)` | `columns` (S) → `system`; `others` → `others`; `game_adapter_luid` (adapter whose 3D engine the game used most) → `target["adapter_luid"]`; `game_pids` (game + children seen) → `target["pids"]`; `cost` `{ticks, median_ms, max_ms, mean_ms}` (also in the status detail) |
+| `system`, capture/sysmon.py, `SystemSampler(target)` | `columns` (S) → `system`; `others` → `others`; `game_adapter_luid` (adapter whose 3D engine the game used most) → `target["adapter_luid"]`; `game_pids` (game + children seen) → `target["pids"]`; `cost` `{ticks, median_ms, max_ms, mean_ms}` (also in the status detail); `windows_folder` (whether the others table's `system_folder` check covered the Windows folder itself, since 2026-11-16) → `target["windows_folder"]`, set only when True |
 | `gpu`, capture/gpumon.py, `NvidiaSampler(adapter)` | `columns` (G) → `gpu`; `device` `{name, clock_max_mhz, mem_total_mb, temp_target_c, power_default_w}` or None → `inventory["nvidia"]`; `live()` adds `source` ("nvml"/"nvidia-smi") |
 | `network`, capture/netmon.py, `NetworkSampler(server_ip=None, *, steam_log=None)` | `columns` (N) → `network`; `targets` `{gateway, internet, server}` (IPs or None), `probes` `{target: {"sent", "lost", "from_t"}}`, `lost` `{target: [t, …]}`, `wifi_scans` `[t, …]`, `route` `{if_index, description, vpn: bool \| None, toward}` → `net_flows[…]` under the same keys; `interface` `{name, kind: "wifi"/"ethernet"/"other", band, channel}` → `inventory["network"]`; `downloads` `[{t, source, mbps}]` from the Steam log, or None when no download log was read, with `download_sources` (the logs read) → `net_flows[…]` |
 | `net_flows`, capture/netflows.py, `FlowTracker(game_pids or a callable, *, relay=None)` | `server` `{ip, port, proto, pid, rx_packets, tx_packets, rx_bytes, tx_bytes, tick_ms, first_rx_t, last_rx_t}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8, with `talkers_scope` "all" (its own ETW session) or "session" (through the relay: the programs in this Windows session only); `game_wire_bytes` `[rx, tx]` the game's bytes that crossed the network (one end this PC's), never its loopback traffic; `gaps` `[[t, ms, kind], …]` (t = the last packet before the silence; kind: "delay" burst after the gap / "loss" no burst / "local" our own tx paused too / "open" the server went silent for good while we kept sending / "unknown" a late delivery hides which); `server_rx` `[[t, pps], …]` (t = end of each 1 s bin); talkers, game_wire_bytes, gaps and server_rx are None when the session never ran; `layout` "verified"/"unverified"; `health` → `net_flows[…]` |
@@ -635,10 +635,15 @@ memory (since 2026-11-16: a program holding memory while idle was never listed),
 FILETIME ticks (so a fix can prove a PID was not reused), `gpu_game_pct` their busiest engine on the game's adapter
 (None while that adapter is unknown), `session` their Windows session (0: services and Windows' own), and
 `system_folder` True when their program sits directly in Windows' own System32 or SysWOW64 folder
-(`winapi.folders.system_folders`), False elsewhere, None when it cannot say: the path could not be read, is no drive
+(`winapi.folders.system_folders`), or, since 2026-11-16, when it is Windows' shell, `explorer.exe`
+(`sysmon.WINDOWS_FOLDER_PROGRAMS`, equal to `rules.WINDOWS_FOLDER_PARTS`), directly in the Windows folder itself
+(`winapi.folders.windows_folder`, GetSystemWindowsDirectoryW: the folder every user shares; `target["windows_folder"]`
+says the check covered it; any other program there, such as a `svchost.exe` dropped in it, and a folder below it such
+as `Temp`, are not it), False elsewhere,
+None when it cannot say: the path could not be read, is no drive
 path (System, Registry, Memory Compression), or names another program than the snapshot did (a reused PID)
 (`ntquery.image_path`, handle-free; an answer is kept while the process stays listed: `sysmon.SystemFolders`; a
-System32 that cannot be read is said in the status). The path itself is never kept. `ram_mb` is the RAM the process
+System32 or Windows folder that cannot be read is said in the status). The path itself is never kept. `ram_mb` is the RAM the process
 alone holds (its private working set, `ntquery.ProcInfo.ws_private_bytes`, Task Manager's "Memory"), `commit_mb` the
 memory committed to it (its private bytes, which count toward the commit limit), `vram_mb` its dedicated video memory
 on the game's adapter (`\GPU Process Memory(*)\Dedicated Usage`, `sysmon.pid_vram`; 0 for a process the counter does
@@ -1387,11 +1392,19 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   busy", and the advice says what their work means (System: a driver's work; Memory Compression: RAM running short).
   The same goes for Windows' other own programs (`rules._windows_own`): a `WINDOWS_PARTS` name, by what it normally
   is. Where the others row says where a process runs (fields 7 and 8), a `WINDOWS_PARTS` name counts only in session
-  0 or from System32, so one in the player's session from another folder is a look-alike, said so ("named like a
+  0 or from System32 (`explorer.exe`, Windows' shell: from the Windows folder itself, `rules.WINDOWS_FOLDER_PARTS`,
+  judged so only where `target["windows_folder"]` says the recorder checked that folder; an older capture's False said
+  only "not System32", so there its name decides), so one in the player's session from another folder is a look-alike, said so ("named like a
   part of Windows, but not where Windows runs it") and kept closable and lowerable, apart from the real ones of its
   name; a program on no list never counts by where it runs (a backup service's robocopy.exe stays closable). Defender's
   scanner (`MpCmdRun.exe`), an older capture and an unread path decide by name. No priority fix goes to a session-0
   process either: `fixes/priority.py` refuses those, and `gpu_contention` offers no other GPU for Windows' own work.
+  The programs of the store app that started the game (`rules._store_of`) are treated the same in both: said to be
+  part of it, which the game may need (`rules._store_advice`), never told to pause or close, never lowered, and given
+  no other GPU. Where Memory Compression is named in a capture whose table holds memory, the advice after what it is
+  names the other programs that held the most RAM around the stutters it rose at (`rules._compression_holders`, each
+  window reaching `MEMORY_NEAR_S` further to meet the nearest memory reading; Memory Compression itself left out), as
+  `ram_pressure` does; an older capture keeps its old advice alone.
 - The advice to close other heavy programs names them (`rules._heavy`, `_disk_advice`, `_cpu_advice`,
   `_net_advice`). `asset_streaming` and `hdd_streaming` name the other programs whose reads and writes averaged
   `attribute.OTHERS_DISK_BPS` (20 MB/s) or more over the windows attribution looked at around the finding's own
@@ -1401,7 +1414,7 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   tick it was not listed on counts as 0 and the figure is a lower bound ("at least"). At most three are named, biggest
   first, then by name, never by PID; the game, its helpers, lag-doctor's own processes and the game's image name never
   are. Windows' own (`WINDOWS_ITSELF`, and `rules._windows_own`: Defender, Windows Update, Search, `svchost.exe`,
-  `csrss.exe`, `audiodg.exe` and `dwm.exe`, by where they run when the capture says it, else by name) are said to
+  `csrss.exe`, `audiodg.exe`, `dwm.exe` and `explorer.exe`, by where they run when the capture says it, else by name) are said to
   be Windows, never told to close: Memory Compression as RAM running short,
   System on the CPU as a driver's work, the others by what the name normally is; a name's look-alikes are counted
   apart and named as such. Under the floor the disk advice says the most any program did (a Windows one said to be

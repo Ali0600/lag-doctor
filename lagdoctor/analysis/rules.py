@@ -1190,16 +1190,20 @@ def _gpu_contention(cap: Capture, ctx: dict) -> Any:
                                 + (", and of the rest the 4 busiest by disk and the 4 holding the most of each kind of "
                                    "memory)" if _lists_memory(e) else
                                    " and the 4 busiest of the rest by disk)" if _where(e)[1] else ")"))
+    store = _store_of(e, name) if name else None
     if name and _windows_itself(name):
         first = _windows_advice(name, f" (process {pid})")
     elif name and _windows_own(e, pid, name):         # the Desktop Window Manager draws every window, for one
         first = _part_advice(name, f" (process {pid})")
+    elif store:
+        first = _store_advice(name, f" (process {pid})", store)
     else:
         like = LOOKALIKE if name and _lookalike(e, pid, name) else ""
         first = _advice(f"Pause or close {name}{like} while you play" if name else "Find and pause the GPU-heavy program",
                         "Training, rendering, mining or video encoding on the same GPU takes time the game needs; "
                         "lag-doctor never closes programs itself.")
-    own = bool(name) and _windows_own(e, pid, name)            # Windows' own work cannot move to another GPU
+    # Windows' own work cannot move to another GPU, and the store app's is no work to move
+    own = bool(name) and (_windows_own(e, pid, name) or store is not None)
     fixes = [first] + ([] if own else [_advice("Or let that work run on another GPU, if this PC has one")])
     return c.conclude(f"Another program kept the game's GPU {m:.0f}% busy" + (f": {_shown_as(name)}" if name else ""),
                       "Other programs used the same GPU as the game, so the game's frames had to wait for it.", fixes)
@@ -2576,7 +2580,12 @@ WINDOWS_PARTS: dict[str, tuple[str, str]] = {
     "audiodg.exe": ("Windows' audio engine, which runs sound effects", ""),
     "dwm.exe": ("Windows' Desktop Window Manager, which draws every window on the screen", ""),
     "vmmem": _VM, "vmmemwsl": _VM,
+    "explorer.exe": ("Windows' shell, which runs the taskbar, the Start menu and File Explorer", ""),
 }
+# Windows' own programs that Windows runs from the Windows folder itself, not System32 (explorer.exe). A capture
+# whose folder check covered that folder (target windows_folder, since 2026-11-16) judges them by where they run; in
+# an older one, False says only "not in System32", so their name decides
+WINDOWS_FOLDER_PARTS = frozenset({"explorer.exe"})
 CLOSE_CHECK = "not something you need first; lag-doctor never closes programs itself."
 DISK_ADVICE = "Close other disk-heavy programs while playing"
 CPU_ADVICE = "Close CPU-heavy programs while playing"
@@ -2603,7 +2612,8 @@ def _store_of(e: _Env, name: str) -> str | None:
 
 
 def _where(e: _Env) -> tuple[dict[tuple[int, str], tuple[int | None, bool | None]], bool]:
-    """((pid, image name) -> (its Windows session, whether its program sits in System32 or SysWOW64), whether the
+    """((pid, image name) -> (its Windows session, whether its program sits in System32 or SysWOW64, or explorer.exe in
+    the Windows folder itself, where a capture's target windows_folder says that was checked), whether the
     others table also lists the busiest by reads and writes): both from rows of 9 fields, recorded since 2026-11-15
     (sysmon.top_others). A reading that is None never replaces one that is not."""
     if "where" not in e.memo:
@@ -2653,7 +2663,8 @@ def _windows_own(e: _Env, pid: Any, name: str) -> bool:
     """Whether a listed process is Windows' own, never a program to close or lower: the kernel's minimal processes
     (WINDOWS_ITSELF), and a WINDOWS_PARTS name where Windows runs it: in session 0, where Windows runs its services and
     nothing a player starts runs (Defender keeps its programs outside System32), or from System32 (csrss.exe and
-    dwm.exe run one in each player's session). A WINDOWS_PARTS name in a player's session from another folder is a
+    dwm.exe run one in each player's session), or for explorer.exe from the Windows folder itself (WINDOWS_FOLDER_PARTS,
+    in a capture whose check covered that folder). A WINDOWS_PARTS name in a player's session from another folder is a
     look-alike, so it stays a program to close. An older capture, or a process whose path was not read: by name alone.
     A program from System32 on no list is never Windows' own by where it runs: a backup service's robocopy.exe, or a
     player's cmd.exe, is closable. A service someone installed under a Windows name runs in session 0 and reads as
@@ -2664,6 +2675,8 @@ def _windows_own(e: _Env, pid: Any, name: str) -> bool:
     if key not in WINDOWS_PARTS:
         return False
     session, folder = _where(e)[0].get((pid if attribute._is_pid(pid) else None, name), (None, None))
+    if key in WINDOWS_FOLDER_PARTS and e.target.get("windows_folder") is not True:
+        folder = None
     return session == 0 or folder is not False or key in PLAYER_STARTS
 
 
@@ -2678,6 +2691,13 @@ def _part_advice(name: str, procs: str) -> FixSuggestion:
     return _advice(f"{name}{procs} is normally part of Windows, not a program to close",
                    f"That name is normally {role}, so lag-doctor does not suggest closing it." + (f" {tail}" if tail
                                                                                                   else ""))
+
+
+def _store_advice(name: str, procs: str, store: str) -> FixSuggestion:
+    """What a program of the store app the game was started through (_store_of) is, in place of advice to pause, close
+    or lower it: the game may need it."""
+    return _advice(f"{name}{procs} is part of {store}, which started the game",
+                   "The game may need it running, so lag-doctor does not suggest closing it.")
 
 
 @dataclass
@@ -2709,7 +2729,8 @@ def _event_spans(e: _Env, ids: Iterable[int]) -> list[tuple[float, float]]:
                   for ev in e.judged if ev.id in want)
 
 
-def _heavy(e: _Env, col: str, spans: list[tuple[float, float]], floor: float) -> _Heavy | None:
+def _heavy(e: _Env, col: str, spans: list[tuple[float, float]], floor: float,
+           leave_out: frozenset[str] = frozenset()) -> _Heavy | None:
     """Which other programs used `col` most over `spans` (the recording's own times): "cpu" in % of one logical CPU,
     "io" in bytes/s, "ram", "commit" and "vram" in MiB held (attribute.MEMORY_FIELDS; since 2026-11-16 the table also
     lists the 4 holding the most of each). Each image name's readings in the others table are summed over the table's ticks inside the spans
@@ -2717,8 +2738,8 @@ def _heavy(e: _Env, col: str, spans: list[tuple[float, float]], floor: float) ->
     on the CPU, and since 2026-11-15 the 4 busiest of the rest by reads and writes), so the mean is a lower bound, and
     the text says "at least". None when no tick there read `col`: not measured, never "none". The game, its own child
     processes, lag-doctor's own processes (attribute._others' roles) and any process with the game's image name are
-    left out; a name's processes that are Windows' own (_windows_own) are counted apart from a look-alike's; the order
-    is by mean, then name, never by PID."""
+    left out, as are the image names in `leave_out` (casefolded); a name's processes that are Windows' own
+    (_windows_own) are counted apart from a look-alike's; the order is by mean, then name, never by PID."""
     if "others" not in e.memo:
         e.memo["others"] = attribute._others(e.cap)
     o = e.memo["others"]
@@ -2738,7 +2759,8 @@ def _heavy(e: _Env, col: str, spans: list[tuple[float, float]], floor: float) ->
     sums: dict[tuple[str, bool], list[float]] = {}
     count: dict[tuple[str, bool], int] = {}
     for (pid, name), cols in o.per.items():
-        if o.roles.get((pid, name)) != "background" or _image_name(name) is None or _same_image(name, game_name):
+        if o.roles.get((pid, name)) != "background" or _image_name(name) is None or _same_image(name, game_name) \
+                or name.casefold() in leave_out:
             continue
         key = (name, _windows_own(e, pid, name) or _store_of(e, name) is not None)
         vals = [x for t, x in zip(cols[col].t, cols[col].v) if inside(t)]
@@ -2914,12 +2936,12 @@ HELD_LIMIT = (" lag-doctor lists the 4 processes holding the most at each moment
 
 
 def _held_advice(e: _Env, col: str, title: str, spans: list[tuple[float, float]], at: str, floor: float,
-                 plain: str = "") -> FixSuggestion:
+                 plain: str = "", leave_out: frozenset[str] = frozenset()) -> FixSuggestion:
     """ram_pressure's "close memory-heavy programs" and vram_overflow's "close other GPU-heavy programs", naming the
     other programs that held the most `col` (_heavy) `at` the spans, the ticks the finding's own condition held, with
     their figures; under `floor`, the most any program held. An older capture, whose table holds no memory, keeps the
     old line (`title`, `plain`)."""
-    h = _heavy(e, col, spans, floor)
+    h = _heavy(e, col, spans, floor, leave_out)
     if h is None:
         return _advice(title, plain)
     verb, base, what, note = HELD[col]
@@ -3006,7 +3028,8 @@ def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
     offer = _offerable(e)
     where = _where(e)[0]
     fixes: list[FixSuggestion] = []
-    for n in [n for n in named[:3] if not _all_own(e, n)][:2]:      # programs the title names, never Windows' own
+    # programs the title names, never Windows' own nor the store app's that started the game
+    for n in [n for n in named[:3] if not _all_own(e, n) and _store_of(e, n.name) is None][:2]:
         # SEC-2, A10: never the game or its children (the PID check below), nor a process with the game's own
         # image name (a sibling of a multi-process game is no child of the chosen process); the fix needs the PIDs
         if not game or _same_image(n.name, game_name):
@@ -3041,8 +3064,12 @@ def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
                                  "game's own settings and forums."))
         elif _windows_itself(n.name):
             fixes.append(_windows_advice(name, procs))
+            if n.name.casefold() == "memory compression":
+                fixes.extend(_compression_holders(e, n, named[:3]))
         elif _all_own(e, n):
             fixes.append(_part_advice(name, procs))
+        elif store := _store_of(e, n.name):
+            fixes.append(_store_advice(name, procs, store))
         elif mixed := [pid for pid in n.pids if _windows_own(e, pid, n.name)]:     # a look-alike beside the real one
             fake = [pid for pid in n.pids if pid not in mixed]
             fixes.append(_advice(f"Pause or close {name}{LOOKALIKE} while you play{_pids_text(fake)}",
@@ -3058,6 +3085,25 @@ def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
                                  "Check it is not something you need first; lag-doctor never closes programs itself."))
     fixes.append(_advice("Pause downloads and updates while playing", "Steam, Epic, the browser, Windows Update."))
     return fixes
+
+
+def _compression_holders(e: _Env, n: _Named, named: list[_Named]) -> list[FixSuggestion]:
+    """After background_hogs says what Memory Compression is: the other programs that held the most RAM around the
+    stutters and FPS drops it rose at (_held_advice), each window reaching MEMORY_NEAR_S further to meet the nearest
+    memory reading; Memory Compression itself is left out, as it is what the advice explains. None where no row there
+    read memory, as in an older capture, whose table holds none: its advice keeps the old line alone; none either
+    where the line would only tell the player to close programs background_hogs already names (`named`)."""
+    spans = _merge((ev.t_start - attribute.WINDOW_BEFORE_S - MEMORY_NEAR_S,
+                    ev.t_end + attribute.WINDOW_AFTER_S + MEMORY_NEAR_S) for ev in n.events)
+    leave_out = frozenset({n.name.casefold()})
+    h = _heavy(e, "ram", spans, MEM_MIN_MB, leave_out)
+    if h is None:
+        return []
+    blamed = {x.name.casefold() for x in named}
+    if h.named and not h.windows and all(name.casefold() in blamed for name, _v, _k in h.named):
+        return []
+    return [_held_advice(e, "ram", MEM_ADVICE, spans, f"when {_text(n.name, 80)} got busy", MEM_MIN_MB, BROWSERS,
+                         leave_out)]
 
 
 def _pids_text(pids: list[int]) -> str:

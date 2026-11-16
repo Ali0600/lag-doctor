@@ -1274,3 +1274,14 @@ PC's recordings hit the second, with gigabytes of RAM free, where the RAM each p
 ones.
 **Takeaway**: before blaming a process for memory, pick the measure that fills the resource the finding is about: the
 private working set for RAM, commit for the commit limit, and never the whole working set summed over processes.
+
+### "The Windows folder" has two answers, and only one is the one every user shares
+`GetWindowsDirectoryW` can return a private folder per user on a multi-user PC (Terminal Services), unless the program
+is marked as Terminal Server aware; `GetSystemWindowsDirectoryW` always returns the shared one, where Windows itself
+lives. On a single-user PC both give the same path, so a test there cannot tell them apart.
+**Why it came up**: telling the real `explorer.exe`, which Windows runs from the Windows folder itself rather than
+System32, from a look-alike: the check must compare with the folder Windows' own programs sit in, not a user's copy.
+Counting every program in that folder as Windows' own also turned a `svchost.exe` dropped there, a usual place for a
+look-alike, into Windows' own, so the folder counts for `explorer.exe` alone.
+**Takeaway**: for "where Windows keeps its own files", call the System-prefixed function, and widen a trust rule only
+for the names that needed it.

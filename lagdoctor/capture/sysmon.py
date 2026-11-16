@@ -3,7 +3,8 @@
 Design: docs/research/windows-telemetry.md (WT) section 11, as corrected by its verification log. Each tick
 runs one PDH collect (the WT 11.1 counter list) and one NtQuerySystemInformation snapshot with the game's
 threads, and writes one row of S columns plus an `others` row (the top 8 other processes by CPU, then the top 4 of
-the rest by reads and writes, each with its Windows session and whether its program sits in System32).
+the rest by reads and writes, each with its Windows session and whether its program sits in System32, or for
+explorer.exe in the Windows folder itself).
 
 - Process and thread CPU are the delta since the previous tick (about 250 ms), kept sharp so a short hitch
   shows in the tick that holds it. Thread times move in 15.625 ms steps (WT 3.5), so one tick is only good
@@ -446,7 +447,7 @@ def top_others(rates: list[tuple], gpu_window: list[GpuSample | None], adapter: 
     unknown or the process has no engine there). The create time (raw FILETIME ticks) lets a fix on that process prove
     later that the PID was not reused. session is its Windows session (0: services and Windows' own); system_folder
     is `in_system(pid, create_time, name)` for the listed processes only: True when its program sits in Windows' own
-    System32 or SysWOW64 folder, None unread. ram_mb is its private working set (the RAM it alone holds, Task
+    System32 or SysWOW64 folder, or is explorer.exe in the Windows folder itself (SystemFolders), None unread. ram_mb is its private working set (the RAM it alone holds, Task
     Manager's "Memory"), commit_mb the memory committed to it (its private bytes, which count toward Windows' commit
     limit), vram_mb its dedicated video memory on `adapter` (`vram`, from pid_vram: None when not read), each in whole
     MiB. Without `memory` (the sampler reads memory once a second) the row has no memory picks and fields 9-11 are
@@ -480,17 +481,26 @@ def top_others(rates: list[tuple], gpu_window: list[GpuSample | None], adapter: 
     return out
 
 
+# The programs Windows runs from the Windows folder itself rather than System32, which SystemFolders counts there:
+# its shell. rules.WINDOWS_FOLDER_PARTS is the same set (a test holds them equal); any other program directly in the
+# Windows folder (a svchost.exe dropped there, say) reads False, as it did before 2026-11-16
+WINDOWS_FOLDER_PROGRAMS = frozenset({"explorer.exe"})
+
+
 class SystemFolders:
     """in_system for top_others: whether a process's program sits directly in one of Windows' own program folders
-    (System32, SysWOW64), where Windows and its drivers keep theirs. Each process's path is read handle-free
-    (ntquery.image_path); an answer is kept only while the process stays listed (`keep`), so the cache stays the size
-    of an others row, and a failed read is never kept. None when it cannot say: the path could not be read (the
-    process ended), is no drive path (System, Registry and Memory Compression have no program file; a volume Windows
-    could not name), names another program than the snapshot did (its PID was reused since), or the folders are
-    unknown (`problem` says why)."""
+    (System32, SysWOW64), where Windows and its drivers keep theirs, or is one of WINDOWS_FOLDER_PROGRAMS (explorer.exe,
+    Windows' shell) directly in the Windows folder itself (`windows_folder` says whether that was checked: since
+    2026-11-16). Only an administrator writes to any of them; a folder below one (C:\\Windows\\Temp) is not it. Each
+    process's path is read handle-free (ntquery.image_path); an answer is kept only while the process stays listed
+    (`keep`), so the cache stays the size of an others row, and a failed read is never kept. None when it cannot say:
+    the path could not be read (the process ended), is no drive path (System, Registry and Memory Compression have no
+    program file; a volume Windows could not name), names another program than the snapshot did (its PID was reused
+    since), or the folders are unknown (`problem` says why). `folders` and `windows` are for tests: by default both are
+    Windows' own answers."""
 
     def __init__(self, folders: Iterable[str] | None = None,
-                 path_of: Callable[[int], str | None] = ntquery.image_path) -> None:
+                 path_of: Callable[[int], str | None] = ntquery.image_path, windows: str | None = None) -> None:
         self.problem = ""
         if folders is None:
             try:
@@ -499,7 +509,16 @@ class SystemFolders:
                 folders = ()
                 self.problem = (f"Windows' System32 folder could not be read ({exc}), so no process was checked "
                                 "against it")
-        self._folders = frozenset(ntpath.normcase(ntpath.normpath(f)) for f in folders if f)
+            if folders:
+                try:
+                    windows = winfolders.windows_folder()
+                except OSError as exc:
+                    self.problem = (f"the Windows folder could not be read ({exc}), so explorer.exe was judged by its "
+                                    "name alone")
+        folders = [f for f in folders if f]
+        self.windows_folder = bool(folders and windows)     # the analysis judges explorer.exe by where it runs
+        self._folders = frozenset(ntpath.normcase(ntpath.normpath(f)) for f in folders)
+        self._windows = ntpath.normcase(ntpath.normpath(windows)) if self.windows_folder else None
         self._path_of = path_of
         self._seen: dict[tuple[int, int], bool] = {}
 
@@ -524,7 +543,9 @@ class SystemFolders:
         path = ntpath.normpath(path)
         if name is not None and ntpath.basename(path).casefold() != name.casefold():
             return None
-        return ntpath.normcase(ntpath.dirname(path)) in self._folders
+        folder = ntpath.normcase(ntpath.dirname(path))
+        return folder in self._folders or (folder == self._windows
+                                           and ntpath.basename(path).casefold() in WINDOWS_FOLDER_PROGRAMS)
 
     def keep(self, row: list[list]) -> None:
         """Forget every process this others row does not list."""
@@ -626,7 +647,7 @@ class SystemSampler(Collector):
     def result(self) -> dict[str, Any]:
         return {"columns": self.series.build(), "others": [list(r) for r in self.others],
                 "game_adapter_luid": self.game_adapter_luid(), "game_pids": sorted(self._pids_seen),
-                "cost": self.cost.summary()}
+                "cost": self.cost.summary(), "windows_folder": self._system.windows_folder}
 
     # ---- the loop --------------------------------------------------------
     def run(self) -> None:
