@@ -1251,3 +1251,14 @@ Headless Chrome and Edge report the operating system's colour scheme to the page
 out dark against the light one it replaced.
 **Takeaway**: when a headless browser takes a picture for the docs, set the colour scheme on the command line, and give
 it its own `--user-data-dir` so it never touches the user's profile.
+
+### Session 0 and System32 tell Windows' own processes from programs named like them
+An image name proves nothing: any program can be called `svchost.exe`. Two facts a monitor can read without opening the
+process tell Windows' own copies apart: its session (every service runs in session 0, which a signed-in user's programs
+never do) and the folder its program sits in (System32, where an ordinary user cannot put one). Neither is enough
+alone: `csrss.exe` and `dwm.exe` run from System32 in each user's session, and Defender's services run in session 0 from
+Defender's own folder.
+**Why it came up**: the analysis told players to "pause or close" Windows' own `svchost.exe` and `dwm.exe`, because the
+recorder kept names only; PR #50 records each listed process's session and one bit for "its program is in System32".
+**Takeaway**: to judge a process by what it is, record where it runs (its session, its program's folder), never only its
+name, and keep only the bit you decide on, not the path.

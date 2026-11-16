@@ -104,8 +104,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   BAD-BASE, so grep the specs for a test's old name when you rename it. Before merging, rerun every mutation whose
   `file` or tests the change touches, picked by path from all of `tests/redfirst/`, never from a list kept by hand
   (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). Every mutation on
-  `lagdoctor/analysis/rules.py` (367 on 2026-11-15) takes about 50 minutes here: start it in the background as soon as
-  the code is settled, and review meanwhile with agents that run no tests. An `old` that
+  `lagdoctor/analysis/rules.py` (416 on 2026-11-16) takes about an hour here (PR #50's 494 picked mutations took about
+  70 minutes): start it in the background as soon as the code is settled, and review meanwhile with agents that run
+  no tests (no second pytest meanwhile, so write the next change's tests without running them). An `old` that
   still occurs once can still go dead: a change that sends its test down a new path leaves the sabotaged line
   unreached, and only the gate's SURVIVED shows it (PR #45's tick test took a stall past the residual's GPU wording an
   older sabotage changed, 2026-11-11), so read each survivor before assuming the new tests are at fault. A shared fixture
@@ -164,7 +165,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   failed"), so `assert not is_finding(res) or ...` passes on a crash: a sabotage that crashed `bufferbloat` survived
   that way (PR #48). Assert `is_finding(res)` (or the Cleared/Unchecked you mean) first. A hand-built `others` table
   lists some process on every tick: attribution reads a row listing nothing as not read (`_Others.total` and `io_top`
-  None), so a table holding only the program under test reads "not measured" on its quiet ticks.
+  None), so a table holding only the program under test reads "not measured" on its quiet ticks. Its entries' length
+  picks the path under test: 9 fields (since PR #50) say each process's session and whether its program sits in
+  System32 (`rules._where`), so a Windows name is judged by where it runs and the "8 busiest on the CPU" caveat goes;
+  5 to 7 fields are an older capture, judged by name. A `SystemSampler` test with a fake snapshotter calls the real
+  `ntquery.image_path` on its made-up PIDs unless it passes `system_folders=sysmon.SystemFolders(...)`, whose fake
+  paths must end in the snapshot's own image name (a different one reads as a reused PID: None).
 - **A measured part keeps the recording's own times** (`lagdoctor/analysis/crop.py`, DESIGN.md "The measured part").
   On a cropped capture `duration_s` is the part's length, never an end time: code that counts from the start counts
   from `_Env.start`, and text that names a share or a time of the recording names `_Env.part` ("the capture" until
@@ -427,7 +433,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   alone, on M4b's branch and on main alike. Two more depend on the PC's state: `tests/test_cli.py::test_a_real_console_event_
   while_recording_still_saves_the_capture` (its child hit the 60 s timeout once under full-suite load, then 3/3
   alone), and `tests/test_sysmon_target.py::test_auto_picks_a_windowed_renderer_and_never_a_windowless_gpu_job`, which
-  needs LagLab to render where Windows counts it: on 2026-11-07 at 00:30 (Silent mode, display asleep) it failed on
+  needs LagLab to render where Windows counts it (`tests/test_folder_wait.py::test_a_real_laglab_window_is_found_by_its_
+  folder` with it: both failed, with `test_nvidia_live`'s driver-refresh test, on unchanged code on 2026-11-15, twice): on 2026-11-07 at 00:30 (Silent mode, display asleep) it failed on
   unchanged code too, in a worktree of the previous commit, and again on 2026-11-08 in a worktree of main. It also
   fails while another LagLab window is open: on 2026-11-08 another worktree's measurement script was running `python
   -m laglab` in a window of its own, the test's auto pick took that window, and it failed alone and on unchanged main
