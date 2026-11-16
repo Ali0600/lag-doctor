@@ -127,6 +127,17 @@ def full_set():
     ]
 
 
+@pytest.mark.parametrize("said, kept", [(True, True), (False, None), ("yes", None), (None, None)])
+def test_the_target_says_when_the_folder_check_covered_the_windows_folder(said, kept):
+    # rules._windows_own judges explorer.exe by where it runs only when the check looked at the Windows folder
+    collectors = full_set()
+    if said is not None:
+        collectors[1]._result["windows_folder"] = said
+    _, cap = run_session(collectors)
+    assert cap.target.get("windows_folder") is kept
+    assert ("windows_folder" in cap.target) is (kept is not None)
+
+
 def test_results_land_where_the_design_says():
     _, cap = run_session(full_set())
     assert cap.frames == {"t": [0.1], "frame_ms": [16.7]}

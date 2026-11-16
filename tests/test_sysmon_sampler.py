@@ -502,6 +502,80 @@ def test_system_folders_on_this_pc_reads_a_real_svchost_as_system32_and_this_pyt
     assert folders(me.pid, me.create_time) is False, ntquery.image_path(me.pid)
     assert os.path.join(os.environ["SystemRoot"], "System32").casefold() in {
         f.casefold() for f in winfolders.system_folders()}
+    # the Windows folder itself, where Windows runs its shell, explorer.exe (a runner may run none)
+    assert winfolders.windows_folder().casefold() == os.environ["SystemRoot"].casefold()
+    assert folders.windows_folder is True and folders.problem == ""
+    shells = [folders(q.pid, q.create_time, q.name) for q in procs.values() if q.name.casefold() == "explorer.exe"]
+    assert not shells or True in shells and set(shells) <= {True, None}, shells
+
+
+WINDIR = r"C:\Windows"
+
+
+def test_system_folders_told_the_windows_folder_reads_a_program_directly_in_it_too():
+    # explorer.exe, Windows' shell, runs from the Windows folder itself; the folders below it are not it (anyone may
+    # write to C:\Windows\Temp)
+    paths = {1: r"C:\WINDOWS\explorer.exe", 2: r"C:\Windows\Temp\explorer.exe", 3: rf"{SYS32}\svchost.exe",
+             4: r"C:\Users\Jo Tester\explorer.exe",
+             5: r"C:\Windows\svchost.exe", 6: r"C:\Windows\notepad.exe"}   # other programs there are not Windows' shell
+    folders = sysmon.SystemFolders([SYS32, WOW], path_of=paths.get, windows=WINDIR)
+    assert [folders(pid, 1000 + pid) for pid in range(1, 7)] == [True, False, True, False, False, False]
+    assert folders.windows_folder is True
+    plain = sysmon.SystemFolders([SYS32, WOW], path_of=paths.get)
+    assert plain(1, 1001) is False and plain(3, 1003) is True and plain.windows_folder is False
+    assert sysmon.SystemFolders([], path_of=paths.get, windows=WINDIR).windows_folder is False   # checks nothing
+
+
+def test_a_windows_folder_that_cannot_be_read_is_said_and_system32_is_still_checked(monkeypatch):
+    def boom():
+        raise OSError(0, "GetSystemWindowsDirectoryW failed")
+
+    paths = {1: rf"{SYS32}\svchost.exe", 2: r"C:\Windows\explorer.exe"}
+    monkeypatch.setattr(sysmon.winfolders, "system_folders", lambda: (SYS32, WOW))
+    monkeypatch.setattr(sysmon.winfolders, "windows_folder", boom)
+    folders = sysmon.SystemFolders(path_of=paths.get)
+    assert folders(1, 1) is True and folders(2, 2) is False and folders.windows_folder is False
+    assert folders.problem.startswith("the Windows folder could not be read (")
+    assert folders.problem.endswith("), so explorer.exe was judged by its name alone")
+    monkeypatch.setattr(sysmon.winfolders, "windows_folder", lambda: WINDIR)
+    folders = sysmon.SystemFolders(path_of=paths.get)
+    assert folders(2, 2) is True and folders.windows_folder is True and folders.problem == ""
+    # without System32 nothing is checked, and that is what the status says, not the Windows folder
+    monkeypatch.setattr(sysmon.winfolders, "system_folders", lambda: boom())
+    monkeypatch.setattr(sysmon.winfolders, "windows_folder", boom)
+    folders = sysmon.SystemFolders(path_of=paths.get)
+    assert folders(2, 2) is None and folders.windows_folder is False
+    assert folders.problem.startswith("Windows' System32 folder could not be read ("), folders.problem
+
+
+@pytest.mark.parametrize("n, value", [(0, ""), (261, "C:\\Windows")])
+def test_a_windows_folder_call_that_fails_or_needs_a_bigger_buffer_raises(monkeypatch, n, value):
+    # 0 is failure; a length past the buffer is the size it needs (Microsoft's page): never a path either way
+    def fake(buf, size):
+        assert size == len(buf) == 261
+        buf.value = value
+        return n
+
+    monkeypatch.setattr(winfolders._kernel32, "GetSystemWindowsDirectoryW", fake)
+    with pytest.raises(OSError):
+        winfolders.windows_folder()
+
+
+def test_a_windows_folder_call_returns_what_it_wrote(monkeypatch):
+    def fake(buf, size):
+        buf.value = "D:\\Win"
+        return 6
+
+    monkeypatch.setattr(winfolders._kernel32, "GetSystemWindowsDirectoryW", fake)
+    assert winfolders.windows_folder() == "D:\\Win"
+
+
+def test_the_sampler_says_whether_its_folder_check_covered_the_windows_folder():
+    for windows, said in ((WINDIR, True), (None, False)):
+        s = SystemSampler({"pid": GAME, "create_time": 1100}, pdh_factory=lambda paths: FakePdh(paths),
+                          snapshotter=FakeSnap(), layout_check=lambda snapshotter: None,
+                          system_folders=sysmon.SystemFolders([SYS32], path_of=lambda pid: None, windows=windows))
+        assert s.result()["windows_folder"] is said
 
 
 def test_cost_stats_median_from_the_histogram():

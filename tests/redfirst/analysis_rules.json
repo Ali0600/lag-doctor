@@ -1504,7 +1504,7 @@
  {
   "name": "Windows' own processes take a priority-fix slot again",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    for n in [n for n in named[:3] if not _all_own(e, n)][:2]:",
+  "old": "    for n in [n for n in named[:3] if not _all_own(e, n) and _store_of(e, n.name) is None][:2]:",
   "new": "    for n in named[:2]:",
   "tests": [
    "tests/test_analysis_rules.py::test_windows_own_processes_are_never_offered_a_priority_fix_nor_told_to_close"
@@ -1513,8 +1513,8 @@
  {
   "name": "a priority fix reaches past the programs the title names",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    for n in [n for n in named[:3] if not _all_own(e, n)][:2]:",
-  "new": "    for n in [n for n in named if not _all_own(e, n)][:2]:",
+  "old": "    for n in [n for n in named[:3] if not _all_own(e, n) and _store_of(e, n.name) is None][:2]:",
+  "new": "    for n in [n for n in named if not _all_own(e, n) and _store_of(e, n.name) is None][:2]:",
   "tests": [
    "tests/test_analysis_rules.py::test_a_priority_fix_goes_only_to_a_program_the_title_names"
   ]
@@ -2430,8 +2430,8 @@
  {
   "name": "a process with the game's image name is never named",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None or _same_image(name, game_name):\n",
-  "new": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None:\n",
+  "old": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None or _same_image(name, game_name) \\\n",
+  "new": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None \\\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_the_game_its_helpers_lag_doctor_and_bad_names_are_never_named"
   ]
@@ -2439,8 +2439,8 @@
  {
   "name": "a name no advice may show is never named",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None or _same_image(name, game_name):\n",
-  "new": "        if o.roles.get((pid, name)) != \"background\" or _same_image(name, game_name):\n",
+  "old": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None or _same_image(name, game_name) \\\n",
+  "new": "        if o.roles.get((pid, name)) != \"background\" or _same_image(name, game_name) \\\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_the_game_its_helpers_lag_doctor_and_bad_names_are_never_named"
   ]
@@ -2930,8 +2930,8 @@
  {
   "name": "the fix slots skip Windows' own programs, not only Windows itself",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    for n in [n for n in named[:3] if not _all_own(e, n)][:2]:",
-  "new": "    for n in [n for n in named[:3] if not _windows_itself(n.name)][:2]:",
+  "old": "    for n in [n for n in named[:3] if not _all_own(e, n) and _store_of(e, n.name) is None][:2]:",
+  "new": "    for n in [n for n in named[:3] if not _windows_itself(n.name) and _store_of(e, n.name) is None][:2]:",
   "tests": [
    "tests/test_analysis_rules.py::test_windows_own_programs_are_never_told_to_close_nor_offered_a_priority_fix_by_name_in_an_older_capture"
   ]
@@ -3326,6 +3326,143 @@
   "new": "    return any(isinstance(q, (list, tuple)) and len(q) >= 12 and True",
   "tests": [
    "tests/test_analysis_held_memory.py::test_gpu_contention_finds_a_gpu_user_listed_only_for_its_video_memory"
+  ]
+ },
+ {
+  "name": "rules: the store app's program takes a priority-fix slot",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    for n in [n for n in named[:3] if not _all_own(e, n) and _store_of(e, n.name) is None][:2]:",
+  "new": "    for n in [n for n in named[:3] if not _all_own(e, n)][:2]:",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_background_hogs_never_tells_the_player_to_close_the_store_app_that_started_the_game"
+  ]
+ },
+ {
+  "name": "rules: background_hogs tells the store app's program to pause or close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif store := _store_of(e, n.name):\n",
+  "new": "        elif store := None:\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_background_hogs_never_tells_the_player_to_close_the_store_app_that_started_the_game"
+  ]
+ },
+ {
+  "name": "rules: gpu_contention tells the store app's program to pause or close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif store:\n        first = _store_advice(",
+  "new": "    elif False:\n        first = _store_advice(",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_gpu_contention_says_the_store_apps_program_is_part_of_it_and_never_to_close_or_move_it"
+  ]
+ },
+ {
+  "name": "rules: gpu_contention offers to move the store app's work to another GPU",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    own = bool(name) and (_windows_own(e, pid, name) or store is not None)\n",
+  "new": "    own = bool(name) and _windows_own(e, pid, name)\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_gpu_contention_says_the_store_apps_program_is_part_of_it_and_never_to_close_or_move_it"
+  ]
+ },
+ {
+  "name": "rules: Memory Compression's advice names nobody",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            if n.name.casefold() == \"memory compression\":\n                fixes.extend(_compression_holders(e, n, named[:3]))\n",
+  "new": "            if n.name.casefold() == \"memory compression\":\n                pass\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_memory_compressions_advice_names_the_programs_that_held_the_most_ram_when_it_got_busy",
+   "tests/test_analysis_store_and_shell.py::test_under_the_floor_memory_compressions_advice_says_the_most_any_program_held_and_never_itself"
+  ]
+ },
+ {
+  "name": "rules: Memory Compression's holders read only the stutters' own windows",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    spans = _merge((ev.t_start - attribute.WINDOW_BEFORE_S - MEMORY_NEAR_S,\n                    ev.t_end + attribute.WINDOW_AFTER_S + MEMORY_NEAR_S) for ev in n.events)\n",
+  "new": "    spans = _merge((ev.t_start - attribute.WINDOW_BEFORE_S,\n                    ev.t_end + attribute.WINDOW_AFTER_S) for ev in n.events)\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_a_stutter_between_two_memory_readings_meets_the_nearest"
+  ]
+ },
+ {
+  "name": "rules: a name to leave out is still counted",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                or name.casefold() in leave_out:\n",
+  "new": "                or False:\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_under_the_floor_memory_compressions_advice_says_the_most_any_program_held_and_never_itself"
+  ]
+ },
+ {
+  "name": "rules: the held advice drops what it is told to leave out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    h = _heavy(e, col, spans, floor, leave_out)\n",
+  "new": "    h = _heavy(e, col, spans, floor)\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_under_the_floor_memory_compressions_advice_says_the_most_any_program_held_and_never_itself"
+  ]
+ },
+ {
+  "name": "rules: Memory Compression's holders said where no row read memory",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    h = _heavy(e, \"ram\", spans, MEM_MIN_MB, leave_out)\n    if h is None:\n        return []\n",
+  "new": "    h = _heavy(e, \"ram\", spans, MEM_MIN_MB, leave_out)\n    if False:\n        return []\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_memory_compression_in_an_older_capture_keeps_its_old_advice_alone"
+  ]
+ },
+ {
+  "name": "rules: explorer.exe's False in an older capture read as a look-alike",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if key in WINDOWS_FOLDER_PARTS and e.target.get(\"windows_folder\") is not True:\n        folder = None\n",
+  "new": "    if False:\n        folder = None\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_explorer_is_windows_shell_where_windows_runs_it_and_a_look_alike_is_not"
+  ]
+ },
+ {
+  "name": "rules: any marker read as the folder check's",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "e.target.get(\"windows_folder\") is not True:",
+  "new": "not e.target.get(\"windows_folder\"):",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_explorer_is_windows_shell_where_windows_runs_it_and_a_look_alike_is_not"
+  ]
+ },
+ {
+  "name": "rules: explorer.exe is no part of Windows",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    \"explorer.exe\": (\"Windows' shell, which runs the taskbar, the Start menu and File Explorer\", \"\"),\n",
+  "new": "",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_explorer_is_windows_shell_where_windows_runs_it_and_a_look_alike_is_not",
+   "tests/test_analysis_store_and_shell.py::test_explorer_in_a_capture_of_names_only_is_said_to_be_windows_shell"
+  ]
+ },
+ {
+  "name": "rules: Memory Compression's line repeats what background_hogs says",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if h.named and not h.windows and all(name.casefold() in blamed for name, _v, _k in h.named):\n        return []\n",
+  "new": "    if False:\n        return []\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_memory_compressions_line_is_left_out_where_it_would_only_repeat_a_program_background_hogs_names"
+  ]
+ },
+ {
+  "name": "rules: Memory Compression's line left out beside Windows' own holders",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "if h.named and not h.windows and all(",
+  "new": "if h.named and all(",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_memory_compressions_line_is_left_out_where_it_would_only_repeat_a_program_background_hogs_names"
+  ]
+ },
+ {
+  "name": "rules: Memory Compression's line left out under the floor",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "if h.named and not h.windows and all(",
+  "new": "if not h.windows and all(",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_under_the_floor_memory_compressions_advice_says_the_most_any_program_held_and_never_itself"
   ]
  }
 ]

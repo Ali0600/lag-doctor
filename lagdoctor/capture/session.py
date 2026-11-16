@@ -511,6 +511,8 @@ class Session:
             target["adapter_luid"] = sysr["game_adapter_luid"]
         if sysr.get("game_pids"):
             target["pids"] = sorted(sysr["game_pids"])
+        if sysr.get("windows_folder") is True:       # the others table's folder check covered the Windows folder
+            target["windows_folder"] = True
         gpur = results.get("gpu", {})
         if gpur.get("device"):
             inventory["nvidia"] = gpur["device"]
