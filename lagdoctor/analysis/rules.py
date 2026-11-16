@@ -20,7 +20,7 @@ import math
 import ntpath
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from lagdoctor.analysis import attribute, crop
@@ -1187,7 +1187,9 @@ def _gpu_contention(cap: Capture, ctx: dict) -> Any:
                       pct, "%", OTHER_GPU_PCT)
     else:
         c.neutral("background", "which program it was is not in the process table (it lists the 8 busiest by CPU"
-                                + (" and the 4 busiest of the rest by disk)" if _where(e)[1] else ")"))
+                                + (", and of the rest the 4 busiest by disk and the 4 holding the most of each kind of "
+                                   "memory)" if _lists_memory(e) else
+                                   " and the 4 busiest of the rest by disk)" if _where(e)[1] else ")"))
     if name and _windows_itself(name):
         first = _windows_advice(name, f" (process {pid})")
     elif name and _windows_own(e, pid, name):         # the Desktop Window Manager draws every window, for one
@@ -1219,15 +1221,20 @@ def _starved(e: _Env) -> str | None:
 def _top_gpu_user(e: _Env) -> tuple[str, int, float, bool] | None:
     """(name, pid, median %, measured on any adapter?) of the other process with the most GPU in the others table,
     a tick it was not listed on counting as 0: its use of the game's adapter where the table has it, else of any
-    adapter (attribute.game_gpu_pct, A10). Never the game's own processes or lag-doctor's (A10)."""
+    adapter (attribute.game_gpu_pct, A10). Never the game's own processes or lag-doctor's (A10). Where the table lists
+    the memory holders (since 2026-11-16), only its rows that read memory count: they list a program holding video
+    memory with little CPU, which the rows between leave out, and over every row its median would read 0."""
     game = attribute.game_pids(e.cap)
     tool_pids, tool_names = attribute.tool_processes(e.cap)
+    only_memory = _lists_memory(e)
     ticks = 0
     anywhere = False
     seen: dict[tuple[int, str], list[float]] = {}
     for row in e.cap.others if isinstance(e.cap.others, list) else []:
         if not (isinstance(row, (list, tuple)) and len(row) == 2 and fa._bounded(row[0]) is not None
                 and isinstance(row[1], (list, tuple))):
+            continue
+        if only_memory and not _memory_row(row[1]):
             continue
         ticks += 1
         for p in row[1]:
@@ -1490,9 +1497,11 @@ def _vram_overflow(cap: Capture, ctx: dict) -> Any:
                                               f"({SHARED_RISE_MB_PER_MIN:.0f} or more)", rise, "MB/min",
                       SHARED_RISE_MB_PER_MIN)
     _event_link(c, "vram_overflow", "gpu_engine", "video memory spilling over")
+    when = _when(e, S.VRAM_USED_MB, lambda v: v >= VRAM_FULL_FRAC * size) if full else []
     fixes = [_advice("Lower texture quality and the render resolution"),
              _advice("Turn off ray tracing or frame generation", "Both take extra video memory."),
-             _advice("Close other GPU-heavy programs while playing")]
+             _held_advice(e, "vram", VRAM_ADVICE, when or EVERYWHERE,
+                          "while video memory was full" if when else f"during {e.part}", VRAM_MIN_MB)]
     return c.conclude("Video memory is full", "The game needs more video memory than the GPU has, so data spills "
                                               "into slower system memory and frames stall while it moves.", fixes)
 
@@ -1552,13 +1561,21 @@ def _ram_pressure(cap: Capture, ctx: dict) -> Any:
         fixes = [_advice("Let Windows manage the page file size, or make it larger",
                          "Search the Start menu for \"View advanced system settings\", then Performance: Settings > "
                          "Advanced > Virtual memory."),
-                 _advice("Close memory-heavy programs while playing", "Browsers with many tabs are the usual ones.")]
+                 _commit_advice(e)]
         return c.conclude("Windows nearly ran out of memory to hand out: the page file is small",
                           "Programs had reserved almost all the memory Windows can promise (RAM plus the page file) "
                           "while RAM itself stayed free. At that limit a program that asks for more, the game "
                           "included, can stall while the page file grows, or fail to get it.", fixes)
-    fixes = [_advice("Close memory-heavy programs while playing", "Browsers with many tabs are the usual ones."),
-             _advice("Keep the page file system-managed"), _advice("Add RAM if this happens often")]
+    total = ram_gb * 1024.0 if ram_gb and ram_gb > 0 else None
+    low_mb = max(RAM_WARN_FRAC * total, RAM_CRIT_MB) if total else RAM_CRIT_MB      # the finding's own floors
+    when = _when(e, S.RAM_AVAIL_MB, lambda v: v < low_mb)
+    if when:
+        held = _held_advice(e, "ram", MEM_ADVICE, when, "while free RAM was low", MEM_MIN_MB, BROWSERS)
+    elif commit_top is not None and commit_top > COMMIT_WARN_PCT:   # made by the commit charge: who reserved it
+        held = _commit_advice(e)
+    else:
+        held = _held_advice(e, "ram", MEM_ADVICE, EVERYWHERE, f"during {e.part}", MEM_MIN_MB, BROWSERS)
+    fixes = [held, _advice("Keep the page file system-managed"), _advice("Add RAM if this happens often")]
     return c.conclude("The PC is low on RAM", "Free memory ran short, so Windows moved memory to and from the disk "
                                               "while the game ran, which stalls frames.", fixes)
 
@@ -2546,6 +2563,9 @@ def _windows_advice(name: str, procs: str) -> FixSuggestion:
 _DEFENDER = ("Windows Security's virus scan", "If it is, leave it on.")
 _UPDATE = ("Windows Update installing updates", "If it is, let it finish before you play.")
 _SEARCH = ("Windows Search indexing files", "")
+_VM = ("the memory and CPU of a virtual machine Windows runs, such as the one behind WSL 2",
+       "If you are not using it, shutting that virtual machine down frees what it holds: for WSL, run "
+       "wsl --shutdown in a terminal.")
 WINDOWS_PARTS: dict[str, tuple[str, str]] = {
     "msmpeng.exe": _DEFENDER, "mpdefendercoreservice.exe": _DEFENDER, "nissrv.exe": _DEFENDER,
     "mpcmdrun.exe": _DEFENDER,
@@ -2555,6 +2575,7 @@ WINDOWS_PARTS: dict[str, tuple[str, str]] = {
     "csrss.exe": ("a core part of Windows", ""),
     "audiodg.exe": ("Windows' audio engine, which runs sound effects", ""),
     "dwm.exe": ("Windows' Desktop Window Manager, which draws every window on the screen", ""),
+    "vmmem": _VM, "vmmemwsl": _VM,
 }
 CLOSE_CHECK = "not something you need first; lag-doctor never closes programs itself."
 DISK_ADVICE = "Close other disk-heavy programs while playing"
@@ -2564,6 +2585,21 @@ EVERYWHERE = [(-math.inf, math.inf)]     # spans covering the whole analysed par
 
 
 LOOKALIKE = " (named like a part of Windows, but not where Windows runs it)"
+
+# The store apps a game is started through (inventory game.launcher, from where the game is installed), with their
+# programs by image name (WT 10's background-hog table): the game may need its store app running, so a list of
+# programs to close says what they are instead
+STORE_APPS = {
+    "steam": ("Steam", frozenset({"steam.exe", "steamwebhelper.exe", "steamservice.exe"})),
+    "epic": ("the Epic Games Launcher", frozenset({"epicgameslauncher.exe", "epicwebhelper.exe"})),
+}
+
+
+def _store_of(e: _Env, name: str) -> str | None:
+    """The store app the game was started through, when `name` is one of its programs; else None."""
+    game = e.inv.get("game") if isinstance(e.inv.get("game"), dict) else {}
+    store = STORE_APPS.get(game.get("launcher")) if isinstance(game.get("launcher"), str) else None
+    return store[0] if store and name.casefold() in store[1] else None
 
 
 def _where(e: _Env) -> tuple[dict[tuple[int, str], tuple[int | None, bool | None]], bool]:
@@ -2588,6 +2624,24 @@ def _where(e: _Env) -> tuple[dict[tuple[int, str], tuple[int | None, bool | None
                 out[(q[0], q[1])] = (old[0] if session is None else session, old[1] if folder is None else folder)
         e.memo["where"] = (out, new)
     return e.memo["where"]
+
+
+def _memory_row(entries: Any) -> bool:
+    """Whether an others row read memory: some entry of 12 fields with a memory figure (the recorder reads memory
+    once a second; the rows between say None there)."""
+    return any(isinstance(q, (list, tuple)) and len(q) >= 12 and any(x is not None for x in q[9:12])
+               for q in entries)
+
+
+def _lists_memory(e: _Env) -> bool:
+    """Whether the others table also lists the memory holders, with their memory (rows of 12 fields, since
+    2026-11-16)."""
+    if "lists_memory" not in e.memo:
+        rows = e.cap.others if isinstance(e.cap.others, list) else []
+        e.memo["lists_memory"] = any(isinstance(q, (list, tuple)) and len(q) >= 12 for row in rows
+                                     if isinstance(row, (list, tuple)) and len(row) == 2
+                                     and isinstance(row[1], (list, tuple)) for q in row[1])
+    return e.memo["lists_memory"]
 
 
 # Windows' own programs a player may start in their own session from outside System32: Defender's command-line
@@ -2634,6 +2688,8 @@ class _Heavy:
     windows: list[tuple[str, float, int]]   # at or past the floor: Windows' own, never told to close (2 at most)
     most: tuple[str, float, bool] | None    # the biggest mean of any program, under the floor too, and whether it is
                                             # Windows' own (None: none used any)
+    stores: dict[str, str] = field(default_factory=dict)   # name -> the store app the game was started through,
+                                                           # for its programs (counted with Windows' own: _store_of)
 
 
 def _merge(spans: Iterable[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -2655,7 +2711,8 @@ def _event_spans(e: _Env, ids: Iterable[int]) -> list[tuple[float, float]]:
 
 def _heavy(e: _Env, col: str, spans: list[tuple[float, float]], floor: float) -> _Heavy | None:
     """Which other programs used `col` most over `spans` (the recording's own times): "cpu" in % of one logical CPU,
-    "io" in bytes/s. Each image name's readings in the others table are summed over the table's ticks inside the spans
+    "io" in bytes/s, "ram", "commit" and "vram" in MiB held (attribute.MEMORY_FIELDS; since 2026-11-16 the table also
+    lists the 4 holding the most of each). Each image name's readings in the others table are summed over the table's ticks inside the spans
     and divided by those ticks. A tick a program was not listed on counts as 0 (the table lists the 8 processes busiest
     on the CPU, and since 2026-11-15 the 4 busiest of the rest by reads and writes), so the mean is a lower bound, and
     the text says "at least". None when no tick there read `col`: not measured, never "none". The game, its own child
@@ -2672,7 +2729,8 @@ def _heavy(e: _Env, col: str, spans: list[tuple[float, float]], floor: float) ->
         i = bisect.bisect_right(starts, t) - 1
         return i >= 0 and t <= merged[i][1]
 
-    probe = o.total if col == "cpu" else o.io_top        # per tick: None when no process's reading was read
+    probe = o.total if col == "cpu" else o.io_top if col == "io" else o.held_top[col]   # per tick: None when no
+                                                                                        # process's reading was read
     ticks = sum(1 for t, v in zip(probe.t, probe.v) if v is not None and inside(t))
     if not ticks:
         return None
@@ -2682,7 +2740,7 @@ def _heavy(e: _Env, col: str, spans: list[tuple[float, float]], floor: float) ->
     for (pid, name), cols in o.per.items():
         if o.roles.get((pid, name)) != "background" or _image_name(name) is None or _same_image(name, game_name):
             continue
-        key = (name, _windows_own(e, pid, name))
+        key = (name, _windows_own(e, pid, name) or _store_of(e, name) is not None)
         vals = [x for t, x in zip(cols[col].t, cols[col].v) if inside(t)]
         sums.setdefault(key, []).extend(vals)
         if any(x > 0 for x in vals):
@@ -2692,7 +2750,8 @@ def _heavy(e: _Env, col: str, spans: list[tuple[float, float]], floor: float) ->
     rows.sort(key=lambda r: (-r[2], r[0].casefold(), r[1]))
     over = [r for r in rows if r[2] >= floor]
     return _Heavy([(n, v, k) for n, own, v, k in over if not own][:3], [(n, v, k) for n, own, v, k in over if own][:2],
-                  (rows[0][0], rows[0][2], rows[0][1]) if rows else None)
+                  (rows[0][0], rows[0][2], rows[0][1]) if rows else None,
+                  {n: s for n, own, _v, _k in rows if own and (s := _store_of(e, n))})
 
 
 def _and(items: list[str]) -> str:
@@ -2724,13 +2783,17 @@ def _itself_means(name: str, cpu: bool) -> str:
 
 
 def _windows_text(rows: list[tuple[str, float, int]], did: Callable[[float], str], also: bool = True,
-                  cpu: bool = False) -> str:
-    """One sentence per Windows process over the floor, each led by a space: what it is, never advice to close it."""
+                  cpu: bool = False, stores: dict[str, str] | None = None) -> str:
+    """One sentence per Windows process over the floor, each led by a space: what it is, never advice to close it; a
+    program of the store app the game was started through (`stores`) said to be that."""
     out = []
     too = " too" if also else ""
     for name, v, k in rows:
         shown = _text(name, 80)
-        if _windows_itself(name):
+        if (stores or {}).get(name):
+            out.append(f" {shown}{_procs(k)} {did(v)}{too}: that is part of {stores[name]}, which started the game "
+                       "and which it may need, so lag-doctor does not suggest closing it.")
+        elif _windows_itself(name):
             out.append(f" Windows itself ({shown}) {did(v)}{too}: that is {_itself_means(name, cpu)}")
         else:
             role, tail = WINDOWS_PARTS[name.casefold()]
@@ -2750,14 +2813,30 @@ def _close_named(h: _Heavy, lead: str, first: Callable[[float], str], rest: Call
     them = "it is" if len(names) == 1 else "they are"
     return _advice(f"Pause or close {_and(names)} while you play",
                    f"{_cap(lead)}, besides the game, {_named_text(h.named, first, rest)}.{note} Check {them} "
-                   f"{CLOSE_CHECK}{_windows_text(h.windows, did, cpu=cpu)}")
+                   f"{CLOSE_CHECK}{_windows_text(h.windows, did, cpu=cpu, stores=h.stores)}")
 
 
 def _windows_only(title: str, h: _Heavy, lead: str, reached: str, did: Callable[[float], str],
                   note: str = "", who: str = "only Windows' own processes", cpu: bool = False) -> FixSuggestion:
     """The advice when only Windows' own processes passed the floor: the old title, and what each of them is."""
+    if any(n in h.stores for n, _v, _k in h.windows):
+        who = ("only the store app that started the game" if all(n in h.stores for n, _v, _k in h.windows)
+               else "only Windows' own processes and the store app that started the game")
     return _advice(title, f"{_cap(lead)}, besides the game, {who} {reached}."
-                          f"{_windows_text(h.windows, did, also=False, cpu=cpu)}{note}")
+                          f"{_windows_text(h.windows, did, also=False, cpu=cpu, stores=h.stores)}{note}")
+
+
+def _most_shown(name: str, own: bool, store: str | None = None) -> str:
+    """The program that used the most, under the floor, as the advice names it (_Heavy.most): Windows' own said to be
+    Windows, a look-alike said to be one, the store app the game was started through said to be it."""
+    shown = _text(name, 80) or ""
+    if store:
+        shown += f" (part of {store}, which started the game)"
+    elif _windows_itself(name):
+        shown = f"Windows itself ({shown})"
+    elif name.casefold() in WINDOWS_PARTS:
+        shown += f" (normally {WINDOWS_PARTS[name.casefold()][0]})" if own else LOOKALIKE
+    return shown
 
 
 def _disk_advice(e: _Env, spans: list[tuple[float, float]], at: str) -> FixSuggestion:
@@ -2785,14 +2864,79 @@ def _disk_advice(e: _Env, spans: list[tuple[float, float]], at: str) -> FixSugge
         name, v, own = h.most
         fig = attribute._mbps(v)
         fig = ("under 0.1 MB/s" if v < 0.05e6 else f"just under {floor}" if fig == floor else f"at {fig}")
-        shown = _text(name, 80)
-        if _windows_itself(name):
-            shown = f"Windows itself ({shown})"
-        elif name.casefold() in WINDOWS_PARTS:
-            shown += f" (normally {WINDOWS_PARTS[name.casefold()][0]})" if own else LOOKALIKE
-        most = f"; the most was {shown}, {fig}"
+        most = f"; the most was {_most_shown(name, own, h.stores.get(name))}, {fig}"
     return _advice(DISK_ADVICE, f"lag-doctor saw no other program read and write {floor} or more on average "
                                 f"{at}{most}.{missing}")
+
+
+MEM_ADVICE = "Close memory-heavy programs while playing"
+VRAM_ADVICE = "Close other GPU-heavy programs while playing"
+BROWSERS = "Browsers with many tabs are the usual ones."
+MEM_MIN_MB = 500.0           # [inferred] a program holding this much RAM, or memory reserved, on average is named
+VRAM_MIN_MB = 250.0          # [inferred] ... and this much of the game GPU's video memory (a browser holds 100-500)
+HELD = {   # col -> (the verb, its base form, what is held, a note on the figure)
+    "ram": ("held", "hold", "of RAM", " Each figure is the RAM that program alone holds, as Task Manager's Memory "
+                                      "column shows it."),
+    "commit": ("reserved", "reserve", "of memory", " Reserved memory counts toward what Windows can promise even "
+                                                   "where it is not in RAM: Task Manager's Commit size, on its "
+                                                   "Details tab."),
+    "vram": ("held", "hold", "of video memory on the game's GPU", ""),
+}
+
+
+def _size(mb: float) -> str:
+    """MiB held as a player reads it: whole MB up to 999, then GB with one decimal (by the rounded figure, so 999.6
+    is never "1000 MB")."""
+    return f"{mb / 1024:.1f} GB" if round(mb) >= 1000 else f"{round(mb)} MB"
+
+
+MEMORY_NEAR_S = 0.5      # half of sysmon.MEMORY_EVERY_S: the memory reading nearest a tick is at most this far away
+
+
+def _when(e: _Env, column: str, test: Callable[[float], bool]) -> list[tuple[float, float]]:
+    """The system table's ticks at which `test` held of `column`, as spans for _heavy, each reaching MEMORY_NEAR_S to
+    either side: the recorder reads memory once a second, so a moment of low RAM between two readings is matched with
+    the nearest (memory moves slowly), and only the rows that read memory count in a mean."""
+    return _merge((t - MEMORY_NEAR_S, t + MEMORY_NEAR_S) for t, v in e.sys_rows(column) if test(v))
+
+
+def _commit_advice(e: _Env) -> FixSuggestion:
+    """ram_pressure's advice where the commit charge made the finding: who reserved the most while committed memory
+    was over COMMIT_WARN_PCT, else over the whole part."""
+    when = _when(e, S.COMMIT_PCT, lambda v: v > COMMIT_WARN_PCT)
+    return _held_advice(e, "commit", MEM_ADVICE, when or EVERYWHERE,
+                        "while committed memory was near the limit" if when else f"during {e.part}", MEM_MIN_MB,
+                        BROWSERS)
+
+
+HELD_LIMIT = (" lag-doctor lists the 4 processes holding the most at each moment, so a program split into many "
+              "smaller processes, such as a browser, can hold more than that.")
+
+
+def _held_advice(e: _Env, col: str, title: str, spans: list[tuple[float, float]], at: str, floor: float,
+                 plain: str = "") -> FixSuggestion:
+    """ram_pressure's "close memory-heavy programs" and vram_overflow's "close other GPU-heavy programs", naming the
+    other programs that held the most `col` (_heavy) `at` the spans, the ticks the finding's own condition held, with
+    their figures; under `floor`, the most any program held. An older capture, whose table holds no memory, keeps the
+    old line (`title`, `plain`)."""
+    h = _heavy(e, col, spans, floor)
+    if h is None:
+        return _advice(title, plain)
+    verb, base, what, note = HELD[col]
+    floor_text = _size(floor)
+    did = lambda v: f"{verb} at least {_size(v)} {what}"
+    if h.named:
+        return _close_named(h, at, lambda v: f"{did(v)} on average", _size, did, note)
+    if h.windows:
+        return _windows_only(title, h, at, f"{verb} {floor_text} or more {what} on average", did, note)
+    most = ""
+    if h.most:
+        name, v, own = h.most
+        fig = "under 1 MB" if v < 0.5 else f"just under {floor_text}" if _size(v) == floor_text else _size(v)
+        shown = _most_shown(name, own, h.stores.get(name))
+        most = f"; the most was {shown}, {fig}"
+    return _advice(title, (f"{plain} " if plain else "") + f"lag-doctor saw no other program {base} {floor_text} "
+                                                         f"or more {what} on average {at}{most}.{HELD_LIMIT}")
 
 
 def _cpu_advice(e: _Env) -> FixSuggestion:

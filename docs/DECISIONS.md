@@ -171,12 +171,82 @@
   the control asks whether the doctor invents game lag, and the Wi-Fi's own spikes fail it today (the second 2026-11-11 run:
   the router itself answered in 120 ms). Revisit hook: the "no lag in the control" check in `e2e_truth.judge`
   (DECISIONS 2026-11-12).
-- **Name the programs behind "close memory-heavy programs" and "close other GPU-heavy programs"** (`ram_pressure`,
-  `vram_overflow`), once the recorder keeps each process's private bytes (in every snapshot already,
-  `ntquery.ProcInfo`) and its dedicated video memory (PDH reads it for every process; only the game's is kept), the
-  top few of each about once a second. Revisit hook: `sysmon.top_others` and `rules._heavy` (DECISIONS 2026-11-15).
+- **The store app's own programs in `background_hogs` and `gpu_contention`**, which can still tell a Steam game's
+  player to pause `steamwebhelper.exe` for a CPU or GPU rise; the "close heavy programs" advice says what they are since
+  2026-11-16. Revisit hook: `rules._store_of` in `_hog_fixes` and `_gpu_contention` (DECISIONS 2026-11-16).
+- **`explorer.exe` said to be Windows' shell** rather than a program to close. It runs from the Windows folder itself,
+  not System32, so `rules._windows_own` would read the real one as a look-alike: it needs a folder rule of its own.
+  Revisit hook: `sysmon.SystemFolders` and `rules._windows_own` (DECISIONS 2026-11-16).
+- **Name the programs that held memory in `background_hogs`' Memory Compression advice**, which still says "close
+  memory-heavy programs" without names. Revisit hook: `rules._itself_means` (DECISIONS 2026-11-16).
 
 ---
+
+## 2026-11-16: The recorder keeps each listed program's memory, and the memory advice names who held it
+
+The owner asked to "name memory- and GPU-heavy programs too" (2026-11-16), the backlog item the entry below left:
+`ram_pressure` said "Close memory-heavy programs while playing" and `vram_overflow` "Close other GPU-heavy programs
+while playing" with no name, since the recorder kept no process's memory.
+
+What each others entry keeps:
+- **A: the RAM it alone holds, the memory committed to it, and its video memory on the game's GPU, in whole MiB
+  (chosen)**: the private working set (`WorkingSetPrivateSize`, Task Manager's "Memory"; one more field of the snapshot
+  the sampler already takes) is what fills RAM, the private bytes are what count toward the commit limit (the page-file
+  branch of `ram_pressure`, the one this PC's own recordings hit), and the dedicated video memory on the game's adapter
+  (the PDH counter the sampler already reads for the game) is what fills the GPU. Fields 9-11, None when not read.
+- **B: one memory figure**: rejected. RAM held and memory reserved part for exactly the programs that matter: a VM or a
+  leaking program can reserve gigabytes it keeps out of RAM, and the two findings ask about different ones.
+- **C: the whole working set**: rejected. It counts shared pages (DLLs) once per process, so a browser's 30 processes
+  read several times what they hold.
+
+Which processes a tick lists:
+- **A: after the 8 by CPU and 4 by I/O, the 4 of the rest holding the most RAM, then committed memory, then video
+  memory, busy or idle, once a second (chosen)**: a browser holding 3 GB while idle was never listed. Memory moves
+  slowly, so only every fourth row (at 4 Hz) carries the memory picks and fields 9-11; the rows between say None
+  there (not read at that tick), and the analysis counts only the rows that read memory. 24 entries on those rows, 12
+  on the others. Their CPU counts in the listed totals too, as the disk entries' does. `gpu_contention` judges its
+  busiest GPU user over the rows that read memory alone, where a table lists them (`rules._memory_row`): a program
+  holding video memory with little CPU is listed only there, and over every row its median read 0 (found by the
+  review workflow).
+- **B: the picks on every row**: rejected in review. The recorder keeps every row in memory for the whole recording,
+  and 24 entries of 12 fields on every row took about 2.5 times the others table's memory (about 160 MB an hour
+  against 63, a reviewer's tracemalloc estimate) for figures that barely move between rows.
+- **C: a separate table once a second**: rejected. The same saving, but a second table to crop, window and read.
+- **D: totals per image name in the recorder**: rejected. Exact for a browser's many processes, but it loses each
+  process's session and folder, which tell Windows' own from a look-alike.
+
+Where the advice reads them (`rules._held_advice`):
+- **A: at the ticks the finding's own condition held (chosen)**: free RAM under the warning floor, committed memory
+  over 80 %, video memory at 90 % of its size (`rules._when`, the system rows' own times, each reaching half a second
+  to either side, `MEMORY_NEAR_S`, so a dip between two memory readings meets the nearest); the whole part when no
+  tick was, as with a finding made by hard faults alone. A program that held memory only after it was free again is not
+  named for it.
+- **B: the whole part**: rejected. A program started after the pressure ended would be named for it.
+
+Floors: 500 MB of RAM or memory reserved, 250 MB of video memory (a browser holds 100-500 MB of it), the lowest a
+player would close a program for; inferred, not measured, so worth the owner's look. The figures are means over the
+rows that read memory, unlisted ones as 0, so lower bounds ("at least"), and a name's processes add up; under the
+floor the advice says the most any program held ("just under" the floor when it rounds to it) and that the table lists
+the 4 biggest holders at each moment, so a program split into many smaller processes, such as a browser, can hold
+more. A finding the commit charge made with the RAM size unknown reads memory reserved, not RAM.
+
+What the advice says of programs a player should not close:
+- **Windows' own**: Memory Compression and `dwm.exe` as before, and now `vmmem` and `VmmemWSL`, the process behind a
+  virtual machine such as WSL 2's (Microsoft's WSL blog and troubleshooting guide, windows-telemetry.md section 10),
+  with how to give its memory back (`wsl --shutdown`, from Microsoft's WSL commands page).
+- **The store app that started the game (chosen)**: where the game sits in a Steam library or an Epic install
+  (`inventory` game.launcher), Steam's or the Epic launcher's own programs (`steamwebhelper.exe` holds hundreds of MB)
+  are said to be part of it, which the game may need, never "pause or close", in every advice `rules._heavy` writes
+  (disk, CPU, memory). Rejected: leaving them out (a Steam download's disk use would then go unsaid), and naming them as
+  any program (closing Steam can end the game).
+
+An older capture keeps the old memory lines word for word: re-analysed, the owner's 40 recordings are unchanged, the
+store app's line included. The app's moment view averaged each program over only the rows it was listed
+on, so a program listed for its memory read far less busy than one listed only when busy; it now averages over every
+row there, as the analysis does, and leaves out programs listed for their memory alone. Known limits: `background_hogs`'
+Memory Compression line still names nobody, and `background_hogs`, `gpu_contention` and `explorer.exe` keep their old
+treatment (backlog). Revisit hook: `sysmon.top_others`, `sysmon.pid_vram` and `MEMORY_EVERY_S` (the recorder),
+`rules._held_advice` and `rules._store_of` (the analysis).
 
 ## 2026-11-15: The recorder lists the disk users too, and says where each process runs
 
@@ -269,8 +339,8 @@ Which programs a capture can show:
   above)**: a disk user with
   little CPU is never listed today, so it can be neither named nor blamed. It changes what attribution sees on new
   captures, so it lands apart from this. Revisit hook: `sysmon.top_others`.
-- **B: per-process memory and video memory**: deferred (backlog): not recorded, so `ram_pressure` and `vram_overflow`
-  keep their generic line.
+- **B: per-process memory and video memory**: deferred then; since built (2026-11-16, above): `ram_pressure` and
+  `vram_overflow` name the programs that held the most.
 
 ## 2026-11-12: Another program's disk use never explains a frozen frame the game worked through
 

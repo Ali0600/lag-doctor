@@ -162,7 +162,7 @@ _SPI, _P = _struct_for(SYSTEM_PROCESS_INFORMATION, {
     "NextEntryOffset", "NumberOfThreads", "CreateTime", "UserTime", "KernelTime", "ImageName.Length",
     "ImageName.Buffer", "UniqueProcessId", "InheritedFromUniqueProcessId", "SessionId", "PageFaultCount",
     "WorkingSetSize", "PrivatePageCount", "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
-    "ReadTransferCount", "WriteTransferCount", "OtherTransferCount"})
+    "ReadTransferCount", "WriteTransferCount", "OtherTransferCount", "WorkingSetPrivateSize"})
 _STI, _T = _struct_for(SYSTEM_THREAD_INFORMATION, {
     "KernelTime", "UserTime", "CreateTime", "ClientId.UniqueThread", "Priority", "ThreadState"})
 SPI_SIZE, STI_SIZE = _SPI.size, _STI.size
@@ -267,6 +267,8 @@ class ProcInfo:
     other_ops: int
     thread_count: int
     threads: list[ThreadInfo] | None   # only for the pids asked for
+    ws_private_bytes: int | None = None   # the part of its working set no other process shares (Task Manager's
+                                          # "Memory"); None where a caller built one without it
 
 
 class Snapshotter:
@@ -324,11 +326,13 @@ class Snapshotter:
         procs: dict[int, ProcInfo] = {}
         unpack, unpack_thread = _SPI.unpack_from, _STI.unpack_from
         (i_next, i_nthreads, i_create, i_user, i_kernel, i_name_len, i_name_ptr, i_pid, i_ppid, i_session,
-         i_faults, i_ws, i_private, i_rops, i_wops, i_oops, i_rbytes, i_wbytes, i_obytes) = (_P[k] for k in (
-            "NextEntryOffset", "NumberOfThreads", "CreateTime", "UserTime", "KernelTime", "ImageName.Length",
-            "ImageName.Buffer", "UniqueProcessId", "InheritedFromUniqueProcessId", "SessionId", "PageFaultCount",
-            "WorkingSetSize", "PrivatePageCount", "ReadOperationCount", "WriteOperationCount",
-            "OtherOperationCount", "ReadTransferCount", "WriteTransferCount", "OtherTransferCount"))
+         i_faults, i_ws, i_private, i_rops, i_wops, i_oops, i_rbytes, i_wbytes, i_obytes, i_ws_private) = (
+            _P[k] for k in (
+                "NextEntryOffset", "NumberOfThreads", "CreateTime", "UserTime", "KernelTime", "ImageName.Length",
+                "ImageName.Buffer", "UniqueProcessId", "InheritedFromUniqueProcessId", "SessionId", "PageFaultCount",
+                "WorkingSetSize", "PrivatePageCount", "ReadOperationCount", "WriteOperationCount",
+                "OtherOperationCount", "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+                "WorkingSetPrivateSize"))
         t_tid, t_create, t_user, t_kernel, t_prio, t_state = (_T[k] for k in (
             "ClientId.UniqueThread", "CreateTime", "UserTime", "KernelTime", "Priority", "ThreadState"))
         off = 0
@@ -354,7 +358,7 @@ class Snapshotter:
                     threads.append(ThreadInfo(t[t_tid], t[t_create], t[t_user], t[t_kernel], t[t_prio], t[t_state]))
             procs[pid] = ProcInfo(pid, f[i_ppid], create, name, f[i_session], f[i_user], f[i_kernel], f[i_ws],
                                   f[i_private], f[i_faults], f[i_rbytes], f[i_wbytes], f[i_obytes], f[i_rops],
-                                  f[i_wops], f[i_oops], nthreads, threads)
+                                  f[i_wops], f[i_oops], nthreads, threads, f[i_ws_private])
             nxt = f[i_next]
             if nxt == 0:
                 break

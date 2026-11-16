@@ -2531,7 +2531,7 @@
  {
   "name": "under the floor the most is still said",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "        most = f\"; the most was {shown}, {fig}\"\n",
+  "old": "        most = f\"; the most was {_most_shown(name, own, h.stores.get(name))}, {fig}\"\n",
   "new": "        most = \"\"\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_a_program_is_named_from_20_mb_a_second_and_under_it_the_most_is_still_said",
@@ -2676,8 +2676,8 @@
  {
   "name": "a Windows process under the floor is said to be Windows itself",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "            shown = f\"Windows itself ({shown})\"\n",
-  "new": "            pass\n",
+  "old": "        shown = f\"Windows itself ({shown})\"\n",
+  "new": "        pass\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_under_the_floor_a_windows_process_is_said_to_be_windows"
   ]
@@ -2685,8 +2685,8 @@
  {
   "name": "a Windows program under the floor says what it normally is",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "            shown += f\" (normally {WINDOWS_PARTS[name.casefold()][0]})\" if own else LOOKALIKE\n",
-  "new": "            shown += \"\" if own else LOOKALIKE\n",
+  "old": "        shown += f\" (normally {WINDOWS_PARTS[name.casefold()][0]})\" if own else LOOKALIKE\n",
+  "new": "        shown += \"\" if own else LOOKALIKE\n",
   "tests": [
    "tests/test_analysis_named_programs.py::test_under_the_floor_a_windows_process_is_said_to_be_windows"
   ]
@@ -2876,8 +2876,8 @@
  {
   "name": "_heavy asks where each process runs",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "        key = (name, _windows_own(e, pid, name))\n        vals",
-  "new": "        key = (name, _windows_own(e, None, name))\n        vals",
+  "old": "        key = (name, _windows_own(e, pid, name) or _store_of(e, name) is not None)\n        vals",
+  "new": "        key = (name, _windows_own(e, None, name) or _store_of(e, name) is not None)\n        vals",
   "tests": [
    "tests/test_analysis_named_programs.py::test_where_a_process_runs_tells_windows_own_from_a_program_named_like_it"
   ]
@@ -3044,6 +3044,288 @@
   "new": "        elif False:",
   "tests": [
    "tests/test_analysis_rules.py::test_the_engine_fallback_at_the_displays_rate_clears_the_cpu_as_any_verdict_does_there"
+  ]
+ },
+ {
+  "name": "attribute: a memory reading from an entry too short to hold one",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if len(e) >= 12:",
+  "new": "            if len(e) >= 10:",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_reading_that_is_no_number_is_left_out_and_breaks_nothing"
+  ]
+ },
+ {
+  "name": "attribute: a negative memory reading counts",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "                    if x is not None and x >= 0:\n                        cols[c][k] = x",
+  "new": "                    if x is not None:\n                        cols[c][k] = x",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_reading_that_is_no_number_is_left_out_and_breaks_nothing"
+  ]
+ },
+ {
+  "name": "attribute: a tick with no memory read reads as none held",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            held_top[c].append(max(vals) if vals else None)",
+  "new": "            held_top[c].append(max(vals) if vals else 0.0)",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_an_older_capture_whose_table_holds_no_memory_keeps_the_old_line_word_for_word"
+  ]
+ },
+ {
+  "name": "rules: memory probed by the I/O readings",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "else o.io_top if col == \"io\" else o.held_top[col]",
+  "new": "else o.io_top",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_an_older_capture_whose_table_holds_no_memory_keeps_the_old_line_word_for_word"
+  ]
+ },
+ {
+  "name": "rules: RAM read over the whole capture, not while it was low",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    when = _when(e, S.RAM_AVAIL_MB, lambda v: v < low_mb)",
+  "new": "    when = []",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_ram_pressure_names_the_programs_that_held_the_most_ram_while_free_ram_was_low"
+  ]
+ },
+ {
+  "name": "rules: RAM low only under the critical floor",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    low_mb = max(RAM_WARN_FRAC * total, RAM_CRIT_MB) if total else RAM_CRIT_MB",
+  "new": "    low_mb = RAM_CRIT_MB",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_ram_pressure_names_the_programs_that_held_the_most_ram_while_free_ram_was_low"
+  ]
+ },
+ {
+  "name": "rules: committed memory read over the whole capture",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    when = _when(e, S.COMMIT_PCT, lambda v: v > COMMIT_WARN_PCT)",
+  "new": "    when = _when(e, S.COMMIT_PCT, lambda v: True)",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_the_page_file_branch_names_the_programs_that_reserved_the_most_while_committed_memory_was_near_the_limit"
+  ]
+ },
+ {
+  "name": "rules: video memory read over the whole capture",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    when = _when(e, S.VRAM_USED_MB, lambda v: v >= VRAM_FULL_FRAC * size) if full else []",
+  "new": "    when = []",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_vram_overflow_names_the_programs_that_held_the_most_video_memory_while_it_was_full"
+  ]
+ },
+ {
+  "name": "rules: vram_overflow names by RAM",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "             _held_advice(e, \"vram\", VRAM_ADVICE, when or EVERYWHERE,",
+  "new": "             _held_advice(e, \"ram\", VRAM_ADVICE, when or EVERYWHERE,",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_vram_overflow_names_the_programs_that_held_the_most_video_memory_while_it_was_full"
+  ]
+ },
+ {
+  "name": "rules: the page-file branch names by RAM",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return _held_advice(e, \"commit\", MEM_ADVICE, when or EVERYWHERE,",
+  "new": "    return _held_advice(e, \"ram\", MEM_ADVICE, when or EVERYWHERE,",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_the_page_file_branch_names_the_programs_that_reserved_the_most_while_committed_memory_was_near_the_limit"
+  ]
+ },
+ {
+  "name": "rules: the memory floor lowered",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "MEM_MIN_MB = 500.0 ",
+  "new": "MEM_MIN_MB = 400.0 ",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_program_is_named_from_500_mb_and_under_it_the_most_is_still_said"
+  ]
+ },
+ {
+  "name": "rules: the video memory floor lowered",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "VRAM_MIN_MB = 250.0 ",
+  "new": "VRAM_MIN_MB = 200.0 ",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_program_is_named_from_250_mb_of_video_memory"
+  ]
+ },
+ {
+  "name": "rules: 1,000 MB said in MB",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "GB\" if round(mb) >= 1000 else",
+  "new": "GB\" if round(mb) > 1000 else",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_figures_from_1000_mb_are_said_in_gb"
+  ]
+ },
+ {
+  "name": "rules: Windows' own memory told to close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        key = (name, _windows_own(e, pid, name) or _store_of(e, name) is not None)\n        vals",
+  "new": "        key = (name, _store_of(e, name) is not None)\n        vals",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_windows_own_memory_is_said_to_be_windows_and_never_told_to_close"
+  ]
+ },
+ {
+  "name": "rules: under the memory floor the most goes unsaid",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        most = f\"; the most was {shown}, {fig}\"\n",
+  "new": "        most = \"\"\n",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_program_is_named_from_500_mb_and_under_it_the_most_is_still_said",
+   "tests/test_analysis_held_memory.py::test_the_page_file_branch_under_the_floor_says_the_most_and_keeps_its_old_words"
+  ]
+ },
+ {
+  "name": "attribute: a bool memory field read as a number",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "                    x = None if isinstance(e[i], bool) else read(c + \"_mb\", e[i])",
+  "new": "                    x = read(c + \"_mb\", e[i])",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_reading_that_is_no_number_is_left_out_and_breaks_nothing"
+  ]
+ },
+ {
+  "name": "rules: the store app that started the game told to close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        key = (name, _windows_own(e, pid, name) or _store_of(e, name) is not None)\n        vals",
+  "new": "        key = (name, _windows_own(e, pid, name))\n        vals",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_the_store_app_that_started_the_game_is_never_told_to_close"
+  ]
+ },
+ {
+  "name": "rules: every program counted as the store app's",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return store[0] if store and name.casefold() in store[1] else None",
+  "new": "    return store[0] if store else None",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_the_store_app_that_started_the_game_is_never_told_to_close"
+  ]
+ },
+ {
+  "name": "rules: a virtual machine's memory told to close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    \"vmmem\": _VM, \"vmmemwsl\": _VM,\n",
+  "new": "",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_virtual_machines_memory_is_said_to_be_windows_and_how_to_give_it_back"
+  ]
+ },
+ {
+  "name": "rules: a commit-made RAM finding names by RAM",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif commit_top is not None and commit_top > COMMIT_WARN_PCT:   # made by the commit charge: who reserved it",
+  "new": "    elif False:",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_ram_finding_made_by_the_commit_charge_names_who_reserved_it"
+  ]
+ },
+ {
+  "name": "rules: committed memory near the limit from 80 % inclusive",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    when = _when(e, S.COMMIT_PCT, lambda v: v > COMMIT_WARN_PCT)",
+  "new": "    when = _when(e, S.COMMIT_PCT, lambda v: v >= COMMIT_WARN_PCT)",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_committed_memory_is_near_the_limit_over_80_percent"
+  ]
+ },
+ {
+  "name": "rules: a figure under the floor read as the floor",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        fig = \"under 1 MB\" if v < 0.5 else f\"just under {floor_text}\" if _size(v) == floor_text else _size(v)",
+  "new": "        fig = _size(v)",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_figure_under_the_floor_never_reads_as_the_floor"
+  ]
+ },
+ {
+  "name": "rules: GB chosen on the unrounded figure",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "GB\" if round(mb) >= 1000 else",
+  "new": "GB\" if mb >= 1000 else",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_figure_under_the_floor_never_reads_as_the_floor"
+  ]
+ },
+ {
+  "name": "rules: under the floor the table's limit unsaid",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"or more {what} on average {at}{most}.{HELD_LIMIT}\")",
+  "new": "f\"or more {what} on average {at}{most}.\")",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_program_is_named_from_500_mb_and_under_it_the_most_is_still_said"
+  ]
+ },
+ {
+  "name": "rules: gpu_contention leaves the memory picks out of what the table lists",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "memory)\" if _lists_memory(e) else",
+  "new": "memory)\" if False else",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_gpu_contention_says_what_a_table_that_lists_memory_holders_lists"
+  ]
+ },
+ {
+  "name": "views: a moment's programs divided by fewer samples than the span holds",
+  "file": "lagdoctor/app/views.py",
+  "old": "    top = sorted(busy, key=lambda kv: -kv[1][0])[:TOP_PROGRAMS]",
+  "new": "    top = sorted(busy, key=lambda kv: -kv[1][0])[:TOP_PROGRAMS]\n    samples = max(1, samples // 4)",
+  "tests": [
+   "tests/test_app_views.py::test_a_moments_programs_are_averaged_over_every_sample_and_an_idle_one_is_left_out"
+  ]
+ },
+ {
+  "name": "views: a program listed for its memory alone shown",
+  "file": "lagdoctor/app/views.py",
+  "old": "    busy = [(name, a) for name, a in acc.items() if any(x > 0 for x in a)]",
+  "new": "    busy = list(acc.items())",
+  "tests": [
+   "tests/test_app_views.py::test_a_moments_programs_are_averaged_over_every_sample_and_an_idle_one_is_left_out"
+  ]
+ },
+ {
+  "name": "rules: the store app's program under the floor said as any",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    shown += f\" (part of {store}, which started the game)\"\n",
+  "new": "    pass\n",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_the_disk_advice_under_its_floor_says_the_store_apps_program_is_its",
+   "tests/test_analysis_held_memory.py::test_the_store_app_that_started_the_game_is_never_told_to_close"
+  ]
+ },
+ {
+  "name": "rules: a memory figure read only at the exact tick",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "MEMORY_NEAR_S = 0.5 ",
+  "new": "MEMORY_NEAR_S = 1e-6 ",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_short_dip_of_free_ram_between_memory_readings_is_matched_with_the_nearest",
+   "tests/test_analysis_held_memory.py::test_the_nearest_memory_reading_is_half_the_recorders_memory_interval"
+  ]
+ },
+ {
+  "name": "rules: the busiest GPU user judged over every row of a table that lists memory",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if only_memory and not _memory_row(row[1]):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_gpu_contention_finds_a_gpu_user_listed_only_for_its_video_memory"
+  ]
+ },
+ {
+  "name": "rules: a row of 12 fields reads memory whatever it holds",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return any(isinstance(q, (list, tuple)) and len(q) >= 12 and any(x is not None for x in q[9:12])",
+  "new": "    return any(isinstance(q, (list, tuple)) and len(q) >= 12 and True",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_gpu_contention_finds_a_gpu_user_listed_only_for_its_video_memory"
   ]
  }
 ]

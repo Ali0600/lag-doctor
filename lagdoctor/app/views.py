@@ -298,20 +298,27 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
 
 
 def _programs(rows: list) -> list[dict[str, Any]]:
-    """The other programs busiest in a span (Capture.others rows), by mean CPU over the samples they appear in."""
-    acc: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0, 0])
+    """The other programs busiest in a span (Capture.others rows), by mean CPU over the span's samples, a sample a
+    program was not listed in counting as 0, as the analysis counts them: the table also lists programs for their disk
+    use or the memory they hold, which a mean over only the samples a program appears in would hide among busy ones.
+    A program that did nothing there (listed for its memory alone) is left out."""
+    acc: dict[str, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0])
+    samples = 0
     for row in rows:
-        for p in _list(row[1]) if isinstance(row, list) and len(row) == 2 else []:
+        if not (isinstance(row, list) and len(row) == 2 and isinstance(row[1], list)):
+            continue
+        samples += 1
+        for p in row[1]:
             if not isinstance(p, list) or len(p) < 5 or not isinstance(p[1], str):
                 continue
             a = acc[p[1]]
             a[0] += number(p[2]) or 0.0
             a[1] += number(p[4]) or 0.0
             a[2] += number(p[3]) or 0.0
-            a[3] += 1
-    top = sorted(acc.items(), key=lambda kv: -kv[1][0] / max(1, kv[1][3]))[:TOP_PROGRAMS]
-    return [{"name": name, "cpu": fmt(a[0] / a[3], suffix="%"), "gpu": fmt(a[1] / a[3], suffix="%"),
-             "disk": fmt(a[2] / a[3] / 1e6, "{:.1f}", " MB/s")} for name, a in top if a[3]]
+    busy = [(name, a) for name, a in acc.items() if any(x > 0 for x in a)]
+    top = sorted(busy, key=lambda kv: -kv[1][0])[:TOP_PROGRAMS]
+    return [{"name": name, "cpu": fmt(a[0] / samples, suffix="%"), "gpu": fmt(a[1] / samples, suffix="%"),
+             "disk": fmt(a[2] / samples / 1e6, "{:.1f}", " MB/s")} for name, a in top]
 
 
 def moment_view(cap: Capture, d: Diagnosis, main: dict[str, list], event_id: int) -> dict[str, Any] | None:
