@@ -104,9 +104,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   BAD-BASE, so grep the specs for a test's old name when you rename it. Before merging, rerun every mutation whose
   `file` or tests the change touches, picked by path from all of `tests/redfirst/`, never from a list kept by hand
   (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). Every mutation on
-  `lagdoctor/analysis/rules.py` (416 on 2026-11-16) takes about an hour here (PR #50's 494 picked mutations took about
-  70 minutes): start it in the background as soon as the code is settled, and review meanwhile with agents that run
-  no tests (no second pytest meanwhile, so write the next change's tests without running them). An `old` that
+  `lagdoctor/analysis/rules.py` (441 after PR #51) takes up to an hour here (PR #50's 494 picked mutations took about
+  70 minutes, PR #51's 744 about 36 on a quiet PC): start it in the background as soon as the code is settled, and
+  review meanwhile with agents that run no tests (no second pytest meanwhile, so write the next change's tests without
+  running them; the full suite may run beside such agents, about 8.5 minutes). A guard a later edit makes redundant
+  (PR #51: `return out or None` after an `if not proc_ded: return None`) leaves its mutation equivalent, so it can
+  only survive: drop the redundant check and its mutation together. An `old` that
   still occurs once can still go dead: a change that sends its test down a new path leaves the sabotaged line
   unreached, and only the gate's SURVIVED shows it (PR #45's tick test took a stall past the residual's GPU wording an
   older sabotage changed, 2026-11-11), so read each survivor before assuming the new tests are at fault. A shared fixture
@@ -359,7 +362,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   is an administrator with UAC off, so `tests/test_cli.py` models an unelevated owner unless a test says otherwise,
   and the app's own `run()`, which refuses an elevated start, is never what a test opens: `tests/app_harness.py`
   builds `App` itself.
-- `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
+- `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running, and so does a bare
+  `python` (`python -` hung a whole command on 2026-11-16). Use `uv run python`.
 - A new worktree has no `.venv`; the first `uv sync` or `uv run` builds one on Python 3.13, named by `.python-version`,
   which resolves to `C:\Python313` here (measured 2026-11-08, uv 0.10.4). Before that file, uv took its own managed
   3.12, which CI never ran. A venv still on 3.12 is rebuilt by the next `uv run`: not while a red-first run uses it.
