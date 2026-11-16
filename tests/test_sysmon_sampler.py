@@ -203,9 +203,9 @@ TICK_100NS = 2_500_000
 
 
 def p(pid, total=0, ppid=4, create=None, threads=None, faults=0, rb=0, wb=0, rops=0, wops=0, ws=0, priv=0,
-      name="x.exe", session=1):
+      name="x.exe", session=1, wsp=None):
     return ProcInfo(pid, ppid, 1000 + pid if create is None else create, name, session, total, 0, ws, priv, faults,
-                    rb, wb, 0, rops, wops, 0, len(threads or []), threads)
+                    rb, wb, 0, rops, wops, 0, len(threads or []), threads, wsp)
 
 
 def th(tid, create, total):
@@ -316,32 +316,35 @@ def test_a_gone_or_replaced_game_has_no_game_columns():
 
 
 def test_top_others_keeps_the_8_busiest_that_did_anything():
-    rates = [(pid, f"p{pid}.exe", float(pid), 0.0, 1000 + pid, 1) for pid in range(1, 13)]
+    rates = [(pid, f"p{pid}.exe", float(pid), 0.0, 1000 + pid, 1, None, None) for pid in range(1, 13)]
     rows = sysmon.top_others(rates, [], NV)
     assert [r[0] for r in rows] == [12, 11, 10, 9, 8, 7, 6, 5]        # none used the disk: no more than the 8
-    assert rows[0] == [12, "p12.exe", 12.0, 0.0, None, 1012, None, 1, None]   # the create time and session ride along
+    # the create time and session ride along; memory not read, video memory not read (no `vram`)
+    assert rows[0] == [12, "p12.exe", 12.0, 0.0, None, 1012, None, 1, None, None, None, None]
     gpu = [GpuSample({}, {}, {}, {31: 5.0, 34: 9.0}, {(31, INTEL): 5.0, (34, NV): 9.0})]
-    rows = sysmon.top_others([(30, "idle.exe", 0.0, 0.0, 7, 1), (31, "enc.exe", 0.0, 0.0, 8, 1),
-                              (32, "io.exe", 0.0, 9e5, 9, 1), (33, "busy.exe", 50.0, 0.0, 10, 1),
-                              (34, "gpu.exe", 0.0, 0.0, 11, 1)], gpu, NV)
+    rows = sysmon.top_others([(30, "idle.exe", 0.0, 0.0, 7, 1, None, None), (31, "enc.exe", 0.0, 0.0, 8, 1, None, None),
+                              (32, "io.exe", 0.0, 9e5, 9, 1, None, None), (33, "busy.exe", 50.0, 0.0, 10, 1, None, None),
+                              (34, "gpu.exe", 0.0, 0.0, 11, 1, None, None)], gpu, NV)
     assert [r[0] for r in rows] == [33, 32, 34, 31]                   # fields 0-5 and the ranking as before
-    assert rows[2] == [34, "gpu.exe", 0.0, 0.0, 9.0, 11, 9.0, 1, None]     # busy on the game's GPU
-    assert rows[3] == [31, "enc.exe", 0.0, 0.0, 5.0, 8, None, 1, None]     # busy, but only on the other GPU
+    assert rows[2] == [34, "gpu.exe", 0.0, 0.0, 9.0, 11, 9.0, 1, None, None, None, None]     # busy on the game's GPU
+    assert rows[3] == [31, "enc.exe", 0.0, 0.0, 5.0, 8, None, 1, None, None, None, None]     # only on the other GPU
 
 
 def test_top_others_adds_the_4_busiest_of_the_rest_by_reads_and_writes():
     # A backup program reading 90 MB/s at 1 % of a CPU was never listed under 8 busier processes, so the disk advice
     # could not name it and the lift test never saw it: the 4 busiest by I/O of the rest come after the 8 by CPU
-    cpu = [(pid, f"cpu{pid}.exe", 10.0 + pid, 1e3, 1000 + pid, 1) for pid in range(1, 11)]       # 10 CPU users
-    disk = [(100 + k, f"disk{k}.exe", 1.0, bps, 2000 + k, 0) for k, bps in enumerate((9e7, 5e7, 5e7, 3e7, 2e7, 0.0))]
+    cpu = [(pid, f"cpu{pid}.exe", 10.0 + pid, 1e3, 1000 + pid, 1, None, None) for pid in range(1, 11)]   # 10 CPU users
+    disk = [(100 + k, f"disk{k}.exe", 1.0, bps, 2000 + k, 0, None, None)
+            for k, bps in enumerate((9e7, 5e7, 5e7, 3e7, 2e7, 0.0))]
     rows = sysmon.top_others(cpu + disk, [], NV)
     assert [r[0] for r in rows[:8]] == [10, 9, 8, 7, 6, 5, 4, 3]       # the 8 by CPU first, as before
     # then by I/O among the rest, a tie going to the lower PID; the two CPU users left out read only 1 kB/s
     assert [r[0] for r in rows[8:]] == [100, 101, 102, 103]
-    assert rows[8] == [100, "disk0.exe", 1.0, 9e7, None, 2000, None, 0, None]
+    assert rows[8] == [100, "disk0.exe", 1.0, 9e7, None, 2000, None, 0, None, None, None, None]
     assert len(rows) == 12 and len({r[0] for r in rows}) == 12        # nobody twice
     # a process that read and wrote nothing is never an I/O pick, whatever else it did
-    idle = sysmon.top_others(cpu[:8] + [(200, "gpu.exe", 0.0, 0.0, 3000, 1), (201, "io.exe", 0.0, 5.0, 3001, 1)],
+    idle = sysmon.top_others(cpu[:8] + [(200, "gpu.exe", 0.0, 0.0, 3000, 1, None, None),
+                                        (201, "io.exe", 0.0, 5.0, 3001, 1, None, None)],
                              [GpuSample({}, {}, {}, {200: 50.0}, {})], NV)
     assert [r[0] for r in idle] == [8, 7, 6, 5, 4, 3, 2, 1, 201]
     assert [r[0] for r in sysmon.top_others(cpu + disk, [], NV, n_io=0)] == [10, 9, 8, 7, 6, 5, 4, 3]
@@ -354,11 +357,77 @@ def test_top_others_asks_where_each_listed_process_runs_and_only_those():
         asked.append((pid, created, name))
         return pid == 3
 
-    rates = [(pid, f"p{pid}.exe", float(pid), 0.0, 1000 + pid, pid % 2) for pid in range(1, 11)]
+    rates = [(pid, f"p{pid}.exe", float(pid), 0.0, 1000 + pid, pid % 2, None, None) for pid in range(1, 11)]
     rows = sysmon.top_others(rates, [], NV, in_system=in_system)
     assert sorted(asked) == sorted((r[0], r[5], r[1]) for r in rows) and len(asked) == 8   # never the unlisted 1, 2
     where = {r[0]: (r[7], r[8]) for r in rows}
     assert where[3] == (1, True) and where[4] == (0, False)
+
+
+def test_top_others_adds_the_4_of_the_rest_holding_the_most_ram_committed_memory_and_video_memory():
+    # A browser holding 3 GB of RAM while idle was never listed, so "close memory-heavy programs" could not name it:
+    # of the rest, the 4 holding the most RAM, then committed memory, then video memory on the game's GPU follow
+    cpu = [(pid, f"cpu{pid}.exe", 10.0 + pid, 0.0, 1000 + pid, 1, 10 * MIB, 20 * MIB) for pid in range(1, 9)]
+    ram = [(100 + k, f"ram{k}.exe", 0.0, 0.0, 2000 + k, 1, mb * MIB, 1 * MIB)
+           for k, mb in enumerate((3000, 900, 900, 500, 400))]
+    commit = [(200 + k, f"commit{k}.exe", 0.0, 0.0, 3000 + k, 1, 1 * MIB, mb * MIB)
+              for k, mb in enumerate((8000, 6000, 5000, 4000, 3500))]
+    gpu = [(300 + k, f"vram{k}.exe", 0.0, 0.0, 4000 + k, 1, 0, 0) for k in range(5)]
+    held = {300: 2048 * MIB, 301: 1024 * MIB, 302: 512 * MIB, 303: 256 * MIB, 304: 128 * MIB,
+            3: 4096 * MIB, 100: 9999 * MIB}           # a CPU user and a RAM pick hold some too: listed once only
+    disk = [(400 + k, f"disk{k}.exe", 0.0, 1e7 - k, 5000 + k, 1, 9000 * MIB, 9000 * MIB) for k in range(5)]
+    rows = sysmon.top_others(cpu + ram + commit + gpu, [], NV, vram=held)
+    assert [r[0] for r in rows[:8]] == [8, 7, 6, 5, 4, 3, 2, 1]        # the 8 by CPU first, as before
+    assert [r[0] for r in rows[8:12]] == [100, 101, 102, 103]          # RAM, a tie to the lower PID
+    assert [r[0] for r in rows[12:16]] == [200, 201, 202, 203]         # committed memory
+    assert [r[0] for r in rows[16:]] == [300, 301, 302, 303]           # video memory on the game's GPU
+    assert len({r[0] for r in rows}) == len(rows) == 20                # nobody twice
+    # the disk users come before the memory picks, whatever they hold, and a full row is 24 entries
+    full = sysmon.top_others(cpu + ram + commit + gpu + disk, [], NV, vram=held)
+    assert [r[0] for r in full[8:12]] == [400, 401, 402, 403] and len(full) == 24
+    assert [r[0] for r in full[12:16]] == [404, 100, 101, 102]         # disk4 holds the most RAM of the rest
+    # a tick that reads no memory lists no memory picks, and says nothing of memory: not read, never 0
+    bare = sysmon.top_others(cpu + ram + commit + gpu, [], NV, vram=held, memory=False)
+    assert [r[0] for r in bare] == [8, 7, 6, 5, 4, 3, 2, 1] and all(r[9:] == [None, None, None] for r in bare)
+    by_pid = {r[0]: r for r in rows}
+    assert by_pid[100] == [100, "ram0.exe", 0.0, 0.0, None, 2000, None, 1, None, 3000, 1, 9999]   # whole MiB
+    assert by_pid[3][9:] == [10, 20, 4096] and by_pid[1][9:] == [10, 20, 0]   # a process the read did not list: 0
+    assert by_pid[300][9:] == [0, 0, 2048]
+    # memory nobody read is no pick, nor is a process holding none; a reading that failed is said as None
+    unread = [(400, "a.exe", 0.0, 0.0, 1, 1, None, None), (401, "b.exe", 0.0, 0.0, 2, 1, 0, 0)]
+    assert sysmon.top_others(cpu + unread, [], NV, vram=None) == sysmon.top_others(cpu, [], NV, vram=None)
+    assert sysmon.top_others(cpu + unread, [], NV, vram={400: None})[8:] == []
+    assert sysmon.top_others(cpu, [], NV, vram={1: None})[7][11] is None
+    assert len(sysmon.top_others(cpu + ram + commit + gpu, [], NV, vram=held, n_mem=0)) == 8
+
+
+def test_pid_vram_sums_each_process_on_the_games_adapter_only():
+    pded = {"pid_10_luid_0x00000000_0x00010F83_phys_0": 3072.0 * MIB,
+            "pid_10_luid_0x00000000_0x00010F83_phys_1": 1.0 * MIB,
+            "pid_10_luid_0x00000000_0x00010C49_phys_0": 9.0 * MIB,       # the other GPU
+            "pid_20_luid_0x00000000_0x00010F83_phys_0": None,             # a reading that failed
+            "pid_30_luid_0x00000000_0x00010C49_phys_0": 5.0 * MIB,
+            "junk": 7.0}
+    assert sysmon.pid_vram(pded, NV) == {10: 3073.0 * MIB, 20: None}
+    assert sysmon.pid_vram(pded, INTEL) == {10: 9.0 * MIB, 30: 5.0 * MIB}
+    assert sysmon.pid_vram(pded, None) is None and sysmon.pid_vram({}, NV) is None      # cannot say: not 0
+    later = {**pded, "pid_20_luid_0x00000000_0x00010F83_phys_1": 4.0 * MIB}     # the failed one read first
+    assert sysmon.pid_vram(later, NV)[20] is None                       # one failed reading of two: still None
+    # a read that lists nobody on the game's adapter cannot say (a stale adapter after a driver reset): never 0
+    assert sysmon.pid_vram(pded, "0x00000000_0x00099999") is None and sysmon.pid_vram({"junk": 1.0}, NV) is None
+
+
+def test_pid_vram_on_this_pc_reads_the_desktop_window_managers_video_memory():
+    # Live: every \GPU Process Memory instance name parses, and dwm.exe, which draws every window, has a reading on
+    # some adapter (0 on a software adapter such as a runner's Basic Render, so a reading, not a size, is asked)
+    from lagdoctor.winapi.pdh import PdhQuery
+    with PdhQuery([sysmon.G_PROC_DED]) as q:
+        q.collect()
+        ded = q.read(sysmon.G_PROC_DED)
+    assert ded and all(tgt.parse_process_memory(n) is not None for n in ded), sorted(ded)[:3]
+    dwm = {q.pid for q in ntquery.Snapshotter().snapshot().values() if q.name.casefold() == "dwm.exe"}
+    held = [sysmon.pid_vram(ded, luid) for luid in {tgt.parse_process_memory(n)[1] for n in ded}]
+    assert any(h is not None and isinstance(h.get(pid), float) for h in held for pid in dwm), (dwm, held)
 
 
 SYS32, WOW = r"C:\Windows\System32", r"C:\Windows\SysWOW64"
@@ -601,12 +670,59 @@ def test_others_rows_say_how_busy_each_process_kept_the_games_own_gpu():
     assert r["others"]
     for _t, row in r["others"]:
         by_pid = {o[0]: o for o in row}
-        assert set(by_pid) == {CHILD, 300, 301} and all(len(o) == 9 for o in row)
+        assert set(by_pid) == {CHILD, 300, 301} and all(len(o) == 12 for o in row)
         assert {pid: o[7] for pid, o in by_pid.items()} == {CHILD: 1, 300: 0, 301: 1}         # their session
         assert {pid: o[8] for pid, o in by_pid.items()} == {CHILD: False, 300: True, 301: False}   # System32?
         assert {pid: o[5] for pid, o in by_pid.items()} == {CHILD: 1200, 300: 1300, 301: 1301}   # create times
         assert [by_pid[pid][4] for pid in (CHILD, 300, 301)] == [10.0, 80.0, 40.0]     # any adapter, unchanged
         assert [by_pid[pid][6] for pid in (CHILD, 300, 301)] == [10.0, 5.0, None]      # the game's adapter only
+
+
+class MemPdh(FakePdh):
+    """Video memory per process: the idle browser holds some on the game's GPU (Intel), the child on the other, and a
+    process that holds a little lives for one tick only."""
+
+    def read(self, path):
+        if path == sysmon.G_PROC_DED:
+            return {f"pid_{GAME}_luid_0x00000000_0x00010C49_phys_0": 900.0 * MIB,
+                    "pid_302_luid_0x00000000_0x00010C49_phys_0": 700.0 * MIB,
+                    f"pid_{CHILD}_luid_0x00000000_0x00010F83_phys_0": 50.0 * MIB,
+                    f"pid_{7000 + self.ticks}_luid_0x00000000_0x00010C49_phys_0": 1.0 * MIB}
+        return super().read(path)
+
+
+class MemSnap(FakeSnap):
+    """FakeSnap plus an idle browser holding 3 GB of RAM: no CPU, no I/O, never listed before."""
+
+    def snapshot(self, threads_for=()):
+        procs = super().snapshot(threads_for)
+        procs[302] = p(302, 0, create=1302, name="browser.exe", ws=3500 * MIB, wsp=3000 * MIB, priv=3200 * MIB)
+        return procs
+
+
+def test_others_rows_list_an_idle_program_holding_memory_with_its_ram_committed_and_video_memory():
+    # memory is read once every `memory_every_s` (4 ticks here): those rows list the idle browser for its memory; the
+    # rows between list only what did something, and say nothing of memory
+    reads = []
+    s = SystemSampler({"pid": GAME, "create_time": 1100}, period_s=0.05, memory_every_s=0.2,
+                      pdh_factory=lambda paths: MemPdh(paths), snapshotter=MemSnap(), foreground=lambda: GAME,
+                      layout_check=lambda snapshotter: None,
+                      system_folders=sysmon.SystemFolders([SYS32], path_of=lambda pid: reads.append(pid) or (
+                          rf"C:\Apps\{({300: 'other', 302: 'browser'}).get(pid, 'x')}.exe")))
+    r = _run(s, 10, 0.05)
+    assert r["game_adapter_luid"] == INTEL and len(r["others"]) >= 8
+    for k, (_t, row) in enumerate(r["others"]):
+        by_pid = {o[0]: o for o in row}
+        if k % 4:
+            assert set(by_pid) == {CHILD, 300} and all(o[9:] == [None, None, None] for o in row), (k, row)
+            continue
+        assert set(by_pid) == {CHILD, 300, 302}, row          # the browser did nothing, and is listed for its memory
+        assert by_pid[302][2:4] == [0.0, 0.0] and by_pid[302][9:] == [3000, 3200, 700]
+        assert by_pid[CHILD][11] == 0            # its video memory is on the other GPU: none on the game's
+        assert by_pid[300][9] is None            # the snapshot gave no private working set: not read, never 0
+    assert len(s._mem_names) == 4, s._mem_names  # only the names of the last read: the one-tick process is forgotten
+    # where the browser runs is read once: its answer is kept from one memory tick to the next, not pruned between
+    assert reads.count(302) == 1, reads
 
 
 def test_others_rows_have_no_game_gpu_figure_while_the_games_adapter_is_unknown():
@@ -743,6 +859,11 @@ def test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild():
     # ... in this session (ProcessIdToSessionId, read apart from the snapshot), its program outside System32
     listed = [o for row in rows for o in row[1] if o[0] == gpid]
     assert listed and all(o[7] == ntquery._own_session() and o[8] is False for o in listed), listed[:2]
+    # ... with the RAM it alone holds and the memory committed to it, in whole MiB, once a second: a real reading,
+    # never 0; the rows between say nothing of memory
+    held = [o for o in listed if o[9:] != [None, None, None]]
+    assert held and all(type(o[9]) is int and o[9] > 0 and type(o[10]) is int and o[10] > 0 for o in held), held[:2]
+    assert len(held) <= len(listed) // 2, listed[:6]
     assert {child.pid, gpid} <= set(r["game_pids"])
     assert cols[S.GAME_CPU_PCT][-1] is None and cols[S.GAME_THREADS][-1] is None
     assert all(cols[c][i] is not None for i in inside
@@ -778,5 +899,6 @@ def test_the_sampler_keeps_where_each_process_runs_only_while_it_is_listed():
     r = _run(s, 10, 0.05)
     churned = {pid for pid in asked if pid >= 5000}
     assert len(churned) >= 6, asked                       # a new process listed at nearly every tick
-    assert len(folders._seen) <= 3, folders._seen         # CHILD, 300 and this tick's: never every one seen
-    assert all(len(o) == 9 for _t, row in r["others"] for o in row)
+    # CHILD, 300, this tick's and the last memory tick's (kept for the next memory tick): never every one seen
+    assert len(folders._seen) <= 4, folders._seen
+    assert all(len(o) == 12 for _t, row in r["others"] for o in row)

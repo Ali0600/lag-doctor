@@ -40,6 +40,9 @@ PERIOD_S = 0.25
 WINDOW_SAMPLES = 4            # the trailing 1 s at 4 Hz
 TOP_OTHERS = 8
 TOP_OTHERS_IO = 4            # besides the 8 by CPU, the 4 busiest by reads and writes: a disk user with little CPU
+TOP_OTHERS_MEM = 4           # then the 4 of the rest holding the most RAM, the 4 with the most memory committed and the
+                             # 4 with the most video memory on the game's GPU: a program can hold memory while idle
+MEMORY_EVERY_S = 1.0         # ... read once a second: memory moves slowly, and 12 more entries a tick cost RAM
 MAX_GAME_PIDS = 4096
 MIB = float(1 << 20)
 TOOL = "PDH + NtQuerySystemInformation"
@@ -292,6 +295,25 @@ def gpu_memory_columns(adapter_ded: dict, proc_ded: dict, proc_shared: dict, gam
     return out
 
 
+def pid_vram(proc_ded: dict, adapter: str | None,
+             parse: Callable[[str], tuple[int, str, int] | None] = tgt.parse_process_memory
+             ) -> dict[int, float | None] | None:
+    """Each process's dedicated video memory on `adapter` (bytes; GPU Process Memory), for the others row: None when
+    it cannot say for any process (the adapter is unknown, or the counter gave nothing), a process's None when one of
+    its readings there failed. A process the read did not list holds none there: 0, as GAME_VRAM_MB counts it; a read
+    that lists nobody on the adapter cannot say (a stale adapter after a driver reset, or names it cannot parse)."""
+    if adapter is None:
+        return None
+    out: dict[int, float | None] = {}
+    for inst, v in proc_ded.items():
+        p = parse(inst)
+        if p is None or p[1] != adapter:
+            continue
+        old = out.get(p[0], 0.0)
+        out[p[0]] = None if v is None or old is None else old + float(v)
+    return out or None
+
+
 # ---------------------------------------------------------------- processes ---
 
 GAME_COLUMNS = (S.GAME_CPU_PCT, S.GAME_TOP_THREAD_PCT, S.GAME_TOP_THREAD_ID, S.GAME_LEAD_THREAD_PCT, S.GAME_THREADS,
@@ -330,8 +352,8 @@ class ProcessRates:
         self._thread_hist: deque[dict[tuple[int, int], int]] = deque(maxlen=WINDOW_SAMPLES)   # recent deltas
 
     def update(self, procs: dict[int, ProcInfo] | None, t_ns: int) -> tuple[Values, list[tuple] | None]:
-        """(game_* columns, [(pid, name, cpu_pct, io_bps, create_time, session_id), ...] for every other process, or
-        None)."""
+        """(game_* columns, [(pid, name, cpu_pct, io_bps, create_time, session_id, private working set bytes or None,
+        committed bytes), ...] for every other process, or None)."""
         cols: Values = dict.fromkeys(GAME_COLUMNS)
         if procs is None:
             self._prev, self._prev_threads = None, None
@@ -402,33 +424,60 @@ class ProcessRates:
             d_io = (p.read_bytes + p.write_bytes) - ((old.read_bytes + old.write_bytes) if old else 0)
             if d_cpu < 0 or d_io < 0:
                 continue
-            others.append((p.pid, p.name, 100.0 * d_cpu / dt_100ns, d_io / dt_s, p.create_time, p.session_id))
+            others.append((p.pid, p.name, 100.0 * d_cpu / dt_100ns, d_io / dt_s, p.create_time, p.session_id,
+                           p.ws_private_bytes, p.private_bytes))
         return cols, others
+
+
+def _mb(b: float | None) -> int | None:
+    return None if b is None else round(b / MIB)
 
 
 def top_others(rates: list[tuple], gpu_window: list[GpuSample | None], adapter: str | None,
                n: int = TOP_OTHERS, n_io: int = TOP_OTHERS_IO,
-               in_system: Callable[[int, int, str], bool | None] = lambda pid, created, name: None) -> list[list]:
+               in_system: Callable[[int, int, str], bool | None] = lambda pid, created, name: None,
+               vram: dict[int, float | None] | None = None, n_mem: int = TOP_OTHERS_MEM,
+               memory: bool = True) -> list[list]:
     """The others row: the top `n` by CPU among processes that did anything, then the top `n_io` of the rest by
-    reads and writes (a program that loads the disk with little CPU), as [pid, name, cpu, io, gpu, create_time,
-    gpu_game, session, system_folder]. gpu is the busiest engine on any adapter; gpu_game the busiest on `adapter`,
-    the game's (pid_gpu_pct_on: None when that adapter is unknown or the process has no engine there). The create
-    time (raw FILETIME ticks) lets a fix on that process prove later that the PID was not reused. session is its
-    Windows session (0: services and Windows' own); system_folder is `in_system(pid, create_time, name)` for the
-    listed processes only: True when its program sits in Windows' own System32 or SysWOW64 folder, None unread."""
+    reads and writes (a program that loads the disk with little CPU), then of the rest the top `n_mem` by RAM, by
+    memory committed and by video memory on the game's GPU (a program can hold memory while idle), as [pid, name,
+    cpu, io, gpu, create_time, gpu_game, session, system_folder, ram_mb, commit_mb, vram_mb]. gpu is the busiest
+    engine on any adapter; gpu_game the busiest on `adapter`, the game's (pid_gpu_pct_on: None when that adapter is
+    unknown or the process has no engine there). The create time (raw FILETIME ticks) lets a fix on that process prove
+    later that the PID was not reused. session is its Windows session (0: services and Windows' own); system_folder
+    is `in_system(pid, create_time, name)` for the listed processes only: True when its program sits in Windows' own
+    System32 or SysWOW64 folder, None unread. ram_mb is its private working set (the RAM it alone holds, Task
+    Manager's "Memory"), commit_mb the memory committed to it (its private bytes, which count toward Windows' commit
+    limit), vram_mb its dedicated video memory on `adapter` (`vram`, from pid_vram: None when not read), each in whole
+    MiB. Without `memory` (the sampler reads memory once a second) the row has no memory picks and fields 9-11 are
+    None: not read at that tick."""
     rows = []
-    for pid, name, cpu, io, created, session in rates:
+    for pid, name, cpu, io, created, session, ram, commit in rates:
         gpu = pid_gpu_pct(gpu_window, pid)
-        if cpu > 0 or io > 0 or (gpu or 0) > 0:
-            rows.append((cpu, io, gpu or 0.0, pid, name, gpu, created, pid_gpu_pct_on(gpu_window, pid, adapter),
-                         session))
-    best = heapq.nlargest(n, rows, key=lambda r: (r[0], r[1], r[2], -r[3]))
+        held = None if vram is None else vram.get(pid, 0.0)
+        rows.append((cpu, io, gpu or 0.0, pid, name, gpu, created, session, ram, commit, held,
+                     cpu > 0 or io > 0 or (gpu or 0) > 0))
+    active = [r for r in rows if r[11]]
+    best = heapq.nlargest(n, active, key=lambda r: (r[0], r[1], r[2], -r[3]))
     listed = {r[3] for r in best}
-    best += heapq.nlargest(n_io, (r for r in rows if r[3] not in listed and r[1] > 0),
-                           key=lambda r: (r[1], r[0], -r[3]))
-    return [[pid, name, round(cpu, 2), round(io, 1), None if gpu is None else round(gpu, 2), created,
-             None if game_gpu is None else round(game_gpu, 2), session, in_system(pid, created, name)]
-            for cpu, io, _g, pid, name, gpu, created, game_gpu, session in best]
+
+    def add(k: int, pool: Iterable[tuple], key: Callable[[tuple], tuple]) -> None:
+        got = heapq.nlargest(k, (r for r in pool if r[3] not in listed), key=key)
+        best.extend(got)
+        listed.update(r[3] for r in got)
+
+    add(n_io, (r for r in active if r[1] > 0), lambda r: (r[1], r[0], -r[3]))
+    if memory:
+        for i in (8, 9, 10):            # RAM, committed memory, video memory: whoever holds some, busy or not
+            add(n_mem, (r for r in rows if (r[i] or 0) > 0), lambda r, i=i: (r[i], -r[3]))
+    out = []
+    for cpu, io, _g, pid, name, gpu, created, session, ram, commit, held, _a in best:
+        game_gpu = pid_gpu_pct_on(gpu_window, pid, adapter)
+        held_mb = [_mb(ram), _mb(commit), _mb(held)] if memory else [None, None, None]
+        out.append([pid, name, round(cpu, 2), round(io, 1), None if gpu is None else round(gpu, 2), created,
+                    None if game_gpu is None else round(game_gpu, 2), session, in_system(pid, created, name),
+                    *held_mb])
+    return out
 
 
 class SystemFolders:
@@ -528,7 +577,7 @@ class SystemSampler(Collector):
                  snapshotter: Any = None,
                  foreground: Callable[[], int | None] = windows.foreground_pid,
                  layout_check: Callable[[Any], None] = ntquery.self_check,
-                 system_folders: SystemFolders | None = None) -> None:
+                 system_folders: SystemFolders | None = None, memory_every_s: float = MEMORY_EVERY_S) -> None:
         super().__init__()
         pid, create_time = target.get("pid"), target.get("create_time")
         tgt._check_identity(pid, create_time)
@@ -548,6 +597,10 @@ class SystemSampler(Collector):
         self._pids_seen: set[int] = {pid}
         self._luid_3d: dict[str, float] = {}
         self._engine_names: dict[str, tuple | None] = {}
+        self._mem_names: dict[str, tuple | None] = {}    # GPU Process Memory instance -> parse_process_memory
+        self._mem_every = max(1, round(memory_every_s / period_s))      # ticks between memory readings
+        self._mem_tick = 0
+        self._mem_listed: list[list] = []        # the last memory tick's row: its folder answers stay cached
         self._cpu_window: deque = deque(maxlen=WINDOW_SAMPLES)
         self._gpu_window: deque = deque(maxlen=WINDOW_SAMPLES)
         self._rates = ProcessRates(pid, create_time)
@@ -695,8 +748,20 @@ class SystemSampler(Collector):
         self._rows += 1
         if rates is not None:
             # the same adapter as game_gpu_pct, so gpu_game says what else loaded the game's own GPU
-            listed = top_others(rates, window, adapter, in_system=self._system)
-            self._system.keep(listed)
+            memory = self._mem_tick % self._mem_every == 0
+            self._mem_tick += 1
+            vram = None
+            if memory:
+                proc_ded = get(G_PROC_DED)
+                if proc_ded:        # parsed names of the instances read now: the cache never grows without bound
+                    self._mem_names = {n: self._mem_names[n] if n in self._mem_names else tgt.parse_process_memory(n)
+                                       for n in proc_ded}
+                vram = pid_vram(proc_ded, adapter, self._mem_names.__getitem__)
+            listed = top_others(rates, window, adapter, in_system=self._system,
+                                vram=vram, memory=memory)
+            if memory:
+                self._mem_listed = listed
+            self._system.keep(listed + self._mem_listed)
             self.others.append([t, listed])
         temps = [k for k in get(T_TEMP).values() if k is not None]
         self.publish(t=t, cpu_total_pct=row[S.CPU_TOTAL_PCT], cpu_max_core_pct=row[S.CPU_MAX_CORE_PCT],

@@ -17,7 +17,7 @@ import bisect
 import math
 import ntpath
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from lagdoctor.analysis import events as ev_mod
@@ -434,10 +434,13 @@ def _gpu_heat(cap: Capture) -> _Series:
     return _Series([t for t, _, _ in rows], [x if not old or named or x == 0 else None for _, x, named in rows])
 
 
+MEMORY_FIELDS = (("ram", 9), ("commit", 10), ("vram", 11))   # an others entry's MiB held, since 2026-11-16 (12 fields)
+
+
 @dataclass
 class _Others:
     """The `others` table: top non-game processes per tick ([pid, name, cpu_pct, io_bps, gpu_pct, create_time,
-    gpu_game_pct]; older captures stop after field 5 or 6)."""
+    gpu_game_pct, session, system_folder, ram_mb, commit_mb, vram_mb]; older captures stop after field 5, 6 or 9)."""
 
     total: _Series        # sum of the listed processes' CPU, lag-doctor's own left out
     top: _Series          # the busiest one's CPU, lag-doctor's own left out
@@ -448,6 +451,8 @@ class _Others:
     roles: dict[tuple[int, str], str]                  # (pid, name) -> "background" | "game_helper" | "tool"
     gpu_any_adapter: bool = False                      # some "gpu" reading is field 5 (any adapter): game_gpu_pct
     tool: _Series | None = None                        # lag-doctor's own listed CPU per tick (0 when none listed)
+    held_top: dict[str, _Series] = field(default_factory=dict)   # "ram", "commit", "vram": the most any listed
+                                                                 # process held (MiB) per tick, None when none was read
 
 
 def _others(cap: Capture) -> _Others:
@@ -468,10 +473,12 @@ def _others(cap: Capture) -> _Others:
         return pid in tool_pids or name.lower() in tool_names
 
     total, top, io_top, tool = [], [], [], []
+    held_top: dict[str, list[float | None]] = {c: [] for c, _ in MEMORY_FIELDS}
     seen: dict[tuple[int, str], dict[str, dict[int, float]]] = {}       # tick index -> value, listed ticks only
     any_adapter = False
     for k, (_ti, entries) in enumerate(rows):
         cpus, ios, own = [], [], []
+        held: dict[str, list[float]] = {c: [] for c, _ in MEMORY_FIELDS}   # lag-doctor's own included, as cpu_read
         cpu_read = io_read = False                              # a reading at all this tick, lag-doctor's included
         for e in entries:
             if not (isinstance(e, (list, tuple)) and len(e) >= 5):
@@ -482,9 +489,15 @@ def _others(cap: Capture) -> _Others:
             gpu, anywhere = game_gpu_pct(e)                     # A10: the game's adapter where the row says it
             any_adapter = any_adapter or anywhere
             cpu, io = fa._bounded(e[2]), read("io_bps", e[3])  # %, bytes/s
-            cols = seen.setdefault((pid, name), {"cpu": {}, "io": {}, "gpu": {}})
+            cols = seen.setdefault((pid, name), {"cpu": {}, "io": {}, "gpu": {}, **{c: {} for c, _ in MEMORY_FIELDS}})
             for key, x in (("cpu", cpu), ("io", io), ("gpu", gpu)):
                 cols[key][k] = float(x) if x is not None and x >= 0 else 0.0
+            if len(e) >= 12:                                    # a reading that failed stays out: a lower bound
+                for c, i in MEMORY_FIELDS:
+                    x = None if isinstance(e[i], bool) else read(c + "_mb", e[i])    # a bool is no reading
+                    if x is not None and x >= 0:
+                        cols[c][k] = x
+                        held[c].append(x)
             ok_cpu, ok_io = cpu is not None and cpu >= 0, io is not None and io >= 0
             cpu_read, io_read = cpu_read or ok_cpu, io_read or ok_io
             if is_tool(pid, name):                              # its sampling is the measurement's cost
@@ -498,6 +511,8 @@ def _others(cap: Capture) -> _Others:
         top.append(max(cpus) if cpus else (0.0 if cpu_read else None))
         io_top.append(max(ios) if ios else (0.0 if io_read else None))
         tool.append(math.fsum(own))
+        for c, vals in held.items():
+            held_top[c].append(max(vals) if vals else None)
     total_s = _Series(t, total)
 
     roles = {key: ("tool" if is_tool(*key) else "game_helper" if key[0] in game else "background") for key in seen}
@@ -505,7 +520,7 @@ def _others(cap: Capture) -> _Others:
     for key, cols in seen.items():
         if roles[key] == "tool":
             continue
-        acc = sums[roles[key]].setdefault(key[1], {"cpu": {}, "io": {}, "gpu": {}})
+        acc = sums[roles[key]].setdefault(key[1], {c: {} for c in cols})
         for c, vals in cols.items():
             for k, x in vals.items():
                 acc[c][k] = acc[c].get(k, 0.0) + x
@@ -518,7 +533,7 @@ def _others(cap: Capture) -> _Others:
     grouped = {role: {name: {c: sparse(vals) for c, vals in cols.items()} for name, cols in names.items()}
                for role, names in sums.items()}
     return _Others(total_s, _Series(t, top), _Series(t, io_top), per, grouped["background"], grouped["game_helper"],
-                   roles, any_adapter, _Series(t, tool))
+                   roles, any_adapter, _Series(t, tool), {c: _Series(t, v) for c, v in held_top.items()})
 
 
 # --------------------------------------------------------------------------- checks ---

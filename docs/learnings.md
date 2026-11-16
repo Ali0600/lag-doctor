@@ -1262,3 +1262,15 @@ Defender's own folder.
 recorder kept names only; PR #50 records each listed process's session and one bit for "its program is in System32".
 **Takeaway**: to judge a process by what it is, record where it runs (its session, its program's folder), never only its
 name, and keep only the bit you decide on, not the path.
+
+### A process's memory has three sizes, and each answers a different question
+Windows reports a process's working set (every page it has in RAM, shared DLL pages included, so a browser's 30
+processes count the same DLLs 30 times), its private working set (the pages in RAM only it holds: Task Manager's
+"Memory" column) and its private bytes, or commit (the memory Windows has promised it, in RAM or the page file: Task
+Manager's "Commit size"). "RAM is full" is about private working sets; "Windows ran out of memory to hand out" is about
+commit, which a program can hold while keeping it out of RAM.
+**Why it came up**: naming the programs behind lag-doctor's "low on RAM" and "the page file is small" findings; this
+PC's recordings hit the second, with gigabytes of RAM free, where the RAM each program held would have named the wrong
+ones.
+**Takeaway**: before blaming a process for memory, pick the measure that fills the resource the finding is about: the
+private working set for RAM, commit for the commit limit, and never the whole working set summed over processes.

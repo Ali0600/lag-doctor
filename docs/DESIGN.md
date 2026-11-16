@@ -590,7 +590,8 @@ Rules every collector follows:
   with the reason (e.g. "PresentMon needs admin rights: access denied") and returns empty columns; it never
   raises into the session and never fakes data. A failed sample is `None`, never `0`.
 - **Bounded.** Fixed rates, bounded buffers, reused ctypes buffers, no unbounded growth per tick
-  (`others`: the top 8 by CPU and the top 4 of the rest by reads and writes).
+  (`others`: the top 8 by CPU, then of the rest the top 4 by reads and writes, by RAM, by memory committed and by
+  video memory, the last three once a second: 24 entries a tick at most).
 - **No handles to the game** (Principle 1).
 
 ### Who follows a recording (capture/session.py)
@@ -625,9 +626,11 @@ The session copies these into the `Capture`. Keys not listed here go nowhere, so
 | `network`, capture/netmon.py, `NetworkSampler(server_ip=None, *, steam_log=None)` | `columns` (N) → `network`; `targets` `{gateway, internet, server}` (IPs or None), `probes` `{target: {"sent", "lost", "from_t"}}`, `lost` `{target: [t, …]}`, `wifi_scans` `[t, …]`, `route` `{if_index, description, vpn: bool \| None, toward}` → `net_flows[…]` under the same keys; `interface` `{name, kind: "wifi"/"ethernet"/"other", band, channel}` → `inventory["network"]`; `downloads` `[{t, source, mbps}]` from the Steam log, or None when no download log was read, with `download_sources` (the logs read) → `net_flows[…]` |
 | `net_flows`, capture/netflows.py, `FlowTracker(game_pids or a callable, *, relay=None)` | `server` `{ip, port, proto, pid, rx_packets, tx_packets, rx_bytes, tx_bytes, tick_ms, first_rx_t, last_rx_t}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8, with `talkers_scope` "all" (its own ETW session) or "session" (through the relay: the programs in this Windows session only); `game_wire_bytes` `[rx, tx]` the game's bytes that crossed the network (one end this PC's), never its loopback traffic; `gaps` `[[t, ms, kind], …]` (t = the last packet before the silence; kind: "delay" burst after the gap / "loss" no burst / "local" our own tx paused too / "open" the server went silent for good while we kept sending / "unknown" a late delivery hides which); `server_rx` `[[t, pps], …]` (t = end of each 1 s bin); talkers, game_wire_bytes, gaps and server_rx are None when the session never ran; `layout` "verified"/"unverified"; `health` → `net_flows[…]` |
 
-`others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct, create_time, gpu_game_pct, session, system_folder],
-…]]`: up to 8 non-game processes that did something that tick, ranked by CPU, then up to 4 of the rest that read or
-wrote, ranked by `io_bps` (since 2026-11-15: a disk user with little CPU was never listed before), `cpu_pct` with
+`others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct, create_time, gpu_game_pct, session, system_folder,
+ram_mb, commit_mb, vram_mb], …]]`: up to 8 non-game processes that did something that tick, ranked by CPU, then up to 4
+of the rest that read or wrote, ranked by `io_bps` (since 2026-11-15: a disk user with little CPU was never listed
+before), then up to 4 of the rest by each of `ram_mb`, `commit_mb` and `vram_mb`, busy or idle, on the rows that read
+memory (since 2026-11-16: a program holding memory while idle was never listed), `cpu_pct` with
 100 = one logical CPU, `io_bps` read + write bytes, `gpu_pct` their busiest engine on any adapter, `create_time` raw
 FILETIME ticks (so a fix can prove a PID was not reused), `gpu_game_pct` their busiest engine on the game's adapter
 (None while that adapter is unknown), `session` their Windows session (0: services and Windows' own), and
@@ -635,8 +638,16 @@ FILETIME ticks (so a fix can prove a PID was not reused), `gpu_game_pct` their b
 (`winapi.folders.system_folders`), False elsewhere, None when it cannot say: the path could not be read, is no drive
 path (System, Registry, Memory Compression), or names another program than the snapshot did (a reused PID)
 (`ntquery.image_path`, handle-free; an answer is kept while the process stays listed: `sysmon.SystemFolders`; a
-System32 that cannot be read is said in the status). The path itself is never kept.
-Older captures have 5 to 7 fields, and the analysis reads a row of 9 as one that lists the disk users too. lag-doctor's own process is included: its load is real, and `target["tool_pids"]` lets the analysis
+System32 that cannot be read is said in the status). The path itself is never kept. `ram_mb` is the RAM the process
+alone holds (its private working set, `ntquery.ProcInfo.ws_private_bytes`, Task Manager's "Memory"), `commit_mb` the
+memory committed to it (its private bytes, which count toward the commit limit), `vram_mb` its dedicated video memory
+on the game's adapter (`\GPU Process Memory(*)\Dedicated Usage`, `sysmon.pid_vram`; 0 for a process the counter does
+not list, None while the adapter is unknown or the counter lists nobody there), each in whole MiB, None when not
+read. They are readings at that moment, where `cpu_pct` and `io_bps` are rates over the interval, and memory is read
+once a second (`sysmon.MEMORY_EVERY_S`): every fourth row at 4 Hz has them and the memory picks, and the rows between
+have None there (not read at that tick), so the analysis counts only the rows that read memory.
+Older captures have 5 to 7 fields, and the analysis reads a row of 9 as one that lists the disk users too, and one of
+12 as one that lists the memory holders and their memory. lag-doctor's own process is included: its load is real, and `target["tool_pids"]` lets the analysis
 keep it out of the blame and out of the background-CPU signals (the listed totals, and the machine-wide reading
 minus the game): its sampling is the measurement's cost, never "another program using the CPU". The session writes
 it from handle-free snapshots, at every status tick from `TOOL_SIGHT_S` (0.5 s) on and once more just before the
@@ -1397,8 +1408,19 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   Windows, a figure that rounds up to the floor "just under" it), and, in an older capture, that the table lists the
   8 processes busiest on the CPU, so a disk user with little CPU can be missing; with no I/O reading there it says
   that was not measured. `cpu_limit` and `bufferbloat` keep their old line when none passed
-  (a part has no talkers); talkers through the relay (`talkers_scope` "session") say only that session was seen. The names go only into the advice, so no score moves. Per-process memory
-  and video memory are not recorded, so `ram_pressure` and `vram_overflow` keep theirs.
+  (a part has no talkers); talkers through the relay (`talkers_scope` "session") say only that session was seen. The names go only into the advice, so no score moves.
+  `ram_pressure` and `vram_overflow` name the other programs that held the most (`rules._held_advice`): RAM
+  (`ram_mb`) while free RAM was under the warning floor, memory reserved (`commit_mb`) in the page-file branch while
+  committed memory was over 80 %, and video memory on the game's GPU (`vram_mb`) while it was 90 % full, each at the
+  system rows' own ticks reaching half a second to either side (`rules._when`, `MEMORY_NEAR_S`: the nearest memory
+  reading), else over the whole part; from `MEM_MIN_MB` (500 MB) and `VRAM_MIN_MB` (250
+  MB) on average, under which they say the most any program held ("just under" the floor when it rounds to it) and that
+  the table lists the 4 biggest holders at each moment, so a program split into many processes can hold more; a finding
+  the commit charge made with the RAM size unknown reads `commit_mb`. An older capture, whose table holds no memory,
+  keeps the old line word for word. In every advice `rules._heavy` writes, the programs of the store app the game was
+  started through (`inventory` game.launcher "steam" or "epic": `rules.STORE_APPS`) are said to be part of it, which the
+  game may need, and never told to close; `vmmem` and `VmmemWSL` (a virtual machine's memory) are `WINDOWS_PARTS`.
+  `gpu_contention`'s busiest GPU user is judged over the rows that read memory alone in a table that lists them.
 - `packet_loss`: loss events, and a steady overall loss ≥ 1 % from at least 2 lost probes; never "no ping was
   lost" when some were. `server_lag`: argued only when a server flow covers most of the capture; no server flow
   is unchecked (a TCP-only or offline game); an "open" gap is a lost connection; "local" gaps are the game

@@ -168,7 +168,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   None), so a table holding only the program under test reads "not measured" on its quiet ticks. Its entries' length
   picks the path under test: 9 fields (since PR #50) say each process's session and whether its program sits in
   System32 (`rules._where`), so a Windows name is judged by where it runs and the "8 busiest on the CPU" caveat goes;
-  5 to 7 fields are an older capture, judged by name. A `SystemSampler` test with a fake snapshotter calls the real
+  12 fields (since 2026-11-16) add each process's RAM, memory committed and video memory, which alone let
+  `ram_pressure` and `vram_overflow` name programs (fewer keep their old line word for word); 5 to 7 fields are an
+  older capture, judged by name. A memory figure is read at the system rows' own ticks (`rules._when`), so a hand-built
+  others table must carry the system table's times (`synth.system_table`'s 0.25 s steps). The sampler reads memory
+  once a second (`memory_every_s`): a `SystemSampler` test at `period_s=0.05` sees it on every 20th row unless it
+  passes `memory_every_s` too. A `SystemSampler` test with a fake snapshotter calls the real
   `ntquery.image_path` on its made-up PIDs unless it passes `system_folders=sysmon.SystemFolders(...)`, whose fake
   paths must end in the snapshot's own image name (a different one reads as a reused PID: None).
 - **A measured part keeps the recording's own times** (`lagdoctor/analysis/crop.py`, DESIGN.md "The measured part").
