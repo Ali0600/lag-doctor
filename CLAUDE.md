@@ -466,7 +466,7 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   alike, with `test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild` failing beside it under that
   script's CPU load. Before rerunning, list the `python.exe` command lines that hold `laglab` (`Get-CimInstance
   Win32_Process`): one the test did not start means another session is measuring, so wait for it to end. Rerun them
-  alone, with the display awake, and run that control before blaming a change. The self-test cases of
+  alone, with the display awake, and run that control before blaming a change. `tests/test_sysmon_windows.py::test_the_foreground_pid_owns_a_listed_window` fails whenever the screen is locked: LockApp then holds the foreground and owns no listed window (2026-11-17, 3 of 3 alone, on a branch that touched nothing it reads). The self-test cases of
   `tests/test_etw_flows.py` and `tests/test_etw_tracker.py` failed on CI with "no free port for both UDP and TCP"
   until 2026-11-08 (4 at once on 2026-11-07, 2 on 2026-11-08):
   their loopback DNS stand-ins took TCP's next port-0 number and tried UDP on it, 10 times. Windows hands port-0
