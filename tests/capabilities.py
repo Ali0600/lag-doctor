@@ -24,6 +24,9 @@ CAPABILITIES = {
     # The laptop and GitHub's windows-2025 runner both have the Windows SDK's headers, which tests/test_launch.py reads
     # Explorer's COM slots back from, so nothing declares it; a PC without the SDK sets LAGDOCTOR_ABSENT=windows_sdk.
     "windows_sdk": "Windows SDK C headers (Windows Kits 10 Include um)",
+    # The ASUS System Control Interface driver's device, through which tests/test_fans_live.py reads the fans; ASUS
+    # laptops only, so any other PC sets LAGDOCTOR_ABSENT=asus_acpi.
+    "asus_acpi": "ASUS System Control Interface device (an ASUS laptop's fans)",
 }
 
 

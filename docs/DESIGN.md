@@ -52,7 +52,8 @@ verification log; trust a note's *Corrected* entries over its body.
  capture/target ─►│ frames   : PresentMon 2.6.0 child, CSV on a pipe ──► F columns (all swap chains)            │
   (pid, exe,      │ system   : 4 Hz sampler (one PDH query + NtQuerySystemInformation) ──► S columns, others   │
    window,        │ gpu      : NVML, 1 Hz, only when the game renders on the NVIDIA GPU ──► G columns          │
-   adapter)       │ network  : ICMP rounds at 2 Hz + Wi-Fi + NIC counters ──► N columns, lost probes, scans   │
+   adapter)       │ fans     : ASUS laptops' fan speeds, 1 Hz, read only (ATKACPI DSTS) ──► C columns          │
+                  │ network  : ICMP rounds at 2 Hz + Wi-Fi + NIC counters ──► N columns, lost probes, scans   │
                   │ net_flows: ETW Microsoft-Windows-Kernel-Network (when allowed) ──► server flow, gaps        │
                   │ marks    : global hotkey "it lagged now" ──► marks                                          │
                   └─────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -276,6 +277,7 @@ lagdoctor/
             dxgi.py display.py power.py storage.py      machine state        (capture/inventory, fixes)
             memory.py folders.py
             nvml.py                                     NVIDIA telemetry     (capture/gpumon)
+            atkacpi.py                                  an ASUS laptop's fans, read only (capture/fanmon)
             icmp.py iphlp.py wlan.py                    network probes       (capture/netmon)
             etw.py                                      ETW sessions         (capture/netflows)
             elevation.py                                rights + UAC relaunch
@@ -286,7 +288,7 @@ lagdoctor/
             __init__.py steam.py epic.py keyvalues.py   the games each store has installed, from its own files (M6)
   relay/    protocol.py server.py client.py __main__.py   frame timing and the network trace with admin rights
             process.py                                  priority of other processes (fixes/priority)
-  capture/  base.py (done) target.py sysmon.py gpumon.py netmon.py netflows.py presentmon.py inventory.py
+  capture/  base.py (done) target.py sysmon.py gpumon.py fanmon.py netmon.py netflows.py presentmon.py inventory.py
             gamefiles.py (what lay beside the game, for the inventory) session.py
   analysis/ stats.py (done) frames.py events.py attribute.py rules.py diagnose.py
             window.py                                   the samples around a moment (the app's Results)
@@ -659,6 +661,7 @@ The session copies these into the `Capture`. Keys not listed here go nowhere, so
 | `frames`, capture/presentmon.py, `PresentMonSource(pid, exe=None, etl_file=None, *, is_alive=None, forward=None)` (relayed: relay/client.py `RelayedFrames`) | `columns` (F, every swap chain of the target) → `frames`; `swap_chains` `{"0x…": {"frames", "displayed", "runtime"}}` (an unfiltered replay keys them `"<pid>:0x…"`), `main_chain` (most displayed frames), `presentmon` `{version, exe, args, exit_code, stop_path, rows, malformed, rejoined, headers, stderr_tail}` → `target["presentmon"]`; `live()` = `{frames, fps, malformed}` |
 | `system`, capture/sysmon.py, `SystemSampler(target)` | `columns` (S) → `system`; `others` → `others`; `game_adapter_luid` (adapter whose 3D engine the game used most) → `target["adapter_luid"]`; `game_pids` (game + children seen) → `target["pids"]`; `cost` `{ticks, median_ms, max_ms, mean_ms}` (also in the status detail); `windows_folder` (whether the others table's `system_folder` check covered the Windows folder itself, since 2026-11-16) → `target["windows_folder"]`, set only when True |
 | `gpu`, capture/gpumon.py, `NvidiaSampler(adapter)` | `columns` (G) → `gpu`; `device` `{name, clock_max_mhz, mem_total_mb, temp_target_c, power_default_w}` or None → `inventory["nvidia"]`; `live()` adds `source` ("nvml"/"nvidia-smi") |
+| `fans`, capture/fanmon.py, `FanSampler(reader_factory=None, period_s=1.0)` | `columns` (C) → `fans`; `device` `{fans: ["cpu", "gpu", "mid" the firmware has]}` or None → `inventory["fans"]`; `cost` `{median_ms, max_ms}` per round of reads (also in the status detail) |
 | `network`, capture/netmon.py, `NetworkSampler(server_ip=None, *, steam_log=None)` | `columns` (N) → `network`; `targets` `{gateway, internet, server}` (IPs or None), `probes` `{target: {"sent", "lost", "from_t"}}`, `lost` `{target: [t, …]}`, `wifi_scans` `[t, …]`, `route` `{if_index, description, vpn: bool \| None, toward}` → `net_flows[…]` under the same keys; `interface` `{name, kind: "wifi"/"ethernet"/"other", band, channel}` → `inventory["network"]`; `downloads` `[{t, source, mbps}]` from the Steam log, or None when no download log was read, with `download_sources` (the logs read) → `net_flows[…]` |
 | `net_flows`, capture/netflows.py, `FlowTracker(game_pids or a callable, *, relay=None)` | `server` `{ip, port, proto, pid, rx_packets, tx_packets, rx_bytes, tx_bytes, tick_ms, first_rx_t, last_rx_t}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8, with `talkers_scope` "all" (its own ETW session) or "session" (through the relay: the programs in this Windows session only); `game_wire_bytes` `[rx, tx]` the game's bytes that crossed the network (one end this PC's), never its loopback traffic; `gaps` `[[t, ms, kind], …]` (t = the last packet before the silence; kind: "delay" burst after the gap / "loss" no burst / "local" our own tx paused too / "open" the server went silent for good while we kept sending / "unknown" a late delivery hides which); `server_rx` `[[t, pps], …]` (t = end of each 1 s bin); talkers, game_wire_bytes, gaps and server_rx are None when the session never ran; `layout` "verified"/"unverified"; `health` → `net_flows[…]` |
 
@@ -779,6 +782,18 @@ Fallback when NVML is unavailable: `nvidia-smi --query-gpu=… -lms 1000` stream
 kill-on-close job so it dies with lag-doctor; `status` says which ran. `nvmlDeviceGetDisplayActive` stays out
 of the loop.
 
+**fans (docs/research/asus-fans.md).** An ASUS laptop's CPU, GPU and middle fan speeds once a second, on a thread
+of its own, in every recording on any PC. `winapi/atkacpi.py` opens the ASUS System Control Interface driver's
+device (`\\.\ATKACPI`) with no access rights (enough, and no admin: measured) and sends one kind of call only,
+DSTS (device status, a read) on a fan's id; the same device takes DEVS (set) on the same ids, which can pin a fan
+at full speed, so `_call` refuses any buffer that is not a fan read before it reaches DeviceIoControl, and
+`tests/test_fans.py` holds that nothing else in `lagdoctor/` names the device, its control code or the set
+method. A status's high word must be 1 (present); the low word is hundreds of RPM. A fan the firmware says the
+laptop lacks (no presence word, or the driver's ERROR_INVALID_FUNCTION, as a two-fan laptop answers for the middle
+fan) is never read again and stays None; a failed reading is None for that second (`partial`, counted); 0 RPM is
+a fan standing still. No device (any other PC, CI's runner): `unavailable`, "this PC has no ASUS System Control
+Interface". A device that answers for no fan: `unavailable`, and no rows are kept.
+
 **network (NE 1–3, 8).** One row per 0.5 s probe round: the gateway, the internet anchor (`1.1.1.1`,
 configurable) and the game server (once `net_flows` reports one, or `--server`) are each pinged once per
 round on their own worker (blocking `IcmpSendEcho2`, so use enough workers that a lost probe never delays the
@@ -825,6 +840,10 @@ through `clean_note`, so text a file holds is shown only as printable characters
 (M5): `{key, registered, window_s, at}`, `at` the press that counted in seconds from t = 0, to the millisecond, or
 None when none came; None for a recording without one. One of another type is "damaged"; a dict whose values do not
 add up only measures nothing (`crop.key_part` says the record is damaged, and the whole recording is analysed).
+
+`fans` (C columns, added after the format's first build, as `note` was) holds an ASUS laptop's fan speeds: `{}` on
+another PC and in an older capture; one of another type is "damaged". The measured part and a moment's window cut it
+like the other tables (`crop.TABLES`, `window.TABLES`).
 
 `span` is not in the format: only a copy cut to part of the recording has one (analysis/crop.py), `save` refuses such a
 copy, and a file holding a `span` key loads as the whole recording, the key named in the note above.
@@ -879,6 +898,7 @@ game      {exe, drive, media, free_gb, gpu_preference, monitor_device, launcher,
           it opens the game's process.
 oem       {tools: [names of running OEM utilities, e.g. "ArmouryCrate.Service.exe"]}
 network   {name, kind, band, channel}                    filled by the session from the network collector
+fans      {fans: ["cpu", "gpu", "mid" the firmware has]}       filled by the session from the fans collector
 nvidia    {name, clock_max_mhz, mem_total_mb, temp_target_c, power_default_w}   from the gpu collector
           power_default_w: the GPU's default power limit (NVML), so a mode that lowered the enforced limit shows
 ```
@@ -1126,6 +1146,8 @@ headroom, headroom_note                    str | None      the sentence and labe
                                                            gpu_limit or cpu_limit finding carries it (headroom_line)
 gpu_clock_mhz, gpu_clock_max_mhz           float           NVIDIA: median clock, readings not naming gpu_idle; top
 gpu_power_w, gpu_power_limit_w             float           NVIDIA: median power drawn, enforced limit, same readings
+fan_cpu_rpm, fan_gpu_rpm                   float | None    ASUS: each fan's median speed (attribute.fan_stats), None
+                                                           without readings
 refresh_hz, present_mode, runtime          float, str, str     the game's display; most common mode and runtime
 swap_chains, main_chain                    int, str        chains seen; the address the analysis used (the
                                                            HTML frame chart draws only that chain)
@@ -1204,7 +1226,11 @@ For an NVIDIA GPU held down by heat or power, `gpu_throttle` says how deep, seco
 clock against its top clock and the power it drew against its limit (`attribute.nvidia_depth` over the readings
 that named what held it, never the idle ones; "so heat held it back, not its power limit" under 95 % of the limit),
 and `gpu_limit`'s heat line adds the median clock. `Diagnosis.stats` keeps the same medians over every reading that
-is not idle.
+is not idle. When heat held it down and an ASUS laptop's fans were read, a third line says what they did meanwhile
+(`rules._fans_text`, `attribute.fans_while`): each fan's median over the NVIDIA readings that named heat and were not
+idle, each matched to the fan's nearest reading within `FAN_NEAR_S` (1 s), and its fastest in the part; a reading
+past `FAN_MAX_RPM` (12,000, G-Helper's own bound) is corrupt and left out. It is context, never scored: a fan's top
+speed is per model, so a median far under the fastest is shown, not judged. A GPU at a lowered power cap gets none.
 
 ### Lag events (LC 2.4; NE 2.2, 4.6)
 - **stutter**: `D ≥ 2.5 × M` and `D − M ≥ 8 ms`, where `M` = median of the previous
@@ -1369,7 +1395,8 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   a GPU idle in every reading is unchecked. The power-cap share counts a reading only where its reasons named
   `sw_power_cap` (`attribute.power_cap_readings`: on driver 591.86 the counter read 42 % over 169 readings that
   never named it), and the text says so when the counter moved without the reason. Its second line says how deep:
-  the median clock against the top clock and the power against its limit (Headroom). Its lift test only supports
+  the median clock against the top clock and the power against its limit (Headroom); a third, with an ASUS
+  laptop's fans read, how fast they ran meanwhile and their fastest (Headroom). Its lift test only supports
   (LC 4.2's event-linked variant): throttling is a steady cause, and a GPU held down 97 % of the time cannot rise
   at a stutter, so LC 5.2's "contradicts", meant for stutter causes, never counts against it. The same holds for
   `cpu_throttle`.
@@ -1603,7 +1630,8 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 - **HTML** (`report/html.py`): one self-contained file (inline CSS + SVG, no script, no URL), light/dark via
   `prefers-color-scheme`: the player's note under the header when the capture has one ("Your note: ...", through
   `e()`, never as prose), verdict, stat tiles, frame-time chart (main swap chain only) with stutters and marks,
-  CPU/GPU chart, VRAM chart, ping chart (lost pings from the collector's own record), marks on every time chart,
+  CPU/GPU chart, fan chart (an ASUS laptop's fans in RPM; elsewhere "Not measured" with the reason), VRAM chart,
+  ping chart (lost pings from the collector's own record), marks on every time chart,
   finding cards, marked moments, worst moments, checked-and-fine, system snapshot, not measured. Each section
   falls back to a note on odd values instead of failing the page.
 - **A measured part** (a diagnosis whose `stats["span"]` is set, `labels.measured_part`): both reports still draw the
@@ -1916,7 +1944,8 @@ owner's run.
   (`summary.headroom_fields`): `bound` and `next_limit` (each only as one of its own words), `steady_fps`,
   `bound_gpu_ms`, `bound_frame_ms`, `busiest_thread_pct`, `gpu_ceiling_fps`, `cpu_ceiling_low_fps`,
   `cpu_ceiling_high_fps`, `speedup_low`, `speedup_high`, `gpu_clock_mhz`, `gpu_clock_max_mhz`, `gpu_power_w`,
-  `gpu_power_limit_w` and `headroom`, the sentence (Headroom). These keys came after the schema's first build and are
+  `gpu_power_limit_w` and `headroom`, the sentence (Headroom); and `fan_cpu_rpm` and `fan_gpu_rpm` (`FAN_NUMBERS`,
+  an ASUS laptop's fans). These keys came after the schema's first build and are
   optional in it: a summary without them, or a capture from before the folder check or the note, reads back with
   each None. Read back field by field: one of the wrong type reads as None, and the note through `clean_note` again.
   A failed write is said and the analysis goes on.
@@ -1927,7 +1956,8 @@ owner's run.
   (`analysis.window` 5 s either side
   of an event, at most 120 s of it), `compare_view` (the numbers with the better side marked, then what limited the
   frame rate: the FPS outside lag moments (higher is better), "Limited by", GPU busy per frame ("16.1 of 16.9 ms"),
-  the busiest game thread, the NVIDIA GPU clock ("780 of 2,100 MHz") and the headroom sentence, "-" in a summary from
+  the busiest game thread, the NVIDIA GPU clock ("780 of 2,100 MHz"), the fans' medians ("CPU 3,500 RPM, GPU 5,800
+  RPM") and the headroom sentence, "-" in a summary from
   before them, with `labels.HEADROOM_NOTE` in the note when either side has a sentence; beside the conditions:
   first "Your note", each recording's note or "-", differing only when both have one and they differ; then
   power plan and mode, refresh rate, how frames were timed, measured length, and what changed in the game itself:

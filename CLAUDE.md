@@ -209,6 +209,14 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `Popen.terminate()` first, which leaks its ETW session until reboot. Exit code 6 is ambiguous: read stderr. Leave
   `--track_pc_latency` out: it switches on the latency-ping code inside games built with NVIDIA's Reflex markers
   (DECISIONS 2026-11-09; `test_pc_latency_tracking_stays_off` guards it).
+- **The fan reader only reads** (`lagdoctor/winapi/atkacpi.py`, `docs/research/asus-fans.md`). ASUS's device takes
+  reads (DSTS) and sets (DEVS) through one control code, and DEVS on the very fan ids it reads can pin a fan at full
+  speed, so the handle's rights cannot keep it read-only: `_call` refuses any buffer that is not a DSTS read of a fan
+  id before DeviceIoControl, and `tests/test_fans.py` fails if any other module names the device or its control code,
+  or anything names the set method. Never add a set, a curve, a mode or another id there; a fan setting stays the
+  owner's, in ASUS's own tool. Every recording runs the fans collector, so `tests/conftest.py`'s
+  `_no_real_asus_device` fails a test that reaches the real device, except those marked `needs("asus_acpi")`
+  (`tests/test_fans_live.py`, which reads this laptop's fans). An agent may run those: they only read.
 - **Fixes go through `lagdoctor/fixes/base.py`** (journal first, readback, undo). Never offered: disabling
   security features, killing or suspending processes, HKLM or policy tweaks, anything on the game process.
 - **ETW needs rights.** PresentMon (session `lagdoctor`) and the network tracker (session `lag-doctor-net`)

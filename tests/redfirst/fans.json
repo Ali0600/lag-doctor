@@ -1,0 +1,330 @@
+[
+ {
+  "name": "a fan read is sent as the set method",
+  "file": "lagdoctor/winapi/atkacpi.py",
+  "old": "DSTS = 0x53545344  ",
+  "new": "DSTS = 0x53564544  ",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_read_is_dsts_with_the_fans_id_in_sixteen_bytes",
+   "tests/test_fans.py::test_only_the_reader_names_the_asus_device_and_nothing_names_the_set_method"
+  ]
+ },
+ {
+  "name": "any buffer reaches the device",
+  "file": "lagdoctor/winapi/atkacpi.py",
+  "old": "    if not is_fan_read(buf):\n",
+  "new": "    if False:\n",
+  "tests": [
+   "tests/test_fans.py::test_anything_but_a_fan_read_is_refused_before_it_reaches_the_device"
+  ]
+ },
+ {
+  "name": "a read of any device id passes as a fan read",
+  "file": "lagdoctor/winapi/atkacpi.py",
+  "old": "device in FAN_IDS.values()",
+  "new": "True",
+  "tests": [
+   "tests/test_fans.py::test_anything_but_a_fan_read_is_refused_before_it_reaches_the_device"
+  ]
+ },
+ {
+  "name": "any method passes as a fan read",
+  "file": "lagdoctor/winapi/atkacpi.py",
+  "old": "return method == DSTS and length",
+  "new": "return length",
+  "tests": [
+   "tests/test_fans.py::test_anything_but_a_fan_read_is_refused_before_it_reaches_the_device"
+  ]
+ },
+ {
+  "name": "a second argument passes as a fan read",
+  "file": "lagdoctor/winapi/atkacpi.py",
+  "old": "device in FAN_IDS.values() and second == 0",
+  "new": "device in FAN_IDS.values()",
+  "tests": [
+   "tests/test_fans.py::test_anything_but_a_fan_read_is_refused_before_it_reaches_the_device"
+  ]
+ },
+ {
+  "name": "a status without the presence word is a speed",
+  "file": "lagdoctor/winapi/atkacpi.py",
+  "old": "    if raw >> 16 != PRESENT:\n",
+  "new": "    if raw == 0:\n",
+  "tests": [
+   "tests/test_fans.py::test_a_status_without_the_presence_word_is_no_such_fan"
+  ]
+ },
+ {
+  "name": "a status is read as RPM, not hundreds",
+  "file": "lagdoctor/winapi/atkacpi.py",
+  "old": "    return (raw & 0xFFFF) * RPM_STEP\n",
+  "new": "    return raw & 0xFFFF\n",
+  "tests": [
+   "tests/test_fans.py::test_a_fans_status_is_hundreds_of_rpm_and_zero_is_a_fan_standing_still"
+  ]
+ },
+ {
+  "name": "the device is opened for reading and writing",
+  "file": "lagdoctor/winapi/atkacpi.py",
+  "old": "handle = _open(PATH, 0, FILE_SHARE_READ",
+  "new": "handle = _open(PATH, 0xC0000000, FILE_SHARE_READ",
+  "tests": [
+   "tests/test_fans.py::test_the_reader_opens_the_device_with_no_access_rights_and_reads_only"
+  ]
+ },
+ {
+  "name": "an id the driver does not know is a failed call",
+  "file": "lagdoctor/winapi/atkacpi.py",
+  "old": "        if err == ERROR_INVALID_FUNCTION:\n",
+  "new": "        if False:\n",
+  "tests": [
+   "tests/test_fans.py::test_the_reader_opens_the_device_with_no_access_rights_and_reads_only"
+  ]
+ },
+ {
+  "name": "a short answer is a reading",
+  "file": "lagdoctor/winapi/atkacpi.py",
+  "old": "    if got.value < 4:\n",
+  "new": "    if False:\n",
+  "tests": [
+   "tests/test_fans.py::test_a_failed_or_short_call_is_an_error_never_a_reading"
+  ]
+ },
+ {
+  "name": "a fan the laptop lacks is asked every second",
+  "file": "lagdoctor/capture/fanmon.py",
+  "old": "                    if fan in unknown:           # never had it: drop it for good\n                        unknown.remove(fan)\n",
+  "new": "                    if fan in unknown:           # never had it: drop it for good\n                        pass\n",
+  "tests": [
+   "tests/test_fans.py::test_two_fans_are_read_each_second_and_a_fan_the_laptop_lacks_is_asked_once"
+  ]
+ },
+ {
+  "name": "a failed reading goes uncounted",
+  "file": "lagdoctor/capture/fanmon.py",
+  "old": "                except OSError:\n                    failed += 1\n",
+  "new": "                except OSError:\n                    pass\n",
+  "tests": [
+   "tests/test_fans.py::test_a_failed_reading_is_none_for_that_second_and_a_still_fan_reads_zero"
+  ]
+ },
+ {
+  "name": "a fan that vanished is no failure",
+  "file": "lagdoctor/capture/fanmon.py",
+  "old": "                    else:                        # had it a moment ago: a failed reading this second\n                        failed += 1\n",
+  "new": "                    else:                        # had it a moment ago: a failed reading this second\n                        pass\n",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_that_vanishes_after_answering_is_a_failed_reading_not_a_missing_fan"
+  ]
+ },
+ {
+  "name": "a PC without the driver gets the bare error",
+  "file": "lagdoctor/capture/fanmon.py",
+  "old": "        return NO_DEVICE\n",
+  "new": "        return f\"the ASUS System Control Interface did not open ({exc})\"\n",
+  "tests": [
+   "tests/test_fans.py::test_a_device_that_does_not_open_leaves_the_source_unavailable_with_the_reason"
+  ]
+ },
+ {
+  "name": "the reader is left open",
+  "file": "lagdoctor/capture/fanmon.py",
+  "old": "        finally:\n            reader.close()\n",
+  "new": "        finally:\n            pass\n",
+  "tests": [
+   "tests/test_fans.py::test_two_fans_are_read_each_second_and_a_fan_the_laptop_lacks_is_asked_once",
+   "tests/test_fans.py::test_a_reader_that_crashes_is_closed_and_the_source_failed"
+  ]
+ },
+ {
+  "name": "a device with no fans keeps its rows of times",
+  "file": "lagdoctor/capture/fanmon.py",
+  "old": "                self.series = SeriesBuilder(C.ALL)\n",
+  "new": "                pass\n",
+  "tests": [
+   "tests/test_fans.py::test_a_device_with_no_fans_keeps_no_rows"
+  ]
+ },
+ {
+  "name": "the session drops the fans",
+  "file": "lagdoctor/capture/session.py",
+  "old": "start_key=start_key,\n            fans=fanr.get(\"columns\") or {})",
+  "new": "start_key=start_key)",
+  "tests": [
+   "tests/test_fans.py::test_the_session_puts_the_fans_in_the_capture_and_their_names_in_the_inventory"
+  ]
+ },
+ {
+  "name": "the inventory never names the fans",
+  "file": "lagdoctor/capture/session.py",
+  "old": "            inventory[\"fans\"] = fanr[\"device\"]\n",
+  "new": "            pass\n",
+  "tests": [
+   "tests/test_fans.py::test_the_session_puts_the_fans_in_the_capture_and_their_names_in_the_inventory"
+  ]
+ },
+ {
+  "name": "a recording runs no fan collector",
+  "file": "lagdoctor/capture/session.py",
+  "old": "    out.append(FanSampler())  ",
+  "new": "    print(FanSampler())  ",
+  "tests": [
+   "tests/test_fans.py::test_a_real_recording_runs_the_fan_collector_on_any_pc"
+  ]
+ },
+ {
+  "name": "a part's fans keep a source their part has no rows of",
+  "file": "lagdoctor/analysis/crop.py",
+  "old": "TABLES = (\"frames\", \"system\", \"gpu\", \"network\", \"fans\")",
+  "new": "TABLES = (\"frames\", \"system\", \"gpu\", \"network\")",
+  "tests": [
+   "tests/test_fans.py::test_a_measured_part_keeps_only_its_own_fan_readings"
+  ]
+ },
+ {
+  "name": "a part keeps the whole recording's fans",
+  "file": "lagdoctor/analysis/crop.py",
+  "old": ", \"fans\": w[\"fans\"]}",
+  "new": "}",
+  "tests": [
+   "tests/test_fans.py::test_a_measured_part_keeps_only_its_own_fan_readings"
+  ]
+ },
+ {
+  "name": "a moment has no fans",
+  "file": "lagdoctor/analysis/window.py",
+  "old": "TABLES = (\"system\", \"gpu\", \"network\", \"fans\")",
+  "new": "TABLES = (\"system\", \"gpu\", \"network\")",
+  "tests": [
+   "tests/test_fans.py::test_a_measured_part_keeps_only_its_own_fan_readings"
+  ]
+ },
+ {
+  "name": "fans of the wrong type load",
+  "file": "lagdoctor/model.py",
+  "old": "\"network\": dict, \"fans\": dict, \"others\": list,",
+  "new": "\"network\": dict, \"others\": list,",
+  "tests": [
+   "tests/test_fans.py::test_fans_save_and_load_and_an_older_capture_has_none"
+  ]
+ },
+ {
+  "name": "a corrupt fan reading counts",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "if when is not None and x is not None and 0 <= x <= FAN_MAX_RPM:",
+  "new": "if when is not None and x is not None:",
+  "tests": [
+   "tests/test_fans.py::test_a_corrupt_fan_reading_is_left_out"
+  ]
+ },
+ {
+  "name": "idle GPU readings count for the fans",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            and not idle_named(fa._at(why, i)) and keep(fa._at(why, i))]",
+  "new": "            and keep(fa._at(why, i))]",
+  "tests": [
+   "tests/test_fans.py::test_the_fan_median_counts_only_hot_readings_near_a_fan_reading"
+  ]
+ },
+ {
+  "name": "a fan reading any distance away matches",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if abs(times[best] - w) <= FAN_NEAR_S:\n",
+  "new": "            if True:\n",
+  "tests": [
+   "tests/test_fans.py::test_the_fan_median_counts_only_hot_readings_near_a_fan_reading"
+  ]
+ },
+ {
+  "name": "the fan line follows a lowered power cap too",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        fans = _fans_text(e) if held else None",
+  "new": "        fans = _fans_text(e)",
+  "tests": [
+   "tests/test_fans.py::test_a_gpu_at_its_lowered_power_cap_rather_than_held_by_heat_gets_no_fan_line"
+  ]
+ },
+ {
+  "name": "the fan line comes first",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "res.evidence.insert(2 if depth else 1, Evidence(fans))",
+  "new": "res.evidence.insert(0, Evidence(fans))",
+  "tests": [
+   "tests/test_fans.py::test_a_gpu_held_down_by_heat_says_how_fast_the_fans_ran_meanwhile_and_their_fastest"
+  ]
+ },
+ {
+  "name": "the fan line gives the median as the fastest",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    tops = [top for _, _, top in fans]\n",
+  "new": "    tops = [m for _, m, _ in fans]\n",
+  "tests": [
+   "tests/test_fans.py::test_a_gpu_held_down_by_heat_says_how_fast_the_fans_ran_meanwhile_and_their_fastest"
+  ]
+ },
+ {
+  "name": "the diagnosis keeps no fan medians",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "    stats.update(attribute.fan_stats(cap))\n",
+  "new": "",
+  "tests": [
+   "tests/test_fans.py::test_the_diagnosis_keeps_each_fans_median_and_the_summary_carries_it"
+  ]
+ },
+ {
+  "name": "the summary leaves the fans out",
+  "file": "lagdoctor/report/summary.py",
+  "old": "for key in HEADROOM_NUMBERS + FAN_NUMBERS}",
+  "new": "for key in HEADROOM_NUMBERS}",
+  "tests": [
+   "tests/test_fans.py::test_the_diagnosis_keeps_each_fans_median_and_the_summary_carries_it",
+   "tests/test_fans.py::test_compare_puts_each_recordings_fans_side_by_side"
+  ]
+ },
+ {
+  "name": "the report has no fan chart",
+  "file": "lagdoctor/report/html.py",
+  "old": "        f\"<h2>Fans</h2>{_section(lambda: _fan_chart(d, cap))}\"\n",
+  "new": "",
+  "tests": [
+   "tests/test_fans.py::test_the_report_draws_the_fans_and_says_why_when_they_were_not_measured"
+  ]
+ },
+ {
+  "name": "the fans source has no name in words",
+  "file": "lagdoctor/report/labels.py",
+  "old": "    \"fans\": \"fan speeds (ASUS)\",\n",
+  "new": "",
+  "tests": [
+   "tests/test_fans.py::test_the_report_draws_the_fans_and_says_why_when_they_were_not_measured",
+   "tests/test_fans.py::test_the_fans_text_a_player_reads_is_plain_and_their_columns_are_labelled"
+  ]
+ },
+ {
+  "name": "Results have no fan chart",
+  "file": "lagdoctor/app/views.py",
+  "old": "    (\"fans\", \"Fan speeds\", \"RPM\", (C.CPU_FAN_RPM, C.GPU_FAN_RPM, C.MID_FAN_RPM), \"fans\"),\n",
+  "new": "",
+  "tests": [
+   "tests/test_fans.py::test_results_chart_the_fans_and_say_why_they_are_missing"
+  ]
+ },
+ {
+  "name": "Compare leaves the fans out",
+  "file": "lagdoctor/app/views.py",
+  "old": "                    said(\"Fans (median)\", fans(na), fans(nb)),\n",
+  "new": "",
+  "tests": [
+   "tests/test_fans.py::test_compare_puts_each_recordings_fans_side_by_side"
+  ]
+ },
+ {
+  "name": "a test may open the real ASUS device",
+  "file": "tests/conftest.py",
+  "old": "    monkeypatch.setattr(atkacpi, \"_open\", refuse)\n",
+  "new": "",
+  "tests": [
+   "tests/test_fans.py::test_no_test_reaches_the_real_device"
+  ]
+ }
+]

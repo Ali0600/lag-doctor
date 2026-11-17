@@ -275,7 +275,8 @@ class _Env:
 
     # sources ------------------------------------------------------------------------------
     def _rows(self, name: str) -> int:
-        table = {"frames": self.fr, "system": self.cap.system, "gpu": self.cap.gpu, "network": self.cap.network}
+        table = {"frames": self.fr, "system": self.cap.system, "gpu": self.cap.gpu, "network": self.cap.network,
+                 "fans": self.cap.fans}
         if name == "frames":
             n = _num(self.stats.get("frames"))
             return int(n) if n is not None else 0
@@ -1000,6 +1001,22 @@ def _held_clock(e: _Env) -> str:
     return f", at a median {d['clock_mhz']:,.0f} of its {d['clock_max_mhz']:,.0f} MHz top clock"
 
 
+def _fans_text(e: _Env) -> str | None:
+    """How fast the laptop's fans ran while heat held the NVIDIA GPU down (attribute.fans_while), and the fastest
+    each ran in the part; None without fan readings near those NVIDIA readings. A median far under the fastest says
+    the fans held back while the GPU was hot (a quiet mode, or a firmware that let them slow)."""
+    fans = attribute.fans_while(e.cap, attribute.heat_named)
+    if not fans:
+        return None
+    (first, med, _), rest = fans[0], fans[1:]
+    ran = f"the {first} ran at a median {med:,.0f} RPM" + "".join(
+        f"{' and' if i == len(rest) - 1 else ','} the {words} at {m:,.0f} RPM" for i, (words, m, _) in enumerate(rest))
+    tops = [top for _, _, top in fans]
+    fastest = ", ".join(f"{x:,.0f}" for x in tops[:-1]) + (" and " if len(tops) > 1 else "") + f"{tops[-1]:,.0f}"
+    return _sentence(f"while {attribute.held_by(e.cap)} held it down, {ran}; the fastest "
+                     f"{'it' if len(fans) == 1 else 'they'} ran in {e.part} was {fastest} RPM")
+
+
 def _nv_depth_text(e: _Env, power: bool = False) -> str | None:
     """How deep the NVIDIA GPU was held down: its median clock against its top clock and the power it drew against
     its limit, over the readings that named what held it (heat or the power brake; with power=True the power cap),
@@ -1342,9 +1359,13 @@ def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
                      f"The NVIDIA driver held the GPU's clock down for much of {c.env.part}, which lowers the frame "
                      "rate while the GPU is the limit.", fixes)
     if isinstance(res, Finding):        # how deep, second: context after scoring, never a point for or against
-        depth = _nv_depth_text(e, power=limited and not (heat is not None and heat[1] >= NV_THROTTLE_PCT))
+        held = heat is not None and heat[1] >= NV_THROTTLE_PCT
+        depth = _nv_depth_text(e, power=limited and not held)
         if depth:
             res.evidence.insert(1, Evidence(depth))
+        fans = _fans_text(e) if held else None     # what the fans did meanwhile, third: context, never scored
+        if fans:
+            res.evidence.insert(2 if depth else 1, Evidence(fans))
     return res
 
 

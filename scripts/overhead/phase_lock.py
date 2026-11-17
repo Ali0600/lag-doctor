@@ -73,6 +73,11 @@ SOURCES = {
     "network": {"table": "network", "lo": -0.005, "hi": 0.005, "period": 0.5, "label": "network rounds (2 Hz)",
                 "why": "t is the round's tick; its pings and link reads start there "
                        "(lagdoctor/capture/netmon.py _round)"},
+    # not in DEFAULT_SOURCES: only an ASUS laptop's recordings have the table (--sources fans,fans@grid); the call's
+    # cost is measured in the ASUS fans research note, section 9
+    "fans": {"table": "fans", "lo": 0.0, "hi": 0.005, "period": 1.0, "label": "fan readings (1 Hz, ASUS)",
+             "why": "t is the tick; the fans are read right after it, 0.35-0.9 ms a call "
+                    "(lagdoctor/capture/fanmon.py _loop)"},
 }
 DEFAULT_SOURCES = "system,gpu,network,system@grid,gpu@grid,network@grid"
 

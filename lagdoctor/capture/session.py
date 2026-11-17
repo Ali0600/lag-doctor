@@ -718,6 +718,9 @@ class Session:
         gpur = results.get("gpu", {})
         if gpur.get("device"):
             inventory["nvidia"] = gpur["device"]
+        fanr = results.get("fans", {})
+        if fanr.get("device"):
+            inventory["fans"] = fanr["device"]
         netr = results.get("network", {})
         if netr.get("interface"):
             inventory["network"] = netr["interface"]
@@ -754,7 +757,8 @@ class Session:
             target=target, sources=sources, inventory=inventory,
             frames=fr.get("columns") or {}, system=sysr.get("columns") or {}, gpu=gpur.get("columns") or {},
             network=netr.get("columns") or {}, others=sysr.get("others") or [], net_flows=net_flows,
-            marks=marks, notes=list(self.notes), tool_version=__version__, start_key=start_key)
+            marks=marks, notes=list(self.notes), tool_version=__version__, start_key=start_key,
+            fans=fanr.get("columns") or {})
 
 
 def _stop_quietly(c: Collector, timeout: float) -> None:
@@ -846,6 +850,8 @@ def default_collectors(target: dict[str, Any], inventory: dict[str, Any], opts: 
     if _has_nvidia(inventory) and (adapter is None or adapter.get("vendor") == "nvidia"):
         from lagdoctor.capture.gpumon import NvidiaSampler
         out.append(NvidiaSampler(adapter))           # None = adapter unknown yet: watch the NVIDIA GPU anyway
+    from lagdoctor.capture.fanmon import FanSampler
+    out.append(FanSampler())                         # an ASUS laptop's fans; "unavailable" on any other PC
     if opts.network:
         from lagdoctor.capture.netflows import FlowTracker
         from lagdoctor.capture.netmon import NetworkSampler
