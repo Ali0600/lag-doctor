@@ -271,7 +271,7 @@ class App:
             self.log(f"{session}: its diagnosis.json could not be read; analysing the capture again")
             span, _ = crop.key_part(cap)              # the part its start key measured, as the watch analysed it
             d = diagnose(cap if span is None else crop.crop(cap, *span, how="key"))
-        main = main_chain(cap)
+        main = main_chain(cap, d.stats.get("main_chain") if isinstance(d.stats, dict) else None)   # the analysed one
         with self.lock:
             self.loaded = (session, cap, d, main)
         return entry, cap, d, main

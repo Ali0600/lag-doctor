@@ -165,7 +165,7 @@ def test_marked_moments_are_named_as_such():
     assert disk_fix(res).detail.startswith("At those marked moments, besides the game, OneDrive.exe")
 
 
-@pytest.mark.parametrize("t0, t1, named", [(12.0, 30.0, False), (2.0, 12.0, True), (None, None, True)])
+@pytest.mark.parametrize("t0, t1, named", [(12.0, 30.0, False), (1.0, 12.0, True), (None, None, True)])
 def test_a_measured_part_names_only_what_it_holds(t0, t1, named):
     # OneDrive.exe read 90 MB/s up to 11 s only; hdd_streaming with no loading stutter reads the whole part
     cap = make(system=synth.system_table(30), others=table((310, "OneDrive.exe", 90 * MB, lambda t: t <= 11.0)),

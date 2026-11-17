@@ -621,11 +621,13 @@ def test_a_moments_programs_are_averaged_over_every_sample_and_an_idle_one_is_le
 
 # ------------------------------------------------------------- a terminal recording measured from its start key ---
 
-def _keyed_session(home: Path):
+def _keyed_session(home: Path, chains=None):
     cap = synth.startup_then_smooth(startup_s=60.0, total_s=180.0)
     cap.target = {"pid": 20000, "create_time": 5, "name": "Friend.exe"}
     cap.marks = [20.0, 100.0]                                # one press in the startup, one in the measured part
     cap.start_key = {"key": "ctrl+alt+s", "registered": True, "window_s": 60.0, "at": 70.0}
+    if chains:                                               # each frame's swap chain, by its time
+        cap.frames[F.SWAP_CHAIN] = [chains(t) for t in cap.frames[F.T]]
     folder = home / "sessions" / "20261110-010000-friend"
     folder.mkdir(parents=True)
     cap.save(folder / library.CAPTURE_NAME)
@@ -670,3 +672,19 @@ def test_without_its_diagnosis_the_app_analyses_the_part_the_start_key_measured(
                        launcher=lambda *a, **k: None, recorder=lambda: ["unused"])
     _, _, d, _ = app.load(entry.id)
     assert d.stats["span"] == {"from_s": 70.0, "to_s": 130.0, "recorded_s": 180.0, "how": "key"}
+
+
+def test_the_app_draws_the_swap_chain_its_diagnosis_analysed(tmp_path):
+    """A part on another swap chain than the whole recording's main one (a game that made a new chain for its play):
+    the charts and a moment's frames take the chain the part's analysis used, so the part's own frames are drawn."""
+    from lagdoctor.app import main as app_main
+    cap, entry = _keyed_session(tmp_path, chains=lambda t: "0xB" if 70.0 <= t <= 130.0 else "0xA")
+    assert set(main_chain(cap)[F.SWAP_CHAIN]) == {"0xA"}   # the whole recording's main chain is the other one
+    app = app_main.App(home=tmp_path, runtime={"version": "1.0.0.0", "build": 4000}, create_fn=None,
+                       log=lambda s: None, play=lambda name: None, flash=lambda on: None,
+                       launcher=lambda *a, **k: None, recorder=lambda: ["unused"])
+    _, _, d, main = app.load(entry.id)
+    assert d.stats["main_chain"] == "0xB" and set(main[F.SWAP_CHAIN]) == {"0xB"}
+    assert views.frame_bytes(main)[1] == sum(1 for c in cap.frames[F.SWAP_CHAIN] if c == "0xB")
+    # Asked for a chain the capture does not have, or for none, it is the whole recording's main chain.
+    assert set(main_chain(cap, "0xC")[F.SWAP_CHAIN]) == set(main_chain(cap, None)[F.SWAP_CHAIN]) == {"0xA"}

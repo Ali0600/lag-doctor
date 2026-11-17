@@ -151,8 +151,10 @@ def _col(table: Any, name: str) -> list:
 
 # ------------------------------------------------------------------ main chain ---
 
-def main_chain(cap: Capture) -> dict[str, list]:
-    """F columns of the swap chain with the most displayed frames (PM 8.3, parser rule 6).
+def main_chain(cap: Capture, chain: Any = None) -> dict[str, list]:
+    """F columns of the swap chain with the most displayed frames (PM 8.3, parser rule 6), or of `chain` when the
+    capture has it: the chain an analysis used (Diagnosis.stats["main_chain"]), since a measured part can run on
+    another chain than the whole recording's main one.
 
     A game can have a few-row `0x0`/`Other` key next to its real chain, so rows are never the measure.
     Ties go to the chain with more rows, then to the one seen first. Rows are returned in time order
@@ -173,6 +175,8 @@ def main_chain(cap: Capture) -> dict[str, list]:
     if not rows:
         return {**{c: [] for c in F.ALL}, HIDDEN: [], FRONT: []}
     best = max(rows, key=lambda k: (shown.get(k, 0), len(rows[k])))   # max() keeps the first of equals
+    if isinstance(chain, str) and chain in rows:      # the chain asked for by name; a saved record can hold anything
+        best = chain
     pick = sorted(rows[best], key=lambda i: t[i])
     out: dict[str, list] = {}
     for name in F.ALL:

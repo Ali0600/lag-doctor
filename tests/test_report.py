@@ -944,6 +944,49 @@ def test_the_frame_charts_note_never_names_a_frame_behind_another_window():
     assert re.search(r"the worst took 30\d\d ms", html_report.render(diagnose(cap), cap))
 
 
+def test_frames_that_all_came_behind_another_window_are_never_said_not_recorded():
+    """The frames were recorded, yet none was judged: both headers say why, for a whole recording and for a part."""
+    from lagdoctor.analysis.crop import crop
+    whole = synth.laglab("smooth").cap
+    n = len(whole.frames[F.T])
+    whole.frames[F.DISPLAYED] = [0] * (n - 1) + [1]
+    whole.frames[F.DISPLAY_MS] = [None] * (n - 1) + [1000.0 * (whole.frames[F.T][-1] - whole.frames[F.T][0])]
+    whole.system[S.GAME_FOCUSED] = [0 if v is not None else None for v in whole.system[S.GAME_FOCUSED]]
+    covered = synth.laglab("smooth", covered=[(5.0, 25.0)]).cap
+    for d, cap in ((diagnose(whole), whole), (diagnose(crop(covered, 9.5, 20.5)), covered)):
+        assert labels.no_frames_text(d.measured) == "every frame came while another window was in front", d.measured
+        page = html_report.render(d, cap)
+        assert "every frame came while another window was in front" in page and "frame timing not recorded" not in page
+    assert labels.no_frames_text({"frames": "PresentMon ran but recorded no frames from the game"}) == \
+        "frame timing not recorded"
+
+
+def test_a_parts_frame_chart_takes_the_time_behind_another_window_from_the_parts_own_chain():
+    """A part can run on another swap chain than the whole recording's main one (a game that made a new chain after
+    its menus): the chart judges the part's time behind another window on the part's chain, as its analysis did."""
+    from lagdoctor.analysis import frames as fa
+
+    def two_chains(focus_behind):
+        cap = synth.laglab("smooth").cap
+        fr = cap.frames
+        keep = [i for i, x in enumerate(fr[F.T]) if not 20.0 < x < 23.0]
+        cap.frames = {k: [v[i] for i in keep] for k, v in fr.items()}
+        cap.frames[F.SWAP_CHAIN] = ["0xA" if x < 16.0 else "0xB" for x in cap.frames[F.T]]
+        k = next(i for i, x in enumerate(cap.frames[F.T]) if x >= 23.0)
+        gap = 1000.0 * (cap.frames[F.T][k] - cap.frames[F.T][k - 1])
+        cap.frames[F.FRAME_MS][k] = cap.frames[F.DISPLAY_MS][k] = gap
+        cap.system[S.GAME_FOCUSED] = [(0 if 20.0 <= t <= 23.0 and focus_behind else 1) if v is not None else None
+                                      for t, v in zip(cap.system[S.T], cap.system[S.GAME_FOCUSED])]
+        return cap
+    cap = two_chains(True)
+    assert set(fa.main_chain(cap)[F.SWAP_CHAIN]) == {"0xA"}   # the whole recording's main chain is the other one
+    d = _part(cap, 16.5, 30.0)
+    assert d.stats["main_chain"] == "0xB"
+    assert "the worst took" not in html_report.render(d, cap)
+    cap = two_chains(False)                                  # in front: a frozen screen, named
+    assert re.search(r"the worst took 30\d\d ms", html_report.render(_part(cap, 16.5, 30.0), cap))
+
+
 def test_presses_outside_the_part_are_counted_as_the_recording_keeps_them():
     """A part that ends with the recording keeps a press up to 1 s past its end, as the recording does."""
     to_end = {"from_s": 10.0, "to_s": 25.0, "recorded_s": 25.0, "how": "set"}

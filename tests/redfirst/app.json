@@ -253,5 +253,10 @@
    "file": "tests/test_user_text.py",
    "old": "    bare = _ASSET_COMMENTS[suffix].sub(",
    "new": "    bare = text or _ASSET_COMMENTS[suffix].sub(",
-   "tests": ["tests/test_user_text.py::test_the_page_scan_finds_citations_in_text_and_strings_but_not_in_comments"]}
+   "tests": ["tests/test_user_text.py::test_the_page_scan_finds_citations_in_text_and_strings_but_not_in_comments"]},
+  {"name": "the app draws the whole recording's main chain for a part on another",
+   "file": "lagdoctor/app/main.py",
+   "old": "        main = main_chain(cap, d.stats.get(\"main_chain\") if isinstance(d.stats, dict) else None)   # the analysed one",
+   "new": "        main = main_chain(cap)",
+   "tests": ["tests/test_app_views.py::test_the_app_draws_the_swap_chain_its_diagnosis_analysed"]}
 ]

@@ -961,8 +961,10 @@ tagged *inferred* there and are tuned against LagLab, never silently).
 
 ```python
 # analysis/frames.py
-def main_chain(cap) -> dict[str, list]              # F columns of the swap chain with the most displayed frames, and
-                                                    # HIDDEN beside them (time behind another window, below)
+def main_chain(cap, chain=None) -> dict[str, list]  # F columns of the swap chain with the most displayed frames, and
+                                                    # HIDDEN beside them (time behind another window, below); of
+                                                    # `chain` instead when the capture has it (the app draws the chain
+                                                    # its diagnosis used: a part can run on another)
 def frame_stats(fr, duration_s) -> dict             # the frame keys of Diagnosis.stats
 def bound(cap, fr, events) -> dict                  # LC 3.4, steady windows only (event frames excluded):
 # {verdict: "gpu"|"cpu_main"|"cpu_all"|"waiting"|"vsync"|"capped"|"mixed"|"unknown", r, ft_ms, gpu_ms,
@@ -1594,7 +1596,8 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
   the restart note the HTML report adds for `needs_restart`, nor its undo note, and no finding's title is one
   of its own evidence lines (checked by `tests/test_user_text.py` and the diagnosis tests). The HTML shows a
   `command` in backticks as code, "frame timing not recorded" instead of "0 frames" ("no frame timing in the
-  measured part" for a part with none of its own, `labels.no_frames_text`, in the app's Results too), and "No lag
+  measured part" for a part with none of its own, and "every frame came while another window was in front" for frames
+  that were recorded yet none judged, `labels.no_frames_text`, in the app's Results too), and "No lag
   events were
   found" only where frame timing or the network ran to look for them.
 - **HTML** (`report/html.py`): one self-contained file (inline CSS + SVG, no script, no URL), light/dark via

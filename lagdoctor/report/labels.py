@@ -340,10 +340,18 @@ def unmeasured_note(why: str, *, pickable: bool) -> str | None:
 
 def no_frames_text(measured: Any) -> str:
     """The header's words for an analysis that had no frames (Diagnosis.measured): a measured part with none of its own
-    says so, since the charts may still draw the recording's frames outside it."""
+    says so, since the charts may still draw the recording's frames outside it, and frames that all came behind
+    another window (analysis/rules.no_frames_why) were recorded, just never judged."""
     from lagdoctor.analysis.crop import EMPTY_IN_SPAN
     frames = measured.get("frames") if isinstance(measured, dict) else None
-    return "no frame timing in the measured part" if frames == EMPTY_IN_SPAN else "frame timing not recorded"
+    if frames == EMPTY_IN_SPAN:
+        return "no frame timing in the measured part"
+    if isinstance(frames, str) and frames.startswith("every frame of the ") and COVERED_FRAMES in frames:
+        return "every frame came while another window was in front"
+    return "frame timing not recorded"
+
+
+COVERED_FRAMES = "came while another window was in front"   # rules.no_frames_why's words for frames none of which was judged
 
 
 def marks(stats: dict, events: list) -> list[tuple[float, list, list[str]]]:

@@ -336,8 +336,11 @@ def _frame_chart(d: Diagnosis, cap: Capture) -> str:
     # the top, and never named the worst, and neither is one behind another window (frames.HIDDEN: a game that stops
     # drawing there shows one frame as long as the time behind). A part without frames of its own takes the whole
     # recording's scale and says nothing of frames cut off.
+    # Time behind another window as the analysis judged it: a part on the part cut as its analysis cut it, since its
+    # main chain can be another than the whole recording's, and a cover its edge cuts is judged on what is left.
     from lagdoctor.analysis import frames as fa
-    behind = fa.hidden_spans(fa.main_chain(cap))
+    from lagdoctor.analysis.crop import crop
+    behind = fa.hidden_spans(fa.main_chain(crop(cap, part["from_s"], part["to_s"]) if part else cap))
     starts = [a for a, _ in behind]
     seen = [v for x, v in zip(t, ms) if v is not None and not fa._in_spans(x, behind, starts)]
     vals = _analysed_frames(d, cap, part, behind) if part else seen
