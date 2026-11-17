@@ -40,7 +40,8 @@ when that run concluded success and every later commit is such a push. `README.m
 into the wheel's metadata. 3.13 is the Python the installer ships (`scripts/runtime_pin.py`); `requires-python`,
 `.python-version` and the matrix follow it (`tests/test_python_versions.py`), and when the pin moves to a new minor
 version, that version joins the matrix in the same change (`docs/DECISIONS.md`, 2026-11-08). Code and workflow
-changes go through a pull request and merge on green. Before the tests it gets
+changes go through a pull request and merge on green: the repo has auto-merge off and `main` requires no checks, so
+wait for the PR's checks yourself and then squash it (`gh pr merge --squash`). Before the tests it gets
 PresentMon through `lagdoctor setup --download` and the gold captures through `tests.downloads fetch-gold`, checks
 both against the tests' pins and caches them; each job's summary counts the tests that use them. Its wheel job runs
 `uv build --offline` (with the copy of uv_build inside the pinned uv: `pyproject.toml`'s bound stays on that uv's
@@ -109,7 +110,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   new text). Renaming a test does the same to each mutation that names it: only a run of that spec notices, as
   BAD-BASE, so grep the specs for a test's old name when you rename it. Before merging, rerun every mutation whose
   `file` or tests the change touches, picked by path from all of `tests/redfirst/`, never from a list kept by hand
-  (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). Every mutation on
+  (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). Commit before
+  picking: a pick by `git diff --name-only origin/main HEAD` cannot see an uncommitted edit (PR #53's first pick left
+  out `frames.py`'s 112). A picked set runs about 3.7 s a mutation here (PR #53's 1,098 took 67 minutes). Every mutation on
   `lagdoctor/analysis/rules.py` (456 after PR #52) takes up to an hour here (PR #50's 494 picked mutations took about
   70 minutes, PR #51's 744 about 36 and PR #52's 643 about 38 on a quiet PC): start it in the background as soon as the code is settled, and
   review meanwhile with agents that run no tests (no second pytest meanwhile, so write the next change's tests without
