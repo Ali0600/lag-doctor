@@ -30,7 +30,7 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   (`lagdoctor/app/recording.py`, PR #33). The owner recorded a game from the app in their own terminal before the
   second merged ("It works, merge it").
 - [ ] M5: measuring the right part, in three pull requests: the analysis of a part (`crop`, `analyze --from/--to`,
-  merged 2026-11-09, PR #37), the start key in `watch` (built 2026-11-10, on by default in a terminal), then the
+  merged 2026-11-09, PR #37), the start key in `watch` (merged 2026-11-17, PR #53, on by default in a terminal), then the
   app's half, which the owner tries before it merges.
 - [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
@@ -566,7 +566,8 @@ The analysis half was built on 2026-11-09 (DESIGN.md, The measured part; DECISIO
 - Eight read-only readers mapped every reader of a time or a total first (analysis, rules, the capture's fields, the
   recorder, the reports, the app, the tests).
 
-The start key half was built on 2026-11-10 (DESIGN.md, CLI and Who follows a recording; DECISIONS 2026-11-09, the
+The start key half was built on 2026-11-10 and merged on 2026-11-17 (PR #53, with main's PRs #44 to #52
+merged in; DESIGN.md, CLI and Who follows a recording; DECISIONS 2026-11-09, the
 start key). The owner chose three of its forks on a question card: on by default in a terminal, the whole recording
 analysed and labelled when the key measured nothing, and chimes in a terminal with `--no-sound`.
 - `lagdoctor watch` registers Ctrl+Alt+S beside the lag key, one listener per key, and says (with a short chime) when
