@@ -296,8 +296,7 @@ code, after the research.
    --sources fans,fans@grid` [unverified].
 4. Does the open work unelevated, and from a standard account? Unelevated: yes (section 9). A standard account:
    [unverified].
-5. Does the reading still work with ASUS's services stopped? On the laptop measured, Armoury Crate was uninstalled
-   and ASUS's other services ran; with them stopped too: [unverified].
+5. Does the reading still work with ASUS's services stopped? [unverified].
 
 ## 9. Measured with lag-doctor's reader (2026-11-17)
 
@@ -312,8 +311,8 @@ ASUS laptop with the ASUS System Control Interface v3, five rounds 0.5 s apart [
   `atkacpi._call` reads error 1 as "no such fan".
 - One call took 0.35-0.9 ms, the middle fan's refusal included.
 
-The values fit the units of section 4: hundreds of RPM in the low word under the presence word, below the fastest
-G-Helper had recorded on the same laptop (6,800-6,900 RPM in its settings file).
+The values fit the units of section 4: hundreds of RPM in the low word under the presence word, and speeds inside
+the per-model top speeds G-Helper lists (5,500-9,200 RPM, section 4).
 
 ## Verification log (2026-11-17)
 
