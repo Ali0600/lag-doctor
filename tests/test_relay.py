@@ -9,6 +9,8 @@ checks that owner on both sides of elevation.
 """
 from __future__ import annotations
 
+import ctypes
+import dataclasses
 import json
 import os
 import secrets
@@ -18,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+from ctypes import wintypes
 from pathlib import Path
 
 import pytest
@@ -478,7 +481,7 @@ def test_someone_else_on_the_pipe_is_let_go_and_the_recorder_still_gets_in(game)
 
 
 @pytest.mark.parametrize("message", [b'{"t":"start","origin":1,"args":["--process_id","4"]}', b'{"t":"frames"}',
-                                     b"not json", b'{"t":"start","origin":NaN}'])
+                                     b"not json", b'{"t":"start","origin":NaN}', b'{"t":"game","game":[5,1]}'])
 def test_the_relay_takes_nothing_but_start_and_stop(game, message):
     relay = InProcessRelay(parts())
     link = launch(game, relay)
@@ -1081,8 +1084,8 @@ class ScriptedRelay:
 
 
 def _hello(cfg, **over):
-    msg = {"t": "hello", "v": protocol.VERSION, "pid": os.getpid(), "game": list(cfg.game), "frames": cfg.frames,
-           "network": cfg.network}
+    msg = {"t": "hello", "v": protocol.VERSION, "pid": os.getpid(), "game": None if cfg.game is None else list(cfg.game),
+           "folders": None if cfg.folders is None else list(cfg.folders), "frames": cfg.frames, "network": cfg.network}
     msg.update(over)
     return json.dumps(msg).encode()
 
@@ -1144,3 +1147,594 @@ def test_a_relay_that_dies_as_the_window_closes_keeps_its_handle_until_the_reade
     link.close()
     assert child.reader_alive_at_close is False and child.waits[0] == 1.0
     assert link.why == "the relay ended (exit code 7)"
+
+
+# ------------------------------------------------------------------- Play: a relay approved for a folder ---
+# The UAC prompt comes before the store starts the game, so it approves the game's install folder; the recorder then
+# names the game the folder wait found, and the relay judges it itself (DECISIONS 2026-11-17, M6d). The folder, its
+# programs and the games are made up: nothing is read from the folder, and a game is a made-up process whose program
+# path the relay's (and the recorder's) image read gives.
+
+FOLDER = "C:" + _B + "Games" + _B + "Lantern Drift"
+PROGRAM = FOLDER + _B + "Lantern" + _B + "Binaries" + _B + "Win64" + _B + "lantern_.exe"
+ELSEWHERE = "D:" + _B + "Other" + _B + "lantern_.exe"
+SECOND = 10_000_000                                   # one second in create-time units
+PLAY, PLAY2, RELAY_PID = 0xFFFFFF30, 0xFFFFFF70, 0xFFFFFF20    # made up; the refusal cases use PLAY + 4 * i
+
+
+def _play_argv(folders=(FOLDER,), wait_s="30", frames=True, **over) -> list[str]:
+    me = _me()
+    a = {"--pipe": protocol.pipe_name(), "--recorder": f"{me.pid}:{me.create_time}",
+         "--sid": elevation.token_user_sid()}
+    a.update(over)
+    out = [x for k, v in a.items() if v is not None for x in (k, v)]
+    for form in folders:
+        out += ["--folder", form]
+    out += ["--wait-s", wait_s] if wait_s is not None else []
+    out += ["--frames", "--presentmon-exe", str(Path(sys.executable).resolve())] if frames else []
+    return out + ["--network"]
+
+
+def _played(pid: int, after_s: float, *, since: int, session: int | None = None, ppid: int = 4,
+            name: str = "lantern_.exe") -> ntquery.ProcInfo:
+    """A made-up process started `after_s` seconds after `since`, nobody's child unless `ppid` says so."""
+    me = _me()
+    return dataclasses.replace(_fake_proc(pid, me.session_id if session is None else session,
+                                          since + int(after_s * SECOND), name), ppid=ppid)
+
+
+class PlayRelay:
+    """The relay approved for a folder (server.main, --folder) on a thread here, with this test as its recorder over a
+    raw pipe: what the relay itself answers about each game named, with the recorder's own check left out. The relay's
+    own process is made up (started after this one, in its session), so its create time, Play's `since`, is not the
+    recorder's; `games` are made-up processes, `images` their program paths."""
+
+    def __init__(self, games=(), images=None, *, wait_s="30", snapshot=None, image=None, argv=None):
+        me = _me()
+        self.relay = _fake_proc(RELAY_PID, me.session_id, me.create_time + 5 * SECOND, "pythonw.exe")
+        self.since = self.relay.create_time
+        self.images = dict(images or {})
+        self.built: list = []
+        games = [g(self.since) if callable(g) else g for g in games]
+        self.parts = parts(snapshot=snapshot or snapshot_with(self.relay, *games), frames=self._frames,
+                           etw=self._etw)
+        self.parts.me = self.relay.pid
+        self.parts.image = image or (lambda pid: self.images.get(pid))
+        self.argv = argv or _play_argv(wait_s=wait_s)
+        self.code = None
+        self.thread = threading.Thread(target=self._run, name="play-relay", daemon=True)
+        self.thread.start()
+        self.c = pipe.connect(self.argv[self.argv.index("--pipe") + 1], 10, max_message=protocol.MAX_MESSAGE)
+        self.hello = self.read()
+
+    def _run(self):
+        self.code = server.main(self.argv, owner="", parts=self.parts)
+
+    def _frames(self, cfg, forward, alive):
+        self.built.append(("frames", cfg.game))
+        return FakeFrames(cfg, forward, alive)
+
+    def _etw(self, on_event):
+        self.built.append(("etw",))
+        return FakeEtw(on_event, [])
+
+    def send(self, data: bytes) -> None:
+        self.c.write(data, 5)
+
+    def read(self, timeout_s: float = 10) -> dict:
+        return protocol.from_relay(self.c.read(timeout_s))
+
+    def propose(self, pid: int, create_time: int) -> dict:
+        self.send(protocol.game((pid, create_time)))
+        return self.read()
+
+    def to_end(self, timeout_s: float = 15) -> list[dict]:
+        """Every message until `end`, which is the last."""
+        got: list[dict] = []
+        deadline = time.monotonic() + timeout_s
+        while not got or got[-1]["t"] != "end":
+            assert time.monotonic() < deadline, f"no end within {timeout_s} s: {got}"
+            try:
+                got.append(self.read(1))
+            except TimeoutError:
+                pass
+        return got
+
+    def close(self) -> int | None:
+        self.c.close()
+        self.thread.join(15)
+        return self.code
+
+
+def test_a_play_relay_greets_with_its_folder_and_records_the_game_it_accepted():
+    r = PlayRelay([lambda since: _played(PLAY, 1, since=since)], {PLAY: PROGRAM})
+    try:
+        assert r.hello["game"] is None and r.hello["folders"] == (FOLDER,) and r.hello["pid"] == RELAY_PID
+        ct = r.since + SECOND
+        assert r.propose(PLAY, ct) == {"t": "game", "game": (PLAY, ct)}
+        assert r.built == []                                     # nothing runs before the recording starts
+        r.send(protocol.start(clock.now()))
+        _until(lambda: ("frames", (PLAY, ct)) in r.built, 10, "PresentMon on the accepted game")
+        r.send(protocol.stop())
+        assert r.to_end()[-1]["t"] == "end"
+    finally:
+        assert r.close() == protocol.EXIT_OK
+
+
+def test_a_play_relay_refuses_each_game_its_folder_rule_does_not_take_and_waits_on():
+    me = _me()
+    cases = [  # (the process, its program, what the refusal says)
+        (lambda s: _played(PLAY, 1, since=s), ELSEWHERE, "is not in the game's folder"),
+        (lambda s: _played(PLAY + 4, -1, since=s), PROGRAM, "started before the UAC prompt was approved"),
+        (lambda s: _played(PLAY + 8, 1, since=s, ppid=RELAY_PID), PROGRAM, "one of lag-doctor's own processes"),
+        (lambda s: _played(PLAY + 12, 1, since=s, ppid=me.pid), PROGRAM, "one of lag-doctor's own processes"),
+        (lambda s: _played(PLAY + 16, 1, since=s, session=me.session_id + 9), PROGRAM, "another Windows session"),
+        (lambda s: _played(PLAY + 20, 1, since=s, name="LANTER~1.EXE"),
+         "C:" + _B + "GAMES~1" + _B + "LANTER~1" + _B + "lantern_.exe", "8.3 short names"),
+    ]
+    games = [c[0] for c in cases] + [lambda s: _played(PLAY2, 2, since=s)]
+    images = {PLAY + 4 * i: c[1] for i, c in enumerate(cases)}
+    r = PlayRelay(games, {**images, PLAY2: PROGRAM})
+    try:
+        for i, (_, _, says) in enumerate(cases):
+            pid = PLAY + 4 * i
+            ct = r.since + (-SECOND if i == 1 else SECOND)
+            answer = r.propose(pid, ct)
+            assert answer["t"] == "refused" and answer["game"] == (pid, ct) and says in answer["why"], (i, answer)
+            assert answer["retry"] is False
+        # The relay itself, and a process no longer running (here: never), are refused too.
+        assert "one of lag-doctor's own" in r.propose(RELAY_PID, r.since)["why"]
+        assert r.built == []                                     # nothing started for any of them
+        assert r.propose(PLAY2, r.since + 2 * SECOND) == {"t": "game", "game": (PLAY2, r.since + 2 * SECOND)}
+        r.send(protocol.stop())
+        r.to_end()
+    finally:
+        assert r.close() == protocol.EXIT_OK
+    assert r.built == []
+
+
+def test_a_play_relays_refusal_shows_a_programs_name_as_plain_text():
+    odd = "lantern" + chr(0x202E) + "exe.txt"                 # a name that turns the text after it around
+    r = PlayRelay([lambda s: _played(PLAY, -1, since=s, name=odd)], {PLAY: PROGRAM})
+    try:
+        no = r.propose(PLAY, r.since - SECOND)
+        assert "(lantern?exe.txt)" in no["why"] and chr(0x202E) not in no["why"], no
+        r.send(protocol.stop())
+        r.to_end()
+    finally:
+        assert r.close() == protocol.EXIT_OK
+
+
+def test_a_play_relay_refuses_a_game_that_is_gone_and_one_it_could_not_read_and_may_be_asked_again():
+    reads = {"left": 3}
+
+    def image(pid):
+        if pid == PLAY and reads["left"]:
+            reads["left"] -= 1
+            raise OSError(31, "A device attached to the system is not functioning")
+        return PROGRAM
+    r = PlayRelay([lambda s: _played(PLAY, 1, since=s)], image=image)
+    try:
+        ct = r.since + SECOND
+        assert "no longer running" in r.propose(PLAY2, ct)["why"]
+        no = r.propose(PLAY, ct)
+        assert no["t"] == "refused" and no["retry"] is True and "could not be checked" in no["why"], no
+        assert reads["left"] == 0 and r.propose(PLAY, ct)["t"] == "game"     # asked again, it reads and takes it
+        r.send(protocol.stop())
+        r.to_end()
+    finally:
+        assert r.close() == protocol.EXIT_OK
+
+
+def test_a_play_relay_takes_nothing_once_the_recording_window_has_gone_and_ends():
+    me = _me()
+    gone = threading.Event()
+    real = snapshot_with()
+
+    def snapshot():
+        procs = real()
+        procs[RELAY_PID] = relay_proc
+        procs[PLAY] = game
+        if gone.is_set():
+            procs.pop(me.pid, None)                  # the recorder's pipe handle lives on, in another process say
+        return procs
+
+    def image(pid):
+        gone.set()                                   # between the relay's two snapshots: the second lacks it
+        return PROGRAM
+    relay_proc = _fake_proc(RELAY_PID, me.session_id, me.create_time + 5 * SECOND, "pythonw.exe")
+    game = _played(PLAY, 1, since=relay_proc.create_time)
+    r = PlayRelay(snapshot=snapshot, image=image)
+    try:
+        no = r.propose(PLAY, game.create_time)
+        assert no["t"] == "refused" and no["why"] == "the recording window is no longer running", no
+        said = r.to_end(10)                          # and the relay, looking for it once a second, ends
+        assert any(m["t"] == "error" and "no longer running" in m["why"] for m in said), said
+    finally:
+        assert r.close() == protocol.EXIT_TARGET
+    assert r.built == []
+
+
+def test_a_play_relay_whose_recording_window_left_while_it_waited_for_the_game_ends():
+    me = _me()
+    gone = threading.Event()
+    real = snapshot_with()
+
+    def snapshot():
+        procs = real()
+        procs[RELAY_PID] = _fake_proc(RELAY_PID, me.session_id, me.create_time + 5 * SECOND, "pythonw.exe")
+        if gone.is_set():
+            procs[me.pid] = dataclasses.replace(procs[me.pid], create_time=me.create_time + 1)  # its number reused
+        return procs
+    r = PlayRelay(snapshot=snapshot)
+    try:
+        t0 = time.monotonic()
+        gone.set()
+        said = r.to_end(10)
+        assert time.monotonic() - t0 < 5 and said[-2]["why"] == "the recording window is no longer running", said
+    finally:
+        assert r.close() == protocol.EXIT_TARGET
+
+
+def test_a_play_relay_waits_for_its_game_as_long_as_the_recording_asked_and_no_longer(monkeypatch):
+    monkeypatch.setattr(server, "GAME_SLACK_S", 0.3)
+    r = PlayRelay(wait_s="0.5")
+    try:
+        t0 = time.monotonic()
+        said = r.to_end(10)
+        assert said[-2] == {"t": "error", "why": "no game the relay could record started in time"}, said
+        assert 0.5 < time.monotonic() - t0 < 5
+    finally:
+        assert r.close() == protocol.EXIT_NO_CLIENT
+
+
+def test_a_play_relays_wait_for_the_game_is_not_the_wait_for_the_start(monkeypatch):
+    monkeypatch.setattr(server, "START_WAIT_S", 0.4)
+    r = PlayRelay([lambda s: _played(PLAY, 1, since=s)], {PLAY: PROGRAM})
+    try:
+        time.sleep(1.0)                              # longer than START_WAIT_S: the game's wait is the recording's own
+        assert r.propose(PLAY, r.since + SECOND)["t"] == "game"
+        t0 = time.monotonic()
+        said = r.to_end(10)                          # once a game is taken, START_WAIT_S is the time for `start`
+        assert said[-2] == {"t": "error", "why": "the recording did not start in time"} and time.monotonic() - t0 < 5
+    finally:
+        assert r.close() == protocol.EXIT_NO_CLIENT
+    assert r.built == []
+
+
+def test_a_later_game_takes_the_place_of_the_one_before():
+    images = {PLAY: PROGRAM, PLAY2: PROGRAM, PLAY + 4: ELSEWHERE}
+    r = PlayRelay([lambda s: _played(PLAY, 1, since=s), lambda s: _played(PLAY2, 2, since=s),
+                   lambda s: _played(PLAY + 4, 3, since=s)], images)
+    try:
+        assert r.propose(PLAY, r.since + SECOND)["t"] == "game"
+        assert r.propose(PLAY2, r.since + 2 * SECOND)["t"] == "game"
+        r.send(protocol.start(clock.now()))
+        _until(lambda: any(b[0] == "frames" for b in r.built), 10, "PresentMon to start")
+        assert [b for b in r.built if b[0] == "frames"] == [("frames", (PLAY2, r.since + 2 * SECOND))]
+        r.send(protocol.stop())
+        r.to_end()
+    finally:
+        assert r.close() == protocol.EXIT_OK
+    # A refused one takes the place of an accepted one too: a start then records nothing.
+    r = PlayRelay([lambda s: _played(PLAY, 1, since=s), lambda s: _played(PLAY + 4, 3, since=s)], images)
+    try:
+        assert r.propose(PLAY, r.since + SECOND)["t"] == "game"
+        assert r.propose(PLAY + 4, r.since + 3 * SECOND)["t"] == "refused"
+        r.send(protocol.start(clock.now()))
+        said = r.to_end()
+        assert any("before the relay had accepted a game" in m.get("why", "") for m in said), said
+    finally:
+        assert r.close() == protocol.EXIT_PROTOCOL
+    assert r.built == []
+
+
+@pytest.mark.parametrize("script, says", [
+    (lambda since: [protocol.start(1.0)], "a start before any game"),
+    (lambda since: [protocol.game((PLAY, since + SECOND)), protocol.start(1.0), protocol.game((PLAY, since + SECOND))],
+     "a game after the start"),
+    (lambda since: [protocol.game((PLAY, since + SECOND))] * (protocol.MAX_GAMES + 1), "more than 8 games"),
+])
+def test_a_play_relay_takes_its_messages_only_in_turn(script, says):
+    r = PlayRelay([lambda s: _played(PLAY, 1, since=s)], {PLAY: PROGRAM})
+    try:
+        for m in script(r.since):
+            r.send(m)
+        said = r.to_end()
+        assert any(m["t"] == "error" and says in m["why"] for m in said), said
+    finally:
+        assert r.close() == protocol.EXIT_PROTOCOL
+    assert ("etw",) not in r.built or says == "a game after the start"
+
+
+def test_a_play_relay_ends_on_a_stop_or_a_hang_up_before_any_game():
+    r = PlayRelay()
+    r.send(protocol.stop())
+    assert r.to_end() == [{"t": "end"}]
+    assert r.close() == protocol.EXIT_OK and r.built == []
+    r = PlayRelay()
+    assert r.close() == protocol.EXIT_OK and r.built == []
+
+
+def test_the_play_relays_reader_queues_games_only_before_the_start_and_at_most_max_games():
+    cfg = server.parse_args(_play_argv())
+    g = protocol.game((PLAY, 5))
+    r = server.Relay(cfg, ScriptedPipe([g, g, protocol.start(1.0), g]), 1, parts())
+    r._read_loop()
+    assert _queued(r) == ["game", "game", "start", "broken"] and r._broke == "a game after the start"
+    r = server.Relay(cfg, ScriptedPipe([protocol.start(1.0)]), 1, parts())
+    r._read_loop()
+    assert _queued(r) == ["broken"] and r._broke == "a start before any game"
+    r = server.Relay(cfg, ScriptedPipe([g] * (protocol.MAX_GAMES + 1)), 1, parts())
+    r._read_loop()
+    assert _queued(r) == ["game"] * protocol.MAX_GAMES + ["broken"] and r._broke == "more than 8 games"
+    r = server.Relay(cfg, ScriptedPipe([g, protocol.stop(), g, protocol.start(1.0)]), 1, parts())
+    r._read_loop()
+    assert _queued(r) == ["game", "stop"] and r._gone.is_set()          # after stop nothing more is taken
+
+
+@pytest.mark.parametrize("over", [
+    {"--game": "12:34"},                                                    # both modes
+    {"--wait-s": None}, {"--folder": None},                                 # a folder without its wait, and neither
+    {"--wait-s": "0"}, {"--wait-s": "3601"}, {"--wait-s": "1e3"}, {"--wait-s": "-5"}, {"--wait-s": "300."},
+    {"--folder": "C:" + _B}, {"--folder": _B * 2 + "server" + _B + "share" + _B + "x"}, {"--folder": "rel" + _B + "x"},
+    {"--folder": "C:" + _B + "Windows" + _B + "Lantern"}, {"--folder": [FOLDER + str(i) for i in range(5)]},
+])
+def test_a_play_relay_takes_only_a_command_line_lag_doctor_builds(over, monkeypatch):
+    monkeypatch.setattr(pipe, "PipeServer", lambda *a, **k: pytest.fail("a pipe was made"))
+    folders = over.pop("--folder", (FOLDER,))
+    folders = () if folders is None else [folders] if isinstance(folders, str) else folders
+    argv = _play_argv(folders=folders, wait_s=over.pop("--wait-s", "30"), **over)
+    assert server.main(argv, owner="", parts=parts()) == protocol.EXIT_BAD_ARGS, argv
+    assert server.parse_args(_play_argv(wait_s="3600")).wait_s == 3600.0     # target.MAX_WAIT_S is the most
+
+
+def test_a_play_relay_checks_its_recorder_before_any_pipe_exists(monkeypatch):
+    monkeypatch.setattr(pipe, "PipeServer", lambda *a, **k: pytest.fail("a pipe was made"))
+    me = _me()
+    stale = _play_argv(**{"--recorder": f"{me.pid}:{me.create_time + 1}"})
+    assert server.main(stale, owner="", parts=parts()) == protocol.EXIT_TARGET
+    relay_elsewhere = _fake_proc(RELAY_PID, me.session_id + 7)
+    p = parts(snapshot=snapshot_with(relay_elsewhere))
+    p.me = relay_elsewhere.pid
+    assert server.main(_play_argv(), owner="", parts=p) == protocol.EXIT_TARGET
+
+
+def test_the_relays_command_line_for_a_folder_holds_its_checked_forms_and_survives_the_prompts_quoting():
+    forms = ("c:/games/lantern drift", "D:" + _B + "Library" + _B + "Lantern Drift" + _B)
+    argv = client.relay_argv(protocol.pipe_name(), (40, 300), "S-1-5-21-1-2-3-1001", folders=forms, wait_s=300,
+                             presentmon_exe=None, frames=False, network=True)
+    want = ("C:" + _B + "games" + _B + "lantern drift", "D:" + _B + "Library" + _B + "Lantern Drift")
+    assert [argv[i + 1] for i, a in enumerate(argv) if a == "--folder"] == list(want)
+    assert argv[argv.index("--wait-s") + 1] == "300" and "--game" not in argv
+    cfg = server.parse_args(argv[6:])
+    assert (cfg.game, cfg.folders, cfg.wait_s) == (None, want, 300.0)
+    # launch_elevated hands the prompt list2cmdline(argv[1:]); the relay reads it back as Windows splits it.
+    assert _split_command_line(argv[0], subprocess.list2cmdline(argv[1:])) == argv
+    for bad in ({}, {"game": (80, 430), "folders": forms, "wait_s": 30}, {"folders": forms},
+                {"folders": forms, "wait_s": True}, {"folders": forms, "wait_s": 3601},
+                {"folders": ("C:" + _B,), "wait_s": 30}):
+        with pytest.raises(ValueError):
+            client.relay_argv(protocol.pipe_name(), (40, 300), "S-1-5-21-1-2-3-1001", presentmon_exe=None,
+                              frames=False, network=True, **bad)
+
+
+def _split_command_line(program: str, params: str) -> list[str]:
+    """How Windows splits the relay's command line (CommandLineToArgvW), program first."""
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32.CommandLineToArgvW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(ctypes.c_int)]
+    shell32.CommandLineToArgvW.restype = ctypes.POINTER(wintypes.LPWSTR)
+    k32 = ctypes.WinDLL("kernel32")
+    k32.LocalFree.argtypes = [ctypes.c_void_p]
+    n = ctypes.c_int()
+    argv = shell32.CommandLineToArgvW(f'"{program}" {params}', ctypes.byref(n))
+    assert argv, f"CommandLineToArgvW failed: {ctypes.get_last_error()}"
+    try:
+        return [argv[i] for i in range(n.value)]
+    finally:
+        k32.LocalFree(ctypes.cast(argv, ctypes.c_void_p))
+
+
+def test_the_relays_wait_for_a_game_leaves_room_for_the_recorders_own_steps():
+    # Past the recorder's own wait (at most target.MAX_WAIT_S, which --wait-s may not pass): one round of the wait
+    # past its deadline, the re-arm's hold and the recorder's own check of the game; and never long past them.
+    room = tgt.REARM_HOLD_S + client.AIM_S + tgt.DRAW_SAMPLE_S * (tgt.DRAW_SAMPLES + 1)
+    assert room <= server.GAME_SLACK_S <= server.GAME_SLACK_MAX_S <= 120.0
+    assert client.GOODBYE_WAIT_S > server.GOODBYE_S
+
+
+# ---- the recorder's side of Play ----------------------------------------------------------------------------
+
+class PlayWorld:
+    """A relay approved for a folder, in process (InProcessRelay: the relay is this process too, so its create time,
+    Play's `since`, is this process's), and the made-up games the relay's and the recorder's snapshots and image reads
+    both see unless a test gives the recorder its own."""
+
+    def __init__(self, games=(), images=None, relay_image=None, *, frames=True):
+        me = _me()
+        self.since = me.create_time
+        self.games = [g(self.since) if callable(g) else g for g in games]
+        self.images = dict(images or {})
+        self.snapshot = snapshot_with(*self.games)
+        self.built: list = []
+        p = parts(snapshot=self.snapshot, frames=self._frames, etw=lambda on_event: FakeEtw(on_event, []))
+        p.image = relay_image or self.image
+        self.relay = InProcessRelay(p)
+        self.link = client.launch(None, folders=(FOLDER,), wait_s=30, presentmon_exe=Path(sys.executable).resolve()
+                                  if frames else None, frames=frames, network=True,
+                                  recorder=(me.pid, me.create_time), sid=elevation.token_user_sid(),
+                                  launcher=self.relay, owner=_default_owner())
+
+    def image(self, pid):
+        return self.images.get(pid)
+
+    def _frames(self, cfg, forward, alive):
+        self.built.append(("frames", cfg.game))
+        return FakeFrames(cfg, forward, alive)
+
+    def aim(self, pid, after_s=1.0, **kw):
+        kw.setdefault("snapshot", self.snapshot)
+        kw.setdefault("image", self.image)
+        return self.link.aim((pid, self.since + int(after_s * SECOND)), **kw)
+
+    def close(self) -> int | None:
+        self.link.close()
+        self.relay.thread.join(15)
+        return self.relay.code
+
+
+def test_launch_for_a_folder_approves_the_forms_the_relay_will_use_and_knows_when_it_started():
+    w = PlayWorld()
+    try:
+        assert w.relay.argv[w.relay.argv.index("--folder") + 1] == FOLDER
+        assert w.link.folders == (FOLDER,) and w.link.game is None and w.link.create_time == w.since
+        assert w.link.session == _me().session_id and w.link.recorder == (_me().pid, w.since)
+        # The relay takes a game until the recorder's wait plus its slack: aim stops asking one answer's time before.
+        assert 30 + server.GAME_SLACK_S - client.AIM_S - 5 < w.link.aim_by - time.monotonic() <= (
+            30 + server.GAME_SLACK_S - client.AIM_S)
+    finally:
+        assert w.close() == protocol.EXIT_OK
+
+
+def test_aim_names_the_game_the_relay_accepts_and_the_recording_records_it():
+    w = PlayWorld([lambda s: _played(PLAY, 1, since=s)], {PLAY: PROGRAM})
+    try:
+        w.aim(PLAY)
+        game = (PLAY, w.since + SECOND)
+        assert w.link.game == game
+        frames = w.link.frames_collector(PLAY)
+        frames.start(clock.now())
+        _until(lambda: frames._rows == 5, 10, "the accepted game's rows")
+        assert w.built == [("frames", game)]
+        frames.stop()
+    finally:
+        assert w.close() == protocol.EXIT_OK
+
+
+def test_aim_refuses_first_what_the_relay_would_refuse_and_sends_nothing(monkeypatch):
+    w = PlayWorld([lambda s: _played(PLAY, 1, since=s), lambda s: _played(PLAY2, 2, since=s)],
+                  {PLAY: ELSEWHERE, PLAY2: PROGRAM})
+    sent: list = []
+    real = w.link._client.write
+    monkeypatch.setattr(w.link._client, "write", lambda data, t: sent.append(protocol.from_recorder(data)) or real(data, t))
+    try:
+        with pytest.raises(client.GameRefused) as no:
+            w.aim(PLAY)
+        assert no.value.sent is False and no.value.retry is False and "is not in the game's folder" in no.value.why
+        assert sent == [] and not w.link.ended.is_set()          # the relay was never asked, and still waits
+        w.aim(PLAY2, after_s=2)
+        assert [m["t"] for m in sent] == ["game"] and w.link.game == (PLAY2, w.since + 2 * SECOND)
+    finally:
+        assert w.close() == protocol.EXIT_OK
+
+
+def test_aim_hears_the_relays_own_no_and_the_relay_waits_on():
+    # The recorder's read says the folder, the relay's own read does not: the relay's is the one that counts.
+    w = PlayWorld([lambda s: _played(PLAY, 1, since=s)], {PLAY: PROGRAM}, relay_image=lambda pid: ELSEWHERE)
+    try:
+        with pytest.raises(client.GameRefused) as no:
+            w.aim(PLAY)
+        assert no.value.sent is True and "is not in the game's folder" in no.value.why and w.link.game is None
+        assert not w.link.ended.is_set() and w.relay.thread.is_alive()
+    finally:
+        assert w.close() == protocol.EXIT_OK
+
+
+def test_aim_is_for_a_relay_approved_for_a_folder_and_one_at_a_time(game):
+    relay = InProcessRelay(parts())
+    link = launch(game, relay)
+    try:
+        with pytest.raises(ValueError, match="running game itself"):
+            link.aim((game["pid"], game["create_time"]))
+    finally:
+        link.close()
+    w = PlayWorld([lambda s: _played(PLAY, 1, since=s)], {PLAY: PROGRAM})
+    try:
+        w.link._aiming = (PLAY2, 1)
+        with pytest.raises(RuntimeError):
+            w.aim(PLAY)
+        w.link._aiming = None
+        w.link.aim_by = time.monotonic() - 1                   # the relay's wait for a game is over
+        with pytest.raises(client.RelayFailed, match="no longer takes a game"):
+            w.aim(PLAY)
+    finally:
+        assert w.close() == protocol.EXIT_OK
+
+
+def test_aim_without_an_answer_ends_the_link(monkeypatch):
+    monkeypatch.setattr(client, "AIM_S", 0.5)
+    me = _me()
+    games = snapshot_with(_played(PLAY, 1, since=me.create_time))
+    relay = ScriptedRelay(lambda cfg: [_hello(cfg)])
+    link = client.launch(None, folders=(FOLDER,), wait_s=30, presentmon_exe=None, frames=False, network=True,
+                         recorder=(me.pid, me.create_time), sid=elevation.token_user_sid(), launcher=relay,
+                         owner=_default_owner())
+    try:
+        with pytest.raises(client.RelayFailed, match="did not answer about the game within"):
+            link.aim((PLAY, me.create_time + SECOND), snapshot=games, image=lambda pid: PROGRAM)
+        assert link.ended.is_set() and link.game is None
+    finally:
+        link.close()
+
+
+def test_an_answer_about_a_game_nobody_named_breaks_the_link():
+    me = _me()
+    relay = ScriptedRelay(lambda cfg: [_hello(cfg), protocol.game((PLAY, 5))])
+    link = client.launch(None, folders=(FOLDER,), wait_s=30, presentmon_exe=None, frames=False, network=True,
+                         recorder=(me.pid, me.create_time), sid=elevation.token_user_sid(), launcher=relay,
+                         owner=_default_owner())
+    try:
+        _until(lambda: link.ended.is_set(), 10, "the link to break")
+        assert "a game the recording window did not name" in (link.why or "")
+    finally:
+        link.close()
+
+
+@pytest.mark.parametrize("over, says", [({"folders": ["C:" + _B + "Other"]}, "folder it was approved for"),
+                                        ({"folders": None, "game": [5, 1]}, "did not greet")])
+def test_launch_for_a_folder_refuses_a_hello_with_another_folder_or_a_game(over, says):
+    me = _me()
+    with pytest.raises(client.RelayFailed, match=says):
+        client.launch(None, folders=(FOLDER,), wait_s=30, presentmon_exe=None, frames=False, network=True,
+                      recorder=(me.pid, me.create_time), sid=elevation.token_user_sid(),
+                      launcher=ScriptedRelay(lambda cfg: [_hello(cfg, **over)]), owner=_default_owner())
+
+
+def test_a_play_launch_that_cannot_tell_when_the_relay_started_leaves_no_relay_behind(monkeypatch):
+    monkeypatch.setattr(client, "_relay_and_session", lambda relay, recorder: (None, None))
+    me = _me()
+    relay = InProcessRelay(parts())
+    with pytest.raises(client.RelayFailed, match="when the relay started could not be read here"):
+        client.launch(None, folders=(FOLDER,), wait_s=30, presentmon_exe=None, frames=False, network=True,
+                      recorder=(me.pid, me.create_time), sid=elevation.token_user_sid(), launcher=relay,
+                      owner=_default_owner())
+    relay.thread.join(15)
+    assert not relay.thread.is_alive() and relay.code == protocol.EXIT_OK    # it saw the hang-up and ended
+
+
+def test_a_recording_that_starts_before_the_relay_accepted_a_game_records_nothing():
+    w = PlayWorld([lambda s: _played(PLAY, 1, since=s)], {PLAY: PROGRAM})
+    try:
+        w.link.start(clock.now())
+        _until(lambda: w.link.ended.is_set(), 10, "the link to end")
+        assert "before the relay had accepted its game" in (w.link.why or "")
+        w.relay.thread.join(15)
+        assert w.relay.code == protocol.EXIT_OK and w.built == []       # told to stop, it ended at once
+    finally:
+        w.close()
+
+
+def test_frames_of_another_process_than_the_accepted_game_record_nothing():
+    w = PlayWorld([lambda s: _played(PLAY, 1, since=s)], {PLAY: PROGRAM})
+    try:
+        w.aim(PLAY)
+        frames = w.link.frames_collector(PLAY2)
+        assert w.link.ended.is_set() and "is not the one the relay accepted" in (w.link.why or "")
+        frames.start(clock.now())
+        _until(lambda: frames.ended, 10, "frames to end")
+        frames.stop()
+        assert frames.status().state == "failed" and "is not the one the relay accepted" in frames.status().detail
+        w.relay.thread.join(15)
+        assert w.relay.code == protocol.EXIT_OK and w.built == []
+    finally:
+        w.close()

@@ -91,3 +91,64 @@ def test_the_real_relay_runs_presentmon_and_the_network_trace_for_this_process(p
     assert info["exit_code"] == 0 and info["stop_path"] != "kill", info
     assert info["relay"]["pid"] == link.pid and info["relay"]["rows_received"] == 0
     assert code == protocol.EXIT_OK
+
+
+def _detached(argv: list[str]) -> int:
+    """Start `argv` through a short-lived process that exits at once, so the new process is nobody's child here (Play's
+    folder rule never takes one of lag-doctor's own, and this test is the recorder): its pid."""
+    code = ("import subprocess, sys\n"
+            "p = subprocess.Popen(sys.argv[1:], creationflags=0x00000008 | 0x00000200, stdin=subprocess.DEVNULL, "
+            "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+            "print(p.pid)")
+    out = subprocess.run([BASE_PY, "-I", "-c", code, *argv], capture_output=True, text=True, timeout=60, check=True)
+    return int(out.stdout.strip())
+
+
+def test_the_real_relay_for_a_folder_judges_each_game_by_its_own_read_and_records_the_one_it_took(presentmon_exe):
+    from lagdoctor.capture import target as tgt
+    from lagdoctor.winapi import folders as winfolders
+    assert elevation.is_elevated(), "GitHub's runner account is an administrator with UAC off"
+    snap = ntquery.Snapshotter()
+    forms = tgt.folder_forms(os.path.dirname(os.path.realpath(BASE_PY)))      # the stand-in game's own folder
+    me = snap.snapshot()[os.getpid()]
+    link = client.launch(None, folders=forms, wait_s=60, presentmon_exe=Path(presentmon_exe).resolve(), frames=True,
+                         network=True, recorder=(me.pid, me.create_time), sid=elevation.token_user_sid())
+    started: list[int] = []
+    try:
+        assert link.folders == forms and link.game is None and link.create_time is not None
+        # Both started after the relay, outside this test's tree: one from outside the folder, one from inside it.
+        ping = os.path.join(winfolders.system_folders()[0], "PING.EXE")
+        started.append(_detached([ping, "-n", "90", "127.0.0.1"]))
+        started.append(_detached([BASE_PY, "-I", "-c", "import time; time.sleep(90)"]))
+        _until(lambda: all(p in snap.snapshot() for p in started), 20, "the stand-ins")
+        procs = snap.snapshot()
+        outside, game = ((p, procs[p].create_time) for p in started)
+        recorder, relay = (me.pid, me.create_time), (link.pid, link.create_time)
+        assert all(p not in tgt.descendants(procs, *root) for p in started for root in (recorder, relay))
+        # The recorder's own check is told the program sits in the folder; the relay reads it for itself.
+        with pytest.raises(client.GameRefused) as no:
+            link.aim(outside, image=lambda pid: forms[0] + "\\lantern.exe")
+        assert no.value.sent is True and "is not in the game's folder" in no.value.why, no.value.why
+        link.aim(game)
+        assert link.game == game
+        frames = link.frames_collector(game[0])
+        tracker = nf.FlowTracker(lambda: {game[0]}, selftest=False, relay=link)
+        origin = clock.now()
+        frames.start(origin)
+        tracker.start(origin)
+        _until(lambda: tracker.status().state == "ok", 20, "the relay's network trace to start")
+        _until(lambda: any(p.ppid == link.pid and "presentmon" in p.name.lower()
+                           for p in snap.snapshot().values()), 20, "the relay's PresentMon on the game it took")
+        frames.stop()
+        tracker.stop()
+    finally:
+        code = link.close(wait_s=5)
+        for pid in started:
+            try:
+                os.kill(pid, 9)                          # the test's own stand-ins
+            except OSError:
+                pass
+    st = frames.status()
+    assert st.state == "failed" and st.detail.startswith("PresentMon ran but"), st      # it never draws
+    assert frames.result()["presentmon"]["relay"]["pid"] == link.pid
+    assert code == protocol.EXIT_OK

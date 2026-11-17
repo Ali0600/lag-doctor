@@ -1,14 +1,21 @@
 """The relay's messages: one JSON object per pipe message, each checked where it arrives.
 
 The relay runs with administrator rights and the recorder in the player's own account, so each side checks what the
-other sends: the relay accepts exactly two messages from the recorder (`start`, with the capture clock's origin, and
-`stop`) and never takes a PresentMon or ETW argument from the pipe; the recorder checks every field's type and range
-before a value reaches the capture, so a broken message ends the link with a reason instead of a traceback or a
-wrong number. Every message fits one pipe message of at most MAX_MESSAGE bytes: rows and events are packed into as
-many messages as they need (`pack`).
+other sends: the relay accepts three messages from the recorder (`game`, for Play, `start`, with the capture clock's
+origin, and `stop`) and takes no PresentMon or ETW argument from the pipe. The one thing that names what is traced,
+Play's `game`, is a proposal: the relay records that process only once it has judged it itself against the install
+folder its UAC prompt approved (target.check_proposed, on its own snapshots). The recorder checks every field's type
+and range before a value reaches the capture, so a broken message ends the link with a reason instead of a traceback
+or a wrong number. Every message fits one pipe message of at most MAX_MESSAGE bytes: rows and events are packed into
+as many messages as they need (`pack`).
 
 From the relay:
-  hello   {v, pid, game: [pid, create_time], frames: bool, network: bool}
+  hello   {v, pid, game: [pid, create_time] | null, folders: [form ...] | null, frames: bool, network: bool}
+          what the prompt approved: the running game (--game), or for Play the forms of its install folder
+          (--folder), before the game exists; exactly one of the two
+  game    {game: [pid, create_time]}                           Play: the game proposed is the one it will record
+  refused {game: [pid, create_time], why, retry: bool}         Play: it is not, and why; retry: asking again about
+                                                               it may change that (a read that failed)
   rows    {cols: [column ...], rows: [[value ...] ...]}     the game's frame rows, FRAME_COLUMNS present in them
   events  {ev: [[qpc, id, version, hex payload] ...]}         the game's and the recorder's Kernel-Network events
   frames  {state, detail, tool, final: bool, info: {...}|null}   PresentMon's status; final once its run is over
@@ -16,7 +23,11 @@ From the relay:
   end     {}                                                   nothing more will come
   error   {why}                                                the relay stops: why, in plain words
 From the recorder:
-  start   {origin: float}      the capture clock's origin (QPC seconds): start PresentMon and the ETW session
+  game    {game: [pid, create_time]}   Play only, before `start`, at most MAX_GAMES times: the process the folder
+                                       wait found; each one answered by `game` or `refused`, and a later one takes
+                                       the place of the one before
+  start   {origin: float}      the capture clock's origin (QPC seconds): start PresentMon and the ETW session (for
+                               Play, on the game the relay last accepted)
   stop    {}                   stop them, send what is left, then `end`
 """
 from __future__ import annotations
@@ -27,8 +38,11 @@ import re
 import secrets
 from typing import Any, Iterable
 
-VERSION = 1
+VERSION = 2                             # 2: Play's folder mode (hello's folders, the game messages), M6d
 MAX_MESSAGE = 65536                     # bytes per pipe message, both ways (the pipe's own cap)
+MAX_GAMES = 8                           # Play's `game` proposals before `start`: a re-armed wait, or a failed read
+MAX_FORMS = 4                           # forms of the install folder (target.MAX_FORMS, which a test holds equal)
+MAX_FORM_CHARS = 260                    # each form's length (target.MAX_FOLDER_CHARS, which a test holds equal)
 PIPE_PREFIX = "lagdoctor-relay-"
 _PIPE_NAME = re.compile(re.escape(PIPE_PREFIX) + r"[0-9a-f]{32}")
 MAX_PID = 0xFFFFFFFF
@@ -46,8 +60,9 @@ EXIT_OK = 0
 EXIT_CRASH = 1             # anything the relay did not expect (pythonw shows no traceback anywhere)
 EXIT_BAD_ARGS = 2          # a command line lag-doctor does not build
 EXIT_TARGET = 3            # the game or the recorder is not running as approved, or runs in another Windows session
+                           # (for Play also the recorder leaving while the relay waited for the game)
 EXIT_PIPE = 4              # its pipe could not be made: the name was taken, or Windows refused its owner
-EXIT_NO_CLIENT = 5         # the recorder did not connect in time
+EXIT_NO_CLIENT = 5         # the recorder did not connect, name the game (Play) or start the recording in time
 EXIT_NOT_READY = 6         # PresentMon is missing or failed its check (watch's own EXIT_NOT_READY is 6 too)
 EXIT_PROTOCOL = 7          # the recorder sent something the protocol does not allow
 
@@ -113,8 +128,20 @@ def pack(head: dict[str, Any], key: str, items: Iterable[Any]) -> tuple[list[byt
     return out, dropped
 
 
-def hello(pid: int, game: tuple[int, int], frames: bool, network: bool) -> bytes:
-    return encode({"t": "hello", "v": VERSION, "pid": pid, "game": list(game), "frames": frames, "network": network})
+def hello(pid: int, game: tuple[int, int] | None, folders: tuple[str, ...] | None, frames: bool,
+          network: bool) -> bytes:
+    return encode({"t": "hello", "v": VERSION, "pid": pid, "game": None if game is None else list(game),
+                   "folders": None if folders is None else list(folders), "frames": frames, "network": network})
+
+
+def game(proposed: tuple[int, int]) -> bytes:
+    """Play's proposal (from the recorder), and the relay's yes to it: the same message both ways."""
+    return encode({"t": "game", "game": [int(proposed[0]), int(proposed[1])]})
+
+
+def refused(proposed: tuple[int, int], why: str, retry: bool) -> bytes:
+    return encode({"t": "refused", "game": [int(proposed[0]), int(proposed[1])], "why": _cut(why, MAX_TEXT),
+                   "retry": bool(retry)})
 
 
 def row_values(row: dict[str, Any]) -> tuple[tuple[str, ...], list[Any]]:
@@ -202,6 +229,24 @@ def _text(value: Any, limit: int, what: str) -> str:
     if not isinstance(value, str) or len(value) > limit:
         raise ProtocolError(f"{what} is not text of at most {limit} characters")
     return value
+
+
+def _proposed(value: Any, what: str) -> tuple[int, int]:
+    """A process as [pid, create_time]: two whole numbers in range, nothing else."""
+    if not isinstance(value, list) or len(value) != 2:
+        raise ProtocolError(f"{what} is not a process as [pid, create time]")
+    return _int(value[0], 1, MAX_PID, f"{what}'s pid"), _int(value[1], 0, MAX_QPC, f"{what}'s create time")
+
+
+def _forms(value: Any) -> tuple[str, ...]:
+    """The install folder's forms as the relay's hello echoes them: 1 to MAX_FORMS short texts, none repeated."""
+    if not isinstance(value, list) or not 1 <= len(value) <= MAX_FORMS or len(set(map(str, value))) != len(value):
+        raise ProtocolError(f"the folder's forms are not 1 to {MAX_FORMS} different paths")
+    for form in value:
+        if not isinstance(form, str) or not 3 <= len(form) <= MAX_FORM_CHARS or any(ord(c) < 32 for c in form):
+            raise ProtocolError("a form of the folder is not a printable path of 3 to "
+                                f"{MAX_FORM_CHARS} characters")
+    return tuple(value)
 
 
 def _plain(value: Any, what: str, depth: int = 0) -> Any:
@@ -311,13 +356,20 @@ def from_relay(data: bytes) -> dict[str, Any]:
     msg = _load(data)
     t = msg["t"]
     if t == "hello":
-        _keys(msg, "v", "pid", "game", "frames", "network")
-        game = msg["game"]
-        if not isinstance(game, list) or len(game) != 2:
-            raise ProtocolError("hello names no game")
+        _keys(msg, "v", "pid", "game", "folders", "frames", "network")
+        if (msg["game"] is None) == (msg["folders"] is None):
+            raise ProtocolError("hello names neither a game nor a folder, or both")
         return {"t": t, "v": _int(msg["v"], 0, 1 << 16, "the version"), "pid": _int(msg["pid"], 1, MAX_PID, "its pid"),
-                "game": (_int(game[0], 1, MAX_PID, "the game's pid"), _int(game[1], 0, MAX_QPC, "its create time")),
+                "game": None if msg["game"] is None else _proposed(msg["game"], "the game"),
+                "folders": None if msg["folders"] is None else _forms(msg["folders"]),
                 "frames": _bool(msg["frames"], "frames"), "network": _bool(msg["network"], "network")}
+    if t == "game":
+        _keys(msg, "game")
+        return {"t": t, "game": _proposed(msg["game"], "the game")}
+    if t == "refused":
+        _keys(msg, "game", "why", "retry")
+        return {"t": t, "game": _proposed(msg["game"], "the game"), "why": _text(msg["why"], MAX_TEXT, "the reason"),
+                "retry": _bool(msg["retry"], "retry")}
     if t == "rows":
         return _rows(msg)
     if t == "events":
@@ -350,9 +402,13 @@ def from_relay(data: bytes) -> dict[str, Any]:
 
 @_readable
 def from_recorder(data: bytes) -> dict[str, Any]:
-    """A message from the recorder, checked: only `start` with a finite origin, or `stop`."""
+    """A message from the recorder, checked: only `game` naming a process, `start` with a finite origin, or `stop`
+    (which of them the relay takes, and when, is its own rule: server.Relay._read_loop)."""
     msg = _load(data)
     t = msg["t"]
+    if t == "game":
+        _keys(msg, "game")                  # no path, folder or session: the relay reads what it judges itself
+        return {"t": t, "game": _proposed(msg["game"], "the game named")}
     if t == "start":
         _keys(msg, "origin")
         origin = msg["origin"]

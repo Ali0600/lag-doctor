@@ -4,7 +4,11 @@ the session's "frames" and "net_flows" collectors.
 `launch()` builds the relay's command line (everything the prompt approves), starts it with `elevation.launch_elevated`
 under pythonw (no console window), connects to its pipe and checks it: the server's pid must be the relay's own (the
 process handle held since the launch pins that pid), and the pipe's owner must be Administrators, which Windows lets
-only an elevated token set. Then `RelayLink` reads the relay's messages on one thread and hands them on:
+only an elevated token set. The prompt approves either the running game or, for Play, the game's install folder
+before the store starts it: then `RelayLink.aim` names the game the folder wait found, once the recorder's own check
+(target.check_proposed, with the arguments the relay will use) passes, and returns when the relay has accepted it too
+(GameRefused when either says no: the relay waits on for another). Then `RelayLink` reads the relay's messages on one
+thread and hands them on:
 - `RelayedFrames` (collector "frames") is PresentMonSource fed the game's rows from the pipe instead of a child's CSV:
   the same storage, live frame rate and result, with PresentMon's status and details as the relay reports them;
 - `RelayedEtwSession` stands in for the ETW session inside FlowTracker (`FlowTracker(relay=link)`): its events, its
@@ -31,6 +35,8 @@ NET_START_S = 15.0            # the relay says whether its ETW session started
 STOP_FRAMES_S = 20.0          # past the relay's worst PresentMon stop (about 10 s), inside the session's 25 s join
 STOP_NET_S = 4.0              # inside the session's 5 s stop for net_flows
 MAX_EARLY_EVENTS = 50_000     # network events that come before the tracker has made its session: kept until it has
+AIM_S = 10.0                  # Play: for the relay's answer about a game (two snapshots and a read on its side)
+GOODBYE_WAIT_S = 6.0          # past the relay's GOODBYE_S: once the link is over, how long its exit code is awaited
 ADMINISTRATORS = "S-1-5-32-544"
 
 
@@ -42,20 +48,43 @@ class RelayFailed(Exception):
         self.why, self.code = why, code
 
 
+class GameRefused(Exception):
+    """Play: the process named is not one the relay may record (RelayLink.aim). `why` in plain words; `retry`: asking
+    again about the same process may change that (a read that failed); `sent`: the relay itself said so (False: the
+    recorder's own check said it first, and nothing was sent). The relay waits on for another game."""
+
+    def __init__(self, why: str, retry: bool = False, sent: bool = False) -> None:
+        super().__init__(why)
+        self.why, self.retry, self.sent = why, retry, sent
+
+
 def relay_python() -> Path:
     """The interpreter that runs the relay: pythonw.exe beside the base interpreter, so no console window opens and
     the launched process is the relay itself (a venv's pythonw.exe is a launcher that starts another process)."""
     return Path(sys.base_exec_prefix) / "pythonw.exe"
 
 
-def relay_argv(pipe_name: str, recorder: tuple[int, int], sid: str, game: tuple[int, int], *,
-               presentmon_exe: Path | None, frames: bool, network: bool, python: Path | None = None) -> list[str]:
+def relay_argv(pipe_name: str, recorder: tuple[int, int], sid: str, game: tuple[int, int] | None = None, *,
+               presentmon_exe: Path | None, frames: bool, network: bool, folders: tuple[str, ...] | None = None,
+               wait_s: float | None = None, python: Path | None = None) -> list[str]:
     """The relay's command line: what the UAC prompt approves. -B: it writes no bytecode (no file at all); -E -s: no
-    PYTHON* variables and no user site-packages. Every path absolute (launch_elevated refuses a relative one)."""
+    PYTHON* variables and no user site-packages. Every path absolute (launch_elevated refuses a relative one). The
+    game is the running one (`game`), or for Play the forms of its install folder (`folders`, target.folder_forms'
+    tuple, written as target.check_forms gives them, so the prompt shows what the relay will use) with how long the
+    recorder will wait for the store to start it (`wait_s`, at most target.MAX_WAIT_S)."""
     python = python if python is not None else relay_python()
     argv = [str(python), "-B", "-E", "-s", "-m", "lagdoctor.relay", "--pipe", pipe_name,
-            "--recorder", f"{int(recorder[0])}:{int(recorder[1])}", "--sid", sid,
-            "--game", f"{int(game[0])}:{int(game[1])}"]
+            "--recorder", f"{int(recorder[0])}:{int(recorder[1])}", "--sid", sid]
+    if (game is None) == (folders is None):
+        raise ValueError("the relay records the running game or one from its install folder: name one of the two")
+    if game is not None:
+        argv += ["--game", f"{int(game[0])}:{int(game[1])}"]
+    else:
+        from lagdoctor.capture.target import check_forms
+        for form in check_forms(folders):
+            argv += ["--folder", form]
+        number = isinstance(wait_s, (int, float)) and not isinstance(wait_s, bool)
+        argv += ["--wait-s", f"{wait_s:g}" if number else str(wait_s)]
     if frames:
         if presentmon_exe is None or not Path(presentmon_exe).is_absolute():
             raise ValueError("frame timing through the relay needs PresentMon's absolute path")
@@ -74,20 +103,27 @@ def _exit_code(child, wait_s: float = 0.0) -> int | None:
         return None
 
 
-def launch(target: dict[str, Any], *, presentmon_exe: Path | None, frames: bool, network: bool,
+def launch(target: dict[str, Any] | None = None, *, presentmon_exe: Path | None, frames: bool, network: bool,
            recorder: tuple[int, int], sid: str, launcher: Callable[..., Any] | None = None,
-           owner: str | None = None, cwd: Path | None = None, python: Path | None = None) -> "RelayLink":
-    """Start the relay for this recording (one UAC prompt), connect and check it. PermissionError when the prompt is
-    declined; ValueError for a command it refused to build; RelayFailed when the relay ended or answered wrongly.
-    `owner`: the pipe owner to require (default ADMINISTRATORS); `cwd`: where it runs (default PROJECT_ROOT)."""
+           owner: str | None = None, cwd: Path | None = None, python: Path | None = None,
+           folders: tuple[str, ...] | None = None, wait_s: float | None = None) -> "RelayLink":
+    """Start the relay for this recording (one UAC prompt), connect and check it: for the running game `target`, or for
+    Play the forms of its install folder (`folders`, target.folder_forms' tuple) before the game exists, with how long
+    the recorder will wait for the store to start it (`wait_s`); RelayLink.aim then names the game. PermissionError
+    when the prompt is declined; ValueError for a command it refused to build; RelayFailed when the relay ended or
+    answered wrongly. `owner`: the pipe owner to require (default ADMINISTRATORS); `cwd`: where it runs (default
+    PROJECT_ROOT)."""
     if launcher is None:
         from lagdoctor.winapi.elevation import launch_elevated as launcher
     owner = ADMINISTRATORS if owner is None else owner
     cwd = PROJECT_ROOT if cwd is None else cwd
     name = protocol.pipe_name()
-    game = (int(target["pid"]), int(target["create_time"]))
+    game = None if target is None else (int(target["pid"]), int(target["create_time"]))
+    if folders is not None:
+        from lagdoctor.capture.target import check_forms
+        folders = check_forms(folders)              # the forms the relay will use and its hello will name
     argv = relay_argv(name, recorder, sid, game, presentmon_exe=presentmon_exe, frames=frames, network=network,
-                      python=python)
+                      folders=folders, wait_s=wait_s, python=python)
     child = launcher(argv, cwd=str(cwd))
     client = None
     try:
@@ -102,7 +138,14 @@ def launch(target: dict[str, Any], *, presentmon_exe: Path | None, frames: bool,
         if (hello["t"] != "hello" or hello["v"] != protocol.VERSION or hello["pid"] != child.pid
                 or hello["game"] != game or hello["frames"] != frames or hello["network"] != network):
             raise RelayFailed("the relay did not greet the recording window as expected")
-        link = RelayLink(client, child, hello)
+        if hello["folders"] != folders:
+            raise RelayFailed("the relay did not greet the recording window with the folder it was approved for")
+        aim_by = time.monotonic() + wait_s + _game_slack() - AIM_S if folders is not None else None
+        since, session = _relay_and_session(child.pid, recorder[0])
+        if folders is not None and (since is None or session is None):
+            raise RelayFailed("when the relay started could not be read here, so no game it might record could be "
+                              "checked; nothing was recorded through it")
+        link = RelayLink(client, child, hello, create_time=since, recorder=recorder, session=session, aim_by=aim_by)
         client = child = None
         return link
     except (TimeoutError, protocol.ProtocolError) as exc:
@@ -114,6 +157,33 @@ def launch(target: dict[str, Any], *, presentmon_exe: Path | None, frames: bool,
             client.close()
         if child is not None:
             child.close()
+
+
+def _game_slack() -> float:
+    """The relay's own GAME_SLACK_S, looked up when called: how long past the recorder's wait it waits for a game."""
+    from lagdoctor.relay.server import GAME_SLACK_S
+    return GAME_SLACK_S
+
+
+def _snapshot_now() -> dict:
+    from lagdoctor.winapi.ntquery import Snapshotter
+    return Snapshotter().snapshot()
+
+
+def _image_path(pid: int) -> str | None:
+    from lagdoctor.winapi import ntquery
+    return ntquery.image_path(pid)
+
+
+def _relay_and_session(relay_pid: int, recorder_pid: int) -> tuple[int | None, int | None]:
+    """The relay's create time (Play's `since`: its game must have started after it) and the recorder's Windows
+    session, from one snapshot of this process's own; None for what it could not read."""
+    try:
+        procs = _snapshot_now()
+    except OSError:
+        return None, None
+    relay, me = procs.get(relay_pid), procs.get(recorder_pid)
+    return (relay.create_time if relay is not None else None), (me.session_id if me is not None else None)
 
 
 def _connect(name: str, child):
@@ -132,13 +202,27 @@ def _connect(name: str, child):
                 raise RelayFailed(f"the relay did not answer within {CONNECT_S:.0f} s") from None
 
 
-class RelayLink:
-    """One relay, connected and checked: its messages go to the collectors made through it."""
+_UNREAD = object()
 
-    def __init__(self, client, child, hello: dict[str, Any]) -> None:
+
+class RelayLink:
+    """One relay, connected and checked: its messages go to the collectors made through it. `create_time`: the
+    relay's, as launch read it (default: read now); for Play also `recorder` (pid, create_time), its Windows
+    `session` and `aim_by` (time.monotonic), past which the relay no longer takes a game."""
+
+    def __init__(self, client, child, hello: dict[str, Any], *, create_time: Any = _UNREAD,
+                 recorder: tuple[int, int] | None = None, session: int | None = None,
+                 aim_by: float | None = None) -> None:
         self.pid: int = hello["pid"]
         self.frames: bool = hello["frames"]
         self.network: bool = hello["network"]
+        self.folders: tuple[str, ...] | None = hello.get("folders")     # Play: the forms the prompt approved
+        # The game it records: the running one the prompt approved, or Play's, once the relay accepted it (aim).
+        self.game: tuple[int, int] | None = hello.get("game")
+        self.recorder, self.session, self.aim_by = recorder, session, aim_by
+        self._aiming: tuple[int, int] | None = None         # Play: the game named, until the relay answers
+        self._reply: dict[str, Any] | None = None
+        self._replied = threading.Event()
         self._client, self._child = client, child
         self._write_lock = threading.Lock()
         self._state_lock = threading.Lock()
@@ -151,13 +235,16 @@ class RelayLink:
         self.ended = threading.Event()          # `end` came, or the link broke
         self.why: str | None = None             # why it broke; None after a clean end
         self.relay_error: str | None = None     # what the relay said when it stopped on a problem
-        self.create_time = _create_time(self.pid)
+        self.create_time = _create_time(self.pid) if create_time is _UNREAD else create_time
         self._reader = threading.Thread(target=self._read_loop, name="lagdoctor-relay", daemon=True)
         self._reader.start()
 
     # ---- for the session ------------------------------------------------------------------------------
     def frames_collector(self, pid: int) -> "RelayedFrames":
         self._frames_sink = RelayedFrames(self, pid)
+        if self.folders is not None and (self.game is None or pid != self.game[0]):
+            self._give_up(f"the recording's game (process {pid}) is not the one the relay accepted, so nothing was "
+                          "recorded through it")
         self._tell_if_over(self._frames_sink)
         return self._frames_sink
 
@@ -188,13 +275,90 @@ class RelayLink:
         return ((self.pid, self.create_time),) if self.create_time is not None else ()
 
     # ---- commands ---------------------------------------------------------------------------------------
+    def aim(self, game: tuple[int, int], *, snapshot: Callable[[], dict] | None = None,
+            image: Callable[[int], str | None] | None = None) -> None:
+        """Play: name the game the folder wait found, (pid, create_time). The recorder's own check comes first
+        (target.check_proposed with the arguments the relay will use, on `snapshot` and `image`: this process's own
+        by default), so a game the relay would refuse is never sent; then the relay judges it on its own snapshots.
+        Returns once the relay has accepted it: the recording may start. GameRefused when either says no (the relay
+        waits on for another); RelayFailed when the link ended, the relay did not answer within AIM_S or its wait
+        for a game is over (the link is closed then, and the relay's exit code is in it); ValueError for a relay
+        approved for the running game itself; RuntimeError while another aim is under way. Each aim takes the place
+        of the one before, as on the relay's side, until the recording starts."""
+        from lagdoctor.capture.target import check_proposed
+        proposed = (int(game[0]), int(game[1]))
+        with self._state_lock:
+            if self.folders is None:
+                raise ValueError("the relay was approved for the running game itself, so it takes no other")
+            if self._aiming is not None:
+                raise RuntimeError("another game is being named to the relay")
+            over = self._started or self._stop_sent or self.ended.is_set()
+        if over or (self.aim_by is not None and time.monotonic() > self.aim_by):
+            raise RelayFailed(self.why or "the relay no longer takes a game for this recording")
+        why, retry = check_proposed(snapshot or _snapshot_now, image or _image_path, *proposed, session=self.session,
+                                    folders=self.folders, since=self.create_time,
+                                    own=(self.recorder, (self.pid, self.create_time)))
+        if why is not None:
+            raise GameRefused(why, retry, sent=False)
+        with self._state_lock:
+            if self._aiming is not None or self._started or self._stop_sent:
+                raise RuntimeError("the relay's game changed hands while it was being named")
+            self._aiming, self._reply = proposed, None
+            self._replied.clear()
+            self.game = None                        # the relay forgets the one before as this one arrives
+        self._send(protocol.game(proposed))
+        deadline = time.monotonic() + AIM_S
+        while not self._replied.wait(0.05):
+            if self.ended.is_set() or time.monotonic() >= deadline:
+                break
+        with self._state_lock:
+            reply, self._aiming = self._reply, None
+            if reply is not None and reply["t"] == "game":
+                self.game = proposed
+        if reply is None:
+            self._broke(f"the relay did not answer about the game within {AIM_S:.0f} s")
+            code = self.close(wait_s=GOODBYE_WAIT_S)
+            raise RelayFailed(self.why or "the relay ended", code)
+        if reply["t"] == "refused":
+            raise GameRefused(reply["why"], reply["retry"], sent=True)
+
+    def _take_reply(self, msg: dict[str, Any]) -> bool:
+        """The relay's answer about a game (`game` or `refused`), on the reader's thread: kept for aim when it names
+        the game being named, once; False for any other (the link then breaks)."""
+        with self._state_lock:
+            if self._aiming is None or msg["game"] != self._aiming or self._reply is not None:
+                return False
+            self._reply = msg
+        self._replied.set()
+        return True
+
     def start(self, origin: float) -> None:
-        """Start the relay's recording on the capture clock's origin; the first call does it."""
+        """Start the relay's recording on the capture clock's origin; the first call does it. For Play only on the
+        game the relay accepted (aim): with none, the relay is told to stop instead and the link ends with the reason,
+        so nothing is recorded through it."""
         with self._state_lock:
             if self._started or self._stop_sent:
                 return
             self._started = True
+            unaimed = self.folders is not None and (self.game is None or self._aiming is not None)
+        if unaimed:
+            self._give_up("the recording started before the relay had accepted its game, so nothing was recorded "
+                          "through it")
+            return
         self._send(protocol.start(origin))
+
+    def _give_up(self, why: str) -> None:
+        """End the link with `why`, and tell the relay to stop, so it ends at once instead of waiting out its deadline
+        (the reason first: the relay's `end` to that stop must not read as a clean end)."""
+        with self._state_lock:
+            stop, self._stop_sent = not self._stop_sent, True
+        self._broke(why)
+        if stop:
+            with self._write_lock:
+                try:
+                    self._client.write(protocol.stop(), 5.0)
+                except (OSError, ValueError):
+                    pass                            # it is gone already: it ends by itself
 
     def stop(self) -> None:
         """Ask the relay to stop and send what is left; the first call does it. Said first to the flow tracker (as the
@@ -250,6 +414,8 @@ class RelayLink:
                 msg = protocol.from_relay(data)
                 if msg["t"] == "hello":
                     raise protocol.ProtocolError("a second hello")
+                if msg["t"] in ("game", "refused") and not self._take_reply(msg):
+                    raise protocol.ProtocolError("an answer about a game the recording window did not name")
             except protocol.ProtocolError as exc:
                 self._broke(f"the relay sent a message the recording window cannot use ({exc})")
                 return
@@ -292,7 +458,8 @@ class RelayLink:
         """`end` came: a collector still waiting for its final status gets the relay's reason (it stopped before the
         recording began, or on a problem it named); one that has its final keeps it."""
         self.ended.set()
-        why = f"the relay ended: {self.relay_error}" if self.relay_error else "the relay ended"
+        # A link this window ended first (_give_up: it told the relay to stop) keeps its own reason.
+        why = self.why or (f"the relay ended: {self.relay_error}" if self.relay_error else "the relay ended")
         for sink in (self._frames_sink, self._net_sink):
             if sink is not None:
                 sink.relay_gone(why)
