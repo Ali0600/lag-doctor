@@ -27,6 +27,7 @@ import pytest
 
 from lagdoctor.capture import presentmon as pm
 from lagdoctor.model import F
+from lagdoctor.report import labels
 from lagdoctor.winapi import elevation, ntquery
 
 FIX = Path(__file__).parent / "fixtures" / "presentmon"
@@ -588,6 +589,20 @@ def test_malformed_rows_make_the_capture_partial(state):
     st, info = src.status(), src.result()["presentmon"]
     assert info["malformed"] == 1 and info["rows"] == PID_ROWS - 1
     assert st.state == "partial" and "1 malformed CSV row(s) skipped" in st.detail
+
+
+def test_a_window_covered_from_the_start_says_why_presentmon_wrote_nothing(state):
+    # PM 2.4: each frame Windows did not show waits behind a shown one that never comes, until PresentMon's queue
+    # overflows. The e2e run said only "PresentMon ran but wrote no CSV": the warning was dropped on that path
+    src = Fake("covered", state)
+    run_to_end(src)
+    st = src.status()
+    assert st.state == "failed" and st.detail.startswith(
+        "PresentMon ran but wrote no CSV (it holds back frames Windows did not show until one is: most likely the "
+        "game's window stayed covered or minimized, or the game drew nothing)"), st.detail
+    assert st.detail.endswith("; warning: 236 overflowed present events detected. This could be due to a high-fps "
+                              "application."), st.detail
+    assert labels.short_reason(st.detail) == "PresentMon ran but wrote no CSV"      # the headline's words stay short
 
 
 def test_lost_events_make_the_capture_partial(state):

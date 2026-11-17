@@ -57,6 +57,16 @@ def run(cause, cap, *, stats=None, bound=None, events=(), causes=None, frames=No
     return rules.run_rule(rules.RULE_BY_CAUSE[cause], cap, ctx)
 
 
+def behind_frames(behind_s, behind_ms=16.0, front_ms=8.0, secs=30.0):
+    """Frames over `secs`: behind_ms each up to behind_s, front_ms after. With game_focused 0 up to behind_s, the game
+    made half the frames behind another window: the cost not_focused needs measured before it is named."""
+    fms, t = [], 0.0
+    while t < secs:
+        fms.append(behind_ms if t < behind_s else front_ms)
+        t += fms[-1] / 1000.0
+    return synth.frames_table(fms, t0=0.0)
+
+
 def stutter(i, t, cause=None, side="cpu", **detail):
     return LagEvent(id=i, kind="stutter", t_start=t, t_end=t + 0.15, severity=150.0,
                     detail={"side": side, "why": ["side line", f"signal line {i}"], **detail},
@@ -553,6 +563,41 @@ def test_the_engine_fallback_never_rules_the_cpu_out():
     assert isinstance(res, rules.Unchecked) and res.text.startswith("whether the CPU limits the frame rate"), res
 
 
+def test_the_engine_fallback_at_the_displays_rate_clears_the_cpu_as_any_verdict_does_there():
+    # At 140 FPS on 144 Hz cpu_limit read "already reaches the display" under a CPU verdict, while under the 3D
+    # engine's "gpu" (too few steady frames for r) it and cpu_throttle read "whether the CPU limits the frame rate
+    # could not be judged": at the display's rate the display sets the pace, whatever the verdict says of the CPU
+    note = "only 240 steady frames over 8.0 s; a verdict needs 300 frames and 10 s"
+    bound = {"verdict": "gpu", "r": None, "notes": [note], "busiest_thread": 0.95}
+    throttled = make(system=cpu_sys(limit=80.0, busiest=95.0), duration=60.0)
+    for fps, cleared in ((140.0, True), (130.0, True), (129.0, False)):      # 0.9 x 144 Hz = 129.6
+        limit = run("cpu_limit", make(system=engine(99.0)), stats={"avg_fps": fps}, bound=bound)
+        held = run("cpu_throttle", throttled, stats={"avg_fps": fps}, bound=bound)
+        if cleared:
+            assert isinstance(limit, rules.Cleared) and limit.text == (
+                f"At {fps:.0f} FPS the game already reaches the 144 Hz display."), (fps, limit)
+            assert isinstance(held, rules.Cleared) and held.text == (
+                "The CPU is not what limits the frame rate: at "
+                f"{fps:.0f} FPS the game already reaches the 144 Hz display."), (fps, held)
+        else:
+            for res in (limit, held):
+                assert isinstance(res, rules.Unchecked) and res.text.startswith(
+                    "whether the CPU limits the frame rate could not be judged"), (fps, res)
+    # every verdict the cpu gate lets through clears there too: under "unknown", the nearest to the fallback, CPU heat
+    # was a finding at 140 FPS while the fallback cleared it; below the display's rate it still is one
+    for verdict in ("unknown", "cpu_main", "cpu_all", "mixed"):
+        through = {"verdict": verdict, "r": 0.40 if verdict != "unknown" else None, "busiest_thread": 0.95}
+        fast = run("cpu_throttle", throttled, stats={"avg_fps": 140.0}, bound=through)
+        assert isinstance(fast, rules.Cleared) and fast.text == (
+            "The CPU is not what limits the frame rate: at 140 FPS the game already reaches the 144 Hz display."), \
+            (verdict, fast)
+        assert is_finding(run("cpu_throttle", throttled, stats={"avg_fps": 120.0}, bound=through)), verdict
+    # frame timing's own "gpu" (r measured) keeps its own clear: the gate's text names the GPU there
+    timed = run("cpu_throttle", throttled, stats={"avg_fps": 140.0}, bound={"verdict": "gpu", "r": 0.97,
+                                                                             "busiest_thread": 0.95})
+    assert isinstance(timed, rules.Cleared) and "it is limited by" in timed.text, timed
+
+
 def test_a_cpu_that_cannot_be_ruled_out_is_never_cleared_by_any_cpu_side_rule():
     # LC 3.2's grey zone and an older capture past VSync's work edge held cpu_limit open, while the cpu gate cleared
     # cpu_throttle ("the CPU is not what limits the frame rate") and not_focused ruled the CPU out in the same report
@@ -560,13 +605,14 @@ def test_a_cpu_that_cannot_be_ruled_out_is_never_cleared_by_any_cpu_side_rule():
     res = run("cpu_throttle", make(system=cpu_sys(limit=80.0, busiest=75.0), duration=60.0), bound=grey)
     assert isinstance(res, rules.Unchecked) and "so it is not ruled out" in res.text
     sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 6.0 else 1)       # 20 % behind another window
-    assert is_finding(run("not_focused", make(system=sys_), bound=grey), "medium")
+    slower = behind_frames(6.0)                                                      # half the frames there
+    assert is_finding(run("not_focused", make(system=sys_), bound=grey, frames=slower), "medium")
     # control: no thread in the grey zone, so the verdict rules the CPU out and the gate clears it, as before (a 40 %
     # thread would not reach the gate: cpu_throttle's own "only 40% of a CPU" cancels the limit it saw)
     calm = {"verdict": "waiting", "r": 0.40}
     res = run("cpu_throttle", make(system=cpu_sys(limit=80.0, busiest=40.0), duration=60.0), bound=calm)
     assert isinstance(res, rules.Cleared), res
-    assert run("not_focused", make(system=sys_), bound=calm) is None
+    assert run("not_focused", make(system=sys_), bound=calm, frames=slower) is None
 
 
 def test_vsync_at_one_refresh_holds_the_cpu_open_below_the_display_whatever_the_thread_and_never_at_it():
@@ -574,20 +620,22 @@ def test_vsync_at_one_refresh_holds_the_cpu_open_below_the_display_whatever_the_
     # thread held the CPU open while a 90 % one ruled it out: CPU heat "checked and fine" and not_focused gone for the
     # busier thread. At the display's rate a CPU limit costs nothing the player sees, so neither holds there
     sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 6.0 else 1)       # 20 % behind another window
+    slower = behind_frames(6.0)                                                      # half the frames there
     for busiest in (0.84, 0.90):
         bound = {"verdict": "vsync", "vsync": True, "r": 0.48, "busiest_thread": busiest}
         throttled = make(system=cpu_sys(limit=80.0, busiest=100 * busiest), duration=60.0)
         slow = run("cpu_throttle", throttled, stats={"avg_fps": 120.0}, bound=bound)    # 144 Hz: some miss a refresh
         assert isinstance(slow, rules.Unchecked) and slow.text.endswith("so the CPU is not ruled out" if busiest > 0.85
                                                                        else "so it is not ruled out"), (busiest, slow)
-        assert is_finding(run("not_focused", make(system=sys_), stats={"avg_fps": 120.0}, bound=bound), "medium")
+        assert is_finding(run("not_focused", make(system=sys_), stats={"avg_fps": 120.0}, bound=bound,
+                              frames=slower), "medium")
         limit = run("cpu_limit", make(system=cpu_sys(busiest=100 * busiest), duration=60.0), stats={"avg_fps": 120.0},
                     bound=bound)
         assert not isinstance(limit, rules.Cleared), (busiest, limit)
         fast = run("cpu_throttle", throttled, stats={"avg_fps": 140.0}, bound=bound)    # the display's rate
         assert isinstance(fast, rules.Cleared) and fast.text.endswith("limited by VSync: the screen's refresh rate."), \
             (busiest, fast)
-        assert run("not_focused", make(system=sys_), stats={"avg_fps": 140.0}, bound=bound) is None
+        assert run("not_focused", make(system=sys_), stats={"avg_fps": 140.0}, bound=bound, frames=slower) is None
 
 
 def test_cpu_throttle_never_says_cpu_speed_is_not_what_holds_back_a_cpu_that_is_not_ruled_out():
@@ -643,7 +691,8 @@ def test_an_old_capture_past_vsyncs_work_edge_on_its_upper_bound_is_never_called
     res = run("cpu_limit", make(system=cpu_sys(busiest=53.0), duration=60.0), stats={"avg_fps": 72.0}, bound=bound)
     assert isinstance(res, rules.Unchecked) and res.text == note
     sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 6.0 else 1)
-    assert is_finding(run("not_focused", make(system=sys_), bound=bound), "medium")       # nor ruled out there
+    assert is_finding(run("not_focused", make(system=sys_), bound=bound, frames=behind_frames(6.0)),
+                      "medium")                                                        # nor ruled out there
     # control: under the edge it is fine, as before
     calm = dict(bound, busiest_thread=0.45, notes=[])
     assert isinstance(run("cpu_limit", make(system=cpu_sys(busiest=45.0), duration=60.0), stats={"avg_fps": 72.0},
@@ -1359,6 +1408,78 @@ def test_throttling_held_all_the_time_is_never_contradicted_by_stutters_it_canno
         [e.text for e in res.evidence]
 
 
+def test_the_lift_line_says_how_many_moments_the_load_explained_and_left_out():
+    # attribute._turbo_veto: where the clock came down only as every CPU filled, the moment leaves the count, and the
+    # line says so, not "4 of 8" over a capture with 20 drops
+    events = [stutter(i, 1.0 + i) for i in range(1, 21)]
+    entry = lift("supports", a=4, n=8, left_out=12, left_out_why=attribute.TURBO_LEFT_OUT)
+    res = run("cpu_throttle", make(system=cpu_sys(), duration=60.0), bound={"verdict": "cpu_main", "busiest_thread": 0.95},
+              events=events, causes={"cpu_throttle": entry})
+    assert ("4 of 8 stutters and FPS drops coincided with the CPU slowing down (lift 20.0); 12 more are left out: there "
+            "the CPU's clock fell only as the PC's CPU use rose, which turbo does by design.") in [e.text for e in res.evidence]
+    one = lift("supports", a=4, n=8, left_out=1, left_out_why=attribute.TURBO_LEFT_OUT)
+    res = run("cpu_throttle", make(system=cpu_sys(), duration=60.0), bound={"verdict": "cpu_main", "busiest_thread": 0.95},
+              events=events, causes={"cpu_throttle": one})
+    assert any(e.text.endswith("(lift 20.0); 1 more is left out: there the CPU's clock fell only as the PC's CPU use "
+                               "rose, which turbo does by design.") for e in res.evidence)
+
+
+def test_the_disk_line_says_how_many_frozen_frames_the_game_worked_through_and_left_out():
+    # attribute._wait_veto: another program's disk use at a frozen frame the game's thread worked through leaves the
+    # count, and the line says why, in the words of the veto the disk answers to (never turbo's)
+    events = [stutter(i, 1.0 + i, "background_cpu") for i in range(1, 10)]
+    causes = {"background_cpu": lift("supports", a=6, n=9),
+              "background_disk": lift("neutral", a=0, n=6, left_out=3,
+                                      left_out_why=attribute._left_out_why(next(
+                                          c for c in attribute._causes(make(), attribute._others(make()))
+                                          if c.name == "background_disk")))}
+    res = run("background_hogs", make(system=synth.system_table(30)), events=events, causes=causes)
+    assert ("0 of 6 stutters and FPS drops coincided with another program's disk use rising; 3 more are left out: "
+            "there the game's busiest thread worked through the frozen frame, so the game was not waiting on the "
+            "disk.") in [e.text for e in res.evidence], [e.text for e in res.evidence]
+
+
+def test_a_causes_example_keeps_a_long_why_line_whole():
+    # a frozen frame's waiting line runs to about 230 characters, and a 200-character cut ended one "so the g"
+    line = ("nothing else moved: in a frame held 160 ms the game's busiest thread ran 5 ms more than usual, nearer the "
+            "27 ms less of waiting than the 133 ms more of working through it; the GPU was idle, so the game waited on "
+            "itself")
+    assert 200 < len(line) < 320
+    events = [LagEvent(id=i, kind="stutter", t_start=1.0 + i, t_end=1.15 + i, severity=150.0,
+                       detail={"side": "cpu", "why": ["side line", line]}, causes=["game_stall"]) for i in range(1, 7)]
+    res = run("game_stall", make(), events=events, causes={"game_stall": lift("supports", a=6, n=6, lift_=None)})
+    assert f"For example at 2.0 s: {line}." in [e.text for e in res.evidence]
+
+
+def test_one_stutter_is_said_as_one():
+    one = [stutter(1, 5.0, "game_cpu_spike")]
+    few = {k: lift("too_few_events", a=0, n=1) for k in ("background_cpu", "background_disk", "background_gpu")}
+    res = run("background_hogs", make(system=synth.system_table(30)), events=one, causes=few)
+    assert isinstance(res, rules.Unchecked) and res.text == ("only 1 stutter or FPS drop: linking them to another "
+                                                             "program needs at least 5")
+    res = run("shader_compile", make(), events=one)
+    assert isinstance(res, rules.Unchecked) and res.text == ("only 1 stutter came from the game's own work: too few to "
+                                                             "tell whether they bunch up at the start")
+
+
+@pytest.mark.parametrize("residual, worked, counts", [(5, 5, True), (1, 1, False), (5, 0, False)])
+def test_the_games_own_work_counts_the_stutters_the_residual_named(residual, worked, counts):
+    # attribute._residual names game_cpu_spike where nothing else moved and the thread was saturated or worked through
+    # the frozen frame, which the lift test's 1 s means could not see: the finding said "(8 of 8)" while its only count
+    # was "3 of 8 coincided". Only frames the ticks showed worked through weigh: a thread saturated all along says
+    # nothing of the moment, and too few say little.
+    events = [stutter(i, 1.0 + i, "game_cpu_spike") for i in range(1, 4 + residual)]
+    entry = lift("neutral", a=0, n=3 + residual, lift_=None, residual=residual, worked=worked)   # the family's
+    res = run("game_cpu_spike", make(), events=events, causes={"game_cpu_spike": entry})      # strongest item counts
+    line = (f"In {residual} of {3 + residual} stutters and FPS drops nothing else explained them, and the game's "
+            "busiest thread was saturated or worked through the frozen frame.")
+    assert line in [e.text for e in res.evidence], [e.text for e in res.evidence]
+    # where that line counts, "best explained by ..., too few to be sure" would sit under it
+    assert any("too few to be sure" in e.text for e in res.evidence) is not counts
+    without = run("game_cpu_spike", make(), events=events, causes={"game_cpu_spike": dict(entry, residual=0, worked=0)})
+    assert (res.score > without.score) is counts         # too few alone add nothing: they count in "best explained"
+
+
 @pytest.mark.parametrize("later, kind", [(80.0, Finding), (80.1, rules.Cleared)])
 def test_cpu_throttle_counts_a_speed_drop_of_twenty_percent_from_the_start(later, kind):
     perf = (lambda t: 100.0 if t <= 20.0 else later)
@@ -2026,7 +2147,7 @@ def test_game_mode_off(mode, kind):
 @pytest.mark.parametrize("behind_s, kind", [(3.0, Finding), (2.9, rules.Cleared)])       # 10 % of 30 s
 def test_not_focused_needs_ten_percent_of_the_capture_behind_another_window(behind_s, kind):
     sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= behind_s + 1e-9 else 1)
-    res = run("not_focused", make(system=sys_))
+    res = run("not_focused", make(system=sys_), frames=behind_frames(behind_s))
     assert isinstance(res, kind), sum(1 for v in sys_[S.GAME_FOCUSED] if v == 0)
 
 
@@ -2036,10 +2157,135 @@ def test_not_focused_needs_ten_percent_of_the_capture_behind_another_window(behi
 def test_not_focused_steady_share_counts_only_while_the_cpu_side_limits_the_game(verdict, kind):
     # A9 (LC 5.1): a window behind others gets less CPU time, which costs frames only on the CPU side
     sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 6.0 else 1)       # 20 % of the capture
-    res = run("not_focused", make(system=sys_), bound={"verdict": verdict, "r": 0.97 if verdict == "gpu" else None})
+    slower = behind_frames(6.0)
+    res = run("not_focused", make(system=sys_), bound={"verdict": verdict, "r": 0.97 if verdict == "gpu" else None},
+              frames=slower)
     assert isinstance(res, kind), res
     if verdict == "gpu":    # the 3D engine's "gpu" (no r: too few steady frames) says nothing of the CPU side
-        assert is_finding(run("not_focused", make(system=sys_), bound={"verdict": "gpu", "r": None}), "medium")
+        assert is_finding(run("not_focused", make(system=sys_), bound={"verdict": "gpu", "r": None}, frames=slower),
+                          "medium")
+
+
+def test_not_focused_names_the_cost_it_measured_and_never_a_cost_it_did_not():
+    # The e2e runs' LagLab kept its frame rate behind another window, yet "the game got less CPU time" came at
+    # medium from the time behind alone: a cost is measured, behind against in front, or the cause is not named
+    sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 6.0 else 1)       # 20 % behind another window
+    res = run("not_focused", make(system=sys_), bound={"verdict": "cpu_main"}, frames=behind_frames(6.0))
+    assert is_finding(res, "medium") and res.evidence[0].text == (
+        "With another window in front the game made 62 frames a second, against 125 with its own window in front "
+        "(for 20% of the capture).")
+    assert "less CPU time" not in res.summary and "lower performance level" in res.summary
+    # 10 % slower is a cost (62.5 / 125 above); faster than that is none
+    res = run("not_focused", make(system=sys_), bound={"verdict": "cpu_main"}, frames=behind_frames(6.0, 8.8, 8.0))
+    assert isinstance(res, rules.Cleared) and res.text == (
+        "With another window in front the game made 114 frames a second, against 125 with its own window in front, so "
+        "being behind another window (for 20% of the capture) cost it no frames."), res
+    assert is_finding(run("not_focused", make(system=sys_), bound={"verdict": "cpu_main"},
+                          frames=behind_frames(6.0, 8.9, 8.0)), "medium")                    # 112.4 FPS: past 10 %
+
+
+@pytest.mark.parametrize("verdict, r", [("cpu_main", 0.40), ("gpu", 0.97), ("gpu", None)])
+def test_not_focused_names_no_cost_where_the_game_still_reached_the_display_behind_another_window(verdict, r):
+    # At 135 FPS behind another window against 154 in front on a 144 Hz screen, a medium finding said the game "ran
+    # worse": the frames it lost there were frames the screen never shows (LIMIT_FPS_FRAC, as cpu_limit clears at
+    # that rate). The rate behind is what counts, never the capture's average: a game visible on a second screen
+    # while another window has the focus shows what it makes there
+    sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 6.0 else 1)       # 20 % behind another window
+    bound = {"verdict": verdict, "r": r, "refresh_hz": 144.0}      # r None: the 3D engine's "gpu", the CPU side
+    res = run("not_focused", make(system=sys_), stats={"avg_fps": 150.0}, bound=bound,
+              frames=behind_frames(6.0, 7.4, 6.5))
+    assert isinstance(res, rules.Cleared) and res.text == (
+        "With another window in front the game made 135 frames a second, against 154 with its own window in front, but "
+        "135 is within 10% of the 144 Hz display's rate, so its lower frame rate behind another window (for 20% of the "
+        "capture) cost nothing you could see."), res
+    # 0.9 x 144 Hz = 129.6: 130 FPS behind reaches the display, 129 does not (both are 10 % or more under 154)
+    assert isinstance(run("not_focused", make(system=sys_), stats={"avg_fps": 150.0}, bound=bound,
+                          frames=behind_frames(6.0, 1000 / 130.0, 6.5)), rules.Cleared)
+    slower = run("not_focused", make(system=sys_), stats={"avg_fps": 150.0}, bound=bound,
+                 frames=behind_frames(6.0, 1000 / 129.0, 6.5))
+    assert is_finding(slower, "medium") if r != 0.97 else slower is None, slower
+    # the capture's average at the display's rate is not the test: 62 FPS behind is a cost the screen showed
+    assert is_finding(run("not_focused", make(system=sys_), stats={"avg_fps": 140.0}, bound={"verdict": "cpu_main"},
+                          frames=behind_frames(6.0)), "medium")
+
+
+def test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window():
+    # PresentMon keeps no frame Windows did not show once none is shown after it, so a game left behind another
+    # window to the end has no frames there (the e2e cpu mode: none after 17.1 s, at 101% of a CPU either way)
+    sys_ = synth.system_table(30, game_focused=lambda t: 0 if t > 24.0 else 1, game_cpu_pct=101.0)
+    front = synth.frames_table([25.0] * 960, t0=0.0)                                   # 24 s, all in front
+    res = run("not_focused", make(system=sys_), bound={"verdict": "cpu_main"}, frames=front)
+    assert isinstance(res, rules.Cleared) and res.text == (
+        "With another window in front (for 20% of the capture) the game used 101% of a CPU, against 101% with its own "
+        "window in front, so it did not get less CPU time."), res
+    starved = synth.system_table(30, game_focused=lambda t: 0 if t > 24.0 else 1,
+                                 game_cpu_pct=lambda t: 80.0 if t > 24.0 else 101.0)   # 79 % of in front: < 90 %
+    res = run("not_focused", make(system=starved), bound={"verdict": "cpu_main"}, frames=front)
+    assert isinstance(res, rules.Unchecked) and res.text == (     # less CPU behind it may be the game's own choice
+        "the game used 80% of a CPU behind another window (for 20% of the capture) against 101% with its own window "
+        "in front, but too few of its frames were recorded there to tell whether that cost it frames"), res
+    # under eight readings of its CPU behind the window (seven, 1.75 s): not compared
+    short = synth.system_table(30, game_focused=lambda t: 0 if t > 24.0 else 1,
+                               game_cpu_pct=lambda t: 101.0 if t <= 24.0 or t > 28.25 else None)
+    res = run("not_focused", make(system=short), bound={"verdict": "cpu_main"}, frames=front)
+    assert isinstance(res, rules.Unchecked), res
+    # frames behind it, but under 100 of them (75 over 3 s): too few to set a rate against
+    sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 3.0 + 1e-9 else 1)
+    res = run("not_focused", make(system=sys_), bound={"verdict": "cpu_main"}, frames=behind_frames(3.0, 40.0))
+    assert isinstance(res, rules.Unchecked) and res.text.endswith("too few of its frames were recorded there or in "
+                                                                  "front to compare how it ran"), res
+
+
+def test_not_focused_never_behind_and_in_front_at_once_cannot_be_told_and_counts_no_moments():
+    # Behind another window the whole time: no time in front to compare with, and the lift test's "0 of 3 stutters
+    # and FPS drops coincided with another window being in front" was false when all three came behind it
+    sys_ = synth.system_table(30, game_focused=0)
+    evs = [stutter(i, 3.0 * i) for i in range(1, 4)]
+    res = run("not_focused", make(system=sys_), bound={"verdict": "cpu_main"}, frames=behind_frames(31.0), events=evs,
+              causes={"not_focused": lift("too_few_events", a=0, n=3)})
+    assert isinstance(res, rules.Unchecked) and res.text == (
+        "the game was behind another window for all of the capture, so how it ran has no time with its own window in "
+        "front to be compared with"), res
+    res = run("not_focused", make(system=sys_), bound={"verdict": "gpu", "r": 0.97}, frames=behind_frames(31.0),
+              events=evs, causes={"not_focused": lift("neutral", a=0, n=12, blind=True)})
+    assert res is None, res          # the GPU side, nothing compared, and no "0 of 12" from a blind lift test
+    sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 24.0 else 1)      # 80 % behind, a measured cost
+    res = run("not_focused", make(system=sys_), bound={"verdict": "cpu_main"}, frames=behind_frames(24.0),
+              events=evs, causes={"not_focused": lift("neutral", a=0, n=12, blind=True)})
+    assert is_finding(res) and not [x for x in res.evidence if "coincided" in x.text], res
+
+
+def test_not_focused_counts_frames_not_a_median_frame_time():
+    # Frame times alternating between two values (judder, uneven pacing): a median lands on one of them. 4/20 ms at
+    # 51/49 in front read 250 FPS by the median, 49/51 behind 50: a 5x "cost" where the real rates differ by 3 %
+    def alternating(n_short, n, short=4.0, long=20.0):
+        return [short if (k * n_short) % n < n_short else long for k in range(n)]
+    fms = alternating(49, 100) * 9 + alternating(51, 100) * 50          # 900 behind (~10.8 s), 5000 in front
+    frames = synth.frames_table(fms, t0=0.0)
+    behind_until = frames[F.T][899]
+    sys_ = synth.system_table(70, game_focused=lambda t: 0 if t <= behind_until else 1)
+    res = run("not_focused", make(system=sys_, duration=70.0), bound={"verdict": "cpu_main"}, frames=frames)
+    assert isinstance(res, rules.Cleared) and "cost it no frames" in res.text, res
+
+
+def test_not_focused_never_counts_generated_frames_or_a_side_too_short():
+    # frame generation doubles the rows in front: its rows are not the game's frames
+    sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 6.0 else 1)
+    fr = behind_frames(6.0, 8.0, 8.0)                                  # the same 125 FPS on both sides
+    n = len(fr[F.T])
+    for i in [i for i in range(n) if fr[F.T][i] > 6.5]:                # each frame in front doubled by a generated one
+        for k in F.ALL:
+            fr[k].append(fr[k][i])
+        fr[F.FRAME_TYPE][-1] = "AMD_AFMF"
+        fr[F.FRAME_MS][-1] = 0.5
+    res = run("not_focused", make(system=sys_), bound={"verdict": "cpu_main"}, frames=fr)
+    assert isinstance(res, rules.Cleared) and "125 frames a second, against 125" in res.text, res
+    # 150 frames behind it in 1.5 s: 100 frames, but not 2 s, so no rate is set against the one in front
+    sys_ = synth.system_table(30, game_focused=lambda t: 0 if t <= 3.0 + 1e-9 else 1)
+    fms = [10.0] * 150 + [8.0] * 3375                                  # from 1.5 s: 100 FPS behind, 125 in front
+    res = run("not_focused", make(system=sys_), bound={"verdict": "cpu_main"},
+              frames=synth.frames_table(fms, t0=1.5))
+    assert isinstance(res, rules.Unchecked), res
 
 
 def test_not_focused_linked_to_the_stutters_counts_on_any_side():
@@ -2322,6 +2568,91 @@ def test_gpu_contention_never_tells_the_player_to_close_windows_itself():
     assert not any(f.title.startswith("Pause or close") for f in res.fixes)
 
 
+def where_hog_capture(hogs_):
+    """kernel_hog_capture's rows as the sampler writes them since 2026-11-15: each (pid, name, times, session, folder)
+    with its Windows session and whether its program sits in System32 (fields 7 and 8)."""
+    cap, evs = kernel_hog_capture([(pid, prog, times) for pid, prog, times, _s, _f in hogs_])
+    where = {pid: (session, folder) for pid, _p, _t, session, folder in hogs_}
+    for _t, procs in cap.others:
+        for q in procs:
+            q.extend([None, *where.get(q[0], (1, False))])
+    return cap, evs
+
+
+def test_windows_own_programs_are_never_told_to_close_nor_offered_a_priority_fix_by_name_in_an_older_capture():
+    # PR #32 left Windows' user-mode processes in "Pause or close X" with a priority fix that fixes/priority.py
+    # refuses when run (services, session 0): an older capture holds names only, so the name decides
+    # blamed most: svchost.exe (5 stutters), then dwm.exe (4), then hog.exe (3), so the two fix slots meet them first
+    cap, evs = kernel_hog_capture([(1200, "svchost.exe", (2.5, 4.0, 5.5, 7.0, 8.5)),
+                                   (2656, "dwm.exe", (11.0, 13.0, 15.0, 17.0)), (20000, "hog.exe", (20.0, 23.0, 26.0))])
+    res = run("background_hogs", cap, events=evs, causes={"background_cpu": lift("supports", a=12, n=12)})
+    assert is_finding(res)
+    assert [f.params["pid"] for f in res.fixes if f.fix_id] == [20000]
+    titles = [f.title for f in res.fixes]
+    assert not any(t.startswith(("Pause or close svchost", "Pause or close dwm")) for t in titles), titles
+    svc = next(f for f in res.fixes if f.title == "svchost.exe (process 1200) is normally part of Windows, not a "
+                                                  "program to close")
+    assert svc.detail == ("That name is normally a host for Windows' own services, such as Windows Update, so "
+                          "lag-doctor does not suggest closing it.")
+    assert "dwm.exe (process 2656) is normally part of Windows, not a program to close" in titles
+    assert "Pause or close hog.exe while you play (process 20000)" in titles
+
+
+def test_where_a_blamed_process_runs_decides_whether_it_can_be_closed_or_lowered():
+    # A svchost.exe in the player's session from another folder is no Windows service host: it stays a program to
+    # close and to lower. Someone else's service (session 0) can be closed, never lowered: the fix refuses session 0.
+    cap, evs = where_hog_capture([(31000, "svchost.exe", (2.5, 5.0, 7.5, 10.0, 12.5), 1, False),
+                                  (1700, "BackupSvc.exe", (15.0, 17.5, 20.0), 0, False),
+                                  (1200, "svchost.exe", (22.5, 25.0), 0, True)])
+    res = run("background_hogs", cap, events=evs, causes={"background_cpu": lift("supports", a=10, n=10)})
+    assert is_finding(res)
+    assert [f.params["pid"] for f in res.fixes if f.fix_id] == [31000]
+    titles = [f.title for f in res.fixes]
+    # one name, two kinds: the look-alike is closable, the real one beside it is Windows' own
+    assert f"Pause or close svchost.exe{rules.LOOKALIKE} while you play (process 31000)" in titles, titles
+    assert "svchost.exe (process 1200) is normally part of Windows, not a program to close" in titles
+    assert "Pause or close BackupSvc.exe while you play (process 1700)" in titles
+    # the real one alone: Windows' own, by where it runs
+    cap, evs = where_hog_capture([(1200, "svchost.exe", (2.5, 5.0, 7.5, 10.0, 12.5), 0, True),
+                                  (20000, "hog.exe", (15.0, 17.5, 20.0), 1, False)])
+    res = run("background_hogs", cap, events=evs, causes={"background_cpu": lift("supports", a=8, n=8)})
+    assert is_finding(res) and [f.params["pid"] for f in res.fixes if f.fix_id] == [20000]
+    assert "svchost.exe (process 1200) is normally part of Windows, not a program to close" in [f.title for f in
+                                                                                                  res.fixes]
+
+
+def test_a_real_process_in_the_players_session_never_takes_its_look_alikes_priority_fix():
+    # dwm.exe runs in the player's session, so session 0 alone never kept the real one from a priority fix: the real
+    # one rose the most, so it came first among the name's processes
+    cap, evs = where_hog_capture([(2656, "dwm.exe", (2.5, 5.0, 7.5, 10.0, 12.5), 1, True),
+                                  (33000, "dwm.exe", (15.0, 17.5, 20.0), 1, False)])
+    res = run("background_hogs", cap, events=evs, causes={"background_cpu": lift("supports", a=8, n=8)})
+    assert is_finding(res)
+    assert [f.params["pid"] for f in res.fixes if f.fix_id] == [33000]
+    titles = [f.title for f in res.fixes]
+    assert f"Pause or close dwm.exe{rules.LOOKALIKE} while you play (process 33000)" in titles, titles
+    assert "dwm.exe (process 2656) is normally part of Windows, not a program to close" in titles
+
+
+def test_gpu_contention_says_the_desktop_window_manager_is_windows_and_a_look_alike_is_not():
+    res = run("gpu_contention", contention(80.0, others=on_the_games_adapter(12.0)), stats={"avg_fps": 58.0},
+              bound=STARVED)
+    assert res.fixes[0].title == "dwm.exe (process 2656) is normally part of Windows, not a program to close"
+    assert "Windows' Desktop Window Manager, which draws every window on the screen" in res.fixes[0].detail
+    assert len(res.fixes) == 1                          # Windows' own work cannot be moved to another GPU
+    rows = on_the_games_adapter(12.0)
+    for _t, procs in rows:
+        for q in procs:
+            q.extend([1, False])                        # dwm.exe in the player's session, outside System32
+    res = run("gpu_contention", contention(80.0, others=rows), stats={"avg_fps": 58.0}, bound=STARVED)
+    assert res.fixes[0].title == f"Pause or close dwm.exe{rules.LOOKALIKE} while you play"
+    assert res.fixes[1].title == "Or let that work run on another GPU, if this PC has one"
+    for _t, procs in rows:
+        procs[1][8] = True                              # ... and from System32: Windows' own
+    res = run("gpu_contention", contention(80.0, others=rows), stats={"avg_fps": 58.0}, bound=STARVED)
+    assert res.fixes[0].title == "dwm.exe (process 2656) is normally part of Windows, not a program to close"
+
+
 # --------------------------------------------------------------------------------- disks ---
 
 def test_hdd_streaming():
@@ -2442,6 +2773,19 @@ def test_a_residual_cause_loses_coverage_when_another_cause_was_not_measured():
     assert is_finding(res, "medium")        # S = 4, but disk and DPCs unmeasured: coverage 4 / 8 < 0.6
 
 
+@pytest.mark.parametrize("cause, phrase, side", [("gpu_spike", "a moment of heavy GPU work", "gpu"),
+                                                 ("game_stall", "the game waiting on itself", "cpu")])
+def test_a_residual_causes_count_says_nothing_else_explained_them_never_that_nothing_moved(cause, phrase, side):
+    # a veto can rule a move out at those stutters (another program's disk use at a frame worked through, a clock
+    # that the load explains), and each one's example line then says what moved: "no other measured cause moved"
+    # sat above "For example at 4.0 s: nothing else that moved explains it"
+    evs = [stutter(i, 3.0 * i, cause, side=side) for i in range(1, 7)]
+    res = run(cause, make(system=synth.system_table(30, game_top_thread_pct=20.0)), events=evs,
+              causes={cause: lift("supports", a=6, n=6, weight=1.0, lift_=None)})
+    assert (f"In 6 of 6 stutters and FPS drops no other measured cause explained them, which leaves {phrase}."
+            in [e.text for e in res.evidence]), [e.text for e in res.evidence]
+
+
 def test_a_gpu_spike_is_never_reported_while_the_cpu_limits_the_game():
     evs = [stutter(i, 3.0 * i, "gpu_spike", side="gpu") for i in range(1, 10)]
     causes = {"gpu_spike": lift("supports", weight=1.0, lift_=None)}
@@ -2466,6 +2810,13 @@ def test_a_cause_the_marks_named_is_listed_even_with_too_few_marks():
     res = run("asset_streaming", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0},
               events=marked(3, {1, 3}, "asset_streaming"), causes=few)
     assert isinstance(res, rules.Unchecked) and res.text == "only 3 marked moments: blaming a cause needs at least 5"
+    one = {"asset_streaming": lift("too_few_events", a=1, n=1, weight=0.5, half_weight=True)}
+    res = run("asset_streaming", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0},
+              events=marked(1, {1}, "asset_streaming"), causes=one)
+    assert isinstance(res, rules.Unchecked) and res.text == "only 1 marked moment: blaming a cause needs at least 5"
+    res = run("asset_streaming", make(), events=[stutter(1, 5.0, "asset_streaming")],
+              causes={"asset_streaming": lift("too_few_events", a=1, n=1)})
+    assert isinstance(res, rules.Unchecked) and res.text == "only 1 stutter or FPS drop: blaming a cause needs at least 5"
     none = {"asset_streaming": lift("too_few_events", a=0, n=3, weight=0.5, half_weight=True)}
     assert run("asset_streaming", make(ok=("system",), src={"frames": NO_FRAMES}), stats={"frames": 0},
                events=marked(3), causes=none) is None                              # none of them named it: silent
@@ -2507,7 +2858,7 @@ def judged(s):
     from e2e_truth import judge
     from lagdoctor.analysis.diagnose import diagnose
     d = diagnose(s.cap)
-    return d, judge(s.log["mode"], s.log, s.cap.clock_origin, d, has_discrete_gpu=True)
+    return d, judge(s.log["mode"], s.log, s.cap.clock_origin, d, has_discrete_gpu=True, capture_s=s.cap.duration_s)
 
 
 @pytest.mark.parametrize("seed", [1, 2, 3])

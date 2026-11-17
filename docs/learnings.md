@@ -1141,3 +1141,160 @@ sabotage that made a test hang would have crashed the whole red-first run, and f
 the test's own processes running in the copy it was about to delete.
 **Takeaway**: to end a process tree on Windows, put its root in a job object while it is suspended, end the job, and
 wait for its process count to reach zero before trusting that nothing of it is left.
+
+### Background load cannot slow a timed busy-wait, and barely touches a foreground thread
+A loop that spins until a deadline ends on time whatever else runs: when the CPU is shared it only does less work, so
+a stressor aimed at it shows nothing. And Windows favours the threads of the foreground process over busy threads of
+the same priority (longer time slices, and a boost when they wake from a wait [inferred, the documented scheduler
+behaviour]), so a game thread at normal priority is seldom kept waiting by them. What still reaches it is the
+hardware: a busy thread on the other half of its core, and the lower clock every core runs at when all are busy, which
+stretch a fixed amount of work.
+**Why it came up**: LagLab's hog mode burned 4 ms by the clock each frame while 32 hogs held every CPU at 95 %, and
+its frames stayed at 8.34 ms, also when it spun out its frame cap instead of sleeping (measured 2026-11-10); the
+end-to-end run could never have found the hogs. With 6 ms of work counted as loop turns, the bursts took LagLab from
+120 to 86 FPS; hogs one priority class higher took it to 8 FPS, and would starve every normal-priority thread with it.
+**Takeaway**: to make background load hurt a test program, give it a fixed amount of work rather than a fixed time,
+and measure that the victim slowed before judging anything against it.
+
+### Windows gives a window's child processes that window's QoS
+A process that owns a window, and every process descended from it, gets a quality of service (QoS) from that window:
+high while it has the focus, medium while it is visible, low when it is minimized or fully covered (Microsoft's
+"Quality of Service" page). On a CPU with performance and efficient cores, lower QoS can steer work to the efficient
+cores: the page says so for low QoS on battery, and it was measured here on mains power too. A tool's helper processes
+therefore slow down or speed up with its window, not with their own work.
+**Why it came up**: LagLab's hogs are its child processes. In the owner's run LagLab's window was never in front and
+the 32 hogs added only about 4 logical CPUs of load; in a run here the hogs' load on the performance cores fell from
+95 % to 68-90 % the moment LagLab lost the focus, while the 4 efficient cores stayed at 99 %.
+**Takeaway**: on Windows, a load test's helper processes inherit the focus of their parent's window; keep that window
+in front, or measure where the load landed.
+
+### PresentMon holds the frames a covered window never showed
+PresentMon 2.6.0's default metrics need each shown frame's successor to compute its time on screen, so a frame not
+shown while a shown one waits is queued behind it and written only when the next shown frame arrives. A window that is
+covered shows no frames, so everything after its last shown frame stays queued: few rows or none, and since the CSV
+header is written with the first row, none at all.
+**Why it came up**: in the owner's end-to-end run, the hitch and hitch-wait captures read "PresentMon ran but wrote no
+CSV" while LagLab drew 120 FPS, and the hog capture's rows began 7.4 s in: LagLab's window was not in front in those
+modes (`IntelPresentMon/CommonUtilities/mc/UnifiedSwapChain.cpp`, `Enqueue`, at v2.6.0).
+**Takeaway**: no frame timing from PresentMon while the game runs means its frames are not reaching the screen; check
+whether its window was covered or minimized before suspecting the tracing.
+
+### Judge a sampled state from readings well inside an event, never at its edges
+When the state you sample changes at the same moment as the event you are delimiting, the reading just before the
+event and the one just after it come from the other side: they say what the state was before it changed. Ask only the
+readings at least one sample period inside the event, and give the event a minimum length so that some exist.
+**Why it came up**: the first design for leaving covered time out asked every foreground reading from the last one
+before a cover to the first one after it. An Alt+Tab covers the game as it takes the foreground, so with 4 Hz
+readings both of those said "in front", and a critique estimated that about 93 % of real covers would have stayed
+read as freezes. The test fixtures had passed because LagLab never had the foreground at all.
+**Takeaway**: when a sample and an event share a cause, pad the event by a sample period before reading the sample,
+and build the test fixture with the state flipping exactly at the event's edges.
+
+### A contrast test is blind when the baseline already sits at the signal's ceiling
+A lift test counts the moments at which a signal rose above its quiet level. When the quiet level is already the most
+the signal can read, no moment can rise, so a count of 0 is no evidence that the moments lacked the cause, though it
+reads as "only 0 of 12 coincided". Check that a rise was possible before reporting its absence.
+**Why it came up**: a game behind another window in most quiet seconds has its "behind another window" signal at 1.0
+there, so the not_focused lift test said "only 0 of 12 stutters coincided with another window being in front" while
+all 12 came behind it. A signal that never moved off 0 is the opposite case: there "0 of 12" is true.
+**Takeaway**: a test that compares moments with a baseline says nothing either way when the baseline is the signal's
+ceiling; label it blind rather than contradicting.
+
+### A median of times that alternate between two values lands on one of them
+With frame times split near 50/50 between two values (VSync judder at two and three refreshes, uneven pacing), the
+median is whichever value holds just over half, so 1000 / median can be 2x off the real frame rate either way, and
+a shift of a few frames between the two flips it. The rate of a run of frames is their count over their summed time.
+**Why it came up**: not_focused's first measured cost compared 1000 / median frame time behind another window and in
+front; a review found that 4 / 20 ms frames at 51/49 in front and 49/51 behind read as 250 against 50 FPS, a 5x
+"cost" where the real rates differ by 3 %.
+**Takeaway**: never quote a rate from a median interval; use count over total time, and keep medians for typical
+values that are not summed.
+
+### Judge a short burst in the readings that hold it, against its own length
+A 4 Hz CPU reading is a counter's delta over its tick, so a 150 ms burst of work shows whole in the one or two ticks
+that hold it, while a 1 s mean spreads it over four ticks and the quieter ones around it. Sum the extra time in just
+those ticks, compare it with what working through the burst would add, and size the noise from those ticks' own
+spread: a counter charged one 15.625 ms clock tick at a time can swing from tick to tick while its 1 s means stay
+flat, so twice the 1 s spread can understate one tick's.
+**Why it came up**: the e2e hitch, a 150 ms busy wait every 3 s, read 23-33 % of a CPU over 1 s against 17 %, under
+the z cut in 5 of 8, so those read "the game waited on itself". The ticks that held it ran 85-101 ms more than usual,
+and a 150 ms sleep's -42 to +5 ms.
+**Takeaway**: to ask whether a thread worked through a short event, read the ticks that hold the event and weigh the
+extra time against the event's length, never a mean wider than the event.
+
+### Turbo runs slower as more cores work, so a clock drop is throttling only at a similar load
+A CPU's top speed depends on how many cores are busy: with one or two working it boosts far past its base clock, with
+all of them working it settles near base. `% Processor Performance` falling as the load spreads to every core is that
+design, not heat or a power limit; a fall below base speed, or one at the same load, is the throttling to name.
+**Why it came up**: the e2e hog filled all 16 CPUs in bursts; the clock went from about 137-156 % of base to 100-105 % at
+each one, with Windows' % Performance Limit at 100 throughout, and every FPS drop named "the CPU slowing down" first.
+**Takeaway**: compare a CPU's speed only between moments of a similar load, and read a fall that stays at or above
+base speed under rising load as turbo.
+
+### PresentMon tells a game that stopped from a screen that held
+PresentMon lists every frame the game presented and whether Windows showed it. In a long stall of the game's own,
+nothing is presented until it ends; when the screen holds while the game keeps presenting at its usual rate and
+Windows leaves frames off the screen that it had a whole refresh to show, the hold came after the game, in Windows'
+composition or the display. A frame replaced before the next refresh is dropped by design, so the burst a game
+catches up with after a stall proves nothing.
+**Why it came up**: the e2e smooth control's one stutter, a frame held 36 ms, read "the game waited on itself", yet
+the game presented 17 frames through it (83 % of its rate) and Windows showed 9, while LagLab's own log showed its
+frames on time; the game's own 100-160 ms hitches presented 5-18 % of their rate, though a short stall of its own can
+keep its rate. A review then found a stall followed by a 1 ms catch-up burst passing the frame count alone.
+**Takeaway**: before blaming the game for a frozen screen, count the frames it presented through the freeze and which
+of them Windows had time to show and did not.
+
+### A z-score off a near-silent baseline says only that something moved
+A robust z divides a rise by how much the signal usually varies. A signal that sits near zero, such as other
+programs' disk reads when nothing is copying, has almost no spread, so any burst lands hundreds or thousands of
+spreads out and hits the cap. Comparing such a z with one from a busy, noisy signal ranks the causes by how quiet each
+signal usually is, not by which one could have made the moment happen.
+**Why it came up**: on the e2e hitch, other programs reading 32-521 MB/s over three of LagLab's
+150 ms busy waits scored z 554-9,129 against 0.3 MB/s normally, past the cap of 10, while the game's own busiest thread
+scored 5.4-8.9; "another program did 48.8 MB/s of I/O" came first, although the game's thread ran 105-137 ms more than
+usual in those 160 ms frames and so was not waiting on any disk.
+**Takeaway**: before letting the strongest z win, ask whether that cause could produce the effect at that moment (a
+busy thread was not waiting), and rule it out there when it could not.
+
+### A headless browser's screenshot follows the system's dark mode
+Headless Chrome and Edge report the operating system's colour scheme to the page, so a page with a
+`prefers-color-scheme: dark` style is shot dark on a PC set to dark mode, whatever the picture it replaces looked like.
+`--blink-settings=preferredColorScheme=1` makes the page see light (0 is dark).
+**Why it came up**: retaking the README's report picture with `msedge --headless=new --screenshot`, the first shot came
+out dark against the light one it replaced.
+**Takeaway**: when a headless browser takes a picture for the docs, set the colour scheme on the command line, and give
+it its own `--user-data-dir` so it never touches the user's profile.
+
+### Session 0 and System32 tell Windows' own processes from programs named like them
+An image name proves nothing: any program can be called `svchost.exe`. Two facts a monitor can read without opening the
+process tell Windows' own copies apart: its session (every service runs in session 0, which a signed-in user's programs
+never do) and the folder its program sits in (System32, where an ordinary user cannot put one). Neither is enough
+alone: `csrss.exe` and `dwm.exe` run from System32 in each user's session, and Defender's services run in session 0 from
+Defender's own folder.
+**Why it came up**: the analysis told players to "pause or close" Windows' own `svchost.exe` and `dwm.exe`, because the
+recorder kept names only; PR #50 records each listed process's session and one bit for "its program is in System32".
+**Takeaway**: to judge a process by what it is, record where it runs (its session, its program's folder), never only its
+name, and keep only the bit you decide on, not the path.
+
+### A process's memory has three sizes, and each answers a different question
+Windows reports a process's working set (every page it has in RAM, shared DLL pages included, so a browser's 30
+processes count the same DLLs 30 times), its private working set (the pages in RAM only it holds: Task Manager's
+"Memory" column) and its private bytes, or commit (the memory Windows has promised it, in RAM or the page file: Task
+Manager's "Commit size"). "RAM is full" is about private working sets; "Windows ran out of memory to hand out" is about
+commit, which a program can hold while keeping it out of RAM.
+**Why it came up**: naming the programs behind lag-doctor's "low on RAM" and "the page file is small" findings; this
+PC's recordings hit the second, with gigabytes of RAM free, where the RAM each program held would have named the wrong
+ones.
+**Takeaway**: before blaming a process for memory, pick the measure that fills the resource the finding is about: the
+private working set for RAM, commit for the commit limit, and never the whole working set summed over processes.
+
+### "The Windows folder" has two answers, and only one is the one every user shares
+`GetWindowsDirectoryW` can return a private folder per user on a multi-user PC (Terminal Services), unless the program
+is marked as Terminal Server aware; `GetSystemWindowsDirectoryW` always returns the shared one, where Windows itself
+lives. On a single-user PC both give the same path, so a test there cannot tell them apart.
+**Why it came up**: telling the real `explorer.exe`, which Windows runs from the Windows folder itself rather than
+System32, from a look-alike: the check must compare with the folder Windows' own programs sit in, not a user's copy.
+Counting every program in that folder as Windows' own also turned a `svchost.exe` dropped there, a usual place for a
+look-alike, into Windows' own, so the folder counts for `explorer.exe` alone.
+**Takeaway**: for "where Windows keeps its own files", call the System-prefixed function, and widen a trust rule only
+for the names that needed it.

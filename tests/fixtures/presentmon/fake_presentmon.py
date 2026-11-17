@@ -13,7 +13,8 @@ Modes: eof (all rows, exit 0), breakable (stops on CTRL_BREAK or a stopped sessi
 CTRL_BREAK, stops only with its session), hung (only a kill stops it), denied (real stderr, exit 6),
 busy_once (first run: "already running" and exit 6), crash (some rows, then 0xC0000005), lossy (all rows,
 then a lost-events warning), reheader (19 rows, then a header without TimeInQPC and 3 rows under it),
-silent (like hung, but writes nothing at all), garbled (all rows, one of them cut short).
+silent (like hung, but writes nothing at all), garbled (all rows, one of them cut short), covered (no CSV at all, then
+the overflow warning PresentMon 2.6.0 printed for a game window covered from the start, e2e 2026-11-09, and exit 0).
 Every mode gives up after 30 s so a broken test leaves nothing running.
 """
 import ctypes
@@ -71,6 +72,8 @@ if mode == "reheader":                       # a restarted recording whose heade
     lines = lines[:20] + [lines[0].replace(b"TimeInQPC", b"TimeInMs")] + lines[20:23]
 if mode == "garbled":                        # one PresentBench row cut short
     lines[2] = lines[2][:120]
+if mode == "covered":                        # every frame held back behind a shown one that never comes (PM 2.4)
+    lines = []
 first = {"crash": 10, "silent": 0, "breakable": 41, "deaf": 41, "hung": 41, "busy_once": 41}.get(mode, len(lines))
 for ln in lines[:first]:
     out.write(ln + b"\r\n")
@@ -96,5 +99,7 @@ for ln in lines[first:]:                     # what PresentMon writes while it s
     out.flush()
 if mode == "lossy":
     err.write(b"warning: 12 ETW events were lost.\r\n")
+if mode == "covered":
+    err.write(b"warning: 236 overflowed present events detected. This could be due to a high-fps application.\r\n")
 (state / "running").unlink(missing_ok=True)
 sys.exit(0)

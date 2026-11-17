@@ -23,6 +23,26 @@ EPOCH_AS_FILETIME = 116444736000000000      # 1970-01-01 in 100 ns units since 1
 TICK = 156250                                # thread times move in 15.625 ms steps (WT 3.5)
 
 
+class PROCESS_MEMORY_COUNTERS_EX2(ctypes.Structure):
+    """psapi.h (Windows 10 22H2 and 11 22H2 with the September 2023 update on): PrivateWorkingSetSize is Task
+    Manager's "Memory" column, the independent readout of WorkingSetPrivateSize."""
+    _fields_ = [("cb", ctypes.c_ulong), ("PageFaultCount", ctypes.c_ulong)] + [
+        (n, ctypes.c_size_t) for n in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                                       "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage", "QuotaNonPagedPoolUsage",
+                                       "PagefileUsage", "PeakPagefileUsage", "PrivateUsage", "PrivateWorkingSetSize")
+    ] + [("SharedCommitUsage", ctypes.c_ulonglong)]
+
+
+def _own_private_working_set() -> int:
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.GetCurrentProcess.restype = ctypes.c_void_p
+    k32.K32GetProcessMemoryInfo.argtypes = [ctypes.c_void_p, ctypes.POINTER(PROCESS_MEMORY_COUNTERS_EX2),
+                                            ctypes.c_ulong]
+    pmc = PROCESS_MEMORY_COUNTERS_EX2(cb=ctypes.sizeof(PROCESS_MEMORY_COUNTERS_EX2))
+    assert k32.K32GetProcessMemoryInfo(k32.GetCurrentProcess(), ctypes.byref(pmc), pmc.cb), ctypes.get_last_error()
+    return pmc.PrivateWorkingSetSize
+
+
 def _psutil_times(p: psutil.Process) -> tuple[int, int]:
     t = p.cpu_times()
     return round(t.user * 1e7), round(t.system * 1e7)
@@ -40,6 +60,7 @@ def test_our_own_process_matches_psutil():
         u1, k1 = _psutil_times(me)
         io1 = me.io_counters()
         mem = me.memory_info()
+        private_ws = _own_private_working_set()
         tids = {t.id for t in me.threads()}
     finally:
         helper_stop.set()
@@ -56,6 +77,8 @@ def test_our_own_process_matches_psutil():
     assert io0.other_count <= p.other_ops <= io1.other_count
     assert abs(p.private_bytes - mem.private) <= 8 << 20, (p.private_bytes, mem.private)
     assert abs(p.ws_bytes - mem.rss) <= 16 << 20, (p.ws_bytes, mem.rss)
+    assert abs(p.ws_private_bytes - private_ws) <= 8 << 20, (p.ws_private_bytes, private_ws)
+    assert 0 < p.ws_private_bytes < p.ws_bytes             # an interpreter shares its DLLs' pages: never all private
     assert p.page_faults <= mem.num_page_faults
     assert p.thread_count == len(p.threads) and {t.tid for t in p.threads} == tids
 
@@ -267,8 +290,9 @@ def test_the_fast_parser_agrees_with_the_ctypes_structures():
         e = SYSTEM_PROCESS_INFORMATION.from_buffer(s._buf, off)
         p = procs[e.UniqueProcessId or 0]
         assert (p.ppid, p.create_time, p.session_id) == (e.InheritedFromUniqueProcessId or 0, e.CreateTime, e.SessionId)
-        assert (p.user_100ns, p.kernel_100ns, p.ws_bytes, p.private_bytes, p.page_faults) == (
-            e.UserTime, e.KernelTime, e.WorkingSetSize, e.PrivatePageCount, e.PageFaultCount)
+        assert (p.user_100ns, p.kernel_100ns, p.ws_bytes, p.private_bytes, p.page_faults, p.ws_private_bytes) == (
+            e.UserTime, e.KernelTime, e.WorkingSetSize, e.PrivatePageCount, e.PageFaultCount,
+            e.WorkingSetPrivateSize)
         assert (p.read_ops, p.write_ops, p.other_ops, p.read_bytes, p.write_bytes, p.other_bytes) == (
             e.ReadOperationCount, e.WriteOperationCount, e.OtherOperationCount, e.ReadTransferCount,
             e.WriteTransferCount, e.OtherTransferCount)

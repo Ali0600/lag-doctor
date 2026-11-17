@@ -602,6 +602,23 @@ def test_compare_names_the_better_side_whichever_order_the_two_come_in(demo):
     assert {k: {"a": "b", "b": "a", None: None}[v] for k, v in forward.items()} == backward
 
 
+def test_a_moments_programs_are_averaged_over_every_sample_and_an_idle_one_is_left_out():
+    # Browser.exe is listed on all 4 samples (for the memory it holds) and busy on one; Burst.exe is listed only on the
+    # one it was busy on: both used 10 % on average there. Averaged over the samples each appears in, the browser read
+    # 10 % and the burst 40 %. Idle.exe, listed for its memory alone, did nothing and is not shown.
+    def entry(pid, name, cpu, io=0.0, gpu=0.0):
+        return [pid, name, cpu, io, gpu, 1, None, 1, False, 900, 900, 0]
+
+    rows = [[0.25 * k, [entry(1, "Browser.exe", 40.0 if k == 1 else 0.0), entry(3, "Idle.exe", 0.0)]
+             + ([entry(2, "Burst.exe", 40.0)] if k == 1 else [])] for k in range(1, 5)]
+    rows.append([1.25, "not a row"])
+    shown = views._programs(rows)
+    assert [(p["name"], p["cpu"]) for p in shown] == [("Browser.exe", "10%"), ("Burst.exe", "10%")]
+    disk = views._programs([[0.25, [entry(4, "Copy.exe", 0.0, io=8e6)]], [0.5, []]])
+    assert disk == [{"name": "Copy.exe", "cpu": "0%", "gpu": "0%", "disk": "4.0 MB/s"}]
+    assert views._programs([]) == [] and views._programs([[0.25, []]]) == []
+
+
 # ------------------------------------------------------------- a terminal recording measured from its start key ---
 
 def _keyed_session(home: Path):

@@ -2,7 +2,9 @@
 
 Design: docs/research/windows-telemetry.md (WT) section 11, as corrected by its verification log. Each tick
 runs one PDH collect (the WT 11.1 counter list) and one NtQuerySystemInformation snapshot with the game's
-threads, and writes one row of S columns plus an `others` row (the top 8 other processes by CPU).
+threads, and writes one row of S columns plus an `others` row (the top 8 other processes by CPU, then the top 4 of
+the rest by reads and writes, each with its Windows session and whether its program sits in System32, or for
+explorer.exe in the Windows folder itself).
 
 - Process and thread CPU are the delta since the previous tick (about 250 ms), kept sharp so a short hitch
   shows in the tick that holds it. Thread times move in 15.625 ms steps (WT 3.5), so one tick is only good
@@ -20,6 +22,7 @@ threads, and writes one row of S columns plus an `others` row (the top 8 other p
 from __future__ import annotations
 
 import heapq
+import ntpath
 import re
 import time
 from collections import deque
@@ -29,6 +32,7 @@ from typing import Any, Callable, Iterable
 from lagdoctor.capture import target as tgt
 from lagdoctor.capture.base import Collector
 from lagdoctor.model import S, SeriesBuilder
+from lagdoctor.winapi import folders as winfolders
 from lagdoctor.winapi import ntquery, windows
 from lagdoctor.winapi.ntquery import ProcInfo
 from lagdoctor.winapi.pdh import PdhQuery, status_name
@@ -36,6 +40,10 @@ from lagdoctor.winapi.pdh import PdhQuery, status_name
 PERIOD_S = 0.25
 WINDOW_SAMPLES = 4            # the trailing 1 s at 4 Hz
 TOP_OTHERS = 8
+TOP_OTHERS_IO = 4            # besides the 8 by CPU, the 4 busiest by reads and writes: a disk user with little CPU
+TOP_OTHERS_MEM = 4           # then the 4 of the rest holding the most RAM, the 4 with the most memory committed and the
+                             # 4 with the most video memory on the game's GPU: a program can hold memory while idle
+MEMORY_EVERY_S = 1.0         # ... read once a second: memory moves slowly, and 12 more entries a tick cost RAM
 MAX_GAME_PIDS = 4096
 MIB = float(1 << 20)
 TOOL = "PDH + NtQuerySystemInformation"
@@ -288,6 +296,25 @@ def gpu_memory_columns(adapter_ded: dict, proc_ded: dict, proc_shared: dict, gam
     return out
 
 
+def pid_vram(proc_ded: dict, adapter: str | None,
+             parse: Callable[[str], tuple[int, str, int] | None] = tgt.parse_process_memory
+             ) -> dict[int, float | None] | None:
+    """Each process's dedicated video memory on `adapter` (bytes; GPU Process Memory), for the others row: None when
+    it cannot say for any process (the adapter is unknown, or the counter gave nothing), a process's None when one of
+    its readings there failed. A process the read did not list holds none there: 0, as GAME_VRAM_MB counts it; a read
+    that lists nobody on the adapter cannot say (a stale adapter after a driver reset, or names it cannot parse)."""
+    if adapter is None:
+        return None
+    out: dict[int, float | None] = {}
+    for inst, v in proc_ded.items():
+        p = parse(inst)
+        if p is None or p[1] != adapter:
+            continue
+        old = out.get(p[0], 0.0)
+        out[p[0]] = None if v is None or old is None else old + float(v)
+    return out or None
+
+
 # ---------------------------------------------------------------- processes ---
 
 GAME_COLUMNS = (S.GAME_CPU_PCT, S.GAME_TOP_THREAD_PCT, S.GAME_TOP_THREAD_ID, S.GAME_LEAD_THREAD_PCT, S.GAME_THREADS,
@@ -326,7 +353,8 @@ class ProcessRates:
         self._thread_hist: deque[dict[tuple[int, int], int]] = deque(maxlen=WINDOW_SAMPLES)   # recent deltas
 
     def update(self, procs: dict[int, ProcInfo] | None, t_ns: int) -> tuple[Values, list[tuple] | None]:
-        """(game_* columns, [(pid, name, cpu_pct, io_bps), ...] for every other process, or None)."""
+        """(game_* columns, [(pid, name, cpu_pct, io_bps, create_time, session_id, private working set bytes or None,
+        committed bytes), ...] for every other process, or None)."""
         cols: Values = dict.fromkeys(GAME_COLUMNS)
         if procs is None:
             self._prev, self._prev_threads = None, None
@@ -397,26 +425,132 @@ class ProcessRates:
             d_io = (p.read_bytes + p.write_bytes) - ((old.read_bytes + old.write_bytes) if old else 0)
             if d_cpu < 0 or d_io < 0:
                 continue
-            others.append((p.pid, p.name, 100.0 * d_cpu / dt_100ns, d_io / dt_s, p.create_time))
+            others.append((p.pid, p.name, 100.0 * d_cpu / dt_100ns, d_io / dt_s, p.create_time, p.session_id,
+                           p.ws_private_bytes, p.private_bytes))
         return cols, others
 
 
+def _mb(b: float | None) -> int | None:
+    return None if b is None else round(b / MIB)
+
+
 def top_others(rates: list[tuple], gpu_window: list[GpuSample | None], adapter: str | None,
-               n: int = TOP_OTHERS) -> list[list]:
-    """The others row: the top `n` by CPU among processes that did anything,
-    as [pid, name, cpu, io, gpu, create_time, gpu_game]. gpu is the busiest engine on any adapter;
-    gpu_game the busiest on `adapter`, the game's (pid_gpu_pct_on: None when that adapter is unknown or the
-    process has no engine there). The create time (raw FILETIME ticks) lets a fix on that process prove
-    later that the PID was not reused."""
+               n: int = TOP_OTHERS, n_io: int = TOP_OTHERS_IO,
+               in_system: Callable[[int, int, str], bool | None] = lambda pid, created, name: None,
+               vram: dict[int, float | None] | None = None, n_mem: int = TOP_OTHERS_MEM,
+               memory: bool = True) -> list[list]:
+    """The others row: the top `n` by CPU among processes that did anything, then the top `n_io` of the rest by
+    reads and writes (a program that loads the disk with little CPU), then of the rest the top `n_mem` by RAM, by
+    memory committed and by video memory on the game's GPU (a program can hold memory while idle), as [pid, name,
+    cpu, io, gpu, create_time, gpu_game, session, system_folder, ram_mb, commit_mb, vram_mb]. gpu is the busiest
+    engine on any adapter; gpu_game the busiest on `adapter`, the game's (pid_gpu_pct_on: None when that adapter is
+    unknown or the process has no engine there). The create time (raw FILETIME ticks) lets a fix on that process prove
+    later that the PID was not reused. session is its Windows session (0: services and Windows' own); system_folder
+    is `in_system(pid, create_time, name)` for the listed processes only: True when its program sits in Windows' own
+    System32 or SysWOW64 folder, or is explorer.exe in the Windows folder itself (SystemFolders), None unread. ram_mb is its private working set (the RAM it alone holds, Task
+    Manager's "Memory"), commit_mb the memory committed to it (its private bytes, which count toward Windows' commit
+    limit), vram_mb its dedicated video memory on `adapter` (`vram`, from pid_vram: None when not read), each in whole
+    MiB. Without `memory` (the sampler reads memory once a second) the row has no memory picks and fields 9-11 are
+    None: not read at that tick."""
     rows = []
-    for pid, name, cpu, io, created in rates:
+    for pid, name, cpu, io, created, session, ram, commit in rates:
         gpu = pid_gpu_pct(gpu_window, pid)
-        if cpu > 0 or io > 0 or (gpu or 0) > 0:
-            rows.append((cpu, io, gpu or 0.0, pid, name, gpu, created, pid_gpu_pct_on(gpu_window, pid, adapter)))
-    best = heapq.nlargest(n, rows, key=lambda r: (r[0], r[1], r[2], -r[3]))
-    return [[pid, name, round(cpu, 2), round(io, 1), None if gpu is None else round(gpu, 2), created,
-             None if game_gpu is None else round(game_gpu, 2)]
-            for cpu, io, _g, pid, name, gpu, created, game_gpu in best]
+        held = None if vram is None else vram.get(pid, 0.0)
+        rows.append((cpu, io, gpu or 0.0, pid, name, gpu, created, session, ram, commit, held,
+                     cpu > 0 or io > 0 or (gpu or 0) > 0))
+    active = [r for r in rows if r[11]]
+    best = heapq.nlargest(n, active, key=lambda r: (r[0], r[1], r[2], -r[3]))
+    listed = {r[3] for r in best}
+
+    def add(k: int, pool: Iterable[tuple], key: Callable[[tuple], tuple]) -> None:
+        got = heapq.nlargest(k, (r for r in pool if r[3] not in listed), key=key)
+        best.extend(got)
+        listed.update(r[3] for r in got)
+
+    add(n_io, (r for r in active if r[1] > 0), lambda r: (r[1], r[0], -r[3]))
+    if memory:
+        for i in (8, 9, 10):            # RAM, committed memory, video memory: whoever holds some, busy or not
+            add(n_mem, (r for r in rows if (r[i] or 0) > 0), lambda r, i=i: (r[i], -r[3]))
+    out = []
+    for cpu, io, _g, pid, name, gpu, created, session, ram, commit, held, _a in best:
+        game_gpu = pid_gpu_pct_on(gpu_window, pid, adapter)
+        held_mb = [_mb(ram), _mb(commit), _mb(held)] if memory else [None, None, None]
+        out.append([pid, name, round(cpu, 2), round(io, 1), None if gpu is None else round(gpu, 2), created,
+                    None if game_gpu is None else round(game_gpu, 2), session, in_system(pid, created, name),
+                    *held_mb])
+    return out
+
+
+# The programs Windows runs from the Windows folder itself rather than System32, which SystemFolders counts there:
+# its shell. rules.WINDOWS_FOLDER_PARTS is the same set (a test holds them equal); any other program directly in the
+# Windows folder (a svchost.exe dropped there, say) reads False, as it did before 2026-11-16
+WINDOWS_FOLDER_PROGRAMS = frozenset({"explorer.exe"})
+
+
+class SystemFolders:
+    """in_system for top_others: whether a process's program sits directly in one of Windows' own program folders
+    (System32, SysWOW64), where Windows and its drivers keep theirs, or is one of WINDOWS_FOLDER_PROGRAMS (explorer.exe,
+    Windows' shell) directly in the Windows folder itself (`windows_folder` says whether that was checked: since
+    2026-11-16). Only an administrator writes to any of them; a folder below one (C:\\Windows\\Temp) is not it. Each
+    process's path is read handle-free (ntquery.image_path); an answer is kept only while the process stays listed
+    (`keep`), so the cache stays the size of an others row, and a failed read is never kept. None when it cannot say:
+    the path could not be read (the process ended), is no drive path (System, Registry and Memory Compression have no
+    program file; a volume Windows could not name), names another program than the snapshot did (its PID was reused
+    since), or the folders are unknown (`problem` says why). `folders` and `windows` are for tests: by default both are
+    Windows' own answers."""
+
+    def __init__(self, folders: Iterable[str] | None = None,
+                 path_of: Callable[[int], str | None] = ntquery.image_path, windows: str | None = None) -> None:
+        self.problem = ""
+        if folders is None:
+            try:
+                folders = winfolders.system_folders()
+            except OSError as exc:
+                folders = ()
+                self.problem = (f"Windows' System32 folder could not be read ({exc}), so no process was checked "
+                                "against it")
+            if folders:
+                try:
+                    windows = winfolders.windows_folder()
+                except OSError as exc:
+                    self.problem = (f"the Windows folder could not be read ({exc}), so explorer.exe was judged by its "
+                                    "name alone")
+        folders = [f for f in folders if f]
+        self.windows_folder = bool(folders and windows)     # the analysis judges explorer.exe by where it runs
+        self._folders = frozenset(ntpath.normcase(ntpath.normpath(f)) for f in folders)
+        self._windows = ntpath.normcase(ntpath.normpath(windows)) if self.windows_folder else None
+        self._path_of = path_of
+        self._seen: dict[tuple[int, int], bool] = {}
+
+    def __call__(self, pid: int, created: int, name: str | None = None) -> bool | None:
+        key = (pid, created)
+        if key in self._seen:
+            return self._seen[key]
+        got = self._read(pid, name)
+        if got is not None:
+            self._seen[key] = got
+        return got
+
+    def _read(self, pid: int, name: str | None) -> bool | None:
+        if not self._folders:
+            return None
+        try:
+            path = self._path_of(pid)
+        except (OSError, ValueError):
+            return None
+        if not isinstance(path, str) or not ntpath.splitdrive(path)[0] or not ntpath.isabs(path):
+            return None
+        path = ntpath.normpath(path)
+        if name is not None and ntpath.basename(path).casefold() != name.casefold():
+            return None
+        folder = ntpath.normcase(ntpath.dirname(path))
+        return folder in self._folders or (folder == self._windows
+                                           and ntpath.basename(path).casefold() in WINDOWS_FOLDER_PROGRAMS)
+
+    def keep(self, row: list[list]) -> None:
+        """Forget every process this others row does not list."""
+        listed = {(p[0], p[5]) for p in row}
+        self._seen = {k: v for k, v in self._seen.items() if k in listed}
 
 
 # ---------------------------------------------------------------- the collector ---
@@ -463,7 +597,8 @@ class SystemSampler(Collector):
                  pdh_factory: Callable[[list[str]], Any] = PdhQuery,
                  snapshotter: Any = None,
                  foreground: Callable[[], int | None] = windows.foreground_pid,
-                 layout_check: Callable[[Any], None] = ntquery.self_check) -> None:
+                 layout_check: Callable[[Any], None] = ntquery.self_check,
+                 system_folders: SystemFolders | None = None, memory_every_s: float = MEMORY_EVERY_S) -> None:
         super().__init__()
         pid, create_time = target.get("pid"), target.get("create_time")
         tgt._check_identity(pid, create_time)
@@ -483,9 +618,14 @@ class SystemSampler(Collector):
         self._pids_seen: set[int] = {pid}
         self._luid_3d: dict[str, float] = {}
         self._engine_names: dict[str, tuple | None] = {}
+        self._mem_names: dict[str, tuple | None] = {}    # GPU Process Memory instance -> parse_process_memory
+        self._mem_every = max(1, round(memory_every_s / period_s))      # ticks between memory readings
+        self._mem_tick = 0
+        self._mem_listed: list[list] = []        # the last memory tick's row: its folder answers stay cached
         self._cpu_window: deque = deque(maxlen=WINDOW_SAMPLES)
         self._gpu_window: deque = deque(maxlen=WINDOW_SAMPLES)
         self._rates = ProcessRates(pid, create_time)
+        self._system = system_folders if system_folders is not None else SystemFolders()
         self._read_failures: dict[str, int] = {}
         self._snapshot_failures = 0
         self._last_snapshot_error = ""
@@ -507,7 +647,7 @@ class SystemSampler(Collector):
     def result(self) -> dict[str, Any]:
         return {"columns": self.series.build(), "others": [list(r) for r in self.others],
                 "game_adapter_luid": self.game_adapter_luid(), "game_pids": sorted(self._pids_seen),
-                "cost": self.cost.summary()}
+                "cost": self.cost.summary(), "windows_folder": self._system.windows_folder}
 
     # ---- the loop --------------------------------------------------------
     def run(self) -> None:
@@ -629,7 +769,21 @@ class SystemSampler(Collector):
         self._rows += 1
         if rates is not None:
             # the same adapter as game_gpu_pct, so gpu_game says what else loaded the game's own GPU
-            self.others.append([t, top_others(rates, window, adapter)])
+            memory = self._mem_tick % self._mem_every == 0
+            self._mem_tick += 1
+            vram = None
+            if memory:
+                proc_ded = get(G_PROC_DED)
+                if proc_ded:        # parsed names of the instances read now: the cache never grows without bound
+                    self._mem_names = {n: self._mem_names[n] if n in self._mem_names else tgt.parse_process_memory(n)
+                                       for n in proc_ded}
+                vram = pid_vram(proc_ded, adapter, self._mem_names.__getitem__)
+            listed = top_others(rates, window, adapter, in_system=self._system,
+                                vram=vram, memory=memory)
+            if memory:
+                self._mem_listed = listed
+            self._system.keep(listed + self._mem_listed)
+            self.others.append([t, listed])
         temps = [k for k in get(T_TEMP).values() if k is not None]
         self.publish(t=t, cpu_total_pct=row[S.CPU_TOTAL_PCT], cpu_max_core_pct=row[S.CPU_MAX_CORE_PCT],
                      game_cpu_pct=row[S.GAME_CPU_PCT], game_top_thread_pct=row[S.GAME_TOP_THREAD_PCT],
@@ -639,7 +793,7 @@ class SystemSampler(Collector):
                      perf_limit_flags=single(get(P_LIMIT_FLAGS)), adapter_luid=adapter)
 
     def _final_status(self) -> None:
-        notes = list(self.problems)
+        notes = list(self.problems) + ([self._system.problem] if self._system.problem else [])
         med = self.cost.median_ms()
         cost = (f"{self._rows} rows at {1 / self._period:g} Hz; median {med:.1f} ms per tick "
                 f"(max {self.cost.max_ms:.1f} ms)" if med is not None else "no ticks ran")

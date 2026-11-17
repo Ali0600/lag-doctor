@@ -2,8 +2,9 @@
 
 Burns one CPU core in bursts: busy for --on seconds, idle for --off seconds,
 repeating from --t0 (a time.perf_counter value from the parent; QPC is the same
-clock in every process, so all hogs burst together). Exits when --duration has
-passed or the parent process is gone, whichever comes first.
+clock in every process, so all hogs burst together), and idle before it. Exits
+when --duration has passed since --t0 or the parent process is gone, whichever
+comes first.
 """
 from __future__ import annotations
 
@@ -42,6 +43,9 @@ def main(argv: list[str] | None = None) -> int:
             next_parent_check = now + 0.25
             if not parent or _kernel32.WaitForSingleObject(parent, 0) != WAIT_TIMEOUT:
                 return 0  # parent gone (or never opened): stop burning
+        if now < args.t0:              # LagLab's warmup, when it measures its game work: burn nothing yet
+            time.sleep(min(0.02, args.t0 - now))
+            continue
         phase = (now - args.t0) % period
         if phase < args.on:
             stop = min(now + 0.02, args.t0 + (now - args.t0) // period * period + args.on)

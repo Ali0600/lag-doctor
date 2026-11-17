@@ -593,7 +593,8 @@ Rules every collector follows:
   with the reason (e.g. "PresentMon needs admin rights: access denied") and returns empty columns; it never
   raises into the session and never fakes data. A failed sample is `None`, never `0`.
 - **Bounded.** Fixed rates, bounded buffers, reused ctypes buffers, no unbounded growth per tick
-  (`others`: top 8 only).
+  (`others`: the top 8 by CPU, then of the rest the top 4 by reads and writes, by RAM, by memory committed and by
+  video memory, the last three once a second: 24 entries a tick at most).
 - **No handles to the game** (Principle 1).
 
 ### Who follows a recording (capture/session.py)
@@ -656,16 +657,38 @@ The session copies these into the `Capture`. Keys not listed here go nowhere, so
 | collector (`name`), module, class | `result()` keys → Capture field |
 |---|---|
 | `frames`, capture/presentmon.py, `PresentMonSource(pid, exe=None, etl_file=None, *, is_alive=None, forward=None)` (relayed: relay/client.py `RelayedFrames`) | `columns` (F, every swap chain of the target) → `frames`; `swap_chains` `{"0x…": {"frames", "displayed", "runtime"}}` (an unfiltered replay keys them `"<pid>:0x…"`), `main_chain` (most displayed frames), `presentmon` `{version, exe, args, exit_code, stop_path, rows, malformed, rejoined, headers, stderr_tail}` → `target["presentmon"]`; `live()` = `{frames, fps, malformed}` |
-| `system`, capture/sysmon.py, `SystemSampler(target)` | `columns` (S) → `system`; `others` → `others`; `game_adapter_luid` (adapter whose 3D engine the game used most) → `target["adapter_luid"]`; `game_pids` (game + children seen) → `target["pids"]`; `cost` `{ticks, median_ms, max_ms, mean_ms}` (also in the status detail) |
+| `system`, capture/sysmon.py, `SystemSampler(target)` | `columns` (S) → `system`; `others` → `others`; `game_adapter_luid` (adapter whose 3D engine the game used most) → `target["adapter_luid"]`; `game_pids` (game + children seen) → `target["pids"]`; `cost` `{ticks, median_ms, max_ms, mean_ms}` (also in the status detail); `windows_folder` (whether the others table's `system_folder` check covered the Windows folder itself, since 2026-11-16) → `target["windows_folder"]`, set only when True |
 | `gpu`, capture/gpumon.py, `NvidiaSampler(adapter)` | `columns` (G) → `gpu`; `device` `{name, clock_max_mhz, mem_total_mb, temp_target_c, power_default_w}` or None → `inventory["nvidia"]`; `live()` adds `source` ("nvml"/"nvidia-smi") |
 | `network`, capture/netmon.py, `NetworkSampler(server_ip=None, *, steam_log=None)` | `columns` (N) → `network`; `targets` `{gateway, internet, server}` (IPs or None), `probes` `{target: {"sent", "lost", "from_t"}}`, `lost` `{target: [t, …]}`, `wifi_scans` `[t, …]`, `route` `{if_index, description, vpn: bool \| None, toward}` → `net_flows[…]` under the same keys; `interface` `{name, kind: "wifi"/"ethernet"/"other", band, channel}` → `inventory["network"]`; `downloads` `[{t, source, mbps}]` from the Steam log, or None when no download log was read, with `download_sources` (the logs read) → `net_flows[…]` |
 | `net_flows`, capture/netflows.py, `FlowTracker(game_pids or a callable, *, relay=None)` | `server` `{ip, port, proto, pid, rx_packets, tx_packets, rx_bytes, tx_bytes, tick_ms, first_rx_t, last_rx_t}` or None; `talkers` `[{pid, name, rx_bytes, tx_bytes}]` top 8, with `talkers_scope` "all" (its own ETW session) or "session" (through the relay: the programs in this Windows session only); `game_wire_bytes` `[rx, tx]` the game's bytes that crossed the network (one end this PC's), never its loopback traffic; `gaps` `[[t, ms, kind], …]` (t = the last packet before the silence; kind: "delay" burst after the gap / "loss" no burst / "local" our own tx paused too / "open" the server went silent for good while we kept sending / "unknown" a late delivery hides which); `server_rx` `[[t, pps], …]` (t = end of each 1 s bin); talkers, game_wire_bytes, gaps and server_rx are None when the session never ran; `layout` "verified"/"unverified"; `health` → `net_flows[…]` |
 
-`others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct, create_time, gpu_game_pct], …]]`: up to 8
-non-game processes that did something that tick, ranked by CPU, `cpu_pct` with 100 = one logical CPU, `io_bps`
-read + write bytes, `gpu_pct` their busiest engine on any adapter, `create_time` raw FILETIME ticks (so a fix can
-prove a PID was not reused), `gpu_game_pct` their busiest engine on the game's adapter (None while that adapter
-is unknown). lag-doctor's own process is included: its load is real, and `target["tool_pids"]` lets the analysis
+`others` rows are `[t, [[pid, name, cpu_pct, io_bps, gpu_pct, create_time, gpu_game_pct, session, system_folder,
+ram_mb, commit_mb, vram_mb], …]]`: up to 8 non-game processes that did something that tick, ranked by CPU, then up to 4
+of the rest that read or wrote, ranked by `io_bps` (since 2026-11-15: a disk user with little CPU was never listed
+before), then up to 4 of the rest by each of `ram_mb`, `commit_mb` and `vram_mb`, busy or idle, on the rows that read
+memory (since 2026-11-16: a program holding memory while idle was never listed), `cpu_pct` with
+100 = one logical CPU, `io_bps` read + write bytes, `gpu_pct` their busiest engine on any adapter, `create_time` raw
+FILETIME ticks (so a fix can prove a PID was not reused), `gpu_game_pct` their busiest engine on the game's adapter
+(None while that adapter is unknown), `session` their Windows session (0: services and Windows' own), and
+`system_folder` True when their program sits directly in Windows' own System32 or SysWOW64 folder
+(`winapi.folders.system_folders`), or, since 2026-11-16, when it is Windows' shell, `explorer.exe`
+(`sysmon.WINDOWS_FOLDER_PROGRAMS`, equal to `rules.WINDOWS_FOLDER_PARTS`), directly in the Windows folder itself
+(`winapi.folders.windows_folder`, GetSystemWindowsDirectoryW: the folder every user shares; `target["windows_folder"]`
+says the check covered it; any other program there, such as a `svchost.exe` dropped in it, and a folder below it such
+as `Temp`, are not it), False elsewhere,
+None when it cannot say: the path could not be read, is no drive
+path (System, Registry, Memory Compression), or names another program than the snapshot did (a reused PID)
+(`ntquery.image_path`, handle-free; an answer is kept while the process stays listed: `sysmon.SystemFolders`; a
+System32 or Windows folder that cannot be read is said in the status). The path itself is never kept. `ram_mb` is the RAM the process
+alone holds (its private working set, `ntquery.ProcInfo.ws_private_bytes`, Task Manager's "Memory"), `commit_mb` the
+memory committed to it (its private bytes, which count toward the commit limit), `vram_mb` its dedicated video memory
+on the game's adapter (`\GPU Process Memory(*)\Dedicated Usage`, `sysmon.pid_vram`; 0 for a process the counter does
+not list, None while the adapter is unknown or the counter lists nobody there), each in whole MiB, None when not
+read. They are readings at that moment, where `cpu_pct` and `io_bps` are rates over the interval, and memory is read
+once a second (`sysmon.MEMORY_EVERY_S`): every fourth row at 4 Hz has them and the memory picks, and the rows between
+have None there (not read at that tick), so the analysis counts only the rows that read memory.
+Older captures have 5 to 7 fields, and the analysis reads a row of 9 as one that lists the disk users too, and one of
+12 as one that lists the memory holders and their memory. lag-doctor's own process is included: its load is real, and `target["tool_pids"]` lets the analysis
 keep it out of the blame and out of the background-CPU signals (the listed totals, and the machine-wide reading
 minus the game): its sampling is the measurement's cost, never "another program using the CPU". The session writes
 it from handle-free snapshots, at every status tick from `TOOL_SIGHT_S` (0.5 s) on and once more just before the
@@ -938,7 +961,8 @@ tagged *inferred* there and are tuned against LagLab, never silently).
 
 ```python
 # analysis/frames.py
-def main_chain(cap) -> dict[str, list]              # F columns of the swap chain with the most displayed frames
+def main_chain(cap) -> dict[str, list]              # F columns of the swap chain with the most displayed frames, and
+                                                    # HIDDEN beside them (time behind another window, below)
 def frame_stats(fr, duration_s) -> dict             # the frame keys of Diagnosis.stats
 def bound(cap, fr, events) -> dict                  # LC 3.4, steady windows only (event frames excluded):
 # {verdict: "gpu"|"cpu_main"|"cpu_all"|"waiting"|"vsync"|"capped"|"mixed"|"unknown", r, ft_ms, gpu_ms,
@@ -1035,6 +1059,32 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
   half of (PresentMon can leave only such a gap when several chains exist, PM 10 rule 7). One helper,
   `frames.stall_gaps`, feeds both the events and the stats: each stall is one interval of the series behind
   `avg_fps`, the lows, the worst frame, the hitch/severe/freeze counts and `time_beyond_50_ms`.
+- **Time behind another window** (`frames.HIDDEN`, `FRONT`, `hidden_rows`): while another window covers the game's,
+  Windows shows almost none of its frames, and PresentMon holds each frame it did not show behind the next shown one,
+  whose display change then spans the whole stretch (PM 2.4): the e2e run of 2026-11-09 read a covered LagLab
+  drawing 120 FPS as "2 stutters (worst 9483 ms) and low frame rate (13 FPS average)". `main_chain` marks a stretch
+  where frames go unshown for `HIDDEN_MIN_S` (1 s) and every foreground reading from a tick after its start to a tick
+  before its end (`HIDDEN_PAD_S`) says another window, two at least and none more than `HIDDEN_READ_GAP_S` (1 s)
+  apart. The readings nearer its ends are never asked: an Alt+Tab covers the game as it takes the foreground, so the
+  reading just before reads "in front". Readings "in front" (or unknown) only at a run's start or only at its end cut
+  it there: the game froze in front and then went behind, or came back to the front before a frame was shown. That
+  part is `FRONT`, judged as one frozen screen (`stall_gaps`), from the last frame to the last reading "in front", or
+  from the first one to the frame that ends it; a reading "in front" in a run's middle leaves the whole run judged. A
+  shorter unshown run within a tick of a stretch (`HIDDEN_JOIN_S`), every reading between them "another window", is
+  part of it, and two stretches are one when every reading between says another window (read at least once a second)
+  and at most half the frames between were shown (`HIDDEN_SHOWN_MAX`: a covered window's frames show in bursts of
+  1-12, a visible one shows nearly all); a gap of a second with no frame in it counts as a run (a game that stops
+  drawing behind another window). Its frames, and the shown frames ending its runs, are left out of everything the
+  frames judge: the display series (so the stats, the stutters, the refresh holds, pacing and the bound's VSync test),
+  stalls, the FPS-drop grid (a 1 s window reaching into it is no reading: it never sets the target and ends a drop),
+  the cap and VSync verdict behind the FPS-drop target, pacing episodes (none spans one), `dropped_pct`, and the
+  steady windows of the bound and the rules (`frames.not_steady_spans`). Nobody saw those frames, and many games slow
+  themselves down behind other windows, so they are not judged by when the game presented them either. `hidden_s` is
+  the stretches' own time (rows PresentMon lost inside one count), less any `FRONT` part; time behind another window
+  before PresentMon's first row or after its last is not in it, since there is no row to place it. Stutters a minute
+  count the capture less `hidden_s`; the headline says how much was left out, and with every frame in it frame timing
+  reads not measured, with that reason (`rules.no_frames_why`, naming the part). Without display tracking or
+  foreground readings nothing is hidden: a frozen screen while the game is in front looks the same, and is lag.
 - `low1_fps` / `low01_fps` = FPS of the average of exactly `ceil(p·n)` slowest frames (never "all frames ≥ the
   quantile", which sweeps in ties, LC 2.5); `p1_fps` = 1000 / P99 frame time, reported separately and labelled.
   Below 1,000 frames the 1% figures are `None` ("not enough frames"), below 10,000 the 0.1% figure (LC 2.6).
@@ -1052,8 +1102,12 @@ stutters, stutters_per_min                 int, float      stutter events (any c
 hitches, severe_hitches, freezes           int             frames >= 50 / 150 / 500 ms (LC 2.4 classes, nested)
 time_beyond_50_ms                          float           sum of (D - 50) over D > 50
 hitch_rate_bound                           float | None    3/n when zero hitches and no stall in n > 30 frames
-dropped_pct                                float           % of frames never displayed
+dropped_pct                                float           % of frames never displayed (outside time behind another window)
 frames_source                              str             "display" or "present"
+hidden_s                                   float           seconds behind another window with almost none of the game's
+                                                           frames shown, left out of every frame figure (only where
+                                                           PresentMon has rows); None without display tracking or
+                                                           foreground readings
 bound, bound_r, gpu_busy_pct               str, float, float   verdict; r; 100 x median GPU busy / median frame time
 steady_fps                                 float           the frame rate outside stutters and FPS drops (bound)
 bound_gpu_ms, bound_frame_ms               float           G and FT of r: median GPU busy less the HAGS margin, median
@@ -1082,8 +1136,8 @@ span                                       dict            {from_s, to_s, record
 ```
 
 ### The bound verdict (LC 3.4)
-`bound()` judges steady stretches only (frames outside stutters and FPS drops, at least 10 s and 300 app
-frames), in order: VSync (displayed intervals quantised on whole refresh periods, SyncInterval not 0 and
+`bound()` judges steady stretches only (frames outside stutters, FPS drops and time behind another window, at
+least 10 s and 300 app frames), in order: VSync (displayed intervals quantised on whole refresh periods, SyncInterval not 0 and
 AllowsTearing not 1; with k = round(FT/P) >= 2 the hardware is tested against one period: GPU busy past
 (k-1)·P gives `gpu`; a busiest thread that is saturated, or whose own CPU time a frame (its share times FT, on the
 lead thread only: a capture saved before it says this could not be told when its per-tick figure passes)
@@ -1163,7 +1217,8 @@ is not idle.
 - **fps_drop**: 1 s rolling displayed FPS below 80 % of the target for ≥ 2 s; target = the cap if one is
   detected, else the refresh rate (refresh/k) if VSync-locked, else the run's p90 FPS, and never above the
   refresh rate on a fixed-refresh display. `severity` = % below target; `detail` `{target_fps, target_from, fps,
-  min_fps}`.
+  min_fps}`. A 1 s window reaching into time behind another window is no reading: it never sets the target, and it
+  ends a drop, so none spans that time.
 - **pacing**: over 2 s, more than 10 % of `|D_i − D_(i−1)| ≥ 4 ms`, or p95 `|anim_error_ms|` > 2 ms, with frames
   inside stutter and stall spans left out (a hitch must not create the pacing that outranks it).
   `detail["criterion"]` = "swing" / "anim" / "both"; `severity` = the median swing ≥ 4 ms, or the animation-error
@@ -1195,9 +1250,57 @@ test: a cause *supports* when `a ≥ 3`, `a/n ≥ 0.30` and `lift ≥ 2` (n ≥ 
 stretch as long as each event's window (judged, like the event, on its busiest 1 s) holds an active second,
 averaged over the events (`attribute._expected`; a length too few quiet stretches reach is taken at the longest
 that 8 do): a mark's 4.25 s window once met a plain 1 s share, 0.36 where its own length gave 0.64.
+A cause is *blind* (`blind: true`, never "contradicts") when every measured part's quiet level is already at its
+floor or past it, and that level plus the floor is past the most its signal ever read: no moment could rise. A game
+behind another window in most quiet seconds has its "behind" signal at 1.0, so "only 0 of 12 coincided with another
+window being in front" would be false; a signal that never moved off nothing is not blind.
+A move that something else explains does not count: the CPU's clock (`cpu_perf_pct`) falling while it stays at or
+above base speed, at a moment the whole machine's CPU use (`cpu_total_pct` times the logical CPUs, the game's
+included) rose by background_cpu's floor for all programs and its z test, is turbo, which runs slower the more cores
+work (LC 4.5 compares speeds "at a similar load"; on the 2026-11-11 e2e hog run this laptop ran at about 137-156 % of
+base with its CPUs nearly idle and at 100-105 % with all of them busy, its % Performance Limit at 100 throughout, and
+every FPS drop had named `cpu_throttle` first). The event's why-lines say so, last, and the moment leaves that cause's
+lift test (`left_out`, `left_out_why`; `n` is then the rest), as a rubric drops what had no chance to show; so does a
+quiet window where the clock moved only that way, from the baseline share. A fall below base speed, or one at the
+usual load, still counts. The run's falls bottomed out at 100.6-102.9 %, close to base: a hotter run under the same
+load that fell below it would name `cpu_throttle` again, as it should.
+Another program's disk use (`background_disk`, whose one part names what the game would wait on, `_Part.waits`) is
+ruled out the same way at a stutter whose longest frozen frame the game's busiest thread worked through
+(`_hold_reading`, the residual's own tick test below, reading "worked"): a thread that ran through the frame was not
+waiting on a disk. On the second 2026-11-11 e2e run another program read 32-521 MB/s over three of hitch's busy waits,
+and its z, past the cap off a near-zero normal, put it first over the busy wait's 5 to 9, which the ticks showed
+running 105-137 ms more than usual in those 160 ms frames. Only a stutter of one frozen frame and no stall is judged
+so: a merged episode's reading judges its longest frame alone, and another of its frames may have waited. A frame read
+as waiting or in between, one too short or noisy to tell, and an FPS drop keep the disk; quiet windows have no frozen
+frame and keep counting it in the baseline share; a program hogging the CPU still counts there, since it competes for
+the core while the thread works. Where a move was ruled out and nothing else counted, the residual's line starts
+"nothing else that moved explains it", never "nothing else moved" above the move its last line names, and the rules'
+count lines for `game_cpu_spike`, `gpu_spike` and `game_stall` say nothing else "explained" those stutters, not that
+nothing moved.
 Each event is then attributed to its single best cause (explaining away), first in `ev.causes`; when nothing
-moved, the residual is `gpu_spike` (GPU side), `game_cpu_spike` (a saturated thread) or `game_stall`, and no
-cause at all when the sampler did not measure that moment.
+moved, the residual (`attribute._residual`), in order: `gpu_spike` on the GPU side; no cause of the game's when the
+screen held while the game kept presenting (`_screen_hold`: at least half the frames its usual rate gives over the
+stutter, at least two of them never shown, a share 25 points over its usual one away from time behind another window,
+and at least one of those with a whole refresh before the game's next present, since composition drops a frame
+replaced sooner by design, as the burst a game catches up with after a stall of its own): Windows' composition or
+the display held it, and the e2e smooth control's 36 ms stutter (8 of 17 frames unshown while LagLab drew on time)
+had read "the game waited on itself" (its side line then names the slowest frame the game presented, never a slow
+side); `game_cpu_spike` for a busiest thread saturated over 1 s, or for a stutter's
+long frozen frame it worked through; else `game_stall`. A stutter's frozen frame (its worst hold; an FPS drop holds
+none) is judged by the thread's extra CPU time in the 4 Hz ticks that cover it (`_work_during`; a tick reads the delta
+since the one before, and a missing tick there leaves the frame unjudged), against the midpoint of working through it
+(about the hold times one minus the thread's usual share) and waiting (minus the hold times that share), where 2
+spreads of those ticks' noise fit in half the distance and two 15.625 ms accounting ticks too: a 1 s mean dilutes a
+150 ms busy wait to a few points, so on the e2e hitch run 5 of 8 had read `game_stall`. Working through it also
+needs a rise past that bar, since for a thread usually past half a CPU the midpoint is below nothing. One tick's
+spread is the larger of twice the 1 s means' and the quiet ticks' own (each guess fell short of the real spread on
+some e2e capture). A frame too short to tell keeps the 1 s reading; a reading nearer working through it but within
+the bar names no cause and says neither answer was measured. A lift test that reads "contradicts" for
+`game_cpu_spike` reads "neutral" where counting the frames the ticks showed worked through (`worked`) ends the
+contradiction, and the rule counts every stutter the residual named for it on a line of its own, weighed only by the
+frames worked through (a thread saturated all along says nothing of the moment). Above the refresh rate a held screen
+cannot clear (the game's frames are under one refresh apart), and in composed GPU-bound play most dropped frames pass
+the refresh test, so there the share decides. No cause at all when the sampler did not measure that moment.
 
 | side | signal that moved | cause id |
 |---|---|---|
@@ -1205,13 +1308,15 @@ cause at all when the sampler did not measure that moment.
 | CPU | game reads up that the disks' own reads match (the game's counter also counts what the file cache served from memory, so each tick is capped at `disk_read_bps`), or disk busy or read latency up | `asset_streaming` |
 | CPU | hard page faults up, RAM low | `memory_paging` |
 | CPU | another process's CPU up (or machine-wide CPU beyond the game) | `background_cpu` |
-| any | another process's disk or GPU up | `background_disk` / `background_gpu` |
+| any | another process's disk (never at a frozen frame the game's thread worked through) or GPU up | `background_disk` / `background_gpu` |
 | any | DPC/interrupt time up on the busiest CPU | `driver_dpc` (capped at "possible": PDH cannot name the driver) |
 | CPU | `cpu_perf_pct` or `cpu_perf_limit_pct` down | `cpu_throttle` |
 | GPU | GPU busy long and `nv_throttle_pct` up | `gpu_throttle` |
 | GPU | VRAM near full and `game_shared_mb` rising (within 5 s, not a plateau over the median) | `vram_overflow` |
 | GPU | GPU busy long, nothing else moved | `gpu_spike` |
 | none | game not focused (`game_focused` = 0) | `not_focused` |
+| none | nothing moved, the game kept presenting and Windows left its frames off the screen | none (the screen held) |
+| none | nothing moved, the thread worked through a long frozen frame | `game_cpu_spike` |
 | none | nothing moved, thread idle | `game_stall` (the game waited on itself) |
 
 Blame for the background causes names the processes whose own rise clears the cause's floor (CPU: 25 % of a
@@ -1227,7 +1332,9 @@ evidence either way, silent), declares the sources it `needs`, its family and ca
 causes a `gate` on the bound verdict (`gpu`: "gpu" or "mixed"; `cpu`: "cpu_main", "cpu_all", "mixed" or
 "unknown", LC 5.1; `gpu_event`: anything but CPU-bound). A gate failure turns a Finding into Cleared (a definite
 verdict) or Unchecked (verdict unknown, or for a CPU-side cause the 3D engine's "gpu" with no r,
-`rules._gpu_by_engine`, which says nothing of the CPU), except that without frame timing a `gpu`-gated Finding
+`rules._gpu_by_engine`, which says nothing of the CPU). At the display's rate a `cpu`-gated Finding clears under every
+verdict the gate lets through and under the engine's "gpu": the display sets the pace, as `cpu_limit` clears itself
+there (`rules._display_paces`). Without frame timing, a `gpu`-gated Finding still
 passes where
 `bound.gpu_probable` holds, with that reading as its last evidence line (`rules._probable_gpu`); when it does not
 hold, the Unchecked reason gives the seconds and marks. A rule whose source was not measured is `unchecked` with
@@ -1272,7 +1379,9 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   "full speed". Its line on a busiest thread under 70 % of a CPU (LC 4.5), the share rounded down, is left out
   under the CPU verdicts (every core busy is CPU-bound too) and an older capture past VSync's work edge, and where
   the CPU is not ruled out it says the thread is under the 70 % at which CPU speed starts to matter, never that CPU
-  speed is not what holds it back.
+  speed is not what holds it back. Its event-linked line, shown when the lift test supports, counts only the moments
+  the load did not explain (Attribution: turbo) and says how many it left out; each of those moments' own why-lines
+  says the load explained it.
 - `ram_pressure`: free RAM under 10 % (5 % or 64 MB critical), hard faults, the commit charge over 80 / 90 %. A
   commit charge over 90 % while RAM stays free is the page file running short: free RAM is no evidence against it
   then (nor hard faults for it, being file reads, nor the paging lift test, which counts paging only while RAM is
@@ -1307,9 +1416,19 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   refresh, uneven presents stay `uneven_pacing`'s, as before.
 - `game_dvr`: background recording known off concludes against; unknown is advice only (no auto-fix);
   `game_dvr_off` is offered only when background recording is known on.
-- `not_focused`: the share of the capture behind another window (>= 10 %, on the CPU side), or the lift test.
-  "The active window most of the time" counts against only when the lag moments did not come while the game was
-  behind more often than that share says; with too few of them for the lift test it is unchecked, with the counts
+- `not_focused`: behind another window for >= 10 % of the part, a cost it measured. The game's own frame rate there
+  (its app frames' count over their summed MsBetweenPresents, shown or not: a median of frame times that alternate
+  between two values lands on one of them; a frame takes the side of the next foreground reading) at least 10 %
+  under its rate with its own window in front supports it, on the CPU side; a smaller drop clears it ("cost it no
+  frames"), and so does a rate behind it within 10 % of the display's (0.9 x refresh or more: "cost nothing you could
+  see"), judged on the rate behind, never the part's average. Without 100 frames and 2 s on each side, its CPU use behind at 90 % or more of its use in front (eight
+  readings a side) clears it ("did not get less CPU time"); a lower one is no cost by itself (a game may slow itself
+  down behind a window) and leaves it unchecked, saying so. With nothing compared it is unchecked on the CPU side and
+  silent on the GPU side. The time behind is no cost by itself: the e2e runs' LagLab kept its frame rate there, yet
+  the share alone named "the game got less CPU time" at medium. Or the lift test, which never counts against it when
+  it is blind (`attribute._blind`: behind another window in most quiet seconds, the signal sits at its top, so no
+  moment can rise above it). "The active window most of the time" counts against only when the lag
+  moments did not come while the game was behind more often than that share says; with too few of them for the lift test it is unchecked, with the counts
   (2 of the first real capture's 3 marks fell in its one stretch behind other windows).
 - With marks standing in for the frames, the marks are the events the rules judge (`_Env.judged`): a stutter
   cause they named first is unchecked with fewer than 5 ("only 3 marked moments"), and one they support is titled
@@ -1321,6 +1440,50 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   without case) stay in the evidence, but here and in `gpu_contention` they never get a priority fix or "pause or
   close" advice: titles name them "Windows itself (System)", a lag only they explain is titled "Windows itself got
   busy", and the advice says what their work means (System: a driver's work; Memory Compression: RAM running short).
+  The same goes for Windows' other own programs (`rules._windows_own`): a `WINDOWS_PARTS` name, by what it normally
+  is. Where the others row says where a process runs (fields 7 and 8), a `WINDOWS_PARTS` name counts only in session
+  0 or from System32 (`explorer.exe`, Windows' shell: from the Windows folder itself, `rules.WINDOWS_FOLDER_PARTS`,
+  judged so only where `target["windows_folder"]` says the recorder checked that folder; an older capture's False said
+  only "not System32", so there its name decides), so one in the player's session from another folder is a look-alike, said so ("named like a
+  part of Windows, but not where Windows runs it") and kept closable and lowerable, apart from the real ones of its
+  name; a program on no list never counts by where it runs (a backup service's robocopy.exe stays closable). Defender's
+  scanner (`MpCmdRun.exe`), an older capture and an unread path decide by name. No priority fix goes to a session-0
+  process either: `fixes/priority.py` refuses those, and `gpu_contention` offers no other GPU for Windows' own work.
+  The programs of the store app that started the game (`rules._store_of`) are treated the same in both: said to be
+  part of it, which the game may need (`rules._store_advice`), never told to pause or close, never lowered, and given
+  no other GPU. Where Memory Compression is named in a capture whose table holds memory, the advice after what it is
+  names the other programs that held the most RAM around the stutters it rose at (`rules._compression_holders`, each
+  window reaching `MEMORY_NEAR_S` further to meet the nearest memory reading; Memory Compression itself left out), as
+  `ram_pressure` does; an older capture keeps its old advice alone.
+- The advice to close other heavy programs names them (`rules._heavy`, `_disk_advice`, `_cpu_advice`,
+  `_net_advice`). `asset_streaming` and `hdd_streaming` name the other programs whose reads and writes averaged
+  `attribute.OTHERS_DISK_BPS` (20 MB/s) or more over the windows attribution looked at around the finding's own
+  stutters (`hdd_streaming` with none: over the whole part); `cpu_limit` those that averaged `HOG_MIN_CPU_PCT` (25 % of
+  a CPU) or more over the part; `bufferbloat` those with a `net_flows` talker that moved `TALKER_MIN_BPS` (1 MB/s) or
+  more on average on its own, as `bandwidth_hog` counts them. A mean sums each image name's readings in the others table and divides by the table's ticks there, so a
+  tick it was not listed on counts as 0 and the figure is a lower bound ("at least"). At most three are named, biggest
+  first, then by name, never by PID; the game, its helpers, lag-doctor's own processes and the game's image name never
+  are. Windows' own (`WINDOWS_ITSELF`, and `rules._windows_own`: Defender, Windows Update, Search, `svchost.exe`,
+  `csrss.exe`, `audiodg.exe`, `dwm.exe` and `explorer.exe`, by where they run when the capture says it, else by name) are said to
+  be Windows, never told to close: Memory Compression as RAM running short,
+  System on the CPU as a driver's work, the others by what the name normally is; a name's look-alikes are counted
+  apart and named as such. Under the floor the disk advice says the most any program did (a Windows one said to be
+  Windows, a figure that rounds up to the floor "just under" it), and, in an older capture, that the table lists the
+  8 processes busiest on the CPU, so a disk user with little CPU can be missing; with no I/O reading there it says
+  that was not measured. `cpu_limit` and `bufferbloat` keep their old line when none passed
+  (a part has no talkers); talkers through the relay (`talkers_scope` "session") say only that session was seen. The names go only into the advice, so no score moves.
+  `ram_pressure` and `vram_overflow` name the other programs that held the most (`rules._held_advice`): RAM
+  (`ram_mb`) while free RAM was under the warning floor, memory reserved (`commit_mb`) in the page-file branch while
+  committed memory was over 80 %, and video memory on the game's GPU (`vram_mb`) while it was 90 % full, each at the
+  system rows' own ticks reaching half a second to either side (`rules._when`, `MEMORY_NEAR_S`: the nearest memory
+  reading), else over the whole part; from `MEM_MIN_MB` (500 MB) and `VRAM_MIN_MB` (250
+  MB) on average, under which they say the most any program held ("just under" the floor when it rounds to it) and that
+  the table lists the 4 biggest holders at each moment, so a program split into many processes can hold more; a finding
+  the commit charge made with the RAM size unknown reads `commit_mb`. An older capture, whose table holds no memory,
+  keeps the old line word for word. In every advice `rules._heavy` writes, the programs of the store app the game was
+  started through (`inventory` game.launcher "steam" or "epic": `rules.STORE_APPS`) are said to be part of it, which the
+  game may need, and never told to close; `vmmem` and `VmmemWSL` (a virtual machine's memory) are `WINDOWS_PARTS`.
+  `gpu_contention`'s busiest GPU user is judged over the rows that read memory alone in a table that lists them.
 - `packet_loss`: loss events, and a steady overall loss ≥ 1 % from at least 2 lost probes; never "no ping was
   lost" when some were. `server_lag`: argued only when a server flow covers most of the capture; no server flow
   is unchecked (a TCP-only or offline game); an "open" gap is a lost connection; "local" gaps are the game
@@ -1943,4 +2106,18 @@ typed on the player's PC, and the game is never started, stopped or opened by la
 - **End to end**: `scripts/e2e.py` runs each LagLab mode with a real capture and judges the diagnosis against
   LagLab's ground-truth log (`scripts/e2e_truth.py`). It needs ETW rights, so it runs on demand: without them
   it relaunches itself once through a UAC prompt and prints the verdicts back in the original window. The
-  `smooth` run also exercises the real ping and Kernel-Network ETW paths.
+  `smooth` run also exercises the real ping and Kernel-Network ETW paths. Every mode's first check is that LagLab's
+  window was the foreground window for the whole capture (LagLab logs each change, `log["front"]`): Windows shows
+  nothing of a covered window, and PresentMon's default metrics hold every frame that was not shown behind the last
+  one that was, so a covered LagLab gives few rows or none (the analysis leaves such time out, `frames.HIDDEN`, but
+  a mode judged on it would have nothing to judge); and a change of focus makes it hitch. The smooth control passes a
+  stutter only where LagLab's own frame starts (`log["frames"]`, at least 10) span it and held no gap there as big as
+  a stutter (LC 2.4: 2.5 times their usual and 8 ms over it), and the doctor named no cause of the game's for it
+  (`GAME_CAUSES`; every other cause is in `NOT_GAME`, and a test holds the two equal to `attribute.CAUSE_ORDER`), and
+  its verdict may then say "stutter" while nothing of another kind blamed on the game sits beside them (the pacing a
+  120 FPS cap gives on a 144 Hz screen names no cause): Windows can hold a window's frames
+  off the screen while LagLab draws on time (the owner's choice, 2026-11-11). A log without usable frame starts fails
+  every stutter. Hog mode does a
+  fixed amount of work per frame, measured in its warmup (`laglab.app.FixedWork`), because a timed busy-wait ends on
+  time whatever else runs; its bursts are whole ones only, and the run gives it 40 s, so that at least
+  `attribute.LIFT_MIN_EVENTS` bursts fall inside the capture (`tests/test_e2e_schedule.py`).

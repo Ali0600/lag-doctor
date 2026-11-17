@@ -106,7 +106,25 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   quotes, or adding a line that repeats one, makes that mutation BAD-SPEC, and no test notices (M6b's spawn scan
   copied the handle scan's parse-failure line, 2026-11-10): after any edit to a file a spec names, check every `old`
   in `tests/redfirst/*.json` still occurs exactly once in its file, and re-point the ones that moved (same sabotage,
-  new text). Most specs (`report.json`, `user_text.json` and `session.json` among them) are laid out by hand: change their
+  new text). Renaming a test does the same to each mutation that names it: only a run of that spec notices, as
+  BAD-BASE, so grep the specs for a test's old name when you rename it. Before merging, rerun every mutation whose
+  `file` or tests the change touches, picked by path from all of `tests/redfirst/`, never from a list kept by hand
+  (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). Every mutation on
+  `lagdoctor/analysis/rules.py` (456 after PR #52) takes up to an hour here (PR #50's 494 picked mutations took about
+  70 minutes, PR #51's 744 about 36 and PR #52's 643 about 38 on a quiet PC): start it in the background as soon as the code is settled, and
+  review meanwhile with agents that run no tests (no second pytest meanwhile, so write the next change's tests without
+  running them; the full suite may run beside such agents, about 8.5 minutes). A guard a later edit makes redundant
+  (PR #51: `return out or None` after an `if not proc_ded: return None`) leaves its mutation equivalent, so it can
+  only survive: drop the redundant check and its mutation together. An `old` that
+  still occurs once can still go dead: a change that sends its test down a new path leaves the sabotaged line
+  unreached, and only the gate's SURVIVED shows it (PR #45's tick test took a stall past the residual's GPU wording an
+  older sabotage changed, 2026-11-11), so read each survivor before assuming the new tests are at fault. A shared fixture
+  such as `tests/synth.py` touches every test built on it, so pick the mutations those tests guard too (PR #43 refit
+  synth's hog mode and reran the 7 whose tests build it). A change that leaves every call the old tests make giving
+  the same output needs no rerun once that is shown: wrap the fixture's function for one run of those tests, compare
+  each call's output with the old version's (`git show <base>:tests/synth.py`), and first see a planted change read
+  as different (PR #44's `covered` knob: 319 calls, all identical, 2026-11-11). To rerun a picked set, copy its
+  entries byte for byte into a spec under the short `TEMP` folder and pass that file to `redfirst.py`. Most specs (`report.json`, `user_text.json` and `session.json` among them) are laid out by hand: change their
   values in place, never by rewriting the file through `json.dumps`. A script may rewrite a spec only after checking
   it is byte for byte `json.dumps(indent=1)` plus a newline (`first_capture.json` and `power_plan.json` are), and with
   `write_bytes`: Python's `write_text` writes CRLF on Windows. The copy holds `lagdoctor/`, `laglab/`, `tests/`,
@@ -141,8 +159,37 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   or `%USERPROFILE%\...` (`html.user_neutral`), and a command the page offers names it as `"$env:LOCALAPPDATA\..."`
   (`html.powershell_path`). `charts.py` escapes its own labels without that, so pass a chart only fixed words and
   numbers. Tests use a made-up profile (`C:\Users\Jo Tester` in `tests/test_report.py`). The console summary keeps
-  real paths on purpose (DESIGN.md, Report).
-- **Column names come from `lagdoctor/model.py`** (`F`, `S`, `G`, `N`); `SeriesBuilder` rejects unknown names.
+  real paths on purpose (DESIGN.md, Report). The README's picture of it (`docs/images/report.png`, 2026-11-15) is
+  `tests.synth.laglab("hitch-io")` with a made-up `BackupSync.exe` reading and writing about 31 MB/s added to every
+  `others` row (keeping the 8 busiest by CPU), through `diagnose` and `html.write`, shot by headless Edge
+  (`--headless=new --hide-scrollbars --user-data-dir=<a folder under %TEMP%> --blink-settings=preferredColorScheme=1
+  --window-size=1100,2400 --screenshot=<png> file:///<html>`; without the colour-scheme flag it follows Windows' dark
+  mode) and cropped to 1100x1690, just below the third finding. Never shoot one of the owner's own recordings.
+- **Column names come from `lagdoctor/model.py`** (`F`, `S`, `G`, `N`); `SeriesBuilder` rejects unknown names. The
+  dict `frames.main_chain` returns also holds two per-row lists that are no capture column, `frames.HIDDEN` and
+  `FRONT` (time behind another window, DESIGN.md "Frames and stats"): copy or cut it by its own items, never by
+  `F.ALL`, which drops them and judges a covered window's frames again. A frame test builds its capture and goes
+  through `main_chain`, since a dict built by hand has no `HIDDEN` and hides nothing.
+- **A rule test asserts the kind it expects.** `rules.run_rule` turns a rule that raises into Unchecked ("the check
+  failed"), so `assert not is_finding(res) or ...` passes on a crash: a sabotage that crashed `bufferbloat` survived
+  that way (PR #48). Assert `is_finding(res)` (or the Cleared/Unchecked you mean) first. A hand-built `others` table
+  lists some process on every tick: attribution reads a row listing nothing as not read (`_Others.total` and `io_top`
+  None), so a table holding only the program under test reads "not measured" on its quiet ticks. Its entries' length
+  picks the path under test: 9 fields (since PR #50) say each process's session and whether its program sits in
+  System32 (`rules._where`), so a Windows name is judged by where it runs and the "8 busiest on the CPU" caveat goes;
+  12 fields (since 2026-11-16) add each process's RAM, memory committed and video memory, which alone let
+  `ram_pressure` and `vram_overflow` name programs (fewer keep their old line word for word); 5 to 7 fields are an
+  older capture, judged by name. `explorer.exe` is judged by where it runs only when `target["windows_folder"]` is
+  True (since 2026-11-16 the folder check covers the Windows folder itself, where Windows runs it); without it, by
+  name. A memory figure is read at the system rows' own ticks (`rules._when`), so a hand-built others table must
+  carry the system table's times (`synth.system_table`'s 0.25 s steps). A test of the half second that reaches the
+  nearest memory reading (`MEMORY_NEAR_S`) needs a window holding no reading of its own: `tests/test_analysis_rules.py`'s `stutter` lasts 0.15 s and attribution looks from 0.5 s before
+  to 0.25 s after, so with memory read on whole seconds a stutter at x.6 s ends its window exactly on one (PR #52's first
+  version passed without the reach, and only the gate's SURVIVED showed it); one at x.55 s holds none. The sampler reads memory
+  once a second (`memory_every_s`): a `SystemSampler` test at `period_s=0.05` sees it on every 20th row unless it
+  passes `memory_every_s` too. A `SystemSampler` test with a fake snapshotter calls the real
+  `ntquery.image_path` on its made-up PIDs unless it passes `system_folders=sysmon.SystemFolders(...)`, whose fake
+  paths must end in the snapshot's own image name (a different one reads as a reused PID: None).
 - **A measured part keeps the recording's own times** (`lagdoctor/analysis/crop.py`, DESIGN.md "The measured part").
   On a cropped capture `duration_s` is the part's length, never an end time: code that counts from the start counts
   from `_Env.start`, and text that names a share or a time of the recording names `_Env.part` ("the capture" until
@@ -165,7 +212,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   need ETW rights: PresentMon an elevated token or Performance Log Users, the tracker an elevated token only
   (measured, E1 in `docs/research/install-and-rights.md`: Kernel-Network's own descriptor lets only SYSTEM,
   LocalService and Administrators enable it). Tests use private
-  in-process sessions with unique names instead. The end-to-end run (`scripts/e2e.py`) is on demand. The venv's
+  in-process sessions with unique names instead. The end-to-end run (`scripts/e2e.py`) is on demand, and the owner's
+  (UAC prompt): each mode is judged only if LagLab's window kept the focus for the whole capture (a covered window
+  gives PresentMon no rows), so when you ask for a run, ask the owner to leave the PC alone until it ends (about 5.5
+  minutes). LagLab's hog mode burns every CPU in bursts: an agent runs it only on an idle PC, after the same check for
+  other sessions' `pytest`, `redfirst.py` or `laglab` as before a test run. The venv's
   `python.exe` is a launcher: the real process is the base interpreter, so target LagLab by the PID it writes to
   `--pid-file`.
 - **This laptop is hybrid** (RTX 3070 Laptop + Intel UHD; the internal panel is driven by the Intel GPU).
@@ -187,7 +238,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   and `appcache\appinfo.vdf`, read-only, show how a launch behaves (`docs/research/desktop-app.md`, section 14).
   `check` and `analyze` only print a note there, yet each writes a new folder under `paths.sessions_dir()`, into that
   private copy, where the owner never sees it: to re-run today's analysis on one of the owner's recordings, load it
-  and call `diagnose()` in memory (`Capture.load(path)`; the agent's shell reads the real sessions folder, as it did on
+  and call `diagnose()` in memory (`Capture.load(path)`; to diff a change against main, put a `git worktree add
+  --detach` of main under `%TEMP%` first on `PYTHONPATH` and check `lagdoctor.__file__`, as PR #45 did for every e2e
+  and FF7 capture; the agent's shell reads the real sessions folder, as it did on
   2026-11-09). Nor does an agent change a game's own files (its settings, saves or install folder): Documents is not
   moved, so an edit to a game's config there (FINAL FANTASY VII REBIRTH keeps its own under `Documents\My Games`)
   changes the owner's real game, while one under `%LOCALAPPDATA%` lands in the private copy yet reads back as applied
@@ -322,7 +375,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   is an administrator with UAC off, so `tests/test_cli.py` models an unelevated owner unless a test says otherwise,
   and the app's own `run()`, which refuses an elevated start, is never what a test opens: `tests/app_harness.py`
   builds `App` itself.
-- `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running. Use `uv run python`.
+- `python3` in Git Bash here is the Microsoft Store placeholder: it waits instead of running, and so does a bare
+  `python` (`python -` hung a whole command on 2026-11-16). Use `uv run python`.
 - A new worktree has no `.venv`; the first `uv sync` or `uv run` builds one on Python 3.13, named by `.python-version`,
   which resolves to `C:\Python313` here (measured 2026-11-08, uv 0.10.4). Before that file, uv took its own managed
   3.12, which CI never ran. A venv still on 3.12 is rebuilt by the next `uv run`: not while a red-first run uses it.
@@ -356,6 +410,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   goes the other way: a doubled backslash typed into a command, heredocs with a quoted delimiter included, arrives
   halved, so `\\localhost` landed as `\localhost` in a PR body and a doc, and `"..\\x"` broke a script (four times on
   2026-11-08). Write text that holds Windows paths with the Write tool, or build it from `chr(92)`, and read it back.
+  A Bash heredoc whose body holds a Python `'''` string failed outright (bash: "unexpected EOF while looking for
+  matching" quote, three times on 2026-11-11): write such a script with the Write tool and run the file.
 - To read one CI job's log while the rest of its run goes on (a fast job's verdict, such as the wheel job on a
   sabotage commit), use `gh api repos/Ali0600/lag-doctor/actions/jobs/<job id>/logs --allow-escape-sequences`:
   `gh run view <run> --log --job <job id>` refuses until the whole run has finished, and without the flag `gh api`
@@ -399,7 +455,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   alone, on M4b's branch and on main alike. Two more depend on the PC's state: `tests/test_cli.py::test_a_real_console_event_
   while_recording_still_saves_the_capture` (its child hit the 60 s timeout once under full-suite load, then 3/3
   alone), and `tests/test_sysmon_target.py::test_auto_picks_a_windowed_renderer_and_never_a_windowless_gpu_job`, which
-  needs LagLab to render where Windows counts it: on 2026-11-07 at 00:30 (Silent mode, display asleep) it failed on
+  needs LagLab to render where Windows counts it (`tests/test_folder_wait.py::test_a_real_laglab_window_is_found_by_its_
+  folder` with it: both failed, with `test_nvidia_live`'s driver-refresh test, on unchanged code on 2026-11-15, twice): on 2026-11-07 at 00:30 (Silent mode, display asleep) it failed on
   unchanged code too, in a worktree of the previous commit, and again on 2026-11-08 in a worktree of main. It also
   fails while another LagLab window is open: on 2026-11-08 another worktree's measurement script was running `python
   -m laglab` in a window of its own, the test's auto pick took that window, and it failed alone and on unchanged main
@@ -427,6 +484,15 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   M6c's branch, which touches nothing the sweep imports: exit 2, so the settings were not all put back), then passed
   3 of 3 alone and twice in its file. Its fake world's journal waits 0.3 s for its lock, which a loaded PC may
   outrun (not measured); rerun it alone before blaming a change.
+  `tests/test_redfirst.py::test_the_job_counts_every_process_under_pytest_and_ending_it_ends_them_all` failed once on
+  main's push run (2026-11-11, 5ea3f80; the PR's run of the same tree and the rerun passed): right after `job.end()`,
+  with the job counting none of them, the snapshot still listed one of the tree's four processes (the parent's
+  interpreter under the venv's launcher), gone when the assertion built its message. It looked once; since 2026-11-12
+  it waits for the tree to leave the snapshot (`_still_listed`, by a deadline taken when it starts, `TREE_GONE_S` =
+  10 s; in 60 runs here the first snapshot after `end()` never listed one). A failure now names what stayed listed
+  that long: a real leftover, not that lag. `test_a_hang_is_a_timeout_whose_processes_all_end_and_the_
+  run_goes_on` still reads its leftovers once, right after the runner exits: if it fails the same way, give it
+  `_still_listed` too.
   Never run two pytest processes here at once (a review agent's tests beside the suite): they share
   `%TEMP%\pytest-of-<user>` and its keep-three cleanup, and on 2026-11-08
   `tests/test_downloads.py::test_fetch_gold_takes_the_pinned_commits_gold_folder_byte_for_byte` failed twice that way

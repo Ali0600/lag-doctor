@@ -17,7 +17,7 @@ import bisect
 import math
 import ntpath
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from lagdoctor.analysis import events as ev_mod
@@ -80,6 +80,34 @@ DISK_BUSY_PCT = 90.0         # LC 4.8 (PAL, S30): disk idle < 10 %
 DISK_READ_MS = 15.0          # LC 4.8 (PAL, S30): Avg. Disk sec/Read > 15 ms
 UNFOCUSED_SHARE = 0.5        # [inferred] the game was not in front for at least half of that second
 STALL_COVER = ev_mod.STALL_COVER   # a frame holding less than half of the lost time did not cause it
+CPU_BASE_PCT = 100.0         # LC 4.5: % Processor Performance is a share of the base clock, so at or above 100 the CPU
+                             # runs its rated speed or a turbo step
+TURBO_LEFT_OUT = "there the CPU's clock fell only as the PC's CPU use rose, which turbo does by design"
+WORKED_LINE = "nothing else moved, and in a frame held"      # how _residual's "worked through it" line, and no
+                                                             # other of its lines, starts
+NOTHING_MOVED = "nothing else moved"         # how _residual's lines that name what the game did start ...
+RULED_OUT = "nothing else that moved explains it"   # ... and how they start instead where a cause's move was ruled out
+                                             # there (_evaluate's veto): something did move
+WAIT_LEFT_OUT = "there the game's busiest thread worked through the frozen frame, so the game was not waiting on {}"
+# ---- the residual: working, waiting or the screen (the owner's end-to-end run, 2026-11-11) ----------
+BUSY_Z = 2.0                 # [inferred] a stall is judged between two named answers, the game's thread working
+                             # through it or waiting, at their midpoint, so a misreading needs the noise to cover half
+                             # their distance: at 2 spreads about 2 % each way for normal noise. On that run a 150 ms
+                             # busy wait read +85 to +101 ms of extra thread time and a 150 ms sleep -42 to +5 ms,
+                             # against a 52 ms midpoint and a 26 ms spread. Working through it also needs a rise of 2
+                             # spreads: a busy thread's usual share past half puts the midpoint below nothing
+SCREEN_KEPT = 0.5            # [inferred] the game presented at least half the frames its usual rate gives over the
+                             # stutter (the e2e runs' held screens: smooth's 0.83 on 2026-11-11 and 0.91 on 2026-11-09,
+                             # pace's 1.16 on 2026-11-11, hog's 1.09 on 2026-11-09). The game's own stalls kept 0.05 to
+                             # 0.18 in its 100-160 ms hitches, but more where the stutter outlasts the hitch (0.76, a
+                             # 104 ms one in a 371 ms stutter) or the stall is short or spread out (pace's 0.99-1.16,
+                             # hitch-io's 34 ms one 0.73), so the frames left off the screen decide ...
+SCREEN_UNSHOWN = 0.25        # [inferred] ... Windows showed this share fewer of them than it usually does (the held
+                             # screens: 33 % to 80 % unshown, against at most 8 % over the rest of each capture) ...
+SCREEN_MIN_UNSHOWN = 2       # [inferred] ... at least two never reached the screen ...
+SCREEN_MIN_PASSED = 1        # [inferred] ... and at least one of those Windows had a whole refresh to show before the
+                             # game's next present. A frame replaced sooner is dropped by design (composition shows
+                             # the newest), so a stall of the game's own and the burst it catches up with never pass
 # ---- naming the program that rose (A5) -------------------------------------------------------------
 BLAME_CPU_RISE_PCT = 25.0    # [inferred, DESIGN background_hogs' 25 % of one CPU] a process is named only when it
                              # rose this much; a steady job's 1 % wobble never is. Disk: OTHERS_DISK_BPS, GPU:
@@ -406,10 +434,13 @@ def _gpu_heat(cap: Capture) -> _Series:
     return _Series([t for t, _, _ in rows], [x if not old or named or x == 0 else None for _, x, named in rows])
 
 
+MEMORY_FIELDS = (("ram", 9), ("commit", 10), ("vram", 11))   # an others entry's MiB held, since 2026-11-16 (12 fields)
+
+
 @dataclass
 class _Others:
     """The `others` table: top non-game processes per tick ([pid, name, cpu_pct, io_bps, gpu_pct, create_time,
-    gpu_game_pct]; older captures stop after field 5 or 6)."""
+    gpu_game_pct, session, system_folder, ram_mb, commit_mb, vram_mb]; older captures stop after field 5, 6 or 9)."""
 
     total: _Series        # sum of the listed processes' CPU, lag-doctor's own left out
     top: _Series          # the busiest one's CPU, lag-doctor's own left out
@@ -420,6 +451,8 @@ class _Others:
     roles: dict[tuple[int, str], str]                  # (pid, name) -> "background" | "game_helper" | "tool"
     gpu_any_adapter: bool = False                      # some "gpu" reading is field 5 (any adapter): game_gpu_pct
     tool: _Series | None = None                        # lag-doctor's own listed CPU per tick (0 when none listed)
+    held_top: dict[str, _Series] = field(default_factory=dict)   # "ram", "commit", "vram": the most any listed
+                                                                 # process held (MiB) per tick, None when none was read
 
 
 def _others(cap: Capture) -> _Others:
@@ -440,10 +473,12 @@ def _others(cap: Capture) -> _Others:
         return pid in tool_pids or name.lower() in tool_names
 
     total, top, io_top, tool = [], [], [], []
+    held_top: dict[str, list[float | None]] = {c: [] for c, _ in MEMORY_FIELDS}
     seen: dict[tuple[int, str], dict[str, dict[int, float]]] = {}       # tick index -> value, listed ticks only
     any_adapter = False
     for k, (_ti, entries) in enumerate(rows):
         cpus, ios, own = [], [], []
+        held: dict[str, list[float]] = {c: [] for c, _ in MEMORY_FIELDS}   # lag-doctor's own included, as cpu_read
         cpu_read = io_read = False                              # a reading at all this tick, lag-doctor's included
         for e in entries:
             if not (isinstance(e, (list, tuple)) and len(e) >= 5):
@@ -454,9 +489,15 @@ def _others(cap: Capture) -> _Others:
             gpu, anywhere = game_gpu_pct(e)                     # A10: the game's adapter where the row says it
             any_adapter = any_adapter or anywhere
             cpu, io = fa._bounded(e[2]), read("io_bps", e[3])  # %, bytes/s
-            cols = seen.setdefault((pid, name), {"cpu": {}, "io": {}, "gpu": {}})
+            cols = seen.setdefault((pid, name), {"cpu": {}, "io": {}, "gpu": {}, **{c: {} for c, _ in MEMORY_FIELDS}})
             for key, x in (("cpu", cpu), ("io", io), ("gpu", gpu)):
                 cols[key][k] = float(x) if x is not None and x >= 0 else 0.0
+            if len(e) >= 12:                                    # a reading that failed stays out: a lower bound
+                for c, i in MEMORY_FIELDS:
+                    x = None if isinstance(e[i], bool) else read(c + "_mb", e[i])    # a bool is no reading
+                    if x is not None and x >= 0:
+                        cols[c][k] = x
+                        held[c].append(x)
             ok_cpu, ok_io = cpu is not None and cpu >= 0, io is not None and io >= 0
             cpu_read, io_read = cpu_read or ok_cpu, io_read or ok_io
             if is_tool(pid, name):                              # its sampling is the measurement's cost
@@ -470,6 +511,8 @@ def _others(cap: Capture) -> _Others:
         top.append(max(cpus) if cpus else (0.0 if cpu_read else None))
         io_top.append(max(ios) if ios else (0.0 if io_read else None))
         tool.append(math.fsum(own))
+        for c, vals in held.items():
+            held_top[c].append(max(vals) if vals else None)
     total_s = _Series(t, total)
 
     roles = {key: ("tool" if is_tool(*key) else "game_helper" if key[0] in game else "background") for key in seen}
@@ -477,7 +520,7 @@ def _others(cap: Capture) -> _Others:
     for key, cols in seen.items():
         if roles[key] == "tool":
             continue
-        acc = sums[roles[key]].setdefault(key[1], {"cpu": {}, "io": {}, "gpu": {}})
+        acc = sums[roles[key]].setdefault(key[1], {c: {} for c in cols})
         for c, vals in cols.items():
             for k, x in vals.items():
                 acc[c][k] = acc[c].get(k, 0.0) + x
@@ -490,7 +533,7 @@ def _others(cap: Capture) -> _Others:
     grouped = {role: {name: {c: sparse(vals) for c, vals in cols.items()} for name, cols in names.items()}
                for role, names in sums.items()}
     return _Others(total_s, _Series(t, top), _Series(t, io_top), per, grouped["background"], grouped["game_helper"],
-                   roles, any_adapter, _Series(t, tool))
+                   roles, any_adapter, _Series(t, tool), {c: _Series(t, v) for c, v in held_top.items()})
 
 
 # --------------------------------------------------------------------------- checks ---
@@ -505,6 +548,9 @@ class _Part:
     label: str                               # plain English, "{v}" and "{n}" are filled in
     fmt: Callable[[float], str]
     level: Callable[[float], bool] | None = None   # an extra condition on the level itself
+    turbo: bool = False                            # the CPU's clock: a load that rose explains a fall to base or above
+    waits: str | None = None                       # what the game would wait on ("the disk"): a frozen frame its
+                                                   # busiest thread worked through rules the part out (_wait_veto)
 
 
 @dataclass
@@ -525,6 +571,26 @@ class _Baseline:
     def __init__(self, med: float, mad: float, mean_ad: float = 0.0) -> None:
         self.med = med
         self.scale = fa.MAD_TO_SD * mad if mad > 0 else MEAN_AD_TO_SD * mean_ad
+
+
+def _tick_spread(series: _Series, windows: list[tuple[float, float]], base: _Baseline | None) -> float | None:
+    """The spread of one reading of `series` (not of a 1 s mean) in the quiet windows: their mean absolute deviation
+    from the quiet level, as a normal spread. None with fewer than MIN_BASE_WINDOWS readings there."""
+    if base is None:
+        return None
+    merged: list[list[float]] = []
+    for a, b in sorted(windows):
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    xs: list[float] = []
+    for a, b in merged:
+        lo, hi = bisect.bisect_left(series.t, a), bisect.bisect_right(series.t, b)
+        xs += [x for x in series.v[lo:hi] if x is not None]
+    if len(xs) < MIN_BASE_WINDOWS:
+        return None
+    return MEAN_AD_TO_SD * math.fsum(abs(x - base.med) for x in xs) / len(xs)
 
 
 def _baseline(series: _Series, windows: list[tuple[float, float]]) -> _Baseline | None:
@@ -626,7 +692,7 @@ def _causes(cap: Capture, others: _Others) -> list[_Cause]:
                   _pct)],
                why_missing="no CPU readings for other processes"),
         _Cause("background_disk", [_Part(others.io_top, +1, lambda m: OTHERS_DISK_BPS,
-                                         "another program did {v} of I/O (normally {n})", _mbps)],
+                                         "another program did {v} of I/O (normally {n})", _mbps, waits="the disk")],
                why_missing="no I/O readings for other processes"),
         _Cause("background_gpu", [_Part(gpu_other, +1, lambda m: OTHERS_GPU_PCT,
                                         "other programs kept the game's GPU {v} busy (normally {n})", _pct)],
@@ -639,7 +705,7 @@ def _causes(cap: Capture, others: _Others) -> list[_Cause]:
                why_missing="no DPC or interrupt counters"),
         _Cause("cpu_throttle", [
             _Part(perf, -1, lambda m: PERF_DROP_FRAC * m, "the CPU ran at {v} of its base speed (normally {n})",
-                  _pct),
+                  _pct, turbo=True),
             _Part(limited, +1, lambda m: LIMIT_SHARE,
                   "the CPU was held below full speed in {v} of samples (normally {n})",
                   lambda v: f"{100 * v:.0f}%")],
@@ -658,6 +724,62 @@ def _causes(cap: Capture, others: _Others) -> list[_Cause]:
                                      lambda v: f"{100 * v:.0f}%")],
                why_missing="foreground window not recorded"),
     ]
+
+
+def _load_part(cap: Capture) -> _Part:
+    """The whole machine's CPU use, the game's included, in CPUs (100 = one logical CPU): what turbo answers to. A
+    rise counts at background_cpu's floor for all programs together, two logical CPUs (LC 4.6)."""
+    total, nlp = _system(cap, S.CPU_TOTAL_PCT), fa._logical_cpus(cap)
+    load = _Series(total.t, [x * nlp if x is not None and nlp else None for x in total.v])
+    return _Part(load, +1, lambda m: OTHERS_ALL_PCT, "", _pct)
+
+
+def _turbo_veto(load: _Part, base: _Baseline | None) -> Callable[[_Part, float, float, float, float], str | None]:
+    """LC 4.5 compares the CPU's speed "at a similar load", and turbo runs slower as more cores work: on the owner's
+    end-to-end run (2026-11-11) this laptop ran at about 137-156 % of its base clock with its CPUs nearly idle and at
+    100-105 % with all of them busy, with Windows' % Performance Limit at 100 throughout. So a fall of the clock that
+    stays at or above base speed while the machine's load rose is the load's doing: the reason, else None. A fall
+    below base speed still counts, load or not."""
+    def veto(part: _Part, x: float, normal: float, a: float, b: float) -> str | None:
+        if not part.turbo or x < CPU_BASE_PCT or base is None:
+            return None
+        y = load.series.peak(a, b, +1)
+        if y is None or not _judge(load, base, y)[0]:
+            return None
+        return (f"the CPU's clock came down to {_pct(x)} of its base speed (normally {_pct(normal)}) as the PC's CPU use "
+                f"rose to {_pct(y)} of a CPU (normally {_pct(base.med)}): turbo runs slower when more cores are busy, "
+                "so that is not throttling")
+    return veto
+
+
+def _wait_veto(veto: Callable[[_Part, float, float, float, float], str | None], reading: _Hold | None
+               ) -> Callable[[_Part, float, float, float, float], str | None]:
+    """`veto` (_turbo_veto), and the reason a part that acts only by making the game wait (_Part.waits) does not count
+    at a stutter whose longest frozen frame the game's busiest thread worked through (`reading`, _hold_reading): a
+    thread that ran through it was not waiting. On the owner's second end-to-end run of 2026-11-11 another program read
+    32 to 521 MB/s over three of hitch's 150 ms busy waits, and "another program did 48.8 MB/s of I/O" came first: its z
+    stood past the cap off a near-zero normal, the busy wait's at 5 to 9. A frame too short or noisy to tell, one read
+    as waiting or in between, and an FPS drop keep the part as it was."""
+    def both(part: _Part, x: float, normal: float, a: float, b: float) -> str | None:
+        why = veto(part, x, normal, a, b)
+        if why or not part.waits or reading is None or reading.outcome != "worked":
+            return why
+        return (f"{part.label.format(v=part.fmt(x), n=part.fmt(normal))}, but {reading.ran}, nearer {reading.work} "
+                f"than {reading.wait}: the game was busy, not waiting on {part.waits}")
+    return both
+
+
+def _lone_frame(ev: LagEvent) -> bool:
+    """A stutter of one frozen frame and no stall (events._stutters merges those under 250 ms apart into one episode
+    and keeps only the longest as its worst hold): what _hold_reading judges is then the whole stutter."""
+    return ev.kind == "stutter" and ev.detail.get("frames") == 1 and ev.detail.get("stall") is False
+
+
+def _left_out_why(cause: _Cause) -> str:
+    """Why rules says a cause's moments a veto explained are left out of its lift test: the veto its parts answer
+    to (no cause has parts that answer to both)."""
+    waits = next((p.waits for p in cause.parts if p.waits), None)
+    return WAIT_LEFT_OUT.format(waits) if waits and not any(p.turbo for p in cause.parts) else TURBO_LEFT_OUT
 
 
 def _align(series: _Series, times: list[float]) -> list[float | None]:
@@ -826,10 +948,15 @@ def _expected(active: list[bool], index: list[int], slides: list[int]) -> float 
     return math.fsum(vals) / len(vals) if vals else None
 
 
-def _evaluate(cause: _Cause, bases: dict[int, _Baseline | None], a: float, b: float) -> tuple[_Hit | None, bool]:
-    """(the strongest active part, measured?) of a cause over [a, b]."""
+def _evaluate(cause: _Cause, bases: dict[int, _Baseline | None], a: float, b: float,
+              veto: Callable[[_Part, float, float, float, float], str | None] | None = None
+              ) -> tuple[_Hit | None, bool, str | None]:
+    """(the strongest active part, measured?, why a part that moved does not count) of a cause over [a, b]. `veto`
+    gives that reason for a part's move that something else explains (_turbo_veto); the reason is returned only
+    when no other part counts."""
     best: _Hit | None = None
     measured = False
+    vetoed = None
     for k, part in enumerate(cause.parts):
         base = bases.get(k)
         if base is None:
@@ -839,11 +966,16 @@ def _evaluate(cause: _Cause, bases: dict[int, _Baseline | None], a: float, b: fl
             continue
         measured = True
         ok, z = _judge(part, base, x)
+        if ok and veto is not None:
+            why = veto(part, x, base.med, a, b)
+            if why:
+                vetoed = vetoed or why
+                continue
         if ok and (best is None or z > best.z):
             best = _Hit(cause.name, z, x, base.med, part.label.format(v=part.fmt(x), n=part.fmt(base.med)))
     if best is not None and cause.condition is not None and cause.condition(a, b) is not True:
         best = None
-    return best, measured
+    return best, measured, (vetoed if best is None else None)
 
 
 def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bound: dict | None) -> dict[str, dict]:
@@ -883,42 +1015,69 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
 
     bases = {c.name: {k: _baseline(p.series, windows) for k, p in enumerate(c.parts)} for c in causes}
     thread_base = _baseline(thread, windows)
+    thread_tick = _tick_spread(thread, windows, thread_base)
+    load = _load_part(cap)
+    veto = _turbo_veto(load, _baseline(load.series, windows))
+    usual = _usual_presents(fr)
+    hz = fa.refresh_hz(cap)
+    period = 1000.0 / hz if hz else None
 
     # 1 + 2: per-event activity
-    acts: list[tuple[LagEvent, tuple[str | None, str, str | None], dict[str, _Hit], set[str]]] = []
+    acts: list[tuple[LagEvent, tuple[str | None, str, str | None], dict[str, _Hit], set[str], dict[str, str]]] = []
     for ev in targets:
         side = _side(fr, ev, verdict, margin) if not half else (None, "a moment you marked", None)
         a, b = ev.t_start - WINDOW_BEFORE_S, ev.t_end + WINDOW_AFTER_S
         allowed = _allowed(side[0])
         hits: dict[str, _Hit] = {}
         measured: set[str] = set()
+        explained: dict[str, str] = {}      # cause -> why its move does not count here (_turbo_veto, _wait_veto)
+        # a merged episode's reading judges its longest frozen frame alone, so only a lone frame can rule a wait out
+        reading = _hold_reading(thread, thread_base, ev, thread_tick) if _lone_frame(ev) else None
+        ev_veto = _wait_veto(veto, reading)
         for c in causes:
-            hit, was = _evaluate(c, bases[c.name], a, b)
+            hit, was, why_not = _evaluate(c, bases[c.name], a, b, ev_veto)
             if was:
                 measured.add(c.name)
             if hit is not None and c.name in allowed:
                 hits[c.name] = hit
-        acts.append((ev, side, hits, measured))
+            elif why_not and c.name in allowed:
+                explained[c.name] = why_not
+        acts.append((ev, side, hits, measured, explained))
 
     # 3: lift test
     n = len(targets)
     summary: dict[str, dict] = {}
     weight: dict[str, float] = {}
     for c in causes:
-        a_cnt = sum(1 for _, _, hits, _ in acts if c.name in hits)
-        active_b = [bool(_evaluate(c, bases[c.name], wa, wb)[0]) for wa, wb in windows]
-        b = (_expected(active_b, index, slides) if active_b and any(v is not None for v in bases[c.name].values())
+        a_cnt = sum(1 for _, _, hits, _, _ in acts if c.name in hits)
+        # an event where the cause's move had another explanation could not show the cause either way: it leaves the
+        # count, as a rubric drops what had no chance to show (it is neither "coincided" nor "did not")
+        left = sum(1 for *_, explained in acts if c.name in explained)
+        m = n - left
+        # so does a quiet window where it moved only that way: counted as quiet, it would lower the baseline share
+        judged = [(k, _evaluate(c, bases[c.name], wa, wb, veto)) for k, (wa, wb) in zip(index, windows)]
+        judged = [(k, hit is not None) for k, (hit, _, why_not) in judged if hit is not None or not why_not]
+        active_b, index_b = [x for _, x in judged], [k for k, _ in judged]
+        b = (_expected(active_b, index_b, slides) if active_b and any(v is not None for v in bases[c.name].values())
              else None)
-        lift = (a_cnt / n) / max(b, LIFT_B_FLOOR) if b is not None else None
-        ever = any(c.name in m for *_, m in acts)
-        label = _label(a_cnt, n, lift, measured=ever)
+        lift = (a_cnt / m) / max(b, LIFT_B_FLOOR) if b is not None and m else None
+        ever = any(c.name in measured for _, _, _, measured, _ in acts)
+        label = _label(a_cnt, m, lift, measured=ever)
+        blind = _blind(c, bases[c.name])
+        if blind and label == "contradicts":      # no moment could rise: "only 0 of n" would be false, not evidence
+            label = "neutral"
         w = (3.0 if lift is not None and lift >= LIFT_STRONG else 2.0) if label == "supports" else 1.0
         if c.name in CAPPED_AT_POSSIBLE:
             w = min(w, 1.0)
         weight[c.name] = w / 2.0 if half else w
-        summary[c.name] = {"a": a_cnt, "n": n, "share": 0.0, "lift": lift, "label": label, "b": b,
+        summary[c.name] = {"a": a_cnt, "n": m, "share": 0.0, "lift": lift, "label": label, "b": b,
                            "weight": weight[c.name], "time_share": 0.0, "baseline_guard_s": guard,
                            "why": "" if ever else c.why_missing}
+        if left:
+            summary[c.name]["left_out"] = left
+            summary[c.name]["left_out_why"] = _left_out_why(c)
+        if blind:
+            summary[c.name]["blind"] = True
         if c.name in CAPPED_AT_POSSIBLE:
             summary[c.name]["cap"] = "possible"
 
@@ -926,8 +1085,9 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
     first_counts: dict[str, int] = {}
     first_time: dict[str, float] = {}
     residual_counts = {"gpu_spike": 0, "game_stall": 0, "game_cpu_spike": 0}
+    worked = 0                            # of game_cpu_spike's, the frozen frames the ticks showed worked through
     blame_cache: dict = {}
-    for ev, (side, side_line, side_source), hits, measured in acts:
+    for ev, (side, side_line, side_source), hits, measured, explained in acts:
         ranked = sorted(hits.values(), key=lambda h: (-weight[h.cause] * min(h.z, Z_CAP) / Z_MIN,
                                                       CAUSE_ORDER.index(h.cause)))
         why = [side_line] + [h.text for h in ranked]
@@ -937,10 +1097,17 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
         if not names and half:
             why.append("nothing measured moved at this moment")
         elif not names:
-            res, line = _residual(side, side_source, thread, thread_base, ev, measured)
+            screen = _screen_hold(fr, ev, usual, period) if side in ("cpu", None) else None
+            res, line = _residual(side, side_source, thread, thread_base, ev, measured, screen and screen[1],
+                                  thread_tick)
+            if screen and line == screen[1]:
+                why[0] = screen[0]            # its slowest frame, never "the CPU side was slow" beside a held screen
             if res:
                 names = [res]
                 residual_counts[res] += 1
+                worked += 1 if res == "game_cpu_spike" and line.startswith(WORKED_LINE) else 0
+            if explained and line.startswith(NOTHING_MOVED):    # a move ruled out here still moved: never "nothing"
+                line = RULED_OUT + line[len(NOTHING_MOVED):]
             why.append(line)
         for h in ranked:
             blame = _blame_process(h.cause, others, windows, ev, blame_cache)
@@ -951,6 +1118,7 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
                 ev.detail["process_rises"] = [[pid, round(rise, 2)] for pid, rise in blame.rises]
                 why.append(blame.line)
                 break
+        why += [explained[k] for k in sorted(explained)]     # last: rules quote why[1] as a cause's example
         ev.causes = names
         ev.detail["why"] = why
         ev.detail["side"] = side
@@ -962,8 +1130,12 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
 
     total_time = math.fsum(max(0.0, e.t_end - e.t_start) for e in targets) or 1.0
     for name, cnt in residual_counts.items():
-        if name == "game_cpu_spike":          # `a` stays the signal's count; this is "thread saturated" only
-            summary[name]["residual"] = cnt
+        if name == "game_cpu_spike":          # `a` stays the signal's count; these are the residual's own: a thread
+            summary[name]["residual"] = cnt   # saturated over 1 s, or working through a long frozen frame
+            summary[name]["worked"] = worked
+            entry = summary[name]             # the 1 s means could not show the frames worked through: where counting
+            if entry["label"] == "contradicts" and _label(entry["a"] + worked, entry["n"], None, True) != "contradicts":
+                entry["label"] = "neutral"    # them stops "only 0 of 12", that line would deny what the ticks showed
             continue
         summary[name] = {"a": cnt, "n": n, "share": 0.0, "lift": None, "label": _label(cnt, n, None, True),
                          "b": None, "weight": 1.0, "time_share": 0.0, "baseline_guard_s": guard,
@@ -974,6 +1146,22 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
         if half:
             entry["half_weight"] = True
     return summary
+
+
+def _blind(c: _Cause, bases: dict[int, _Baseline | None]) -> bool:
+    """No moment could have counted although the cause was there: every measured part's quiet level is itself a rise
+    from nothing (at its floor or past it), and that level plus the floor is past the most its signal ever read. A
+    game behind another window in most quiet seconds has its "behind" signal at the top, 1.0, so a moment behind it
+    cannot stand out. A signal that never moved off nothing is no such case: "0 of n coincided" is then true."""
+    seen = False
+    for k, p in enumerate(c.parts):
+        base, vals = bases.get(k), [x for x in p.series.v if x is not None]
+        if base is None or not vals:
+            continue
+        if p.direction < 0 or base.med < p.floor(base.med) or base.med + p.floor(base.med) <= max(vals):
+            return False
+        seen = True
+    return seen
 
 
 def _label(a: int, n: int, lift: float | None, measured: bool) -> str:
@@ -988,13 +1176,162 @@ def _label(a: int, n: int, lift: float | None, measured: bool) -> str:
     return "neutral"
 
 
+def _usual_presents(fr: dict[str, list]) -> tuple[float, float] | None:
+    """(the median ms between the game's own presents, the share of them Windows never showed) over the chain, or
+    None without frame times. Time behind another window (frames.HIDDEN) is left out: Windows shows almost none of a
+    covered window's frames, which says nothing about how it shows them in front."""
+    fm, shown, hid = fr.get(F.FRAME_MS) or [], fr.get(F.DISPLAYED) or [], fr.get(fa.HIDDEN) or []
+    rows = [i for i in range(len(fr.get(F.T) or [])) if fa._is_app(fr, i) and fa._at(hid, i) is not True]
+    ms = [float(fm[i]) for i in rows if fa._pos(fa._at(fm, i))]
+    if not ms:
+        return None
+    known = [fa._at(shown, i) for i in rows if fa._at(shown, i) in (0, 1)]
+    return st.median(ms), (sum(1 for x in known if x == 0) / len(known) if known else 0.0)
+
+
+def _screen_hold(fr: dict[str, list], ev: LagEvent, usual: tuple[float, float] | None,
+                 period_ms: float | None = None) -> tuple[str, str] | None:
+    """(a side line, why the screen, not the game, held still at a stutter), else None: the game kept presenting
+    through it (at least
+    SCREEN_KEPT of the frames its usual rate gives), and Windows left at least SCREEN_MIN_UNSHOWN of them, a share
+    SCREEN_UNSHOWN over its usual one, off the screen, SCREEN_MIN_PASSED of them with a whole refresh (period_ms, else
+    the usual frame time) before the game's next present. A frame replaced sooner is dropped by design, as the burst a
+    game catches up with after a stall of its own is."""
+    if ev.kind != "stutter" or usual is None or usual[0] <= 0:
+        return None
+    span_ms = (ev.t_end - ev.t_start) * 1000.0
+    if not span_ms > 0:
+        return None
+    t, shown = fr.get(F.T) or [], fr.get(F.DISPLAYED) or []
+    lo, hi = bisect.bisect_left(t, ev.t_start), bisect.bisect_right(t, ev.t_end)
+    rows = [i for i in range(lo, hi) if fa._is_app(fr, i)]
+    known = [i for i in rows if fa._at(shown, i) in (0, 1)]
+    unshown = [i for i in known if fa._at(shown, i) == 0]
+    expected = span_ms / usual[0]
+    if (not known or len(rows) < SCREEN_KEPT * expected or len(unshown) < SCREEN_MIN_UNSHOWN
+            or len(unshown) / len(known) < usual[1] + SCREEN_UNSHOWN):
+        return None
+    refresh = period_ms if period_ms and period_ms > 0 else usual[0]
+    passed = 0
+    for i in unshown:
+        j = next((k for k in range(i + 1, min(len(t), i + 64)) if fa._is_app(fr, k)), None)   # the game's next frame
+        ti, tj = fa._bounded(t[i]), (fa._bounded(t[j]) if j is not None else None)
+        if ti is not None and tj is not None and (tj - ti) * 1000.0 >= 0.95 * refresh:   # 5 %: present jitter
+            passed += 1
+    if passed < SCREEN_MIN_PASSED:
+        return None
+    rate = min(100, round(100 * len(rows) / expected))
+    fm = fr.get(F.FRAME_MS) or []
+    slow = max((float(fm[i]) for i in rows if fa._pos(fa._at(fm, i))), default=None)
+    worst = _worst_hold(ev)
+    hold = worst[0] if worst else span_ms
+    side = (f"the slowest frame the game presented in it took {slow:.0f} ms, where the screen held one for {hold:.0f} ms"
+            if slow is not None else f"the screen held one frame for {hold:.0f} ms")
+    shown_n = len(known) - len(unshown)
+    return side, (f"nothing else moved: the game kept presenting through it ({len(rows)} frames in {span_ms:.0f} ms, "
+                  f"about {rate}% of its usual rate), but Windows showed {f'only {shown_n}' if shown_n else 'none'} of "
+                  "them: the screen held, not the game, so Windows or the display kept its frames back")
+
+
+def _work_during(thread: _Series, med: float, a: float, b: float) -> tuple[float, float] | None:
+    """(the ms of CPU the busiest game thread ran over its usual level in the ticks that overlap [a, b], the sum of
+    those ticks' squared lengths in s^2), or None with no reading there. A reading is that thread's share of the tick
+    before it (capture/sysmon: the delta since the previous tick), so a 150 ms hitch shows whole in the one or two
+    ticks that hold it, where a 1 s mean dilutes it to a few points (WT 3.5)."""
+    extra = sq = covered = 0.0
+    prev = None
+    for t, v in zip(thread.t, thread.v):
+        lo = prev if prev is not None else t - BASE_STRIDE_S
+        prev = t
+        if v is None or t <= a or lo >= b or t <= lo:
+            continue
+        extra += (v - med) / 100.0 * (t - lo) * 1000.0
+        sq += (t - lo) ** 2
+        covered += min(t, b) - max(lo, a)
+    # a missing tick inside the frame would hide its work, and the ticks around it would read as waiting
+    return (extra, sq) if sq > 0 and covered >= 0.99 * (b - a) else None
+
+
+def _worst_hold(ev: LagEvent) -> tuple[float, float] | None:
+    """(ms, the time it ended) of a stutter's longest frozen frame (events._stutters' worst), else None: an FPS drop
+    holds no frame, and a stutter built without that detail says nothing of one."""
+    ms, t = ev.detail.get("worst_ms"), ev.detail.get("worst_t")
+    if ev.kind != "stutter" or isinstance(ms, bool) or isinstance(t, bool):
+        return None
+    if isinstance(ms, (int, float)) and isinstance(t, (int, float)) and math.isfinite(ms) and math.isfinite(t) and ms > 0:
+        return float(ms), float(t)
+    return None
+
+
+def _more_or_less(ms: float) -> str:
+    if round(abs(ms)) == 0:
+        return "no more than usual"
+    return f"{abs(ms):.0f} ms {'more' if ms > 0 else 'less'} than usual"
+
+
+@dataclass(frozen=True)
+class _Hold:
+    """What the busiest game thread's ticks say of a stutter's longest frozen frame (_hold_reading)."""
+
+    outcome: str          # "worked" (through it), "waited", or "unknown": in between, by less than readings vary
+    hold: float           # the frame's ms
+    extra: float          # the thread's ms over its usual level in the ticks that hold it
+    busy: float           # what working through it would add, in ms
+    idle: float           # what waiting would take away, in ms
+
+    @property
+    def ran(self) -> str:
+        return f"in a frame held {self.hold:.0f} ms the game's busiest thread ran {_more_or_less(self.extra)}"
+
+    @property
+    def work(self) -> str:
+        return f"working through it ({self.busy:.0f} ms more)"
+
+    @property
+    def wait(self) -> str:
+        return f"waiting ({self.idle:.0f} ms less)" if round(self.idle) else "waiting (no change)"
+
+
+def _hold_reading(thread: _Series, base: _Baseline | None, ev: LagEvent, tick: float | None) -> _Hold | None:
+    """A stutter's longest frozen frame judged between the busiest thread working through it, about (1 - its usual
+    share) of the frame in extra CPU time, and waiting, about minus its usual share: at their midpoint, where the noise
+    of those ticks' readings cannot carry one answer past it. None where it cannot be judged: no frozen frame (an FPS
+    drop), no usual level, a tick missing inside it, or a frame too short for that noise. `tick` is one reading's quiet
+    spread (_tick_spread). One tick's spread is the larger of two guesses, since on the owner's end-to-end captures
+    (2026-11-09 and -11) each fell short of the real spread of 160 ms sums on some: twice the 1 s means' (independent
+    ticks, four to a second; 6.3 against 9.6 ms on one) and the quiet ticks' own (31 against 43 ms on another); the
+    larger came within 15 % on all ten. 1 % of a CPU for 1 s is 10 ms."""
+    worst = _worst_hold(ev)
+    if base is None:
+        return None
+    work = _work_during(thread, base.med, worst[1] - worst[0] / 1000.0, worst[1]) if worst else None
+    if worst and work is not None:
+        hold, (extra, sq) = worst[0], work
+        noise = 10.0 * max(2.0 * base.scale, tick or 0.0) * math.sqrt(sq)
+        share = base.med / 100.0
+        bar = max(BUSY_Z * noise, THREAD_EXTRA_MS)
+        busy, idle = hold * (1.0 - share), hold * share       # what working through it and waiting would add
+        if 0.5 * hold >= bar:
+            if extra >= hold * (0.5 - share) and extra >= bar:
+                return _Hold("worked", hold, extra, busy, idle)
+            if extra < hold * (0.5 - share):
+                return _Hold("waited", hold, extra, busy, idle)
+            # nearer working through it, but not by more than its readings vary: neither answer was measured
+            return _Hold("unknown", hold, extra, busy, idle)
+    return None
+
+
 def _residual(side: str | None, source: str | None, thread: _Series, base: _Baseline | None, ev: LagEvent,
-              measured: set[str]) -> tuple[str | None, str]:
-    """When no signal moved: the GPU's own work (GPU side), the game's own work (its thread was busy) or
-    the game waiting on itself (thread idle). Never a guess when the system was not measured, and the GPU is
-    called idle only when the event's own frames showed it (A3)."""
+              measured: set[str], screen: str | None = None, tick: float | None = None) -> tuple[str | None, str]:
+    """When no signal moved: the GPU's own work (GPU side), no cause of the game's when the screen held while the game
+    kept presenting (`screen`, _screen_hold's reason), the game's own work (its busiest thread saturated, or working
+    through a long frozen frame) or the game waiting on itself. Never a guess when the system was not measured, and the
+    GPU is called idle only when the event's own frames showed it (A3). `tick` is one reading's quiet spread
+    (_tick_spread)."""
     if side == "gpu" or side == "mixed":
         return "gpu_spike", "nothing else moved: the GPU's own work took long"
+    if screen:
+        return None, screen
     if "game_cpu_spike" not in measured or base is None:
         return None, "the game's CPU use was not measured at this moment, so the cause is unknown"
     a, b = ev.t_start - WINDOW_BEFORE_S, ev.t_end + WINDOW_AFTER_S
@@ -1002,8 +1339,20 @@ def _residual(side: str | None, source: str | None, thread: _Series, base: _Base
     if level is not None and level >= 100.0 * THREAD_BUSY:
         return "game_cpu_spike", (f"nothing else moved, and the game's busiest thread was saturated "
                                   f"({level:.0f}% of a CPU): the game's own work")
+    gpu_idle = side == "cpu" and source == "frames"          # only the event's own frames can show it (A3)
+    gpu = " and the GPU was idle" if gpu_idle else "; the GPU's share of it is unknown"
+    h = _hold_reading(thread, base, ev, tick)       # a long frozen frame: working through it, waiting, or in between
+    if h is not None:
+        ran, work, wait = h.ran, h.work, h.wait
+        if h.outcome == "worked":
+            return "game_cpu_spike", f"nothing else moved, and {ran}, nearer {work} than {wait}: the game's own work"
+        if h.outcome == "waited":
+            where = "the GPU was idle" if gpu_idle else "the GPU's share of it is unknown"
+            return "game_stall", (f"nothing else moved: {ran}, nearer {wait} than {work}; {where}, so the game "
+                                  "waited on itself")
+        return None, f"nothing else moved: {ran}, nearer {work} than {wait} but within what its readings vary " \
+                     "by, so whether the game worked or waited is unknown"
     shown = f"{level:.0f}%" if level is not None else "unknown"
-    gpu = " and the GPU was idle" if side == "cpu" and source == "frames" else "; the GPU's share of it is unknown"
     return "game_stall", (f"nothing else moved: the busiest game thread was not busy ({shown} of a CPU, "
                           f"normally {base.med:.0f}%){gpu}, so the game waited on itself")
 

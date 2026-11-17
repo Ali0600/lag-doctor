@@ -992,8 +992,8 @@
  {
   "name": "game_name taken as any string",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    game_name = _image_name(e.target.get(\"name\"))",
-  "new": "    game_name = e.target.get(\"name\") if isinstance(e.target.get(\"name\"), str) else None",
+  "old": "    game_name = _image_name(e.target.get(\"name\"))\n    offer = _offerable(e)",
+  "new": "    game_name = e.target.get(\"name\") if isinstance(e.target.get(\"name\"), str) else None\n    offer = _offerable(e)",
   "tests": [
    "tests/test_analysis_rules.py::test_the_priority_fix_names_the_game_only_by_a_real_image_name_and_never_as_empty"
   ]
@@ -1109,8 +1109,8 @@
  {
   "name": "not focused counted on the GPU side",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    if share >= UNFOCUSED_SHARE and (e.verdict in GATES[\"cpu\"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e)):",
-  "new": "    if share >= UNFOCUSED_SHARE:",
+  "old": "        cpu_side = e.verdict in GATES[\"cpu\"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e)",
+  "new": "        cpu_side = True",
   "tests": [
    "tests/test_analysis_rules.py::test_not_focused_steady_share_counts_only_while_the_cpu_side_limits_the_game"
   ]
@@ -1495,8 +1495,8 @@
  {
   "name": "a gated verdict escapes the hold",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "            res = _gated(rule, env, res)\n        held = _holds_open(",
-  "new": "            return _gated(rule, env, res)\n        held = _holds_open(",
+  "old": "            res = _gated(rule, env, res)\n        elif isinstance(res, Finding) and rule.gate == \"cpu\"",
+  "new": "            return _gated(rule, env, res)\n        elif isinstance(res, Finding) and rule.gate == \"cpu\"",
   "tests": [
    "tests/test_analysis_rules.py::test_a_shared_gpu_holds_the_gated_verdict_open_too"
   ]
@@ -1504,7 +1504,7 @@
  {
   "name": "Windows' own processes take a priority-fix slot again",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    for n in [n for n in named[:3] if not _windows_itself(n.name)][:2]:",
+  "old": "    for n in [n for n in named[:3] if not _all_own(e, n) and _store_of(e, n.name) is None][:2]:",
   "new": "    for n in named[:2]:",
   "tests": [
    "tests/test_analysis_rules.py::test_windows_own_processes_are_never_offered_a_priority_fix_nor_told_to_close"
@@ -1513,8 +1513,8 @@
  {
   "name": "a priority fix reaches past the programs the title names",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "    for n in [n for n in named[:3] if not _windows_itself(n.name)][:2]:",
-  "new": "    for n in [n for n in named if not _windows_itself(n.name)][:2]:",
+  "old": "    for n in [n for n in named[:3] if not _all_own(e, n) and _store_of(e, n.name) is None][:2]:",
+  "new": "    for n in [n for n in named if not _all_own(e, n) and _store_of(e, n.name) is None][:2]:",
   "tests": [
    "tests/test_analysis_rules.py::test_a_priority_fix_goes_only_to_a_program_the_title_names"
   ]
@@ -1976,8 +1976,8 @@
  {
   "name": "not_focused rules out a CPU that cannot be ruled out",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "(e.verdict in GATES[\"cpu\"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e))",
-  "new": "(e.verdict in GATES[\"cpu\"] or _gpu_by_engine(e))",
+  "old": "_gpu_by_engine(e) or _cpu_not_ruled_out(e)\n        fps, cpu = _focus_split(e)",
+  "new": "_gpu_by_engine(e)\n        fps, cpu = _focus_split(e)",
   "tests": [
    "tests/test_analysis_rules.py::test_a_cpu_that_cannot_be_ruled_out_is_never_cleared_by_any_cpu_side_rule",
    "tests/test_analysis_rules.py::test_an_old_capture_past_vsyncs_work_edge_on_its_upper_bound_is_never_called_fine"
@@ -2118,6 +2118,1351 @@
   "new": "        used = round(100 * busiest)",
   "tests": [
    "tests/test_analysis_rules.py::test_cpu_throttle_never_says_cpu_speed_is_not_what_holds_back_a_cpu_that_is_not_ruled_out"
+  ]
+ },
+ {
+  "name": "not_focused names time behind as its own cost",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            if fps[0] > floor:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_the_cost_it_measured_and_never_a_cost_it_did_not"
+  ]
+ },
+ {
+  "name": "not_focused needs a 12 % drop",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NOT_FOCUSED_DROP = 0.10 ",
+  "new": "NOT_FOCUSED_DROP = 0.12 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_the_cost_it_measured_and_never_a_cost_it_did_not"
+  ]
+ },
+ {
+  "name": "not_focused takes an 8 % drop",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NOT_FOCUSED_DROP = 0.10 ",
+  "new": "NOT_FOCUSED_DROP = 0.08 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_the_cost_it_measured_and_never_a_cost_it_did_not"
+  ]
+ },
+ {
+  "name": "not_focused never reads the CPU",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "elif cpu[0] is not None and cpu[1] is not None and cpu[0] >= (1.0 - NOT_FOCUSED_DROP) * cpu[1]:",
+  "new": "elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window"
+  ]
+ },
+ {
+  "name": "less CPU behind a window clears not_focused",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "elif cpu[0] is not None and cpu[1] is not None and cpu[0] >= (1.0 - NOT_FOCUSED_DROP) * cpu[1]:",
+  "new": "elif cpu[0] is not None and cpu[1] is not None:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window"
+  ]
+ },
+ {
+  "name": "nothing compared is silence",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif not linked:\n            if share >= 1.0:",
+  "new": "        elif False:\n            if share >= 1.0:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_never_behind_and_in_front_at_once_cannot_be_told_and_counts_no_moments",
+   "tests/test_analysis_rules.py::test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window"
+  ]
+ },
+ {
+  "name": "a blind lift test still counts",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if a is None or not n or entry.get(\"blind\"):",
+  "new": "    if a is None or not n:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_never_behind_and_in_front_at_once_cannot_be_told_and_counts_no_moments"
+  ]
+ },
+ {
+  "name": "not_focused compares from 50 frames",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NOT_FOCUSED_MIN_FRAMES = 100 ",
+  "new": "NOT_FOCUSED_MIN_FRAMES = 50 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window"
+  ]
+ },
+ {
+  "name": "not_focused compares from 400 frames",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NOT_FOCUSED_MIN_FRAMES = 100 ",
+  "new": "NOT_FOCUSED_MIN_FRAMES = 400 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_needs_ten_percent_of_the_capture_behind_another_window"
+  ]
+ },
+ {
+  "name": "not_focused compares from 4 s",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NOT_FOCUSED_MIN_S = 2.0 ",
+  "new": "NOT_FOCUSED_MIN_S = 4.0 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_needs_ten_percent_of_the_capture_behind_another_window"
+  ]
+ },
+ {
+  "name": "not_focused still claims less CPU time",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "\"lower performance level, and some games slow themselves \"",
+  "new": "\"lower priority, so it got less CPU time, and some games slow themselves \"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_the_cost_it_measured_and_never_a_cost_it_did_not"
+  ]
+ },
+ {
+  "name": "a covered capture recorded no frames",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if (_fin(stats.get(\"hidden_s\")) or 0.0) > 0:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_capture_covered_throughout_names_why_nothing_was_judged"
+  ]
+ },
+ {
+  "name": "the rules' reason forgets the time behind",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "else no_frames_why(self.stats)",
+  "new": "else no_frames_why({})",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_capture_covered_throughout_names_why_nothing_was_judged"
+  ]
+ },
+ {
+  "name": "the rules' steady means judge time behind",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        self.tick_spans = fa.not_steady_spans(self.events, self.fr, pad=fa.TICK_PAD_S)",
+  "new": "        self.tick_spans = fa._merged_spans(self.events, fa.FRAME_EVENT_KINDS, pad=fa.TICK_PAD_S)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_is_never_steady"
+  ]
+ },
+ {
+  "name": "not_focused from a median frame time",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "1000.0 * len(ms[side]) / math.fsum(ms[side])",
+  "new": "1000.0 / st.median(ms[side])",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_counts_frames_not_a_median_frame_time"
+  ]
+ },
+ {
+  "name": "not_focused counts generated frames",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "or f <= 0 or not fa._is_app(e.fr, i):",
+  "new": "or f <= 0:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_never_counts_generated_frames_or_a_side_too_short"
+  ]
+ },
+ {
+  "name": "not_focused compares the CPU from two readings",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "len(pct[side]) * fa.TICK_PAD_S >= NOT_FOCUSED_MIN_S",
+  "new": "len(pct[side]) >= 2",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window"
+  ]
+ },
+ {
+  "name": "not_focused compares from 1 s",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "NOT_FOCUSED_MIN_S = 2.0 ",
+  "new": "NOT_FOCUSED_MIN_S = 1.0 ",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_never_counts_generated_frames_or_a_side_too_short"
+  ]
+ },
+ {
+  "name": "less CPU behind a window said as nothing compared",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            elif cpu[0] is not None and cpu[1] is not None:     # a game may slow itself down behind a window",
+  "new": "            elif False:     # a game may slow itself down behind a window",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_reads_the_cpu_where_no_frames_came_behind_another_window"
+  ]
+ },
+ {
+  "name": "the reason names the whole recording in a part",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        noun = \"measured part\" if isinstance(stats.get(\"span\"), dict) else \"capture\"",
+  "new": "        noun = \"capture\"",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_part_cut_inside_a_cover_hides_what_the_whole_recording_hides"
+  ]
+ },
+ {
+  "name": "the lift line never says what it left out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    more = f\"; {left:.0f} more {'is' if left == 1 else 'are'} left out: {why_left}\" if left else \"\"",
+  "new": "    more = \"\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_lift_line_says_how_many_moments_the_load_explained_and_left_out"
+  ]
+ },
+ {
+  "name": "one moment left out is said as several",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "{'is' if left == 1 else 'are'} left out",
+  "new": "{'are'} left out",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_lift_line_says_how_many_moments_the_load_explained_and_left_out"
+  ]
+ },
+ {
+  "name": "one stutter is said as stutters",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "{one if n == 1 else what}",
+  "new": "{what}",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_cause_the_marks_named_is_listed_even_with_too_few_marks"
+  ]
+ },
+ {
+  "name": "the hogs' rule says one stutter as stutters",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        what = \"stutters and FPS drops\" if n != 1 else \"stutter or FPS drop\"",
+  "new": "        what = \"stutters and FPS drops\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_one_stutter_is_said_as_one"
+  ]
+ },
+ {
+  "name": "shader compiles say one stutter as stutters",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"only {len(own)} stutter{'s' if len(own) != 1 else ''} came from the \"",
+  "new": "f\"only {len(own)} stutters came from the \"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_one_stutter_is_said_as_one"
+  ]
+ },
+ {
+  "name": "the stutters the residual named go uncounted",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if residual:      # named by attribute._residual, which the lift test's 1 s means could not see",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_work_counts_the_stutters_the_residual_named"
+  ]
+ },
+ {
+  "name": "a few stutters the residual named count as enough",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            steady = worked >= attribute.LIFT_MIN_A and bool(n) and worked / n >= attribute.LIFT_MIN_SHARE",
+  "new": "            steady = True",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_work_counts_the_stutters_the_residual_named"
+  ]
+ },
+ {
+  "name": "enough stutters the residual named never count",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            steady = worked >= attribute.LIFT_MIN_A and bool(n) and worked / n >= attribute.LIFT_MIN_SHARE",
+  "new": "            steady = False",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_work_counts_the_stutters_the_residual_named"
+  ]
+ },
+ {
+  "name": "a thread saturated all along weighs as worked through",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            steady = worked >= attribute.LIFT_MIN_A and bool(n) and worked / n >= attribute.LIFT_MIN_SHARE",
+  "new": "            steady = residual >= attribute.LIFT_MIN_A and bool(n) and residual / n >= attribute.LIFT_MIN_SHARE",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_work_counts_the_stutters_the_residual_named"
+  ]
+ },
+ {
+  "name": "a counted residual line keeps \"too few to be sure\" under it",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if label not in (\"supports\", \"contradicts\") and ids and not steady:",
+  "new": "        if label not in (\"supports\", \"contradicts\") and ids:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_work_counts_the_stutters_the_residual_named"
+  ]
+ },
+ {
+  "name": "a cause's example is cut at 200 characters",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "{_text(ev.detail['why'][1], 320)}",
+  "new": "{_text(ev.detail['why'][1], 200)}",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_causes_example_keeps_a_long_why_line_whole"
+  ]
+ },
+ {
+  "name": "a residual cause's count says nothing moved where a veto ruled a move out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"in {a:.0f} of {n:.0f} {what} no other measured cause explained them, \"",
+  "new": "f\"in {a:.0f} of {n:.0f} {what} no other measured cause moved, \"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_residual_causes_count_says_nothing_else_explained_them_never_that_nothing_moved"
+  ]
+ },
+ {
+  "name": "the game's own work's count says nothing moved where a veto ruled a move out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"in {residual:.0f} of {n:.0f} {what} nothing else explained them, and the game's busiest thread \"",
+  "new": "f\"in {residual:.0f} of {n:.0f} {what} nothing else moved, and the game's busiest thread \"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_games_own_work_counts_the_stutters_the_residual_named"
+  ]
+ },
+ {
+  "name": "a program is named from the floor, inclusive",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    over = [r for r in rows if r[2] >= floor]\n",
+  "new": "    over = [r for r in rows if r[2] > floor]\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_program_is_named_from_20_mb_a_second_and_under_it_the_most_is_still_said"
+  ]
+ },
+ {
+  "name": "a process with the game's image name is never named",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None or _same_image(name, game_name) \\\n",
+  "new": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None \\\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_the_game_its_helpers_lag_doctor_and_bad_names_are_never_named"
+  ]
+ },
+ {
+  "name": "a name no advice may show is never named",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None or _same_image(name, game_name) \\\n",
+  "new": "        if o.roles.get((pid, name)) != \"background\" or _same_image(name, game_name) \\\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_the_game_its_helpers_lag_doctor_and_bad_names_are_never_named"
+  ]
+ },
+ {
+  "name": "Windows' own programs by name are never told to close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if key not in WINDOWS_PARTS:\n        return False\n",
+  "new": "    if True:\n        return False\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_windows_own_processes_are_said_to_be_windows_and_never_told_to_close",
+   "tests/test_analysis_named_programs.py::test_bufferbloat_says_svchost_is_windows"
+  ]
+ },
+ {
+  "name": "Windows itself is never told to close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if _windows_itself(name):\n        return True\n    key = name.casefold()",
+  "new": "    if False:\n        return True\n    key = name.casefold()",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_windows_own_processes_are_said_to_be_windows_and_never_told_to_close",
+   "tests/test_analysis_named_programs.py::test_cpu_limit_says_windows_itself_is_windows"
+  ]
+ },
+ {
+  "name": "the disk advice reads the stutters' own windows",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "_disk_advice(e, _event_spans(e, ids), f\"at those {what}\")",
+  "new": "_disk_advice(e, EVERYWHERE, f\"at those {what}\")",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_program_heavy_only_away_from_the_stutters_is_not_named_at_them"
+  ]
+ },
+ {
+  "name": "hdd_streaming reads the loading stutters' windows when there are some",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "             _disk_advice(e, _event_spans(e, streams) if streams else EVERYWHERE,\n",
+  "new": "             _disk_advice(e, EVERYWHERE,\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_hdd_streaming_names_them_at_the_loading_stutters_when_there_are_some"
+  ]
+ },
+ {
+  "name": "an unlisted tick counts as 0 (a lower bound)",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    rows = [(name, own, math.fsum(v) / ticks, max(1, count.get((name, own), 0)))",
+  "new": "    rows = [(name, own, math.fsum(v) / max(1, len(v)), max(1, count.get((name, own), 0)))",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_the_disk_advice_names_the_programs_that_read_and_wrote_most_at_the_stutters_biggest_first"
+  ]
+ },
+ {
+  "name": "no reading there is not measured, never none",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if not ticks:\n        return None\n    game_name = _image_name(e.target.get(\"name\"))\n    sums",
+  "new": "    if not ticks:\n        ticks = 1\n    game_name = _image_name(e.target.get(\"name\"))\n    sums",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_with_no_others_table_which_programs_read_or_wrote_was_not_measured"
+  ]
+ },
+ {
+  "name": "a failed I/O reading is no reading",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    probe = o.total if col == \"cpu\" else o.io_top ",
+  "new": "    probe = o.total ",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_with_no_others_table_which_programs_read_or_wrote_was_not_measured"
+  ]
+ },
+ {
+  "name": "the biggest user comes first",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    rows.sort(key=lambda r: (-r[2], r[0].casefold(), r[1]))\n",
+  "new": "    rows.sort(key=lambda r: (r[2], r[0].casefold(), r[1]))\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_the_disk_advice_names_the_programs_that_read_and_wrote_most_at_the_stutters_biggest_first"
+  ]
+ },
+ {
+  "name": "a name's processes are counted",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    rows = [(name, own, math.fsum(v) / ticks, max(1, count.get((name, own), 0)))",
+  "new": "    rows = [(name, own, math.fsum(v) / ticks, 1)",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_the_disk_advice_names_the_programs_that_read_and_wrote_most_at_the_stutters_biggest_first"
+  ]
+ },
+ {
+  "name": "under the floor the most is still said",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        most = f\"; the most was {_most_shown(name, own, h.stores.get(name))}, {fig}\"\n",
+  "new": "        most = \"\"\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_program_is_named_from_20_mb_a_second_and_under_it_the_most_is_still_said",
+   "tests/test_analysis_named_programs.py::test_a_most_that_rounds_to_nothing_is_said_to_be_under_a_tenth"
+  ]
+ },
+ {
+  "name": "\"saw no\" carries the table's limit",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    missing = \"\" if _where(e)[1] else (\" lag-doctor lists the 8 processes",
+  "new": "    missing = \"\" if True else (\" lag-doctor lists the 8 processes",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_program_is_named_from_20_mb_a_second_and_under_it_the_most_is_still_said"
+  ]
+ },
+ {
+  "name": "cpu_limit names from a quarter of a CPU",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    h = _heavy(e, \"cpu\", EVERYWHERE, HOG_MIN_CPU_PCT)\n",
+  "new": "    h = _heavy(e, \"cpu\", EVERYWHERE, HOG_MIN_CPU_PCT + 0.1)\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_cpu_limit_names_programs_from_a_quarter_of_a_cpu_on_average"
+  ]
+ },
+ {
+  "name": "cpu_limit's advice names the programs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "             _cpu_advice(e),\n",
+  "new": "             _advice(CPU_ADVICE),\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_cpu_limit_names_programs_from_a_quarter_of_a_cpu_on_average"
+  ]
+ },
+ {
+  "name": "bufferbloat's advice names the programs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    fixes = [_net_advice(e),\n",
+  "new": "    fixes = [_advice(NET_ADVICE),\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_bufferbloat_names_the_programs_that_moved_1_mb_a_second_or_more"
+  ]
+ },
+ {
+  "name": "bufferbloat never names lag-doctor's own process",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "(attribute._is_pid(pid) and (pid in game or pid in tool_pids))",
+  "new": "(attribute._is_pid(pid) and pid in game)",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_bufferbloat_never_names_the_game_its_helpers_or_lag_doctor"
+  ]
+ },
+ {
+  "name": "bufferbloat never names the game's helpers",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "(attribute._is_pid(pid) and (pid in game or pid in tool_pids))",
+  "new": "(attribute._is_pid(pid) and pid in tool_pids)",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_bufferbloat_never_names_the_game_its_helpers_or_lag_doctor"
+  ]
+ },
+ {
+  "name": "bufferbloat names from 1 MB a second, inclusive",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if b / e.duration >= TALKER_MIN_BPS:",
+  "new": "        if b / e.duration > TALKER_MIN_BPS:",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_bufferbloat_names_the_programs_that_moved_1_mb_a_second_or_more"
+  ]
+ },
+ {
+  "name": "a most that rounds to 0.0 MB/s is said to be under a tenth",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "fig = (\"under 0.1 MB/s\" if v < 0.05e6 else",
+  "new": "fig = (\"under 0.1 MB/s\" if v <= 0.05e6 else",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_most_that_rounds_to_nothing_is_said_to_be_under_a_tenth"
+  ]
+ },
+ {
+  "name": "a name's processes count only background ones",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if o.roles.get((pid, name)) != \"background\" or _image_name(name) is None",
+  "new": "        if _image_name(name) is None",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_names_processes_count_only_background_ones_that_used_it_there"
+  ]
+ },
+ {
+  "name": "a name's processes count only ones that used it",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if any(x > 0 for x in vals):\n",
+  "new": "        if vals:\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_names_processes_count_only_background_ones_that_used_it_there"
+  ]
+ },
+ {
+  "name": "a name's processes count only ones that used it there",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if any(x > 0 for x in vals):\n",
+  "new": "        if any(x > 0 for x in cols[col].v):\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_names_processes_count_only_background_ones_that_used_it_there"
+  ]
+ },
+ {
+  "name": "at most three programs are named",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return _Heavy([(n, v, k) for n, own, v, k in over if not own][:3],",
+  "new": "    return _Heavy([(n, v, k) for n, own, v, k in over if not own][:4],",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_at_most_three_are_named_and_a_tie_goes_by_name"
+  ]
+ },
+ {
+  "name": "a tie goes by name",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    rows.sort(key=lambda r: (-r[2], r[0].casefold(), r[1]))\n",
+  "new": "    rows.sort(key=lambda r: -r[2])\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_at_most_three_are_named_and_a_tie_goes_by_name"
+  ]
+ },
+ {
+  "name": "overlapping windows are merged",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if merged and a <= merged[-1][1]:\n            merged[-1] = (merged[-1][0], max(merged[-1][1], b))",
+  "new": "        if False:\n            merged[-1] = (merged[-1][0], max(merged[-1][1], b))",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_overlapping_windows_are_read_once_and_whole"
+  ]
+ },
+ {
+  "name": "no stutter of its own keeps the old line",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if not spans:\n        return _advice(DISK_ADVICE)\n",
+  "new": "    if False:\n        return _advice(DISK_ADVICE)\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_with_no_stutter_of_its_own_the_advice_is_the_old_line"
+  ]
+ },
+ {
+  "name": "a Windows process under the floor is said to be Windows itself",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        shown = f\"Windows itself ({shown})\"\n",
+  "new": "        pass\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_under_the_floor_a_windows_process_is_said_to_be_windows"
+  ]
+ },
+ {
+  "name": "a Windows program under the floor says what it normally is",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        shown += f\" (normally {WINDOWS_PARTS[name.casefold()][0]})\" if own else LOOKALIKE\n",
+  "new": "        shown += \"\" if own else LOOKALIKE\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_under_the_floor_a_windows_process_is_said_to_be_windows"
+  ]
+ },
+ {
+  "name": "a most that rounds up to the floor is just under it",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"just under {floor}\" if fig == floor else",
+  "new": "f\"at {fig}\" if fig == floor else",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_most_that_rounds_up_to_the_floor_is_just_under_it"
+  ]
+ },
+ {
+  "name": "Memory Compression on the CPU means RAM runs short",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if key == \"memory compression\":\n        return (\"Windows compressing",
+  "new": "    if False:\n        return (\"Windows compressing",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_windows_itself_on_the_cpu_says_what_its_work_means"
+  ]
+ },
+ {
+  "name": "System on the CPU means a driver",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if key == \"system\" and cpu:\n",
+  "new": "    if False:\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_windows_itself_on_the_cpu_says_what_its_work_means"
+  ]
+ },
+ {
+  "name": "cpu_limit's Windows-only line knows it is CPU",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "did, one, cpu=True)\n",
+  "new": "did, one)\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_windows_itself_on_the_cpu_says_what_its_work_means"
+  ]
+ },
+ {
+  "name": "each talker passes the floor on its own, as bandwidth_hog counts them",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if b / e.duration >= TALKER_MIN_BPS:",
+  "new": "        if b > 0:",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_bufferbloat_names_a_program_only_when_one_of_its_processes_was_busy_as_bandwidth_hog_counts_them"
+  ]
+ },
+ {
+  "name": "a program's talkers are added up",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            moved[key] = moved.get(key, 0.0) + b\n",
+  "new": "            moved[key] = b\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_bufferbloat_names_a_program_only_when_one_of_its_processes_was_busy_as_bandwidth_hog_counts_them"
+  ]
+ },
+ {
+  "name": "a program's talkers are counted",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            moved[key] = moved.get(key, 0.0) + b\n            count[key] = count.get(key, 0) + 1\n",
+  "new": "            moved[key] = moved.get(key, 0.0) + b\n            count[key] = 1\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_bufferbloat_names_a_program_only_when_one_of_its_processes_was_busy_as_bandwidth_hog_counts_them"
+  ]
+ },
+ {
+  "name": "bufferbloat never names lag-doctor's own exe by name",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                or name.lower() in tool_names or _same_image(name, game_name):",
+  "new": "                or _same_image(name, game_name):",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_bufferbloat_never_names_presentmon_by_its_image_name"
+  ]
+ },
+ {
+  "name": "bufferbloat through the relay says only the session was seen",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if e.flows().get(\"talkers_scope\") == \"session\":",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_bufferbloat_through_the_relay_says_only_this_windows_session_was_seen"
+  ]
+ },
+ {
+  "name": "bufferbloat with no capture length keeps the old line",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if not isinstance(talkers, list) or not e.duration:\n",
+  "new": "    if not isinstance(talkers, list):\n",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_bufferbloat_survives_malformed_talkers_and_an_unknown_length"
+  ]
+ },
+ {
+  "name": "a look-alike's marker says what it is",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "LOOKALIKE = \" (named like a part of Windows, but not where Windows runs it)\"",
+  "new": "LOOKALIKE = \"\"",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_look_alike_is_said_to_be_one"
+  ]
+ },
+ {
+  "name": "session 0 makes a Windows name Windows' own",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return session == 0 or folder is not False or key in PLAYER_STARTS",
+  "new": "    return folder is not False or key in PLAYER_STARTS",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_windows_own_is_said_by_where_it_runs",
+   "tests/test_analysis_named_programs.py::test_a_capture_that_lists_the_disk_users_too_says_no_more_that_one_can_be_missing"
+  ]
+ },
+ {
+  "name": "a Windows name from another folder in a player's session is a look-alike",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return session == 0 or folder is not False or key in PLAYER_STARTS",
+  "new": "    return session == 0 or True or key in PLAYER_STARTS",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_tells_windows_own_from_a_program_named_like_it",
+   "tests/test_analysis_named_programs.py::test_windows_own_is_said_by_where_it_runs"
+  ]
+ },
+ {
+  "name": "Defender's scanner is judged by its name",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "PLAYER_STARTS = frozenset({\"mpcmdrun.exe\"})",
+  "new": "PLAYER_STARTS = frozenset()",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_windows_own_is_said_by_where_it_runs"
+  ]
+ },
+ {
+  "name": "a reading of None never unsays where a process runs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "out[(q[0], q[1])] = (old[0] if session is None else session, old[1] if folder is None else folder)",
+  "new": "out[(q[0], q[1])] = (session, folder)",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_is_read_only_from_well_formed_fields_and_a_reading_never_unsays_one"
+  ]
+ },
+ {
+  "name": "a bool is no session",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "session = q[7] if isinstance(q[7], int) and not isinstance(q[7], bool)",
+  "new": "session = q[7] if isinstance(q[7], int)",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_is_read_only_from_well_formed_fields_and_a_reading_never_unsays_one"
+  ]
+ },
+ {
+  "name": "only a 9-field row says where it runs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                if not (isinstance(q, (list, tuple)) and len(q) >= 9 and attribute._is_pid(q[0])",
+  "new": "                if not (isinstance(q, (list, tuple)) and len(q) >= 8 and attribute._is_pid(q[0])",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_is_read_only_from_well_formed_fields_and_a_reading_never_unsays_one"
+  ]
+ },
+ {
+  "name": "an older capture keeps the table's limit",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    missing = \"\" if _where(e)[1] else (\" lag-doctor lists the 8 processes",
+  "new": "    missing = \"\" if False else (\" lag-doctor lists the 8 processes",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_capture_that_lists_the_disk_users_too_says_no_more_that_one_can_be_missing"
+  ]
+ },
+ {
+  "name": "a look-alike named among programs to close says so",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "{LOOKALIKE if n.casefold() in WINDOWS_PARTS else ''}{_procs(k)} ",
+  "new": "{_procs(k)} ",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_tells_windows_own_from_a_program_named_like_it"
+  ]
+ },
+ {
+  "name": "a look-alike in the title says so",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    names = [(_text(n, 80) or \"\") + (LOOKALIKE if n.casefold() in WINDOWS_PARTS else \"\") for n, _, _ in h.named]",
+  "new": "    names = [(_text(n, 80) or \"\") for n, _, _ in h.named]",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_tells_windows_own_from_a_program_named_like_it"
+  ]
+ },
+ {
+  "name": "_heavy asks where each process runs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        key = (name, _windows_own(e, pid, name) or _store_of(e, name) is not None)\n        vals",
+  "new": "        key = (name, _windows_own(e, None, name) or _store_of(e, name) is not None)\n        vals",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_where_a_process_runs_tells_windows_own_from_a_program_named_like_it"
+  ]
+ },
+ {
+  "name": "a talker is judged by where the others table says it runs",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            key = (name, _windows_own(e, pid, name))     # where it runs",
+  "new": "            key = (name, _windows_own(e, None, name))     # where it runs",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_bufferbloat_reads_where_a_talker_runs_from_the_others_table"
+  ]
+ },
+ {
+  "name": "a talker's pid that is no number breaks nothing",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "(pid if attribute._is_pid(pid) else None, name)",
+  "new": "(pid, name)",
+  "tests": [
+   "tests/test_analysis_named_programs.py::test_a_talker_the_others_table_never_listed_is_judged_by_its_name_and_a_bad_pid_breaks_nothing"
+  ]
+ },
+ {
+  "name": "no priority fix for a session-0 process",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            if _windows_own(e, pid, n.name) or where.get((pid, n.name), (None, None))[0] == 0:",
+  "new": "            if _windows_own(e, pid, n.name):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_where_a_blamed_process_runs_decides_whether_it_can_be_closed_or_lowered"
+  ]
+ },
+ {
+  "name": "no priority fix for a Windows-own pid of a program",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            if _windows_own(e, pid, n.name) or where.get((pid, n.name), (None, None))[0] == 0:",
+  "new": "            if where.get((pid, n.name), (None, None))[0] == 0:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_real_process_in_the_players_session_never_takes_its_look_alikes_priority_fix"
+  ]
+ },
+ {
+  "name": "a program is Windows' own only when all its processes are",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "return all(_windows_own(e, pid, n.name) for pid in n.pids)",
+  "new": "return any(_windows_own(e, pid, n.name) for pid in n.pids)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_where_a_blamed_process_runs_decides_whether_it_can_be_closed_or_lowered"
+  ]
+ },
+ {
+  "name": "the fix slots skip Windows' own programs, not only Windows itself",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    for n in [n for n in named[:3] if not _all_own(e, n) and _store_of(e, n.name) is None][:2]:",
+  "new": "    for n in [n for n in named[:3] if not _windows_itself(n.name) and _store_of(e, n.name) is None][:2]:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_programs_are_never_told_to_close_nor_offered_a_priority_fix_by_name_in_an_older_capture"
+  ]
+ },
+ {
+  "name": "Windows' own programs get what they are, not 'pause or close'",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif _all_own(e, n):\n            fixes.append(_part_advice(name, procs))",
+  "new": "        elif False:\n            fixes.append(_part_advice(name, procs))",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_programs_are_never_told_to_close_nor_offered_a_priority_fix_by_name_in_an_older_capture"
+  ]
+ },
+ {
+  "name": "a look-alike and the real one of a name get their own advice",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif mixed := [pid for pid in n.pids if _windows_own(e, pid, n.name)]:",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_where_a_blamed_process_runs_decides_whether_it_can_be_closed_or_lowered"
+  ]
+ },
+ {
+  "name": "gpu_contention says what Windows' own GPU user is",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif name and _windows_own(e, pid, name):         # the Desktop Window Manager",
+  "new": "    elif False:         # the Desktop Window Manager",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_says_the_desktop_window_manager_is_windows_and_a_look_alike_is_not"
+  ]
+ },
+ {
+  "name": "gpu_contention never offers another GPU for Windows' own work",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    fixes = [first] + ([] if own else [",
+  "new": "    fixes = [first] + ([] if False else [",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_says_the_desktop_window_manager_is_windows_and_a_look_alike_is_not"
+  ]
+ },
+ {
+  "name": "gpu_contention names a look-alike as one",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        like = LOOKALIKE if name and _lookalike(e, pid, name) else \"\"",
+  "new": "        like = \"\"",
+  "tests": [
+   "tests/test_analysis_rules.py::test_gpu_contention_says_the_desktop_window_manager_is_windows_and_a_look_alike_is_not"
+  ]
+ },
+ {
+  "name": "dwm.exe is Windows' own by name",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    \"dwm.exe\": (\"Windows' Desktop Window Manager, which draws every window on the screen\", \"\"),\n",
+  "new": "",
+  "tests": [
+   "tests/test_analysis_rules.py::test_windows_own_programs_are_never_told_to_close_nor_offered_a_priority_fix_by_name_in_an_older_capture",
+   "tests/test_analysis_rules.py::test_gpu_contention_says_the_desktop_window_manager_is_windows_and_a_look_alike_is_not"
+  ]
+ },
+ {
+  "name": "cpu_limit clears the engine fallback at the display's rate",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if (v in (\"cpu_main\", \"cpu_all\", \"mixed\", \"unknown\") or _gpu_by_engine(e)) and _fps_reaches_display(e):",
+  "new": "    if v in (\"cpu_main\", \"cpu_all\", \"mixed\", \"unknown\") and _fps_reaches_display(e):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_engine_fallback_at_the_displays_rate_clears_the_cpu_as_any_verdict_does_there"
+  ]
+ },
+ {
+  "name": "the cpu gate clears the engine fallback at the display's rate",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if fallback and _fps_reaches_display(env):",
+  "new": "    if False and fallback and _fps_reaches_display(env):",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_engine_fallback_at_the_displays_rate_clears_the_cpu_as_any_verdict_does_there"
+  ]
+ },
+ {
+  "name": "not_focused: behind another window at the display's rate is no cost",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            elif e.refresh and fps[0] >= LIMIT_FPS_FRAC * e.refresh:",
+  "new": "            elif e.refresh and fps[0] >= e.refresh:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_no_cost_where_the_game_still_reached_the_display_behind_another_window[cpu_main-0.4]",
+   "tests/test_analysis_rules.py::test_not_focused_names_no_cost_where_the_game_still_reached_the_display_behind_another_window[gpu-0.97]"
+  ]
+ },
+ {
+  "name": "not_focused: the display's rate starts at 0.9 x refresh",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            elif e.refresh and fps[0] >= LIMIT_FPS_FRAC * e.refresh:",
+  "new": "            elif e.refresh and fps[0] > 1.005 * LIMIT_FPS_FRAC * e.refresh:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_no_cost_where_the_game_still_reached_the_display_behind_another_window[cpu_main-0.4]"
+  ]
+ },
+ {
+  "name": "not_focused: the rate behind counts, never the average",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            elif e.refresh and fps[0] >= LIMIT_FPS_FRAC * e.refresh:",
+  "new": "            elif e.refresh and (e.avg_fps or 0) >= LIMIT_FPS_FRAC * e.refresh:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_not_focused_names_no_cost_where_the_game_still_reached_the_display_behind_another_window[cpu_main-0.4]"
+  ]
+ },
+ {
+  "name": "the cpu gate clears every verdict it lets through at the display's rate",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif isinstance(res, Finding) and rule.gate == \"cpu\" and _fps_reaches_display(env):",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_the_engine_fallback_at_the_displays_rate_clears_the_cpu_as_any_verdict_does_there"
+  ]
+ },
+ {
+  "name": "attribute: a memory reading from an entry too short to hold one",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            if len(e) >= 12:",
+  "new": "            if len(e) >= 10:",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_reading_that_is_no_number_is_left_out_and_breaks_nothing"
+  ]
+ },
+ {
+  "name": "attribute: a negative memory reading counts",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "                    if x is not None and x >= 0:\n                        cols[c][k] = x",
+  "new": "                    if x is not None:\n                        cols[c][k] = x",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_reading_that_is_no_number_is_left_out_and_breaks_nothing"
+  ]
+ },
+ {
+  "name": "attribute: a tick with no memory read reads as none held",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "            held_top[c].append(max(vals) if vals else None)",
+  "new": "            held_top[c].append(max(vals) if vals else 0.0)",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_an_older_capture_whose_table_holds_no_memory_keeps_the_old_line_word_for_word"
+  ]
+ },
+ {
+  "name": "rules: memory probed by the I/O readings",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "else o.io_top if col == \"io\" else o.held_top[col]",
+  "new": "else o.io_top",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_an_older_capture_whose_table_holds_no_memory_keeps_the_old_line_word_for_word"
+  ]
+ },
+ {
+  "name": "rules: RAM read over the whole capture, not while it was low",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    when = _when(e, S.RAM_AVAIL_MB, lambda v: v < low_mb)",
+  "new": "    when = []",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_ram_pressure_names_the_programs_that_held_the_most_ram_while_free_ram_was_low"
+  ]
+ },
+ {
+  "name": "rules: RAM low only under the critical floor",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    low_mb = max(RAM_WARN_FRAC * total, RAM_CRIT_MB) if total else RAM_CRIT_MB",
+  "new": "    low_mb = RAM_CRIT_MB",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_ram_pressure_names_the_programs_that_held_the_most_ram_while_free_ram_was_low"
+  ]
+ },
+ {
+  "name": "rules: committed memory read over the whole capture",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    when = _when(e, S.COMMIT_PCT, lambda v: v > COMMIT_WARN_PCT)",
+  "new": "    when = _when(e, S.COMMIT_PCT, lambda v: True)",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_the_page_file_branch_names_the_programs_that_reserved_the_most_while_committed_memory_was_near_the_limit"
+  ]
+ },
+ {
+  "name": "rules: video memory read over the whole capture",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    when = _when(e, S.VRAM_USED_MB, lambda v: v >= VRAM_FULL_FRAC * size) if full else []",
+  "new": "    when = []",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_vram_overflow_names_the_programs_that_held_the_most_video_memory_while_it_was_full"
+  ]
+ },
+ {
+  "name": "rules: vram_overflow names by RAM",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "             _held_advice(e, \"vram\", VRAM_ADVICE, when or EVERYWHERE,",
+  "new": "             _held_advice(e, \"ram\", VRAM_ADVICE, when or EVERYWHERE,",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_vram_overflow_names_the_programs_that_held_the_most_video_memory_while_it_was_full"
+  ]
+ },
+ {
+  "name": "rules: the page-file branch names by RAM",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return _held_advice(e, \"commit\", MEM_ADVICE, when or EVERYWHERE,",
+  "new": "    return _held_advice(e, \"ram\", MEM_ADVICE, when or EVERYWHERE,",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_the_page_file_branch_names_the_programs_that_reserved_the_most_while_committed_memory_was_near_the_limit"
+  ]
+ },
+ {
+  "name": "rules: the memory floor lowered",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "MEM_MIN_MB = 500.0 ",
+  "new": "MEM_MIN_MB = 400.0 ",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_program_is_named_from_500_mb_and_under_it_the_most_is_still_said"
+  ]
+ },
+ {
+  "name": "rules: the video memory floor lowered",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "VRAM_MIN_MB = 250.0 ",
+  "new": "VRAM_MIN_MB = 200.0 ",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_program_is_named_from_250_mb_of_video_memory"
+  ]
+ },
+ {
+  "name": "rules: 1,000 MB said in MB",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "GB\" if round(mb) >= 1000 else",
+  "new": "GB\" if round(mb) > 1000 else",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_figures_from_1000_mb_are_said_in_gb"
+  ]
+ },
+ {
+  "name": "rules: Windows' own memory told to close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        key = (name, _windows_own(e, pid, name) or _store_of(e, name) is not None)\n        vals",
+  "new": "        key = (name, _store_of(e, name) is not None)\n        vals",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_windows_own_memory_is_said_to_be_windows_and_never_told_to_close"
+  ]
+ },
+ {
+  "name": "rules: under the memory floor the most goes unsaid",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        most = f\"; the most was {shown}, {fig}\"\n",
+  "new": "        most = \"\"\n",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_program_is_named_from_500_mb_and_under_it_the_most_is_still_said",
+   "tests/test_analysis_held_memory.py::test_the_page_file_branch_under_the_floor_says_the_most_and_keeps_its_old_words"
+  ]
+ },
+ {
+  "name": "attribute: a bool memory field read as a number",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "                    x = None if isinstance(e[i], bool) else read(c + \"_mb\", e[i])",
+  "new": "                    x = read(c + \"_mb\", e[i])",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_reading_that_is_no_number_is_left_out_and_breaks_nothing"
+  ]
+ },
+ {
+  "name": "rules: the store app that started the game told to close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        key = (name, _windows_own(e, pid, name) or _store_of(e, name) is not None)\n        vals",
+  "new": "        key = (name, _windows_own(e, pid, name))\n        vals",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_the_store_app_that_started_the_game_is_never_told_to_close"
+  ]
+ },
+ {
+  "name": "rules: every program counted as the store app's",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return store[0] if store and name.casefold() in store[1] else None",
+  "new": "    return store[0] if store else None",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_the_store_app_that_started_the_game_is_never_told_to_close"
+  ]
+ },
+ {
+  "name": "rules: a virtual machine's memory told to close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    \"vmmem\": _VM, \"vmmemwsl\": _VM,\n",
+  "new": "",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_virtual_machines_memory_is_said_to_be_windows_and_how_to_give_it_back"
+  ]
+ },
+ {
+  "name": "rules: a commit-made RAM finding names by RAM",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif commit_top is not None and commit_top > COMMIT_WARN_PCT:   # made by the commit charge: who reserved it",
+  "new": "    elif False:",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_ram_finding_made_by_the_commit_charge_names_who_reserved_it"
+  ]
+ },
+ {
+  "name": "rules: committed memory near the limit from 80 % inclusive",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    when = _when(e, S.COMMIT_PCT, lambda v: v > COMMIT_WARN_PCT)",
+  "new": "    when = _when(e, S.COMMIT_PCT, lambda v: v >= COMMIT_WARN_PCT)",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_committed_memory_is_near_the_limit_over_80_percent"
+  ]
+ },
+ {
+  "name": "rules: a figure under the floor read as the floor",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        fig = \"under 1 MB\" if v < 0.5 else f\"just under {floor_text}\" if _size(v) == floor_text else _size(v)",
+  "new": "        fig = _size(v)",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_figure_under_the_floor_never_reads_as_the_floor"
+  ]
+ },
+ {
+  "name": "rules: GB chosen on the unrounded figure",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "GB\" if round(mb) >= 1000 else",
+  "new": "GB\" if mb >= 1000 else",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_figure_under_the_floor_never_reads_as_the_floor"
+  ]
+ },
+ {
+  "name": "rules: under the floor the table's limit unsaid",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"or more {what} on average {at}{most}.{HELD_LIMIT}\")",
+  "new": "f\"or more {what} on average {at}{most}.\")",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_program_is_named_from_500_mb_and_under_it_the_most_is_still_said"
+  ]
+ },
+ {
+  "name": "rules: gpu_contention leaves the memory picks out of what the table lists",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "memory)\" if _lists_memory(e) else",
+  "new": "memory)\" if False else",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_gpu_contention_says_what_a_table_that_lists_memory_holders_lists"
+  ]
+ },
+ {
+  "name": "views: a moment's programs divided by fewer samples than the span holds",
+  "file": "lagdoctor/app/views.py",
+  "old": "    top = sorted(busy, key=lambda kv: -kv[1][0])[:TOP_PROGRAMS]",
+  "new": "    top = sorted(busy, key=lambda kv: -kv[1][0])[:TOP_PROGRAMS]\n    samples = max(1, samples // 4)",
+  "tests": [
+   "tests/test_app_views.py::test_a_moments_programs_are_averaged_over_every_sample_and_an_idle_one_is_left_out"
+  ]
+ },
+ {
+  "name": "views: a program listed for its memory alone shown",
+  "file": "lagdoctor/app/views.py",
+  "old": "    busy = [(name, a) for name, a in acc.items() if any(x > 0 for x in a)]",
+  "new": "    busy = list(acc.items())",
+  "tests": [
+   "tests/test_app_views.py::test_a_moments_programs_are_averaged_over_every_sample_and_an_idle_one_is_left_out"
+  ]
+ },
+ {
+  "name": "rules: the store app's program under the floor said as any",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    shown += f\" (part of {store}, which started the game)\"\n",
+  "new": "    pass\n",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_the_disk_advice_under_its_floor_says_the_store_apps_program_is_its",
+   "tests/test_analysis_held_memory.py::test_the_store_app_that_started_the_game_is_never_told_to_close"
+  ]
+ },
+ {
+  "name": "rules: a memory figure read only at the exact tick",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "MEMORY_NEAR_S = 0.5 ",
+  "new": "MEMORY_NEAR_S = 1e-6 ",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_a_short_dip_of_free_ram_between_memory_readings_is_matched_with_the_nearest",
+   "tests/test_analysis_held_memory.py::test_the_nearest_memory_reading_is_half_the_recorders_memory_interval"
+  ]
+ },
+ {
+  "name": "rules: the busiest GPU user judged over every row of a table that lists memory",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if only_memory and not _memory_row(row[1]):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_gpu_contention_finds_a_gpu_user_listed_only_for_its_video_memory"
+  ]
+ },
+ {
+  "name": "rules: a row of 12 fields reads memory whatever it holds",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return any(isinstance(q, (list, tuple)) and len(q) >= 12 and any(x is not None for x in q[9:12])",
+  "new": "    return any(isinstance(q, (list, tuple)) and len(q) >= 12 and True",
+  "tests": [
+   "tests/test_analysis_held_memory.py::test_gpu_contention_finds_a_gpu_user_listed_only_for_its_video_memory"
+  ]
+ },
+ {
+  "name": "rules: the store app's program takes a priority-fix slot",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    for n in [n for n in named[:3] if not _all_own(e, n) and _store_of(e, n.name) is None][:2]:",
+  "new": "    for n in [n for n in named[:3] if not _all_own(e, n)][:2]:",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_background_hogs_never_tells_the_player_to_close_the_store_app_that_started_the_game"
+  ]
+ },
+ {
+  "name": "rules: background_hogs tells the store app's program to pause or close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif store := _store_of(e, n.name):\n",
+  "new": "        elif store := None:\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_background_hogs_never_tells_the_player_to_close_the_store_app_that_started_the_game"
+  ]
+ },
+ {
+  "name": "rules: gpu_contention tells the store app's program to pause or close",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    elif store:\n        first = _store_advice(",
+  "new": "    elif False:\n        first = _store_advice(",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_gpu_contention_says_the_store_apps_program_is_part_of_it_and_never_to_close_or_move_it"
+  ]
+ },
+ {
+  "name": "rules: gpu_contention offers to move the store app's work to another GPU",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    own = bool(name) and (_windows_own(e, pid, name) or store is not None)\n",
+  "new": "    own = bool(name) and _windows_own(e, pid, name)\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_gpu_contention_says_the_store_apps_program_is_part_of_it_and_never_to_close_or_move_it"
+  ]
+ },
+ {
+  "name": "rules: Memory Compression's advice names nobody",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            if n.name.casefold() == \"memory compression\":\n                fixes.extend(_compression_holders(e, n, named[:3]))\n",
+  "new": "            if n.name.casefold() == \"memory compression\":\n                pass\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_memory_compressions_advice_names_the_programs_that_held_the_most_ram_when_it_got_busy",
+   "tests/test_analysis_store_and_shell.py::test_under_the_floor_memory_compressions_advice_says_the_most_any_program_held_and_never_itself"
+  ]
+ },
+ {
+  "name": "rules: Memory Compression's holders read only the stutters' own windows",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    spans = _merge((ev.t_start - attribute.WINDOW_BEFORE_S - MEMORY_NEAR_S,\n                    ev.t_end + attribute.WINDOW_AFTER_S + MEMORY_NEAR_S) for ev in n.events)\n",
+  "new": "    spans = _merge((ev.t_start - attribute.WINDOW_BEFORE_S,\n                    ev.t_end + attribute.WINDOW_AFTER_S) for ev in n.events)\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_a_stutter_between_two_memory_readings_meets_the_nearest"
+  ]
+ },
+ {
+  "name": "rules: a name to leave out is still counted",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                or name.casefold() in leave_out:\n",
+  "new": "                or False:\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_under_the_floor_memory_compressions_advice_says_the_most_any_program_held_and_never_itself"
+  ]
+ },
+ {
+  "name": "rules: the held advice drops what it is told to leave out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    h = _heavy(e, col, spans, floor, leave_out)\n",
+  "new": "    h = _heavy(e, col, spans, floor)\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_under_the_floor_memory_compressions_advice_says_the_most_any_program_held_and_never_itself"
+  ]
+ },
+ {
+  "name": "rules: Memory Compression's holders said where no row read memory",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    h = _heavy(e, \"ram\", spans, MEM_MIN_MB, leave_out)\n    if h is None:\n        return []\n",
+  "new": "    h = _heavy(e, \"ram\", spans, MEM_MIN_MB, leave_out)\n    if False:\n        return []\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_memory_compression_in_an_older_capture_keeps_its_old_advice_alone"
+  ]
+ },
+ {
+  "name": "rules: explorer.exe's False in an older capture read as a look-alike",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if key in WINDOWS_FOLDER_PARTS and e.target.get(\"windows_folder\") is not True:\n        folder = None\n",
+  "new": "    if False:\n        folder = None\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_explorer_is_windows_shell_where_windows_runs_it_and_a_look_alike_is_not"
+  ]
+ },
+ {
+  "name": "rules: any marker read as the folder check's",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "e.target.get(\"windows_folder\") is not True:",
+  "new": "not e.target.get(\"windows_folder\"):",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_explorer_is_windows_shell_where_windows_runs_it_and_a_look_alike_is_not"
+  ]
+ },
+ {
+  "name": "rules: explorer.exe is no part of Windows",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    \"explorer.exe\": (\"Windows' shell, which runs the taskbar, the Start menu and File Explorer\", \"\"),\n",
+  "new": "",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_explorer_is_windows_shell_where_windows_runs_it_and_a_look_alike_is_not",
+   "tests/test_analysis_store_and_shell.py::test_explorer_in_a_capture_of_names_only_is_said_to_be_windows_shell"
+  ]
+ },
+ {
+  "name": "rules: Memory Compression's line repeats what background_hogs says",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if h.named and not h.windows and all(name.casefold() in blamed for name, _v, _k in h.named):\n        return []\n",
+  "new": "    if False:\n        return []\n",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_memory_compressions_line_is_left_out_where_it_would_only_repeat_a_program_background_hogs_names"
+  ]
+ },
+ {
+  "name": "rules: Memory Compression's line left out beside Windows' own holders",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "if h.named and not h.windows and all(",
+  "new": "if h.named and all(",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_memory_compressions_line_is_left_out_where_it_would_only_repeat_a_program_background_hogs_names"
+  ]
+ },
+ {
+  "name": "rules: Memory Compression's line left out under the floor",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "if h.named and not h.windows and all(",
+  "new": "if not h.windows and all(",
+  "tests": [
+   "tests/test_analysis_store_and_shell.py::test_under_the_floor_memory_compressions_advice_says_the_most_any_program_held_and_never_itself"
   ]
  }
 ]

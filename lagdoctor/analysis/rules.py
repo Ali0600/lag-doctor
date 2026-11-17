@@ -20,7 +20,7 @@ import math
 import ntpath
 import re
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 
 from lagdoctor.analysis import attribute, crop
@@ -103,6 +103,10 @@ DROPPED_PCT = 100.0 * JUDDER_SHARE   # [inferred, LC 2.4's 10 % judder share] fr
 # ---- background, focus, disk, shaders (DESIGN; LC 4.6, 4.8, 4.9, 4.19) ---------------------------
 HOG_MIN_CPU_PCT = 25.0       # DESIGN: non-game processes summing >= 25 % of one CPU across the lag events
 UNFOCUSED_SHARE = 0.10       # [inferred] not the foreground window for >= 10 % of the capture
+NOT_FOCUSED_DROP = 0.10      # [inferred] behind another window the game made frames >= 10 % slower than with its own
+                             # window in front: a cost, not noise (its CPU use that much lower is no cost by itself)
+NOT_FOCUSED_MIN_FRAMES = 100 # [inferred] a side (behind, in front) is compared from 100 frames ...
+NOT_FOCUSED_MIN_S = 2.0      # [inferred] ... and 2 s (eight sampler ticks for the CPU) of it
 SIDE_SHARE = 0.70            # [inferred] the CPU side was slow in >= 70 % of a cause's events
 EARLY_FRACTION = 1.0 / 3.0   # LC 4.9: shader stutter bunches up early ("first minutes") ...
 EARLY_SHARE = 0.60           # [inferred] ... here: >= 60 % of the game's own stutters in the first third
@@ -217,6 +221,17 @@ def _dict(v: Any) -> dict:
     return v if isinstance(v, dict) else {}
 
 
+def no_frames_why(stats: dict) -> str:
+    """Why frame timing that ran judged no frame: the rules and the Not measured list (diagnose.measured) say the same.
+    Frames behind another window are left out (frames.HIDDEN), so a capture taken that way has frames yet none judged;
+    a measured part (stats["span"], analysis/crop.py) says so of itself, never of the whole recording."""
+    if (_fin(stats.get("hidden_s")) or 0.0) > 0:
+        noun = "measured part" if isinstance(stats.get("span"), dict) else "capture"
+        return (f"every frame of the {noun} came while another window was in front, and Windows showed almost none of "
+                "them")
+    return "PresentMon ran but recorded no frames from the game"
+
+
 class _Env:
     """What every rule reads, derived once per capture."""
 
@@ -238,7 +253,7 @@ class _Env:
         self.half = any(isinstance(v, dict) and v.get("half_weight") for v in self.causes.values())
         self.judged = [e for e in self.events if e.kind == "mark"] if self.half and not self.attributed \
             else self.attributed
-        self.tick_spans = fa._merged_spans(self.events, fa.FRAME_EVENT_KINDS, pad=fa.TICK_PAD_S)
+        self.tick_spans = fa.not_steady_spans(self.events, self.fr, pad=fa.TICK_PAD_S)   # what bound() leaves out too
         dur = fa._bounded(cap.duration_s)
         self.duration = float(dur) if dur is not None and dur > 0 else None
         # A capture cut to the measured part (analysis/crop.py) keeps the recording's own times: a rule that counts
@@ -277,7 +292,7 @@ class _Env:
         if s is None:
             return "not recorded in this capture"
         if getattr(s, "state", None) in OK_STATES:
-            return "it ran but recorded nothing" if name != "frames" else "PresentMon ran but recorded no frames from the game"
+            return "it ran but recorded nothing" if name != "frames" else no_frames_why(self.stats)
         return _text(getattr(s, "detail", None), 300) or str(getattr(s, "state", "not measured"))
 
     def need(self, name: str) -> str:
@@ -542,6 +557,8 @@ def run_rule(rule: Rule, cap: Capture, ctx: dict, env: _Env | None = None) -> An
         res = rule.fn(cap, ctx)
         if isinstance(res, Finding) and rule.gate and env.verdict not in GATES[rule.gate]:
             res = _gated(rule, env, res)
+        elif isinstance(res, Finding) and rule.gate == "cpu" and _fps_reaches_display(env):
+            res = _display_paces(rule, env)          # any verdict the gate lets through: the display sets the pace
         held = _holds_open(rule.cause, env) if isinstance(res, Cleared) and not res.firm else None
     except Exception as exc:  # noqa: BLE001 - one broken rule must not hide the rest; it says it failed
         return Unchecked(rule.cause, f"the check failed ({type(exc).__name__}: {exc})")
@@ -621,6 +638,8 @@ def _gated(rule: Rule, env: _Env, finding: Finding) -> Any:
         finding.evidence.append(Evidence(_sentence(probable[1])))
         return finding
     fallback = rule.gate == "cpu" and _gpu_by_engine(env)        # the 3D engine named the GPU: no CPU verdict
+    if fallback and _fps_reaches_display(env):     # the display sets the pace, as cpu_limit clears it at that rate
+        return _display_paces(rule, env)
     if v == "unknown" or fallback:
         notes = [n for n in env.bound.get("notes") or [] if isinstance(n, str)]
         why = notes[:1] + ([probable[1]] if probable is not None else [])
@@ -632,6 +651,13 @@ def _gated(rule: Rule, env: _Env, finding: Finding) -> Any:
         return Unchecked(rule.cause, held)
     return Cleared(rule.cause, _sentence(f"{side} is not what limits the frame rate: "
                                          f"it is limited by {labels.BOUND.get(v, v)}"))
+
+
+def _display_paces(rule: Rule, env: _Env) -> Cleared:
+    """A CPU-side finding at the display's rate (LIMIT_FPS_FRAC), whatever the verdict says of the CPU: the display
+    sets the pace, so the CPU costs nothing the player sees, as cpu_limit clears itself there."""
+    return Cleared(rule.cause, _sentence(f"the CPU is not what limits the frame rate: at {env.avg_fps:.0f} FPS the "
+                                         f"game already reaches the {env.refresh:.0f} Hz display"))
 
 
 def _probable_gpu(e: _Env) -> tuple[bool, str] | None:
@@ -867,7 +893,8 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
     c = _Case(cap, ctx, "cpu_limit")
     e = c.env
     b, v = e.bound, e.verdict
-    if v in ("cpu_main", "cpu_all", "mixed", "unknown") and _fps_reaches_display(e):
+    # the 3D engine's "gpu" too: it says nothing of the CPU, and at this rate nothing the CPU does is seen
+    if (v in ("cpu_main", "cpu_all", "mixed", "unknown") or _gpu_by_engine(e)) and _fps_reaches_display(e):
         return Cleared("cpu_limit", _sentence(f"at {e.avg_fps:.0f} FPS the game already reaches the "
                                               f"{e.refresh:.0f} Hz display"))    # _cpu_not_ruled_out holds none here
     r, busiest = _fin(b.get("r")), _fin(b.get("busiest_thread"))
@@ -910,7 +937,7 @@ def _cpu_limit(cap: Capture, ctx: dict) -> Any:
     fps = e.avg_fps
     one = v != "cpu_all"
     fixes = [_advice("Turn down CPU-heavy settings", "Crowd density, view distance, simulation detail and physics."),
-             _advice("Close CPU-heavy programs while playing"),
+             _cpu_advice(e),
              _advice("Frame generation can smooth the picture", "Only if the base frame rate is already acceptable: "
                                                                 "the delay stays tied to the base rate.")]
     unsaturated = held and busiest is not None and busiest < fa.THREAD_BOUND
@@ -1159,14 +1186,25 @@ def _gpu_contention(cap: Capture, ctx: dict) -> Any:
                                     f"(process {pid}, its busiest engine there {pct:.0f}% busy, median)",
                       pct, "%", OTHER_GPU_PCT)
     else:
-        c.neutral("background", "which program it was is not in the process table (it lists the 8 busiest by CPU)")
+        c.neutral("background", "which program it was is not in the process table (it lists the 8 busiest by CPU"
+                                + (", and of the rest the 4 busiest by disk and the 4 holding the most of each kind of "
+                                   "memory)" if _lists_memory(e) else
+                                   " and the 4 busiest of the rest by disk)" if _where(e)[1] else ")"))
+    store = _store_of(e, name) if name else None
     if name and _windows_itself(name):
         first = _windows_advice(name, f" (process {pid})")
+    elif name and _windows_own(e, pid, name):         # the Desktop Window Manager draws every window, for one
+        first = _part_advice(name, f" (process {pid})")
+    elif store:
+        first = _store_advice(name, f" (process {pid})", store)
     else:
-        first = _advice(f"Pause or close {name} while you play" if name else "Find and pause the GPU-heavy program",
+        like = LOOKALIKE if name and _lookalike(e, pid, name) else ""
+        first = _advice(f"Pause or close {name}{like} while you play" if name else "Find and pause the GPU-heavy program",
                         "Training, rendering, mining or video encoding on the same GPU takes time the game needs; "
                         "lag-doctor never closes programs itself.")
-    fixes = [first, _advice("Or let that work run on another GPU, if this PC has one")]
+    # Windows' own work cannot move to another GPU, and the store app's is no work to move
+    own = bool(name) and (_windows_own(e, pid, name) or store is not None)
+    fixes = [first] + ([] if own else [_advice("Or let that work run on another GPU, if this PC has one")])
     return c.conclude(f"Another program kept the game's GPU {m:.0f}% busy" + (f": {_shown_as(name)}" if name else ""),
                       "Other programs used the same GPU as the game, so the game's frames had to wait for it.", fixes)
 
@@ -1187,15 +1225,20 @@ def _starved(e: _Env) -> str | None:
 def _top_gpu_user(e: _Env) -> tuple[str, int, float, bool] | None:
     """(name, pid, median %, measured on any adapter?) of the other process with the most GPU in the others table,
     a tick it was not listed on counting as 0: its use of the game's adapter where the table has it, else of any
-    adapter (attribute.game_gpu_pct, A10). Never the game's own processes or lag-doctor's (A10)."""
+    adapter (attribute.game_gpu_pct, A10). Never the game's own processes or lag-doctor's (A10). Where the table lists
+    the memory holders (since 2026-11-16), only its rows that read memory count: they list a program holding video
+    memory with little CPU, which the rows between leave out, and over every row its median would read 0."""
     game = attribute.game_pids(e.cap)
     tool_pids, tool_names = attribute.tool_processes(e.cap)
+    only_memory = _lists_memory(e)
     ticks = 0
     anywhere = False
     seen: dict[tuple[int, str], list[float]] = {}
     for row in e.cap.others if isinstance(e.cap.others, list) else []:
         if not (isinstance(row, (list, tuple)) and len(row) == 2 and fa._bounded(row[0]) is not None
                 and isinstance(row[1], (list, tuple))):
+            continue
+        if only_memory and not _memory_row(row[1]):
             continue
         ticks += 1
         for p in row[1]:
@@ -1458,9 +1501,11 @@ def _vram_overflow(cap: Capture, ctx: dict) -> Any:
                                               f"({SHARED_RISE_MB_PER_MIN:.0f} or more)", rise, "MB/min",
                       SHARED_RISE_MB_PER_MIN)
     _event_link(c, "vram_overflow", "gpu_engine", "video memory spilling over")
+    when = _when(e, S.VRAM_USED_MB, lambda v: v >= VRAM_FULL_FRAC * size) if full else []
     fixes = [_advice("Lower texture quality and the render resolution"),
              _advice("Turn off ray tracing or frame generation", "Both take extra video memory."),
-             _advice("Close other GPU-heavy programs while playing")]
+             _held_advice(e, "vram", VRAM_ADVICE, when or EVERYWHERE,
+                          "while video memory was full" if when else f"during {e.part}", VRAM_MIN_MB)]
     return c.conclude("Video memory is full", "The game needs more video memory than the GPU has, so data spills "
                                               "into slower system memory and frames stall while it moves.", fixes)
 
@@ -1520,13 +1565,21 @@ def _ram_pressure(cap: Capture, ctx: dict) -> Any:
         fixes = [_advice("Let Windows manage the page file size, or make it larger",
                          "Search the Start menu for \"View advanced system settings\", then Performance: Settings > "
                          "Advanced > Virtual memory."),
-                 _advice("Close memory-heavy programs while playing", "Browsers with many tabs are the usual ones.")]
+                 _commit_advice(e)]
         return c.conclude("Windows nearly ran out of memory to hand out: the page file is small",
                           "Programs had reserved almost all the memory Windows can promise (RAM plus the page file) "
                           "while RAM itself stayed free. At that limit a program that asks for more, the game "
                           "included, can stall while the page file grows, or fail to get it.", fixes)
-    fixes = [_advice("Close memory-heavy programs while playing", "Browsers with many tabs are the usual ones."),
-             _advice("Keep the page file system-managed"), _advice("Add RAM if this happens often")]
+    total = ram_gb * 1024.0 if ram_gb and ram_gb > 0 else None
+    low_mb = max(RAM_WARN_FRAC * total, RAM_CRIT_MB) if total else RAM_CRIT_MB      # the finding's own floors
+    when = _when(e, S.RAM_AVAIL_MB, lambda v: v < low_mb)
+    if when:
+        held = _held_advice(e, "ram", MEM_ADVICE, when, "while free RAM was low", MEM_MIN_MB, BROWSERS)
+    elif commit_top is not None and commit_top > COMMIT_WARN_PCT:   # made by the commit charge: who reserved it
+        held = _commit_advice(e)
+    else:
+        held = _held_advice(e, "ram", MEM_ADVICE, EVERYWHERE, f"during {e.part}", MEM_MIN_MB, BROWSERS)
+    fixes = [held, _advice("Keep the page file system-managed"), _advice("Add RAM if this happens often")]
     return c.conclude("The PC is low on RAM", "Free memory ran short, so Windows moved memory to and from the disk "
                                               "while the game ran, which stalls frames.", fixes)
 
@@ -2187,26 +2240,97 @@ def _not_focused(cap: Capture, ctx: dict) -> Any:
         return Unchecked("not_focused", f"the game was the active window {100 * (1 - share):.0f}% of the time, but "
                                         f"{a:.0f} of the {n:.0f} {what} came while another window was in front: too "
                                         f"few to tell (at least {MIN_EVENTS} needed)")
-    if share >= UNFOCUSED_SHARE and (e.verdict in GATES["cpu"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e)):
-        c.support("foreground", W_STEADY, f"the game was not the active window for {100 * share:.0f}% of {e.part} "
-                                          f"({100 * UNFOCUSED_SHARE:.0f}% or more)", 100 * share, "%", 100 * UNFOCUSED_SHARE)
-    elif share >= UNFOCUSED_SHARE:
+    if share >= UNFOCUSED_SHARE:
         # A9 (LC 5.1): less CPU time for a window behind others costs frames only on the CPU side; the
-        # event-linked item below still counts on any side
-        c.neutral("foreground", f"the game was not the active window for {100 * share:.0f}% of {e.part}, but the "
-                                f"frame rate is limited by {labels.BOUND.get(e.verdict, e.verdict)}, so less CPU time "
-                                "is not what holds it back", 100 * share, "%", 100 * UNFOCUSED_SHARE)
+        # event-linked item below still counts on any side. Time behind is no cost by itself: the game's own frame
+        # rate and CPU use, behind and in front, say whether there was one (none, in the e2e runs' LagLab)
+        cpu_side = e.verdict in GATES["cpu"] or _gpu_by_engine(e) or _cpu_not_ruled_out(e)
+        fps, cpu = _focus_split(e)
+        behind_pct = f"for {100 * share:.0f}% of {e.part}"
+        if fps[0] is not None and fps[1] is not None:
+            floor = (1.0 - NOT_FOCUSED_DROP) * fps[1]
+            made = (f"with another window in front the game made {fps[0]:.0f} frames a second, against {fps[1]:.0f} "
+                    "with its own window in front")
+            if fps[0] > floor:
+                c.against("foreground", W_STEADY, f"{made}, so being behind another window ({behind_pct}) cost it no "
+                                                  "frames", fps[0], "FPS", floor)
+            elif e.refresh and fps[0] >= LIMIT_FPS_FRAC * e.refresh:   # the frames it lost there never reach a screen
+                c.against("foreground", W_STEADY, f"{made}, but {fps[0]:.0f} is within "
+                                                  f"{100 * (1 - LIMIT_FPS_FRAC):.0f}% of the {e.refresh:.0f} Hz "
+                                                  "display's rate, so its lower frame rate behind another window "
+                                                  f"({behind_pct}) cost nothing you could see", fps[0], "FPS",
+                          LIMIT_FPS_FRAC * e.refresh)
+            elif cpu_side:
+                c.support("foreground", W_STEADY, f"{made} ({behind_pct})", fps[0], "FPS", floor)
+            else:
+                c.neutral("foreground", f"{made}, but the frame rate is limited by "
+                                        f"{labels.BOUND.get(e.verdict, e.verdict)}, so less CPU time is not what holds "
+                                        "it back", fps[0], "FPS", floor)
+        elif cpu[0] is not None and cpu[1] is not None and cpu[0] >= (1.0 - NOT_FOCUSED_DROP) * cpu[1]:
+            c.against("foreground", W_STEADY, f"with another window in front ({behind_pct}) the game used "
+                                              f"{cpu[0]:.0f}% of a CPU, against {cpu[1]:.0f}% with its own window in "
+                                              "front, so it did not get less CPU time", cpu[0], "%",
+                      (1.0 - NOT_FOCUSED_DROP) * cpu[1])
+        elif not cpu_side:
+            c.neutral("foreground", f"the game was not the active window {behind_pct}, but the frame rate is limited "
+                                    f"by {labels.BOUND.get(e.verdict, e.verdict)}, so less CPU time is not what holds it "
+                                    "back", 100 * share, "%", 100 * UNFOCUSED_SHARE)
+        elif not linked:
+            if share >= 1.0:
+                why = (f"the game was behind another window for all of {e.part}, so how it ran has no time with its "
+                       "own window in front to be compared with")
+            elif cpu[0] is not None and cpu[1] is not None:     # a game may slow itself down behind a window
+                why = (f"the game used {cpu[0]:.0f}% of a CPU behind another window ({behind_pct}) against "
+                       f"{cpu[1]:.0f}% with its own window in front, but too few of its frames were recorded there to "
+                       "tell whether that cost it frames")
+            else:
+                why = (f"the game was behind another window {behind_pct}, but too few of its frames were recorded "
+                       "there or in front to compare how it ran")
+            return Unchecked("not_focused", why)
     elif not linked and not behind:   # mostly in front is no evidence against lag that came while it was behind
         c.against("foreground", W_STEADY, f"the game was the active window {100 * (1 - share):.0f}% of the time",
                   100 * share, "%", 100 * UNFOCUSED_SHARE)
     _event_link(c, "not_focused", "foreground", "another window being in front")
     battery = e.power.get("on_battery") is True
-    fixes = [_advice("Keep the game in front while you play", "Click into its window; Windows gives background "
-                                                              "windows a lower priority"
+    fixes = [_advice("Keep the game in front while you play", "Click into its window: Windows gives a program whose "
+                                                              "window is not in front a lower performance level"
                      + (", and on battery an even lower speed." if battery else "."))]
     ids = _first_cause_ids(e, ("not_focused",))
-    return c.conclude("The game was not the active window", "Windows lowers the priority of windows that are not in "
-                                                            "front, so the game got less CPU time.", fixes, ids)
+    return c.conclude("The game was not the active window", "While another window was in front the game ran worse: "
+                                                            "Windows gives a program whose window is not in front a "
+                                                            "lower performance level, and some games slow themselves "
+                                                            "down then.", fixes, ids)
+
+
+def _focus_split(e: _Env) -> tuple[tuple[float | None, float | None], tuple[float | None, float | None]]:
+    """((frames a second behind another window, in front), (% of a CPU behind, in front)) of the game, each None
+    without NOT_FOCUSED_MIN_S of it. The frame rate is what its app frames made, shown on screen or not: their count
+    over their summed MsBetweenPresents (a median of frame times that alternate between two values lands on one of
+    them, 2x off). A frame takes the side of the first foreground reading at or after it, and a sampler tick its own:
+    the few placed on the wrong side at each change of window are a tick's worth against 2 s or more."""
+    if "focus_split" not in e.memo:
+        readings = fa.focus_readings(e.cap)
+        rt = [x for x, _ in readings]
+        t, fm = e.fr.get(F.T) or [], e.fr.get(F.FRAME_MS) or []
+        ms: dict[int, list[float]] = {0: [], 1: []}
+        for i in range(len(t)):
+            ti, f = fa._bounded(fa._at(t, i)), fa._bounded(fa._at(fm, i))
+            if ti is None or f is None or f <= 0 or not fa._is_app(e.fr, i):
+                continue
+            k = bisect.bisect_left(rt, ti)
+            if k < len(rt) and readings[k][1] is not None:
+                ms[readings[k][1]].append(float(f))
+        fps = tuple(1000.0 * len(ms[side]) / math.fsum(ms[side]) if len(ms[side]) >= NOT_FOCUSED_MIN_FRAMES
+                    and math.fsum(ms[side]) / 1000.0 >= NOT_FOCUSED_MIN_S else None for side in (0, 1))
+        cpu_at = dict(e.sys_rows(S.GAME_CPU_PCT))
+        pct: dict[int, list[float]] = {0: [], 1: []}
+        for x, f in readings:
+            if f is not None and cpu_at.get(x) is not None:
+                pct[f].append(cpu_at[x])
+        cpu = tuple(st.median(pct[side]) if len(pct[side]) * fa.TICK_PAD_S >= NOT_FOCUSED_MIN_S else None
+                    for side in (0, 1))
+        e.memo["focus_split"] = (fps, cpu)
+    return e.memo["focus_split"]
 
 
 # ------------------------------------------------------------------------- background, disk ---
@@ -2221,25 +2345,30 @@ def _event_link(c: _Case, cause: str, family: str, phrase: str, contradict: bool
     if label == "not_measured":
         c.lack(family, W_STEADY, _text(entry.get("why"), 200) or f"{phrase} was not measured")
         return False
-    if a is None or not n:
-        return False
+    if a is None or not n or entry.get("blind"):     # blind: no moment could rise above the rest, so no count says
+        return False                                # anything (attribute._blind)
     half = bool(entry.get("half_weight"))
     what = "marked moments" if half else "stutters and FPS drops"
     lift = _fin(entry.get("lift"))
     share = 100 * a / n
+    left = _num(entry.get("left_out"))       # moments where its move had another explanation (attribute._turbo_veto,
+                                             # attribute._wait_veto)
+    why_left = _text(entry.get("left_out_why"), 200) or "something else explained its move there"
+    more = f"; {left:.0f} more {'is' if left == 1 else 'are'} left out: {why_left}" if left else ""
     if label == "supports":
         w = _fin(entry.get("weight")) or W_STEADY
         if entry.get("cap") == "possible":   # DESIGN: at most possible. Its lift weight stays 1 so it ranks last when
             w = W_STEADY * (HALF if half else 1.0)    # explaining away, but 1 point alone could never reach possible
         c.support(family, w, f"{a:.0f} of {n:.0f} {what} coincided with {phrase}"
-                  + (f" (lift {lift:.1f})" if lift is not None else ""), share, "%", 100 * attribute.LIFT_MIN_SHARE)
+                  + (f" (lift {lift:.1f})" if lift is not None else "") + more, share, "%",
+                  100 * attribute.LIFT_MIN_SHARE)
         return True
     if label == "contradicts" and contradict:
         c.against(family, CONTRA_WEIGHT * (HALF if half else 1.0),
-                  f"only {a:.0f} of {n:.0f} {what} coincided with {phrase}", share, "%",
+                  f"only {a:.0f} of {n:.0f} {what} coincided with {phrase}{more}", share, "%",
                   100 * attribute.CONTRA_MAX_SHARE)
     else:
-        c.neutral(family, f"{a:.0f} of {n:.0f} {what} coincided with {phrase}", share, "%",
+        c.neutral(family, f"{a:.0f} of {n:.0f} {what} coincided with {phrase}{more}", share, "%",
                   100 * attribute.LIFT_MIN_SHARE)
     return False
 
@@ -2339,8 +2468,9 @@ def _background_hogs(cap: Capture, ctx: dict) -> Any:
     entries = {k: e.causes.get(k) for k in kinds if isinstance(e.causes.get(k), dict)}
     if entries and all(v.get("label") == "too_few_events" for v in entries.values()):
         n = len(e.attributed)
-        return Unchecked("background_hogs", f"only {n} stutter{'s' if n != 1 else ''} and FPS drops: linking them to "
-                                            f"another program needs at least {MIN_EVENTS}")
+        what = "stutters and FPS drops" if n != 1 else "stutter or FPS drop"
+        return Unchecked("background_hogs", f"only {n} {what}: linking them to another program needs at least "
+                                            f"{MIN_EVENTS}")
     if not entries or all(v.get("label") == "not_measured" for v in entries.values()):
         c.lack("background", W_EVENT_STRONG, "no CPU, disk or GPU readings for other programs")
         return c.conclude()
@@ -2354,13 +2484,7 @@ def _background_hogs(cap: Capture, ctx: dict) -> Any:
     blamed = [ev for ev in e.attributed if ev.causes and ev.causes[0] in kinds]
     named = []
     for n in _named_programs(e, blamed):
-        spans = sorted((ev.t_start - attribute.WINDOW_BEFORE_S, ev.t_end + attribute.WINDOW_AFTER_S) for ev in n.events)
-        merged: list[tuple[float, float]] = []
-        for a, b in spans:
-            if merged and a <= merged[-1][1]:
-                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
-            else:
-                merged.append((a, b))
+        merged = _merge((ev.t_start - attribute.WINDOW_BEFORE_S, ev.t_end + attribute.WINDOW_AFTER_S) for ev in n.events)
         during, normal = _name_cpu(e, n.name, merged, set(n.pids) if n.pids else None)
         many = f" ({len(n.pids)} processes)" if len(n.pids) > 1 else ""
         shown = _text(n.name, 80) or "a program"
@@ -2433,12 +2557,479 @@ def _windows_advice(name: str, procs: str) -> FixSuggestion:
     return _advice(f"{name}{procs} is Windows itself, not a program to close", why)
 
 
+# ---- naming the programs behind "close other X-heavy programs" ------------------------------------------------------
+
+# Windows' own programs that a list of programs to close may meet, by image name: what each name normally is, and what
+# to do instead (WT 10's background-hog table; csrss.exe, audiodg.exe and dwm.exe from Microsoft's own pages, WT 10
+# too). A capture since 2026-11-15 says where each listed process runs (its session, and whether its program sits in
+# System32), so a look-alike of one of these names stays a program to close (_windows_own); an older one holds names
+# only, so the text says what the name normally is, never that it is safe, and nothing here offers a fix.
+_DEFENDER = ("Windows Security's virus scan", "If it is, leave it on.")
+_UPDATE = ("Windows Update installing updates", "If it is, let it finish before you play.")
+_SEARCH = ("Windows Search indexing files", "")
+_VM = ("the memory and CPU of a virtual machine Windows runs, such as the one behind WSL 2",
+       "If you are not using it, shutting that virtual machine down frees what it holds: for WSL, run "
+       "wsl --shutdown in a terminal.")
+WINDOWS_PARTS: dict[str, tuple[str, str]] = {
+    "msmpeng.exe": _DEFENDER, "mpdefendercoreservice.exe": _DEFENDER, "nissrv.exe": _DEFENDER,
+    "mpcmdrun.exe": _DEFENDER,
+    "mousocoreworker.exe": _UPDATE, "tiworker.exe": _UPDATE, "trustedinstaller.exe": _UPDATE,
+    "searchindexer.exe": _SEARCH, "searchprotocolhost.exe": _SEARCH, "searchfilterhost.exe": _SEARCH,
+    "svchost.exe": ("a host for Windows' own services, such as Windows Update", ""),
+    "csrss.exe": ("a core part of Windows", ""),
+    "audiodg.exe": ("Windows' audio engine, which runs sound effects", ""),
+    "dwm.exe": ("Windows' Desktop Window Manager, which draws every window on the screen", ""),
+    "vmmem": _VM, "vmmemwsl": _VM,
+    "explorer.exe": ("Windows' shell, which runs the taskbar, the Start menu and File Explorer", ""),
+}
+# Windows' own programs that Windows runs from the Windows folder itself, not System32 (explorer.exe). A capture
+# whose folder check covered that folder (target windows_folder, since 2026-11-16) judges them by where they run; in
+# an older one, False says only "not in System32", so their name decides
+WINDOWS_FOLDER_PARTS = frozenset({"explorer.exe"})
+CLOSE_CHECK = "not something you need first; lag-doctor never closes programs itself."
+DISK_ADVICE = "Close other disk-heavy programs while playing"
+CPU_ADVICE = "Close CPU-heavy programs while playing"
+NET_ADVICE = "Pause or limit the download or upload while playing"
+EVERYWHERE = [(-math.inf, math.inf)]     # spans covering the whole analysed part (a cropped capture holds only it)
+
+
+LOOKALIKE = " (named like a part of Windows, but not where Windows runs it)"
+
+# The store apps a game is started through (inventory game.launcher, from where the game is installed), with their
+# programs by image name (WT 10's background-hog table): the game may need its store app running, so a list of
+# programs to close says what they are instead
+STORE_APPS = {
+    "steam": ("Steam", frozenset({"steam.exe", "steamwebhelper.exe", "steamservice.exe"})),
+    "epic": ("the Epic Games Launcher", frozenset({"epicgameslauncher.exe", "epicwebhelper.exe"})),
+}
+
+
+def _store_of(e: _Env, name: str) -> str | None:
+    """The store app the game was started through, when `name` is one of its programs; else None."""
+    game = e.inv.get("game") if isinstance(e.inv.get("game"), dict) else {}
+    store = STORE_APPS.get(game.get("launcher")) if isinstance(game.get("launcher"), str) else None
+    return store[0] if store and name.casefold() in store[1] else None
+
+
+def _where(e: _Env) -> tuple[dict[tuple[int, str], tuple[int | None, bool | None]], bool]:
+    """((pid, image name) -> (its Windows session, whether its program sits in System32 or SysWOW64, or explorer.exe in
+    the Windows folder itself, where a capture's target windows_folder says that was checked), whether the
+    others table also lists the busiest by reads and writes): both from rows of 9 fields, recorded since 2026-11-15
+    (sysmon.top_others). A reading that is None never replaces one that is not."""
+    if "where" not in e.memo:
+        out: dict[tuple[int, str], tuple[int | None, bool | None]] = {}
+        new = False
+        for row in e.cap.others if isinstance(e.cap.others, list) else []:
+            if not (isinstance(row, (list, tuple)) and len(row) == 2 and isinstance(row[1], (list, tuple))):
+                continue
+            for q in row[1]:
+                if not (isinstance(q, (list, tuple)) and len(q) >= 9 and attribute._is_pid(q[0])
+                        and isinstance(q[1], str)):
+                    continue
+                new = True
+                session = q[7] if isinstance(q[7], int) and not isinstance(q[7], bool) and 0 <= q[7] < 2 ** 32 \
+                    else None
+                folder = q[8] if isinstance(q[8], bool) else None
+                old = out.get((q[0], q[1]), (None, None))
+                out[(q[0], q[1])] = (old[0] if session is None else session, old[1] if folder is None else folder)
+        e.memo["where"] = (out, new)
+    return e.memo["where"]
+
+
+def _memory_row(entries: Any) -> bool:
+    """Whether an others row read memory: some entry of 12 fields with a memory figure (the recorder reads memory
+    once a second; the rows between say None there)."""
+    return any(isinstance(q, (list, tuple)) and len(q) >= 12 and any(x is not None for x in q[9:12])
+               for q in entries)
+
+
+def _lists_memory(e: _Env) -> bool:
+    """Whether the others table also lists the memory holders, with their memory (rows of 12 fields, since
+    2026-11-16)."""
+    if "lists_memory" not in e.memo:
+        rows = e.cap.others if isinstance(e.cap.others, list) else []
+        e.memo["lists_memory"] = any(isinstance(q, (list, tuple)) and len(q) >= 12 for row in rows
+                                     if isinstance(row, (list, tuple)) and len(row) == 2
+                                     and isinstance(row[1], (list, tuple)) for q in row[1])
+    return e.memo["lists_memory"]
+
+
+# Windows' own programs a player may start in their own session from outside System32: Defender's command-line
+# scanner lives in Defender's own folder (WT 10), so where it runs says nothing, and its name decides
+PLAYER_STARTS = frozenset({"mpcmdrun.exe"})
+
+
+def _windows_own(e: _Env, pid: Any, name: str) -> bool:
+    """Whether a listed process is Windows' own, never a program to close or lower: the kernel's minimal processes
+    (WINDOWS_ITSELF), and a WINDOWS_PARTS name where Windows runs it: in session 0, where Windows runs its services and
+    nothing a player starts runs (Defender keeps its programs outside System32), or from System32 (csrss.exe and
+    dwm.exe run one in each player's session), or for explorer.exe from the Windows folder itself (WINDOWS_FOLDER_PARTS,
+    in a capture whose check covered that folder). A WINDOWS_PARTS name in a player's session from another folder is a
+    look-alike, so it stays a program to close. An older capture, or a process whose path was not read: by name alone.
+    A program from System32 on no list is never Windows' own by where it runs: a backup service's robocopy.exe, or a
+    player's cmd.exe, is closable. A service someone installed under a Windows name runs in session 0 and reads as
+    Windows': installing one takes an administrator, and the priority fix refuses session 0 whatever it is."""
+    if _windows_itself(name):
+        return True
+    key = name.casefold()
+    if key not in WINDOWS_PARTS:
+        return False
+    session, folder = _where(e)[0].get((pid if attribute._is_pid(pid) else None, name), (None, None))
+    if key in WINDOWS_FOLDER_PARTS and e.target.get("windows_folder") is not True:
+        folder = None
+    return session == 0 or folder is not False or key in PLAYER_STARTS
+
+
+def _lookalike(e: _Env, pid: Any, name: str) -> bool:
+    return name.casefold() in WINDOWS_PARTS and not _windows_own(e, pid, name)
+
+
+def _part_advice(name: str, procs: str) -> FixSuggestion:
+    """What one of Windows' own programs (a WINDOWS_PARTS name) is, in place of advice to pause, close or lower it;
+    _windows_advice for the kernel's own."""
+    role, tail = WINDOWS_PARTS[name.casefold()]
+    return _advice(f"{name}{procs} is normally part of Windows, not a program to close",
+                   f"That name is normally {role}, so lag-doctor does not suggest closing it." + (f" {tail}" if tail
+                                                                                                  else ""))
+
+
+def _store_advice(name: str, procs: str, store: str) -> FixSuggestion:
+    """What a program of the store app the game was started through (_store_of) is, in place of advice to pause, close
+    or lower it: the game may need it."""
+    return _advice(f"{name}{procs} is part of {store}, which started the game",
+                   "The game may need it running, so lag-doctor does not suggest closing it.")
+
+
+@dataclass
+class _Heavy:
+    """Other programs' use of one resource (_heavy): (image name, mean, processes) each, the biggest first."""
+
+    named: list[tuple[str, float, int]]     # at or past the floor: programs the player may close (3 at most)
+    windows: list[tuple[str, float, int]]   # at or past the floor: Windows' own, never told to close (2 at most)
+    most: tuple[str, float, bool] | None    # the biggest mean of any program, under the floor too, and whether it is
+                                            # Windows' own (None: none used any)
+    stores: dict[str, str] = field(default_factory=dict)   # name -> the store app the game was started through,
+                                                           # for its programs (counted with Windows' own: _store_of)
+
+
+def _merge(spans: Iterable[tuple[float, float]]) -> list[tuple[float, float]]:
+    merged: list[tuple[float, float]] = []
+    for a, b in sorted(spans):
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def _event_spans(e: _Env, ids: Iterable[int]) -> list[tuple[float, float]]:
+    """The windows attribution looked at around the judged events `ids` (LC 5.2), merged."""
+    want = set(ids)
+    return _merge((ev.t_start - attribute.WINDOW_BEFORE_S, ev.t_end + attribute.WINDOW_AFTER_S)
+                  for ev in e.judged if ev.id in want)
+
+
+def _heavy(e: _Env, col: str, spans: list[tuple[float, float]], floor: float,
+           leave_out: frozenset[str] = frozenset()) -> _Heavy | None:
+    """Which other programs used `col` most over `spans` (the recording's own times): "cpu" in % of one logical CPU,
+    "io" in bytes/s, "ram", "commit" and "vram" in MiB held (attribute.MEMORY_FIELDS; since 2026-11-16 the table also
+    lists the 4 holding the most of each). Each image name's readings in the others table are summed over the table's ticks inside the spans
+    and divided by those ticks. A tick a program was not listed on counts as 0 (the table lists the 8 processes busiest
+    on the CPU, and since 2026-11-15 the 4 busiest of the rest by reads and writes), so the mean is a lower bound, and
+    the text says "at least". None when no tick there read `col`: not measured, never "none". The game, its own child
+    processes, lag-doctor's own processes (attribute._others' roles) and any process with the game's image name are
+    left out, as are the image names in `leave_out` (casefolded); a name's processes that are Windows' own
+    (_windows_own) are counted apart from a look-alike's; the order is by mean, then name, never by PID."""
+    if "others" not in e.memo:
+        e.memo["others"] = attribute._others(e.cap)
+    o = e.memo["others"]
+    merged = _merge(spans)
+    starts = [a for a, _ in merged]
+
+    def inside(t: float) -> bool:
+        i = bisect.bisect_right(starts, t) - 1
+        return i >= 0 and t <= merged[i][1]
+
+    probe = o.total if col == "cpu" else o.io_top if col == "io" else o.held_top[col]   # per tick: None when no
+                                                                                        # process's reading was read
+    ticks = sum(1 for t, v in zip(probe.t, probe.v) if v is not None and inside(t))
+    if not ticks:
+        return None
+    game_name = _image_name(e.target.get("name"))
+    sums: dict[tuple[str, bool], list[float]] = {}
+    count: dict[tuple[str, bool], int] = {}
+    for (pid, name), cols in o.per.items():
+        if o.roles.get((pid, name)) != "background" or _image_name(name) is None or _same_image(name, game_name) \
+                or name.casefold() in leave_out:
+            continue
+        key = (name, _windows_own(e, pid, name) or _store_of(e, name) is not None)
+        vals = [x for t, x in zip(cols[col].t, cols[col].v) if inside(t)]
+        sums.setdefault(key, []).extend(vals)
+        if any(x > 0 for x in vals):
+            count[key] = count.get(key, 0) + 1
+    rows = [(name, own, math.fsum(v) / ticks, max(1, count.get((name, own), 0)))
+            for (name, own), v in sums.items() if math.fsum(v) > 0]
+    rows.sort(key=lambda r: (-r[2], r[0].casefold(), r[1]))
+    over = [r for r in rows if r[2] >= floor]
+    return _Heavy([(n, v, k) for n, own, v, k in over if not own][:3], [(n, v, k) for n, own, v, k in over if own][:2],
+                  (rows[0][0], rows[0][2], rows[0][1]) if rows else None,
+                  {n: s for n, own, _v, _k in rows if own and (s := _store_of(e, n))})
+
+
+def _and(items: list[str]) -> str:
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def _procs(n: int) -> str:
+    return f" ({n} processes)" if n > 1 else ""
+
+
+def _named_text(rows: list[tuple[str, float, int]], first: Callable[[float], str], rest: Callable[[float], str]) -> str:
+    """"A (2 processes) <first>, and B <rest>": the first program's figure in full, the others' by their number. Rows
+    are programs to close (_Heavy.named), so a WINDOWS_PARTS name among them is a look-alike, and says so."""
+    parts = [f"{_text(n, 80)}{LOOKALIKE if n.casefold() in WINDOWS_PARTS else ''}{_procs(k)} "
+             f"{(first if i == 0 else rest)(v)}" for i, (n, v, k) in enumerate(rows)]
+    return parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + ", and " + parts[-1]
+
+
+def _itself_means(name: str, cpu: bool) -> str:
+    """What one of Windows' own processes' work means, as _windows_advice says it, after "that is"."""
+    key = name.casefold()
+    if key == "memory compression":
+        return ("Windows compressing memory because RAM runs short: close memory-heavy programs, such as a browser "
+                "with many tabs, while you play.")
+    if key == "system" and cpu:
+        return ("work Windows' kernel does, often for a driver: update the graphics, Wi-Fi, storage and chipset "
+                "drivers.")
+    return "Windows' own work, so there is nothing to close."
+
+
+def _windows_text(rows: list[tuple[str, float, int]], did: Callable[[float], str], also: bool = True,
+                  cpu: bool = False, stores: dict[str, str] | None = None) -> str:
+    """One sentence per Windows process over the floor, each led by a space: what it is, never advice to close it; a
+    program of the store app the game was started through (`stores`) said to be that."""
+    out = []
+    too = " too" if also else ""
+    for name, v, k in rows:
+        shown = _text(name, 80)
+        if (stores or {}).get(name):
+            out.append(f" {shown}{_procs(k)} {did(v)}{too}: that is part of {stores[name]}, which started the game "
+                       "and which it may need, so lag-doctor does not suggest closing it.")
+        elif _windows_itself(name):
+            out.append(f" Windows itself ({shown}) {did(v)}{too}: that is {_itself_means(name, cpu)}")
+        else:
+            role, tail = WINDOWS_PARTS[name.casefold()]
+            out.append(f" {shown}{_procs(k)} {did(v)}{too}: that name is normally {role}, so lag-doctor does not "
+                       "suggest closing it." + (f" {tail}" if tail else ""))
+    return "".join(out)
+
+
+def _cap(lead: str) -> str:
+    return lead[:1].upper() + lead[1:]
+
+
+def _close_named(h: _Heavy, lead: str, first: Callable[[float], str], rest: Callable[[float], str],
+                 did: Callable[[float], str], note: str = "", cpu: bool = False) -> FixSuggestion:
+    """The advice once programs passed the floor: "Pause or close A and B while you play", with their figures."""
+    names = [(_text(n, 80) or "") + (LOOKALIKE if n.casefold() in WINDOWS_PARTS else "") for n, _, _ in h.named]
+    them = "it is" if len(names) == 1 else "they are"
+    return _advice(f"Pause or close {_and(names)} while you play",
+                   f"{_cap(lead)}, besides the game, {_named_text(h.named, first, rest)}.{note} Check {them} "
+                   f"{CLOSE_CHECK}{_windows_text(h.windows, did, cpu=cpu, stores=h.stores)}")
+
+
+def _windows_only(title: str, h: _Heavy, lead: str, reached: str, did: Callable[[float], str],
+                  note: str = "", who: str = "only Windows' own processes", cpu: bool = False) -> FixSuggestion:
+    """The advice when only Windows' own processes passed the floor: the old title, and what each of them is."""
+    if any(n in h.stores for n, _v, _k in h.windows):
+        who = ("only the store app that started the game" if all(n in h.stores for n, _v, _k in h.windows)
+               else "only Windows' own processes and the store app that started the game")
+    return _advice(title, f"{_cap(lead)}, besides the game, {who} {reached}."
+                          f"{_windows_text(h.windows, did, also=False, cpu=cpu, stores=h.stores)}{note}")
+
+
+def _most_shown(name: str, own: bool, store: str | None = None) -> str:
+    """The program that used the most, under the floor, as the advice names it (_Heavy.most): Windows' own said to be
+    Windows, a look-alike said to be one, the store app the game was started through said to be it."""
+    shown = _text(name, 80) or ""
+    if store:
+        shown += f" (part of {store}, which started the game)"
+    elif _windows_itself(name):
+        shown = f"Windows itself ({shown})"
+    elif name.casefold() in WINDOWS_PARTS:
+        shown += f" (normally {WINDOWS_PARTS[name.casefold()][0]})" if own else LOOKALIKE
+    return shown
+
+
+def _disk_advice(e: _Env, spans: list[tuple[float, float]], at: str) -> FixSuggestion:
+    """asset_streaming's and hdd_streaming's "close other disk-heavy programs", naming the other programs that read
+    and wrote the most `at` the spans, with their figures; the most any program did when none reached the floor
+    (the owner's ask, 2026-11-15: "posting the second highest disk reading")."""
+    if not spans:
+        return _advice(DISK_ADVICE)
+    h = _heavy(e, "io", spans, attribute.OTHERS_DISK_BPS)
+    if h is None:
+        return _advice(DISK_ADVICE, f"Which other programs read or wrote {at} was not measured.")
+    floor = attribute._mbps(attribute.OTHERS_DISK_BPS)
+    did = lambda v: f"read and wrote at least {attribute._mbps(v)}"
+    if h.named:
+        return _close_named(h, at, lambda v: f"{did(v)} on average", attribute._mbps, did,
+                            " Windows counts network transfers and files read from memory in this too.")
+    # an older capture's table lists the 8 busiest on the CPU only, so "saw no" needs its limit next to it; since
+    # 2026-11-15 it lists the 4 busiest of the rest by reads and writes too (_where)
+    missing = "" if _where(e)[1] else (" lag-doctor lists the 8 processes busiest on the CPU at each moment, so one "
+                                       "that used the disk with little CPU can be missing.")
+    if h.windows:
+        return _windows_only(DISK_ADVICE, h, at, f"read and wrote {floor} or more on average", did, missing)
+    most = ""
+    if h.most:
+        name, v, own = h.most
+        fig = attribute._mbps(v)
+        fig = ("under 0.1 MB/s" if v < 0.05e6 else f"just under {floor}" if fig == floor else f"at {fig}")
+        most = f"; the most was {_most_shown(name, own, h.stores.get(name))}, {fig}"
+    return _advice(DISK_ADVICE, f"lag-doctor saw no other program read and write {floor} or more on average "
+                                f"{at}{most}.{missing}")
+
+
+MEM_ADVICE = "Close memory-heavy programs while playing"
+VRAM_ADVICE = "Close other GPU-heavy programs while playing"
+BROWSERS = "Browsers with many tabs are the usual ones."
+MEM_MIN_MB = 500.0           # [inferred] a program holding this much RAM, or memory reserved, on average is named
+VRAM_MIN_MB = 250.0          # [inferred] ... and this much of the game GPU's video memory (a browser holds 100-500)
+HELD = {   # col -> (the verb, its base form, what is held, a note on the figure)
+    "ram": ("held", "hold", "of RAM", " Each figure is the RAM that program alone holds, as Task Manager's Memory "
+                                      "column shows it."),
+    "commit": ("reserved", "reserve", "of memory", " Reserved memory counts toward what Windows can promise even "
+                                                   "where it is not in RAM: Task Manager's Commit size, on its "
+                                                   "Details tab."),
+    "vram": ("held", "hold", "of video memory on the game's GPU", ""),
+}
+
+
+def _size(mb: float) -> str:
+    """MiB held as a player reads it: whole MB up to 999, then GB with one decimal (by the rounded figure, so 999.6
+    is never "1000 MB")."""
+    return f"{mb / 1024:.1f} GB" if round(mb) >= 1000 else f"{round(mb)} MB"
+
+
+MEMORY_NEAR_S = 0.5      # half of sysmon.MEMORY_EVERY_S: the memory reading nearest a tick is at most this far away
+
+
+def _when(e: _Env, column: str, test: Callable[[float], bool]) -> list[tuple[float, float]]:
+    """The system table's ticks at which `test` held of `column`, as spans for _heavy, each reaching MEMORY_NEAR_S to
+    either side: the recorder reads memory once a second, so a moment of low RAM between two readings is matched with
+    the nearest (memory moves slowly), and only the rows that read memory count in a mean."""
+    return _merge((t - MEMORY_NEAR_S, t + MEMORY_NEAR_S) for t, v in e.sys_rows(column) if test(v))
+
+
+def _commit_advice(e: _Env) -> FixSuggestion:
+    """ram_pressure's advice where the commit charge made the finding: who reserved the most while committed memory
+    was over COMMIT_WARN_PCT, else over the whole part."""
+    when = _when(e, S.COMMIT_PCT, lambda v: v > COMMIT_WARN_PCT)
+    return _held_advice(e, "commit", MEM_ADVICE, when or EVERYWHERE,
+                        "while committed memory was near the limit" if when else f"during {e.part}", MEM_MIN_MB,
+                        BROWSERS)
+
+
+HELD_LIMIT = (" lag-doctor lists the 4 processes holding the most at each moment, so a program split into many "
+              "smaller processes, such as a browser, can hold more than that.")
+
+
+def _held_advice(e: _Env, col: str, title: str, spans: list[tuple[float, float]], at: str, floor: float,
+                 plain: str = "", leave_out: frozenset[str] = frozenset()) -> FixSuggestion:
+    """ram_pressure's "close memory-heavy programs" and vram_overflow's "close other GPU-heavy programs", naming the
+    other programs that held the most `col` (_heavy) `at` the spans, the ticks the finding's own condition held, with
+    their figures; under `floor`, the most any program held. An older capture, whose table holds no memory, keeps the
+    old line (`title`, `plain`)."""
+    h = _heavy(e, col, spans, floor, leave_out)
+    if h is None:
+        return _advice(title, plain)
+    verb, base, what, note = HELD[col]
+    floor_text = _size(floor)
+    did = lambda v: f"{verb} at least {_size(v)} {what}"
+    if h.named:
+        return _close_named(h, at, lambda v: f"{did(v)} on average", _size, did, note)
+    if h.windows:
+        return _windows_only(title, h, at, f"{verb} {floor_text} or more {what} on average", did, note)
+    most = ""
+    if h.most:
+        name, v, own = h.most
+        fig = "under 1 MB" if v < 0.5 else f"just under {floor_text}" if _size(v) == floor_text else _size(v)
+        shown = _most_shown(name, own, h.stores.get(name))
+        most = f"; the most was {shown}, {fig}"
+    return _advice(title, (f"{plain} " if plain else "") + f"lag-doctor saw no other program {base} {floor_text} "
+                                                         f"or more {what} on average {at}{most}.{HELD_LIMIT}")
+
+
+def _cpu_advice(e: _Env) -> FixSuggestion:
+    """cpu_limit's "close CPU-heavy programs", naming the other programs that used HOG_MIN_CPU_PCT or more of a CPU on
+    average; the old line where none did or the table was not read (a program split into many small processes could
+    still be there, and the finding's evidence already says what the others used together)."""
+    h = _heavy(e, "cpu", EVERYWHERE, HOG_MIN_CPU_PCT)
+    did = lambda v: f"used at least {v:.0f}% of a CPU"
+    if h is None or not (h.named or h.windows):
+        return _advice(CPU_ADVICE)
+    one = " 100% is one logical CPU."
+    if not h.named:
+        return _windows_only(CPU_ADVICE, h, f"during {e.part}",
+                             f"used {HOG_MIN_CPU_PCT:.0f}% of a CPU or more on average", did, one, cpu=True)
+    return _close_named(h, f"during {e.part}", lambda v: f"{did(v)} on average", lambda v: f"{v:.0f}%", did, one,
+                        cpu=True)
+
+
+def _net_advice(e: _Env) -> FixSuggestion:
+    """bufferbloat's "pause the download or upload", naming the other programs that moved TALKER_MIN_BPS or more
+    on average (net_flows talkers); the old line without talkers (none in a measured part) or with none that busy."""
+    talkers = e.flows().get("talkers")
+    if not isinstance(talkers, list) or not e.duration:
+        return _advice(NET_ADVICE)
+    game = attribute.game_pids(e.cap)
+    tool_pids, tool_names = attribute.tool_processes(e.cap)
+    game_name = _image_name(e.target.get("name"))
+    moved: dict[tuple[str, bool], float] = {}
+    count: dict[tuple[str, bool], int] = {}
+    for tk in talkers:
+        name = _image_name(tk.get("name")) if isinstance(tk, dict) else None
+        pid = tk.get("pid") if isinstance(tk, dict) else None
+        if name is None or (attribute._is_pid(pid) and (pid in game or pid in tool_pids)) \
+                or name.lower() in tool_names or _same_image(name, game_name):
+            continue
+        b = max(0.0, _fin(tk.get("rx_bytes")) or 0.0) + max(0.0, _fin(tk.get("tx_bytes")) or 0.0)
+        if b / e.duration >= TALKER_MIN_BPS:      # each process on its own, as bandwidth_hog counts them
+            key = (name, _windows_own(e, pid, name))     # where it runs, from the others table when it listed it
+            moved[key] = moved.get(key, 0.0) + b
+            count[key] = count.get(key, 0) + 1
+    over = sorted(((n, own, b, count[(n, own)]) for (n, own), b in moved.items()),
+                  key=lambda r: (-r[2], r[0].casefold(), r[1]))
+    h = _Heavy([(n, b, k) for n, own, b, k in over if not own][:3], [(n, b, k) for n, own, b, k in over if own][:2],
+               None)
+    did = lambda b: f"moved {b / 1e6:,.0f} MB"
+    if not h.named:
+        if not h.windows:
+            return _advice(NET_ADVICE)
+        if e.flows().get("talkers_scope") == "session":       # through the relay: this Windows session's programs
+            return _windows_only(NET_ADVICE, h, f"during {e.part}", f"moved {TALKER_MIN_BPS / 1e6:.0f} MB a second "
+                                 "or more on average", did, " Programs outside your Windows session, Windows' own "
+                                 "services among them, were not measured one by one.",
+                                 who="only Windows' own processes in your Windows session")
+        return _windows_only(NET_ADVICE, h, f"during {e.part}", f"moved {TALKER_MIN_BPS / 1e6:.0f} MB a second or "
+                             "more on average", did)
+    rate = lambda b: f"{b / 1e6:,.0f} MB ({8 * b / e.duration / 1e6:.0f} Mbit/s on average)"
+    title = "Pause or limit the downloads and uploads of " \
+            f"{_and([(_text(n, 80) or '') + (LOOKALIKE if n.casefold() in WINDOWS_PARTS else '') for n, _, _ in h.named])} " \
+            "while playing"
+    detail = _close_named(h, f"during {e.part}", lambda b: f"moved {rate(b)}", rate, did).detail
+    return FixSuggestion(title=title, detail=detail)
+
+
 def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
     game = attribute.game_pids(e.cap)
     game_name = _image_name(e.target.get("name"))
     offer = _offerable(e)
+    where = _where(e)[0]
     fixes: list[FixSuggestion] = []
-    for n in [n for n in named[:3] if not _windows_itself(n.name)][:2]:     # programs the title names, never Windows
+    # programs the title names, never Windows' own nor the store app's that started the game
+    for n in [n for n in named[:3] if not _all_own(e, n) and _store_of(e, n.name) is None][:2]:
         # SEC-2, A10: never the game or its children (the PID check below), nor a process with the game's own
         # image name (a sibling of a multi-process game is no child of the chosen process); the fix needs the PIDs
         if not game or _same_image(n.name, game_name):
@@ -2446,6 +3037,9 @@ def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
         for pid in n.pids:
             ct = offer.get((pid, n.name))
             if pid in game or ct is None or not 0 < pid <= 0xFFFFFFFF:     # DESIGN: a valid, non-game PID
+                continue
+            # fixes/priority.py refuses Windows' own and every session-0 process (services): never offered then
+            if _windows_own(e, pid, n.name) or where.get((pid, n.name), (None, None))[0] == 0:
                 continue
             rise = n.rise.get(pid)
             up = f", up {RISE_TEXT[n.col](rise)} when the game lagged" if rise is not None else ""
@@ -2461,8 +3055,7 @@ def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
                                                "game_name": game_name}))
             break
     for n in named[:3]:
-        shown = ", ".join(str(p) for p in n.pids[:4]) + (" ..." if len(n.pids) > 4 else "")
-        procs = f" (process {shown})" if shown else ""
+        procs = _pids_text(n.pids)
         name = _text(n.name, 80)
         if n.role == "game_helper":
             fixes.append(_advice(f"{name}{procs} is the game's own helper process",
@@ -2471,15 +3064,57 @@ def _hog_fixes(e: _Env, named: list[_Named]) -> list[FixSuggestion]:
                                  "game's own settings and forums."))
         elif _windows_itself(n.name):
             fixes.append(_windows_advice(name, procs))
+            if n.name.casefold() == "memory compression":
+                fixes.extend(_compression_holders(e, n, named[:3]))
+        elif _all_own(e, n):
+            fixes.append(_part_advice(name, procs))
+        elif store := _store_of(e, n.name):
+            fixes.append(_store_advice(name, procs, store))
+        elif mixed := [pid for pid in n.pids if _windows_own(e, pid, n.name)]:     # a look-alike beside the real one
+            fake = [pid for pid in n.pids if pid not in mixed]
+            fixes.append(_advice(f"Pause or close {name}{LOOKALIKE} while you play{_pids_text(fake)}",
+                                 "Check it is not something you need first; lag-doctor never closes programs itself."))
+            fixes.append(_part_advice(name, _pids_text(mixed)))
         elif _same_image(n.name, game_name):
             fixes.append(_advice(f"Check what {name}{procs} is before closing anything",
                                  "It has the game's own name, so it may be part of the game (a renderer or a launcher "
                                  "process); lag-doctor never closes programs itself."))
         else:
-            fixes.append(_advice(f"Pause or close {name} while you play{procs}",
+            like = LOOKALIKE if n.name.casefold() in WINDOWS_PARTS else ""
+            fixes.append(_advice(f"Pause or close {name}{like} while you play{procs}",
                                  "Check it is not something you need first; lag-doctor never closes programs itself."))
     fixes.append(_advice("Pause downloads and updates while playing", "Steam, Epic, the browser, Windows Update."))
     return fixes
+
+
+def _compression_holders(e: _Env, n: _Named, named: list[_Named]) -> list[FixSuggestion]:
+    """After background_hogs says what Memory Compression is: the other programs that held the most RAM around the
+    stutters and FPS drops it rose at (_held_advice), each window reaching MEMORY_NEAR_S further to meet the nearest
+    memory reading; Memory Compression itself is left out, as it is what the advice explains. None where no row there
+    read memory, as in an older capture, whose table holds none: its advice keeps the old line alone; none either
+    where the line would only tell the player to close programs background_hogs already names (`named`)."""
+    spans = _merge((ev.t_start - attribute.WINDOW_BEFORE_S - MEMORY_NEAR_S,
+                    ev.t_end + attribute.WINDOW_AFTER_S + MEMORY_NEAR_S) for ev in n.events)
+    leave_out = frozenset({n.name.casefold()})
+    h = _heavy(e, "ram", spans, MEM_MIN_MB, leave_out)
+    if h is None:
+        return []
+    blamed = {x.name.casefold() for x in named}
+    if h.named and not h.windows and all(name.casefold() in blamed for name, _v, _k in h.named):
+        return []
+    return [_held_advice(e, "ram", MEM_ADVICE, spans, f"when {_text(n.name, 80)} got busy", MEM_MIN_MB, BROWSERS,
+                         leave_out)]
+
+
+def _pids_text(pids: list[int]) -> str:
+    shown = ", ".join(str(p) for p in pids[:4]) + (" ..." if len(pids) > 4 else "")
+    return f" (process {shown})" if shown else ""
+
+
+def _all_own(e: _Env, n: _Named) -> bool:
+    """A program background_hogs names is Windows' own when each of its processes is (_windows_own); without PIDs (an
+    older capture), by its name."""
+    return all(_windows_own(e, pid, n.name) for pid in n.pids) if n.pids else _windows_own(e, None, n.name)
 
 
 def _offerable(e: _Env) -> dict[tuple[int, str], int]:
@@ -2524,12 +3159,15 @@ def _hdd_streaming(cap: Capture, ctx: dict) -> Any:
         p95 = st.percentile(lat, 95.0)
         c.support("disk", W_STEADY, f"disk reads took up to {p95:.0f} ms (95th percentile; over "
                                     f"{DISK_READ_WARN_MS:.0f} ms is slow)", p95, "ms", DISK_READ_WARN_MS)
+    streams = _first_cause_ids(e, ("asset_streaming",))
     fixes = [_advice("Move the game to an SSD", "Most launchers can move an installed game (Steam: Properties > "
                                                 "Installed Files)."),
-             _advice("Close other disk-heavy programs while playing")]
+             _disk_advice(e, _event_spans(e, streams) if streams else EVERYWHERE,
+                          (f"at those {'marked moments' if e.half else 'stutters and FPS drops'}" if streams
+                           else f"during {e.part}"))]
     return c.conclude("The game is on a hard drive (HDD)", "Hard drives take far longer to load game data than "
                                                            "SSDs, so streaming new areas makes the game wait.",
-                      fixes, _first_cause_ids(e, ("asset_streaming",)))
+                      fixes, streams)
 
 
 def _shader_compile(cap: Capture, ctx: dict) -> Any:
@@ -2539,8 +3177,8 @@ def _shader_compile(cap: Capture, ctx: dict) -> Any:
     if not own:
         return None
     if len(own) < MIN_EVENTS:
-        return Unchecked("shader_compile", f"only {len(own)} stutters came from the game's own work: too few to tell "
-                                           "whether they bunch up at the start")
+        return Unchecked("shader_compile", f"only {len(own)} stutter{'s' if len(own) != 1 else ''} came from the "
+                                           "game's own work: too few to tell whether they bunch up at the start")
     if e.duration is None:
         c.lack("frame_timing", W_STEADY, "the capture's length is unknown")
         return c.conclude()
@@ -2575,7 +3213,7 @@ STUTTER_CAUSES = {
     "asset_streaming": ("disk", "the game reading from disk", True, "Stutters while the game loads from disk",
                         [("Install the game on a fast SSD", ""),
                          ("Lower texture quality or streaming settings", "Less data to load per second."),
-                         ("Close other disk-heavy programs while playing", "")]),
+                         (DISK_ADVICE, "")]),
     "driver_dpc": ("interrupts", "a driver holding up the CPU", False, "Stutters while a driver held up the CPU",
                    [("Update or briefly disable Wi-Fi, audio and RGB utilities, then test again", ""),
                     ("Run LatencyMon to name the driver", "It needs administrator rights; lag-doctor cannot name it.")]),
@@ -2608,23 +3246,39 @@ def _stutter_cause(cap: Capture, ctx: dict, cause: str) -> Any:
     if label == "not_measured":
         return Unchecked(cause, _text(entry.get("why"), 200) or "its signal was not measured")
     if label == "too_few_events":
-        return (Unchecked(cause, f"only {n:.0f} {what}: blaming a cause needs at least {MIN_EVENTS}") if ids else None)
+        one = {"stutters and FPS drops": "stutter or FPS drop", "marked moments": "marked moment"}[what]
+        return (Unchecked(cause, f"only {n:.0f} {one if n == 1 else what}: blaming a cause needs at least {MIN_EVENTS}")
+                if ids else None)
     if cause in RESIDUAL_CAUSES:
         if half:
             return None                      # attribute.py works out no residual for marks: nothing was judged
         _residual_items(c, entry, ids, phrase, what)
     else:
         _event_link(c, cause, family, phrase)
-        if label not in ("supports", "contradicts") and ids:
+        residual = (_num(entry.get("residual")) or 0) if cause == "game_cpu_spike" else 0
+        worked = _num(entry.get("worked")) or 0
+        steady = False
+        if residual:      # named by attribute._residual, which the lift test's 1 s means could not see
+            line = (f"in {residual:.0f} of {n:.0f} {what} nothing else explained them, and the game's busiest thread "
+                    "was saturated or worked through the frozen frame")   # what moved there may have been ruled out
+            # only the frames the ticks showed worked through are evidence of extra work: a thread saturated all along
+            # says nothing of the moment
+            steady = worked >= attribute.LIFT_MIN_A and bool(n) and worked / n >= attribute.LIFT_MIN_SHARE
+            if steady:
+                c.support(family, W_STEADY, line, 100 * worked / n, "%", 100 * attribute.LIFT_MIN_SHARE)
+            else:          # they already count in "best explained by", below
+                c.neutral(family, line, 100 * residual / n if n else None, "%", 100 * attribute.LIFT_MIN_SHARE)
+        if label not in ("supports", "contradicts") and ids and not steady:
             c.support(family, W_STATIC, f"{len(ids)} of {n:.0f} {what} were best explained by {phrase}, too few to be "
                                         "sure")
     if cpu_side and not half:
         _cpu_side_item(c, ids)
     for ev in e.judged:
         if ev.id in ids and isinstance(ev.detail.get("why"), list) and len(ev.detail["why"]) > 1:
-            c.neutral(family, f"for example at {ev.t_start:.1f} s: {_text(ev.detail['why'][1], 200)}")
+            c.neutral(family, f"for example at {ev.t_start:.1f} s: {_text(ev.detail['why'][1], 320)}")
             break
-    fixes = [_advice(t, d) for t, d in advice]
+    fixes = [_disk_advice(e, _event_spans(e, ids), f"at those {what}") if t == DISK_ADVICE else _advice(t, d)
+             for t, d in advice]
     share = _fin(entry.get("share")) or 0.0
     if half and title.startswith("Stutters"):     # no stutter was measured: the moments are the user's own
         title = "Lag you marked" + title[len("Stutters"):]
@@ -2653,8 +3307,9 @@ def _residual_items(c: _Case, entry: dict, ids: list[int], phrase: str, what: st
     e = c.env
     label, a, n = entry.get("label"), _num(entry.get("a")) or 0, _num(entry.get("n")) or 0
     if label == "supports":
-        c.support("frame_timing", W_STEADY, f"in {a:.0f} of {n:.0f} {what} no other measured cause moved, which "
-                                            f"leaves {phrase}", 100 * a / n if n else None, "%",
+        # "explained", not "moved": a move a veto ruled out there still moved (attribute._wait_veto, _turbo_veto)
+        c.support("frame_timing", W_STEADY, f"in {a:.0f} of {n:.0f} {what} no other measured cause explained them, "
+                                            f"which leaves {phrase}", 100 * a / n if n else None, "%",
                   100 * attribute.LIFT_MIN_SHARE)
     elif label == "contradicts":
         c.against("frame_timing", CONTRA_WEIGHT, f"only {a:.0f} of {n:.0f} {what} were left unexplained like this")
@@ -2887,7 +3542,7 @@ def _bufferbloat(cap: Capture, ctx: dict) -> Any:
     else:
         c.against("network_path", W_STEADY, f"while the connection was busy (up to {mbps:.0f} Mbit/s), ping rose only "
                                             f"{rise:.0f} ms", rise, "ms", BLOAT_RISE_MS)
-    fixes = [_advice("Pause or limit the download or upload while playing"),
+    fixes = [_net_advice(e),
              _advice("Turn on smart queue management (SQM) or QoS on the router", "It keeps game packets from "
                                                                                     "waiting behind downloads.")]
     return c.conclude("Ping rises whenever the connection is busy (bufferbloat)",
