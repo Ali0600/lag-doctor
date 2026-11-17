@@ -26,10 +26,13 @@ _replace = os.replace            # the seam a test patches: never os.replace its
 SOUNDS = {
     "ask": ((880.0, 0.07), (880.0, 0.07)),                        # a double knock: Windows asks, behind the game
     "ready": ((659.25, 0.15),),                                   # one note: the start key is ready to press
-    "start": ((523.25, 0.09), (783.99, 0.14)),                    # rising: the recording has begun
+    "start": ((523.25, 0.09), (783.99, 0.14)),                    # rising: measuring has begun (with no start key,
+                                                                  # the recording has)
     "mark": ((1046.5, 0.06),),                                    # a blip: the lag key was heard
+    "measured": ((783.99, 0.12), (523.25, 0.18)),                 # start's notes falling: the measured window is
+                                                                  # over, so the recording stops (the app's, M5c)
     "problem": ((392.0, 0.12), (311.13, 0.2)),                    # falling and low: something stopped working
-    "done": ((783.99, 0.09), (659.25, 0.09), (1046.5, 0.18)),     # the recording is analysed
+    "done": ((783.99, 0.09), (659.25, 0.09), (1046.5, 0.18)),     # the recording is analysed: its results are ready
 }
 
 

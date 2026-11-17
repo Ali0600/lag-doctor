@@ -236,12 +236,8 @@ OUTSIDE_MARK = "you pressed the lag key (not analysed)"
 
 def _shade_rest(ch: Chart, part: dict | None, end: float) -> None:
     """Shade what the measured part leaves out: the recording before its start and after its end."""
-    if part is None:
-        return
-    if part["from_s"] > 0:
-        ch.band(0.0, part["from_s"], "skip", SKIP_LABEL)
-    if part["to_s"] < end - labels.PART_SLACK_S:
-        ch.band(part["to_s"], end, "skip", SKIP_LABEL)
+    for a, b in labels.rest_spans(part, end):
+        ch.band(a, b, "skip", SKIP_LABEL)
 
 
 def _seconds(v: float) -> str:
@@ -326,11 +322,12 @@ def _analysed_frames(d: Diagnosis, cap: Capture, part: dict, behind: list[tuple[
     return [v for v in (number(x) for x in kept[F.FRAME_MS]) if v is not None and v > 0]
 
 
-def _frame_chart(d: Diagnosis, cap: Capture) -> str:
-    t, ms = _main_frames(d, cap)
-    every = [v for v in ms if v is not None]
-    if not t or not every:
-        return _not_measured_note(cap, "frames")
+def frame_scale(d: Diagnosis, cap: Capture, t: list, ms: list) -> tuple[float, list[float], dict | None,
+                                                                         float | None, float | None]:
+    """The frame chart's top (ms), from the frames the analysis counted (`vals`), with the measured part, the refresh
+    rate and one refresh in ms; `t` and `ms` are the main chain's frames (_main_frames), at least one of them a number.
+    This report's chart and the app's (app/views.results_view) both take their scale from here, so a frame one of them
+    leaves out of its scale the other never sets its scale by."""
     part = labels.measured_part(d.stats)
     # The scale and the note follow the frames the analysis counted: a loading screen's long frame is drawn, clamped at
     # the top, and never named the worst, and neither is one behind another window (frames.HIDDEN: a game that stops
@@ -344,11 +341,20 @@ def _frame_chart(d: Diagnosis, cap: Capture) -> str:
     starts = [a for a, _ in behind]
     seen = [v for x, v in zip(t, ms) if v is not None and not fa._in_spans(x, behind, starts)]
     vals = _analysed_frames(d, cap, part, behind) if part else seen
-    scale = vals or every
+    scale = vals or [v for v in ms if v is not None]
     refresh = number(_dict(d.stats).get("refresh_hz"))
     ref_ms = 1000.0 / refresh if refresh and refresh > 0 else None
     top = min(max(scale) * 1.05, max(percentile(scale, 99.9) * 1.6, 40.0))
     top = max(top, (ref_ms or 0) * 2.2, 20.0)
+    return top, vals, part, refresh, ref_ms
+
+
+def _frame_chart(d: Diagnosis, cap: Capture) -> str:
+    t, ms = _main_frames(d, cap)
+    every = [v for v in ms if v is not None]
+    if not t or not every:
+        return _not_measured_note(cap, "frames")
+    top, vals, part, refresh, ref_ms = frame_scale(d, cap, t, ms)
     end = _x1(cap, t)
     ch = Chart("Frame times: higher is slower; spikes are stutters", 0.0, end, 0.0, top, " ms")
     _shade_rest(ch, part, end)

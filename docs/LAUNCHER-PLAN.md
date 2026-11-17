@@ -29,9 +29,9 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   stdio`, `lagdoctor/control.py`, PR #31) and the app's "Record the game that's running"
   (`lagdoctor/app/recording.py`, PR #33). The owner recorded a game from the app in their own terminal before the
   second merged ("It works, merge it").
-- [ ] M5: measuring the right part, in three pull requests: the analysis of a part (`crop`, `analyze --from/--to`,
-  merged 2026-11-09, PR #37), the start key in `watch` (merged 2026-11-17, PR #53, on by default in a terminal), then the
-  app's half, which the owner tries before it merges.
+- [ ] M5: measuring the right part, in four pull requests: the analysis of a part (`crop`, `analyze --from/--to`,
+  merged 2026-11-09, PR #37), the start key in `watch` (merged 2026-11-17, PR #53, on by default in a terminal), the
+  app's half (M5c, built 2026-11-17; the owner tries it before it merges), then the trim handles in Results.
 - [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
   below). The relay's folder policy, `watch --wait-folder`, screen 6 and the art are not built yet.
@@ -263,13 +263,15 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
   - Results have trim handles for a late or missed press. A guessed start is only ever proposed, labelled as a guess.
   - No press at all, from a missed key or from a game that turns off other programs' hotkeys while it has focus
     (`RIDEV_NOHOTKEYS`, research note section 7): the time before a press is capped (20 minutes in the first version,
-    a feel number), and Results analyse nothing until the player sets the start.
+    a feel number), and the whole recording is analysed, startup included, and Results say why (the owner's choice
+    for the terminal and the app, DECISIONS 2026-11-09 and 2026-11-17); the trim handles then let the player set a
+    part.
 - **One pure seam**: `crop(cap, t0, t1)` returns a Capture cut to the span, and then the unchanged `diagnose()` runs.
   - shader_compile counts its first third from the span's start.
   - Per-program network totals become None, because they cover the whole recording.
   - The charts and the header say which part was analysed.
   - The CLI gets it too: `lagdoctor analyze CAPTURE --from S --to S`. The capture file always stays whole.
-- **Feedback during play is sound**: ready, start, mark, done and problem. `winsound` ships in the embeddable runtime.
+- **Feedback during play is sound**: ready, start, mark, measured (the window's end), done and problem. `winsound` ships in the embeddable runtime.
   Taskbar progress and a flash help only outside the game. No toasts in the first version: Do-not-disturb sends them
   to the notification center while a game is in front.
 
@@ -385,7 +387,7 @@ Built (2026-11-08), as above, with these choices and limits:
   it holds.
 - Settings show readiness, the lag key, a sound test (Windows' own asterisk sound: the recording sounds come with
   M4 and M5), the library's sources and the sessions folder with a button that opens it. There is no setting to
-  change yet: the default length and the start key come with M5.
+  change yet: since M5c they name the start key, and a choice of key and length comes later.
 - The page names sessions and games only by id; the app answers on two worker threads, at most 32 requests waiting.
   The window comes back from a crashed page (the entry page again) and from an ended browser process (a new
   environment once BrowserProcessExited says the data folder is free), both driven in its tests.
@@ -501,9 +503,9 @@ The app's half was built on 2026-11-09 (DESIGN.md, The app), with these choices 
 - **Record the game that's running**, in the Library's toolbar and its empty state, records what `watch` picks with
   neither `--game` nor `--pid` (the busiest program with a window), for 10 minutes or until Stop or the game's exit.
   The length is fixed until M5 brings a choice (DECISIONS 2026-11-09, M4's end); recording a chosen game comes with
-  Play (M6).
+  Play (M6). Since M5c the 10 minutes run from the start key's press (M5, below).
 - The app starts the recorder as its own child: `pythonw.exe` beside the base interpreter, `-B -E -s -m lagdoctor
-  watch --control stdio --elevate --duration 600`, from the tree the app runs, with lag-doctor's home named in
+  watch --control stdio --elevate --duration 600` (M5c adds its start key, below), from the tree the app runs, with lag-doctor's home named in
   `LAGDOCTOR_HOME` and the recorder's stderr in `recorder.log` there. A recorder whose `hello` names another pid, or
   that says it twice, is cancelled and never handed a relay; one recording raises one prompt.
 - The prompt is raised only for the relay's own command for this recorder (its pid, and its create time from the
@@ -523,7 +525,7 @@ The app's half was built on 2026-11-09 (DESIGN.md, The app), with these choices 
   sight (on a second monitor) never reads as blank. Nothing is posted to the hidden page. It comes back, resumed, when
   the window is activated, and at once when the recording stops; a page or browser process that crashes meanwhile
   comes back hidden and suspended.
-- The sounds (ask, start, mark, problem and done) are lag-doctor's own tones, written once as WAV files in the
+- The sounds (ask, start, mark, problem and done; M5c adds ready and measured) are lag-doctor's own tones, written once as WAV files in the
   home's `sounds` folder, because winsound plays a sound held in memory only while its caller waits. "Ask" is a double
   knock for a prompt raised while the game is in front, where it may only blink on the taskbar. Settings' sound test
   plays the start sound.
@@ -549,8 +551,8 @@ The app's half was built on 2026-11-09 (DESIGN.md, The app), with these choices 
   `runner._record` is the seam, `tests/test_sweep_runner.py` the tests that must keep passing).
 - Trim handles in Results.
 
-It comes in three pull requests: the analysis of a part, the start key in `watch`, and the app's half, which the
-owner tries before it merges, as with M1 and M4.
+It came in three pull requests: the analysis of a part, the start key in `watch`, and the app's half, which the
+owner tries before it merges, as with M1 and M4; the owner then gave the trim handles a fourth (2026-11-17).
 
 The analysis half was built on 2026-11-09 (DESIGN.md, The measured part; DECISIONS 2026-11-09):
 - `crop` keeps the recording's own times and sets the length to the part's, so a part's events and moments land on the
@@ -581,12 +583,40 @@ analysed and labelled when the key measured nothing, and chimes in a terminal wi
   its chimes from watch's events. A runner test whose guard moved into watch was rewritten to what watch can really
   tell (a press told after "stopping" as it races the stop); two that could fail only through events watch never
   tells were dropped, with the guards only they reached.
-- The app's recorder passes `--start-key none` until this milestone's app half gives it the key, its words and its
-  own sounds; `control.from_recorder` already checks the start key's two messages (`start_key`, `measuring`), and a
+- The app's recorder passed `--start-key none` until this milestone's app half gave it the key, its words and its
+  own sounds (M5c, below); `control.from_recorder` already checks the start key's two messages (`start_key`, `measuring`), and a
   window or no-press end is `completed`. A terminal recording measured from its start key shows in the app as it
   is: Results say which part its numbers cover and draw only its presses, and `App.load` makes a missing
   diagnosis again for that part. For the app half: words of its own for those two ends, the rest of the recording
   shaded on Results' charts, and its own start key.
+
+The app's half (M5c) was built on 2026-11-17 (DESIGN.md, The app; DECISIONS 2026-11-17). The owner chose two of its
+forks on a question card: the trim handles come in a pull request of their own, next, and a recording whose start
+key measured nothing is analysed whole and labelled, as in the terminal.
+- The recorder runs `watch --control stdio --elevate --start-key ctrl+alt+s --window 600 --start-by 1200 --duration
+  1860`: the terminal's numbers, held equal to `cli`'s by a test, and a limit past every window a press in time
+  starts, which ends a recording only when Windows did not give the key (then all of it is analysed, and the screen
+  says the key is off and when it stops).
+- Screen 3 while it records: "Recording the startup" once the key is live, never before (it says when to press it,
+  what it measures and when the recording stops without a press); "Measuring", its clock counting the window from the
+  press ("07:12 of 10:00"); "Measured" when the window has run, then saving and analysing; at the end, words of its
+  own for a window that ran and for no press in time. The two reach the app as `done`'s "completed" and are told
+  apart by the `stopping` reason.
+- The app's chimes follow Play's steps 4 to 7: one note when the key is ready, rising at the press (not when the
+  recording starts), a new falling one when the window ends ("measured", the rising one's notes turned round), a
+  low tone when no press came or the key was refused, and "done" when the results are ready. A terminal watch keeps
+  three notes at the window's end, the owner's choice there (DECISIONS 2026-11-09).
+- Results: what a measured part leaves out is shaded grey on every chart and on a lag moment's charts, the presses
+  there are drawn dashed, the part's note says it is shaded (when something is), and the frame chart's scale is the
+  HTML report's, from the frames the analysis counted, so a loading screen before the press is drawn clamped at the
+  top. A start key that measured nothing says why, without the terminal's command. Settings name the start key; no
+  choice of key, window or length yet.
+- The demo library's newest recording (and the README's pictures) is measured from a press 4 s in, after a loading
+  screen and with a lag-key press in it; the window test reads the shading from the canvas's own pixels.
+- Before the gate, four read-only reviewers (the state and its words, the page, the spec, the tests and sabotages)
+  raised 32 findings; the code ones were fixed (the window's length in the recorder's milliseconds, the scale by the
+  report's rule, a `measuring` the stop overtook, "shaded" only when something is), with the sabotages and docs
+  they named.
 
 ### M6: Play
 
@@ -677,7 +707,9 @@ above:
 - **Feel numbers**, to judge on screen: the 10-minute default window, the start key (Ctrl+Alt+S), the 20-minute cap
   before a press, and the 1-hour cap for "until I quit". Since M5's second part a terminal `watch` has them all
   (`--window`, `--start-by`, `--window 3600` for the hour) and its chimes, whose tones are feel numbers too (a
-  new one says the key is ready). Ctrl+Alt+S is AltGr+S on keyboard layouts with AltGr (the Polish layout types
+  new one says the key is ready). Since M5c the app has the key, the window and the cap before a press too, with two
+  more to judge: its falling chime at the window's end, and its 31-minute limit, which ends a recording when Windows
+  did not give the key. Ctrl+Alt+S is AltGr+S on keyboard layouts with AltGr (the Polish layout types
   "ś" with it), so a player on one loses that letter while recording, as Ctrl+Alt+L already takes "ł". Play
   adds the folder wait's 5-minute deadline (`target.WAIT_DEADLINE_S`) and the 20 s within which a chosen process
   that exits re-arms the wait.

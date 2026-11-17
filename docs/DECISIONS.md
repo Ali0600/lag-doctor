@@ -4,8 +4,14 @@
 
 - **Cut a part bounded by `--duration` at the end the session announced** (`until` saved in `start_key`), so the
   analysis stops at the set length rather than at the recorded end with the stop's own seconds, and a press too late
-  for a part could count and be judged there: worth trying when the app's half shows `until` (2026-11-10, the start
-  key in `watch`). Revisit hook: `Session.start`, `Session._assemble`'s `start_key` record, `crop.key_part`.
+  for a part could count and be judged there: worth trying for a terminal `--duration` (2026-11-10, the start key in
+  `watch`); the app's own recordings never meet it, since their limit lies past every window (2026-11-17, M5c).
+  Revisit hook: `Session.start`, `Session._assemble`'s `start_key` record, `crop.key_part`.
+- **Stop an app recording at 10 minutes when Windows refuses the start key**, rather than at its 31-minute limit:
+  worth trying if the owner finds 31 minutes too long (2026-11-17, M5c). Revisit hook: `App.on_recorder` on
+  `start_key` with `registered` false.
+- **The terminal's falling chime at the window's end**, as the app plays it, instead of the three notes the app
+  keeps for "results ready": the owner's call (2026-11-17, M5c). Revisit hook: `cli._Cues`, `cli.CONSOLE_SOUNDS`.
 - **Hand the sweep's held start key to watch**, so nothing frees it between Enter and watch's registration (the UAC
   prompt and the PC's settings sit in that gap): worth trying if a sweep run ever fails as `KEY_TAKEN` there
   (2026-11-09, the start key in `watch`). Revisit hook: `runner._record`'s `_let_go(held)` and `Session`'s
@@ -198,6 +204,67 @@
 - **An explorer.exe look-alike in a capture recorded before the folder check covered the Windows folder** is judged
   by its name, as Windows' shell: such a capture cannot tell it from the real one. Revisit hook: none needed unless a
   recording from 2026-11-15 or 2026-11-16 shows one (DECISIONS 2026-11-16, the store app and Windows' shell).
+
+---
+
+## 2026-11-17: The app measures from its own start key (M5c, the app's half of M5)
+
+The app's recorder runs `watch --control stdio --elevate --start-key ctrl+alt+s --window 600 --start-by 1200
+--duration 1860` (`recording.recorder_argv`), and the app follows the key: the running screen asks for the press once
+Windows has given the key, counts the measured window from it ("07:12 of 10:00"), and words the two ends; the app
+plays its own chimes; Results shade what a measured part leaves out. Five read-only readers mapped the recorder, the
+page, watch's start key, the tests and the plan first, and four read-only reviewers read the change before its gate.
+
+The owner's (a question card, 2026-11-17):
+- **Trim handles in their own pull request, next (chosen: "Own PR, next (Recommended)")**: this one carries the key,
+  the words, the chimes, the shading and the note for a key that measured nothing; the handles follow, and the owner
+  tries that one too.
+  - **All in this pull request**, a trimmed part analysed in the window only: not chosen.
+- **A start key that measured nothing: the whole recording, labelled (chosen: "Whole recording, labelled
+  (Recommended)")**, as in the terminal: Results say why (`labels.unmeasured_note` without the terminal's `analyze
+  --from` command), and the recorder's own analysis of all of it stays what the Library and Compare show.
+  - **Nothing until the player sets the start** (the plan's first rule): not chosen. Revisit hook: the trim handles'
+    pull request, which could offer a part on such a recording without changing what it shows first.
+
+The session's:
+- **A recording limit of 31 minutes (chosen)**: `recording.LENGTH_S` is `START_BY_S + WINDOW_S + 60`, past the end of
+  the last window a press in time can start (watch looks at `--duration` before the window, so a smaller limit would
+  end that window early as "duration", and M4's 600 would leave no press its window). It binds only when Windows does
+  not give the start key: the whole recording is analysed then, and the screen says the key is off and when it stops.
+  - **No `--duration`**: rejected; a refused key would record until Stop or the game's end, which M4 rejected
+    (2026-11-09, M4's end: stopping means switching to the window, which changes the measurement).
+  - **Stop at 10 minutes when the key is refused** (the app sending Stop itself): deferred, worth trying if the owner
+    finds 31 minutes too long; it needs a timer of the app's own and words for a stop it made. Revisit hook:
+    `App.on_recorder` on `start_key` with `registered` false.
+- **The two ends told apart by the `stopping` reason (chosen)**: both reach the app as `done` "completed", and
+  `RecordingState.stop_reason` (session's `WINDOW_ENDED`, `NO_START`) picks the words (`views.KEY_ENDS`,
+  `KEY_STOPPING`); the protocol is unchanged.
+  - **New `control.REASONS` for them**: rejected for now; it changes `done_reason`, `from_recorder` and every reader
+    of a reason, for words the app can already pick. Revisit hook: `control.done_reason`.
+- **The app's chimes (chosen, the plan's Play steps 4 to 7)**: one note when the key is ready, the rising chime at the
+  press (no longer when the recording starts), a new falling "measured" chime (the rising one's notes turned round)
+  when the window ends, the low tone when no press came or the key was refused, and "done" when the results are
+  ready. A feel number for the owner to judge.
+  - **The terminal's three notes at the window's end** (the owner's choice for a terminal watch, 2026-11-09): kept
+    there; in the app that chime already means "results ready", seconds later. Making the terminal play the falling
+    chime too is the owner's call: deferred. Revisit hook: `cli._Cues` and `cli.CONSOLE_SOUNDS`.
+- **The frame chart's scale is the HTML report's (chosen, after the review)**: `html.frame_scale`, from the frames
+  the analysis counted, so neither a loading screen before the part, nor the wait the part starts in, nor time
+  behind another window sets it; the page computes its own only when that gives none.
+  - **The part's frames by their time alone** (the first version): rejected, a short part that starts in a load was
+    scaled to the load's one frame.
+- **Presses outside the part drawn apart (chosen)**, dashed in the reference colour, as the HTML report draws them;
+  every time chart and a moment's charts shade the rest (`labels.rest_spans`, which the report's `_shade_rest` now
+  uses too).
+  - **Leave them off** (the app before M5c): rejected; a press the player made in the startup would seem lost.
+- **No choice of key, window or length in Settings yet (chosen)**: Settings name the start key; the numbers are the
+  terminal's defaults, held equal by a test. A choice needs app settings the app does not keep yet. Revisit hook:
+  `recording.recorder_argv` and `views.settings_view`.
+- **A `measuring` the stop overtook changes nothing (chosen, after the review)**: the session sends it after its
+  lock, so a stop at that moment can reach the window first; the app takes it only while recording.
+
+Revisit hooks: `RecordingState.apply` (`lagdoctor/app/recording.py`), `views.recording_view` and
+`views.results_view`, `overlays` in `lagdoctor/app/assets/app.js`.
 
 ---
 
@@ -765,7 +832,7 @@ The owner's:
   2026-11-10), the whole recording
   is analysed, startup included, and both reports say so and name the `analyze --from` command that picks a part.
   - **Nothing until the player sets the start** (the plan's rule for the app's Results): not chosen for the terminal.
-    M5c decides it for the app, which has trim handles.
+    The owner chose the whole recording, labelled, for the app too (2026-11-17, M5c).
 - **Sounds in a terminal watch (chosen: "Yes, with --no-sound (Recommended)")**: a rising chime when the start press
   counts, three notes when the window ends, a low tone when something went wrong, a blip per lag-key press;
   `--no-sound` turns them off.
@@ -830,8 +897,8 @@ The session's:
     stop the recording.
 - **One player per sound (chosen)**: a terminal watch plays its own; under `--control stdio` the app keeps playing
   its own, and a sweep run its own.
-- **The app records the whole session until M5c (chosen)**: its recorder passes `--start-key none`, so M4's screen,
-  clock and words stay true. A terminal recording measured from its start key still shows in the app, so Results say
+- **The app records the whole session until M5c (chosen; M5c gave it its own key, 2026-11-17)**: its recorder passed
+  `--start-key none`, so M4's screen, clock and words stayed true. A terminal recording measured from its start key still shows in the app, so Results say
   which part its numbers cover, draw only that part's presses, and a diagnosis.json it lacks is made again for the
   same part (`crop.key_part`); the shading of the rest waits for M5c.
 - **A sweep run's report and its numbers may differ by a frame at an edge (accepted)**. **One rule for both**:
@@ -1033,7 +1100,8 @@ owner has not weighed in.
   - **Keep the view showing while the window can still be seen**: deferred, worth trying, if Windows' own occlusion
     state can tell "in sight" from "covered by the game". Revisit hook: `AppWindow.shown`.
 - **A fixed length of 10 minutes (chosen)**, the plan's default, until M5 brings a choice and the start key. Stop ends
-  it sooner, and so does the game's exit.
+  it sooner, and so does the game's exit. Since M5c the 10 minutes run from the start key's press, with a limit of 31
+  minutes (2026-11-17).
   - **Until Stop, as `watch` runs without `--duration`**: rejected. Stopping would mean switching to the window, which
     is what changes the measurement.
 

@@ -78,6 +78,24 @@ def test_results_draw_every_frame_handed_over_in_the_shared_buffer(run):
     r = run["results"]
     assert r["frames_drawn"] == expected and expected > 1000
     assert r["verdict"] == "Stutter" and r["findings"] >= 1 and r["events"] >= 1 and r["charts"] >= 2
+    # Measured from its start key (tests/app_demo.py): the part is named, and the rest shaded on every chart drawn.
+    assert r["part"].startswith("Analysed 20s, from 4s to 24s of the recording (measured from your start key)")
+    assert r["part"].endswith("It is shaded on the charts.") and r["rest"].startswith("0-4 24-")
+    assert r["shaded"] == r["charts"]
+    # Drawn, not only named: the canvas is tinted where the part leaves the recording out, and clear inside it (a tint
+    # of 0.16, about 41 of 255, never an opaque fill), in a grey, not the lag band's red; the press in the startup is
+    # an upright dashed line (about half of its column), not a solid one.
+    px = run["results_pixels"]
+    assert 25 < px["left_out"] - px["part"] < 70, px
+    assert px["left_out_rgb"] and max(px["left_out_rgb"]) - min(px["left_out_rgb"]) < 25, px
+    assert 0.25 < px["dash"] < 0.8, px
+    # Zoomed so the startup runs past the plot's left edge: its tint and the press line stay inside the plot, and the
+    # y axis's gutter keeps rows with nothing drawn on them.
+    zoomed = run["results_zoomed"]
+    assert zoomed["press_x"] < zoomed["left"] and zoomed["fill_least"] < 10 and zoomed["line"] < 0.15, zoomed
+    # The scale comes from the part's frames: the loading screen before the press (frames of LOADING_MS, more than
+    # one in a thousand of them) is drawn clamped at the top instead of setting it.
+    assert r["y_top"] < app_demo.LOADING_MS, r["y_top"]
 
 
 @pytest.mark.needs("webview2")
@@ -91,6 +109,7 @@ def test_the_fix_command_shows_on_the_last_recording_only(run):
 def test_a_lag_moment_opens_with_its_charts(run):
     _ok(run)
     assert run["moment"]["title"] and run["moment"]["charts"] >= 2
+    assert run["moment"]["shaded"] == run["moment"]["charts"]          # a moment shades what the part left out too
 
 
 @pytest.mark.needs("webview2")
@@ -123,6 +142,7 @@ def test_a_note_shows_as_text_on_the_games_recordings_on_results_and_in_compare(
 def test_settings_name_the_sessions_folder_and_the_lag_key(run):
     _ok(run)
     assert run["settings"]["folder"].endswith("sessions") and "Ctrl+Alt+L" in run["settings"]["text"]
+    assert "Ctrl+Alt+S" in run["settings"]["text"]                 # the start key (M5c)
 
 
 @pytest.mark.needs("webview2")
@@ -131,13 +151,14 @@ def test_record_runs_a_recording_the_window_follows_with_the_game_named_as_text(
     # come from its real control channel, and "Open its results" opens the session it named.
     _ok(run)
     r = run["rec_running"]
-    assert r["title"] == "Recording" and r["game"] == app_demo.MARKUP_TITLE and r["made"] == 0 and r["pwned"] is False
+    # It says its start key and a press at once (M5c): the clock counts the measured window from the press.
+    assert r["title"] == "Measuring" and r["game"] == app_demo.MARKUP_TITLE and r["made"] == 0 and r["pwned"] is False
     assert re.fullmatch(r"\d\d:\d\d of 10:00", r["clock"]) and "Ctrl+Alt+L" in r["detail"] and r["bar"] is True
     d = run["rec_done"]
     assert d["title"] == "Recorded" and d["bar"] is False and "Lag marked 2 times." in d["notes"]
     assert run["rec_results"] == app_demo.MARKUP_TITLE
     # The harness's window is never the one in front: the prompt knocks and flashes, and so does the end.
-    assert run["rec_played"] == ["ask", "start", "mark", "mark", "done"]
+    assert run["rec_played"] == ["ask", "ready", "start", "mark", "mark", "done"]
     assert run["rec_flashes"] == [True, False, True]     # the prompt's, stopped once it was answered, and the end's
     assert run["bar_after_reload"] == "Recording ended"  # a page loaded again after the end still leads back to it
     assert run["rec_older_view"] == {"title": "Recorded", "bar": False}       # an older view changes nothing
@@ -156,7 +177,7 @@ def test_the_view_hides_and_suspends_while_the_game_records_and_comes_back_with_
     assert run["rec_view_back"] == {"visible": True, "suspended": False, "hidden": False, "recording": True}
     # A page that crashed, and a browser process that ended, while hidden: hidden and suspended again, and the page
     # back on the running screen.
-    assert run["rec_after_page_crash"] == hidden and run["rec_after_page_crash_screen"] == "Recording"
+    assert run["rec_after_page_crash"] == hidden and run["rec_after_page_crash_screen"] == "Measuring"
     assert run["rec_after_browser_exit"] == hidden
 
 

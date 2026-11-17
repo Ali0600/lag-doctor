@@ -17,8 +17,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
+from lagdoctor.analysis import crop
 from lagdoctor.analysis.diagnose import diagnose
 from lagdoctor.capture.session import session_dir
+from lagdoctor.model import F
 from lagdoctor.report import html, summary
 from tests import synth
 
@@ -42,6 +44,7 @@ class Demo:
     last: bool = False    # the session `lagdoctor fix` acts on
     files: str = ""       # what its game's folder held (GAME_FILES); "": a capture from before lag-doctor looked
     note: str = ""        # the player's note (watch --note); "": none
+    key_at: float | None = None   # when its start key was pressed (M5): the part analysed is KEY_WINDOW_S from it
 
 
 # A made-up Unreal game's folder before and after a fan fix: a drop-in DLL and an ASI plugin added, and the settings
@@ -79,7 +82,7 @@ DEMOS = (
     Demo("Demo Racer", "demoracer.exe", "hitch", datetime(2026, 11, 1, 20, 15, 0), files="before"),
     Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0), files="after", note=MARKUP_NOTE),
     Demo("Star Planner", "starplanner.exe", "hog", datetime(2026, 11, 2, 18, 30, 0), summary=False),
-    Demo(MARKUP_TITLE, MARKUP_EXE, "hitch", datetime(2026, 11, 4, 19, 45, 0), last=True),
+    Demo(MARKUP_TITLE, MARKUP_EXE, "hitch", datetime(2026, 11, 4, 19, 45, 0), last=True, key_at=4.0),
 )
 
 
@@ -89,8 +92,33 @@ PICTURES = (
     Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0), files="after", note=PLAIN_NOTE),
     Demo("Star Planner", "starplanner.exe", "hog", datetime(2026, 11, 2, 18, 30, 0)),
     Demo("Night Harbour", "nightharbour.exe", "pace", datetime(2026, 10, 28, 22, 10, 0)),
-    Demo("Ember Quest", "emberquest.exe", "hitch-io", datetime(2026, 11, 4, 19, 45, 0), last=True),
+    Demo("Ember Quest", "emberquest.exe", "hitch-io", datetime(2026, 11, 4, 19, 45, 0), last=True, key_at=4.0),
 )
+
+
+KEY_WINDOW_S = 20.0      # a demo's measured window: its startup before the press and its end after are left out
+LOADING_MS = 500.0       # and the loading screen before the press, which draws twice a second
+LOADING_UNTIL_S = 3.5
+OUTSIDE_MARK_S = 1.4     # a lag-key press during it, between whole seconds (the charts' grid)
+
+
+def _loading_screen(cap) -> None:
+    """Replace the frames before LOADING_UNTIL_S with a loading screen's: one LOADING_MS frame each half second, as
+    many of them as a part's scale must leave out (more than one in a thousand of the recording's frames)."""
+    t = cap.frames[F.T]
+    keep = [i for i, x in enumerate(t) if x >= LOADING_UNTIL_S]
+    first = keep[0]
+    times = [0.5 * k for k in range(1, int(LOADING_UNTIL_S / 0.5))]
+    # A whole-recording scale reaches the loading frames only while they are over one in a thousand of the frames: a
+    # longer demo would make the page test of a part's scale pass with or without its rule.
+    assert len(times) * 1000 > len(keep) + len(times), "the loading screen is too small for the scale test"
+    for name, column in cap.frames.items():
+        rows = [column[first]] * len(times)
+        if name == F.T:
+            rows = times
+        elif name in (F.FRAME_MS, F.DISPLAY_MS):
+            rows = [LOADING_MS] * len(times)
+        cap.frames[name] = rows + [column[i] for i in keep]
 
 
 def build(home: Path, demos: tuple[Demo, ...] = DEMOS, seconds: float = 30.0) -> dict[str, dict]:
@@ -100,7 +128,10 @@ def build(home: Path, demos: tuple[Demo, ...] = DEMOS, seconds: float = 30.0) ->
     sessions.mkdir(parents=True, exist_ok=True)
     out = {}
     for demo in demos:
-        s = synth.laglab(demo.mode, duration_s=seconds, marks=(12.0,) if demo.mode == "hitch" else ())
+        marks = (12.0,) if demo.mode == "hitch" else ()
+        if demo.key_at is not None:      # and a press in its startup, which the part leaves out: drawn dashed
+            marks = (OUTSIDE_MARK_S,) + marks
+        s = synth.laglab(demo.mode, duration_s=seconds, marks=marks)
         cap = s.cap
         cap.target = dict(cap.target, name=demo.exe, exe=f"C:\\Games\\{demo.exe}", window_title=demo.title)
         cap.started_at = demo.when.astimezone().isoformat(timespec="seconds")
@@ -108,10 +139,14 @@ def build(home: Path, demos: tuple[Demo, ...] = DEMOS, seconds: float = 30.0) ->
         if demo.files:
             cap.inventory = dict(cap.inventory, game=dict(cap.inventory["game"], **GAME_FILES[demo.files]))
         cap.note = demo.note or None
+        if demo.key_at is not None:      # as watch keeps the press, and analyses the part it measured
+            cap.start_key = {"key": "ctrl+alt+s", "registered": True, "window_s": KEY_WINDOW_S, "at": demo.key_at}
+            _loading_screen(cap)
         folder = session_dir(sessions, cap.target, when=demo.when)
         cap_path = folder / "capture.ldcap.json.gz"
         cap.save(cap_path)
-        d = diagnose(cap)
+        span, _ = crop.key_part(cap)
+        d = diagnose(cap if span is None else crop.crop(cap, *span, how="key"))
         (folder / "diagnosis.json").write_text(json.dumps(d.to_json(), indent=1), encoding="utf-8")
         html.write(d, cap, folder / "report.html", capture_path=cap_path)
         if demo.summary:

@@ -199,8 +199,11 @@ since `t` names the message; the start key's `start_key` and `measuring` as they
 anything. Whatever ends it, the last line is `done {reason, code, session}`; `control.done_reason` maps watch's exit
 code, the events that went out and the stop's reason to one of `control.REASONS` (a recording that stopped by
 itself, by its duration, its start key's window or no press in time, is `completed`).
-- **The app records the whole session until it has a start key of its own** (M5's app half): its recorder passes
-  `--start-key none`, so M4's screen, clock and words stay true, and the app plays its own sounds from the messages.
+- **The app measures from a start key of its own** (M5c): its recorder passes `--start-key` `recording.START_KEY`,
+  `--window` `WINDOW_S` and `--start-by` `START_BY_S` (watch's own defaults, which a test holds them equal to) and
+  `--duration` `LENGTH_S`, past every window a press in time starts. The app follows `start_key` and `measuring`,
+  tells a window's end from no press in time by the `stopping` reason (both are `completed`), and plays its own
+  sounds from the messages.
 - **Nothing else reaches the channel.** Before anything can print, `serve` keeps a private copy of stdout's file
   for the channel and points stdout itself at stderr, the window's log file.
 - **Nothing waits on the window.** One writer thread drains a bounded queue (`MAX_QUEUED` lines; past that they are
@@ -1034,8 +1037,8 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
   `bandwidth_hog` then says so (or that counting stopped with the ETW consumer); a key this version does not know
   becomes None. None stays None (not recorded) and a
   list whose cut is empty stays a list (recorded, nothing in the span).
-- **Refused** (`check_span`; `analyze --from/--to` checks through it, and the app's trim handles, M5's app half, are
-  to use it too): ends that are not numbers (an integer too large for a float included), a start before 0 or at or
+- **Refused** (`check_span`; `analyze --from/--to` checks through it, and the app's trim handles, the pull request
+  after M5c, are to use it too): ends that are not numbers (an integer too large for a float included), a start before 0 or at or
   after the recording's end, an end not after the start, a part shorter than `MIN_SPAN_S` (11 s, to the millisecond:
   a second past frames.BOUND_MIN_S, since a part's steady frames sum to a little under its length and a part of
   exactly 10 s never got a verdict on what limits the game; a refused length is rounded down), and a
@@ -1048,8 +1051,9 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
   capture's `start_key` kept, for its window, ending at the recording's end at the latest, through `check_span`; how
   "key". With no part, `why` says why ("the start key Ctrl+Alt+S was not pressed in time", "... could not be registered",
   "... was pressed only 6.2 s before the recording ended, and a part needs at least 11 s", a window too short, a
-  damaged record) and the whole recording is analysed, both reports saying so, with how to pick a part when one
-  can be picked (`labels.unmeasured_note`, `crop.part_pickable`: the length is known and longer than a part); a
+  damaged record) and the whole recording is analysed, both reports and the app's Results saying so, the reports with
+  how to pick a part when one can be picked (`labels.unmeasured_note`, `crop.part_pickable`: the length is known and
+  longer than a part; the app, which has no command to give, passes `pickable=False`); a
   recording without a start key gets ("" and) no word of one. The end of a watch and a
   later `analyze CAPTURE` both find the part here, so they measure the same one.
 
@@ -1860,9 +1864,12 @@ owner's run.
   `ready`, `frames_done` (`token`). The answer is `{type: "reply", id, ok, data | error}`; a failure the app did not
   expect is logged with its traceback and answered with one sentence naming the log. The one message the app sends
   unasked is `{type: "push", kind: "recording", data}`: the running screen's newest view.
-- **Recording** (`recording.py`, M4): `record` starts the recorder, the window's own child: `recording.python()`
-  (pythonw.exe beside the base interpreter, as `relay/client.relay_python`) with `recording.RECORDER_HEAD` and
-  `--duration` `LENGTH_S` (600), run from `recording.ROOT` (the folder holding `lagdoctor/`) with `LAGDOCTOR_HOME` set
+- **Recording** (`recording.py`, M4, its start key since M5c): `record` starts the recorder, the window's own child:
+  `recording.python()` (pythonw.exe beside the base interpreter, as `relay/client.relay_python`) with
+  `recording.RECORDER_HEAD`, the start key's `--start-key` `START_KEY` (Ctrl+Alt+S), `--window` `WINDOW_S` (600) and
+  `--start-by` `START_BY_S` (1200), and `--duration` `LENGTH_S` (1860: `START_BY_S + WINDOW_S + 60`, so it ends a
+  recording only when Windows did not give the key; `App(start_key=None)` records the whole session for `WINDOW_S`, as
+  M4 did), run from `recording.ROOT` (the folder holding `lagdoctor/`) with `LAGDOCTOR_HOME` set
   to the app's home and stderr in `recorder.log` there (the previous one kept as `recorder-previous.log`). A recorder
   that cannot start leaves Record free for the next press. A reader thread checks each line with
   `control.from_recorder` and posts it to the window's thread, with three messages of the app's own: `prompt {how}`
@@ -1878,13 +1885,21 @@ owner's run.
   (Popen's own handle to it). Every answer is cut to the protocol's length, so the recorder always hears one.
   `RecordingState.apply` turns each message into the running screen's state (phases `starting`, `waiting`, `asking`,
   `preparing` once the prompt is answered, `recording`, `stopping`, `saving`, `analysing`, `done`; nothing after
-  `done` changes it; a failure after `saved` ends as `analysis_failed`, its session kept) and names the sounds it calls
-  for; `views.recording_view` makes the screen (Cancel until `recording`, Stop while it runs, what is off: frame
-  timing, the game-server check, the lag key; every `control.REASONS` in words of its own; when it failed, what the
-  recorder said, less its console-only lines (`views.CONSOLE_ONLY`), and, when it ended without saying why
-  (`RecordingState.unexplained`), the log's path), numbered by `seq`. Sounds
-  (`sounds.py`): ask, start, mark, problem and done, 16-bit mono WAV files written once under the home's `sounds`
-  folder and played with SND_FILENAME, SND_ASYNC and SND_NODEFAULT; one that cannot play is logged and left out. While
+  `done` changes it; a failure after `saved` ends as `analysis_failed`, its session kept; with `keyed`, the start key
+  the recorder said (`key`, `key_on`, `window_s`, `start_by_s`) and its press (`measure_at`, `measure_until` and
+  `measuring_since`, taken only while recording, since a stop can overtake it), and names the sounds it calls for;
+  `views.recording_view` makes the screen (Cancel until `recording`, Stop while it runs, what is off: frame timing,
+  the game-server check, the lag key, the start key; every `control.REASONS` in words of its own, and for a keyed
+  recording a stage, `stage` and the page's `data-stage`: `setup` until the recorder says the key, never asking for a
+  press before Windows has given it, `startup` with when to press and what it measures, `measuring` with the clock
+  counting the window from the press, "07:12 of 10:00", in the recorder's milliseconds, then the stop and the end by
+  their `stopping` reason, `views.KEY_STOPPING` and `KEY_ENDS`, for a window that ran and no press in time; when it
+  failed, what the recorder said, less its console-only lines (`views.CONSOLE_ONLY`), and, when it ended without
+  saying why (`RecordingState.unexplained`), the log's path), numbered by `seq`. Sounds (`sounds.py`): ask, ready,
+  start, mark, measured, problem and done, 16-bit mono WAV files written once under the home's `sounds` folder and
+  played with SND_FILENAME, SND_ASYNC and SND_NODEFAULT; one that cannot play is logged and left out. A keyed
+  recording plays ready when the key is live, start (rising) at the press and not when it starts, measured (falling)
+  when its window ends, problem when the key was refused or no press came, and done when it is analysed. While
   the state is `recording`, `AppWindow.update_view` hides the view (`put_IsVisible` false, then `TrySuspend`) unless
   the window is shown (its last WM_ACTIVATE active, and not minimized): the window then draws one still line of its own
   (WM_PAINT, `HIDDEN_TEXT`, drawn again on every resize), its title reads `RECORDING_TITLE`, nothing is posted to the
@@ -1922,8 +1937,12 @@ owner's run.
   A failed write is said and the analysis goes on.
 - **The views** (`views.py`), plain dicts: `library_view`, `game_view`, `results_view` (the saved diagnosis through
   `Diagnosis.from_json`, analysed again only when it cannot be read, for the part `crop.key_part` finds when its start
-  key measured one; a diagnosis of a part says which in `part`, `labels.part_note` plus that the charts show the
-  whole recording until M5's app half shades the rest, and draws only that part's lag-key presses), `moment_view`
+  key measured one; a diagnosis of a part says which in `part`, `labels.part_note` plus "It is shaded on the charts."
+  when something is; `frames.rest`, what the part leaves out (`labels.rest_spans`, the HTML report's too, to the last
+  sample), shaded on every time chart, `frames.outside`, the presses there, drawn dashed, and `frames.top`, the frame
+  chart's top by the HTML report's rule (`html.frame_scale`); a keyed recording analysed whole says why,
+  `labels.unmeasured_note` without the terminal's command), `moment_view` (shading the same rest, the presses outside
+  the part apart)
   (`analysis.window` 5 s either side
   of an event, at most 120 s of it), `compare_view` (the numbers with the better side marked, then what limited the
   frame rate: the FPS outside lag moments (higher is better), "Limited by", GPU busy per frame ("16.1 of 16.9 ms"),

@@ -24,14 +24,22 @@ from pathlib import Path
 from typing import Any, Callable
 
 from lagdoctor import control
+from lagdoctor.capture.session import NO_START, WINDOW_ENDED
 
 ROOT = Path(__file__).resolve().parents[2]      # the folder holding lagdoctor/: the recorder runs this tree's code
-LENGTH_S = 600                                  # a recording's length unless stopped first: the plan's 10 minutes
+# The app's start key and its feel numbers (M5c, DECISIONS 2026-11-17): watch's own defaults (cli.DEFAULT_START_KEY,
+# DEFAULT_WINDOW_S, DEFAULT_START_BY_S, which a test holds these equal to; the app never imports cli), passed on the
+# recorder's command line, so the running screen's words name what the recorder does.
+START_KEY = "ctrl+alt+s"
+WINDOW_S = 600.0                                # measured from the press: 10 minutes
+START_BY_S = 1200.0                             # with no press by then, the recording stops: 20 minutes
+# The recording's own limit, past any window a press before START_BY_S starts (it stops session.WINDOW_TAIL_S after
+# the window), so a press always gets its whole window: it stops a recording only when Windows did not give the start
+# key, which would otherwise record until Stop or the game's end (DECISIONS 2026-11-09, M4's end: no "until Stop").
+LENGTH_S = START_BY_S + WINDOW_S + 60.0         # 31 minutes
 LOG_NAME = "recorder.log"                       # the recorder's stderr, under lag-doctor's home
 OLD_LOG_NAME = "recorder-previous.log"
-# --start-key none: the app records the whole session until its own start key comes (M5's app half), so its screen,
-# clock and words stay true (DECISIONS 2026-11-09, the start key).
-RECORDER_HEAD = ["-B", "-E", "-s", "-m", "lagdoctor", "watch", "--control", "stdio", "--elevate", "--start-key", "none"]
+RECORDER_HEAD = ["-B", "-E", "-s", "-m", "lagdoctor", "watch", "--control", "stdio", "--elevate"]
 RELAY_HEAD = ["-B", "-E", "-s", "-m", "lagdoctor.relay"]    # relay/client.relay_argv's, before the relay's own
 MAX_SAID = 40                                   # lines the recorder said, kept for the running screen
 EXIT_WAIT_S = 10.0                              # for the recorder to end once its output has ended
@@ -47,10 +55,17 @@ def python() -> Path:
     return Path(sys.base_exec_prefix) / "pythonw.exe"
 
 
-def recorder_argv(length_s: float = LENGTH_S, interpreter: Path | None = None) -> list[str]:
+def recorder_argv(length_s: float | None = None, interpreter: Path | None = None,
+                  start_key: str | None = START_KEY) -> list[str]:
     """The recorder's command line: -B writes no bytecode (an installed copy is never written to), -E -s read no
-    PYTHON* variable and no user site-packages; the rest is watch's."""
-    return [str(interpreter or python()), *RECORDER_HEAD, "--duration", f"{length_s:g}"]
+    PYTHON* variable and no user site-packages; the rest is watch's: measured from `start_key` for WINDOW_S, stopped
+    at LENGTH_S at the latest. With `start_key` None, the whole session for WINDOW_S, as M4 recorded."""
+    if start_key is None:
+        key, length = ["--start-key", "none"], WINDOW_S
+    else:
+        key, length = ["--start-key", start_key, "--window", f"{WINDOW_S:g}", "--start-by", f"{START_BY_S:g}"], LENGTH_S
+    return [str(interpreter or python()), *RECORDER_HEAD, *key, "--duration",
+            f"{length if length_s is None else length_s:g}"]
 
 
 def _same_path(a: Any, b: Any) -> bool:
@@ -89,6 +104,7 @@ class RecordingState:
     """Where a recording the app started has got to, from what its recorder said and what the app did. Changed on
     the window's thread only."""
     phase: str = "starting"      # starting, waiting, asking, preparing, recording, stopping, saving, analysing, done
+    keyed: bool = False          # the app asked its recorder for a start key: the chimes follow the key, not the start
     game: str | None = None
     hotkey: bool = False
     frames: bool | None = None   # from "recording": whether frame timing runs
@@ -96,6 +112,15 @@ class RecordingState:
     length_s: float | None = None
     started: float | None = None   # time.monotonic() when "recording" came
     ended: float | None = None     # and when "stopping" came
+    # From "start_key" (control.from_recorder): the key, whether Windows gave it (None until it is said), the measured
+    # window and the time a press must come by; then from "measuring", in the recording's own seconds, and when it came.
+    key: str | None = None
+    key_on: bool | None = None
+    window_s: float | None = None
+    start_by_s: float | None = None
+    measure_at: float | None = None
+    measure_until: float | None = None
+    measuring_since: float | None = None   # time.monotonic() when "measuring" came: the screen's clock counts from it
     marks: int = 0
     frames_lost: str | None = None
     prompt: str | None = None      # how the relay's prompt went: approved, declined, refused, failed
@@ -132,6 +157,15 @@ class RecordingState:
             self.phase, self.started = "recording", now
             self.length_s, self.hotkey = msg["duration_s"], msg["hotkey"]
             self.frames, self.network = msg["frames"], msg["network"]
+            if not self.keyed:                     # with a start key, the rising chime is the press's
+                sounds.append("start")
+        elif t == "start_key":
+            self.key, self.key_on = msg["key"], msg["registered"]
+            self.window_s, self.start_by_s = msg["window_s"], msg["start_by_s"]
+            sounds.append("ready" if self.key_on else "problem")
+        elif t == "measuring" and self.phase == "recording":    # a press the stop overtook (Session.start sends it
+            # after its lock) is no start: the recording has stopped
+            self.measure_at, self.measure_until, self.measuring_since = msg["at"], msg["until"], now
             sounds.append("start")
         elif t == "mark":
             self.marks += 1
@@ -141,6 +175,10 @@ class RecordingState:
             sounds.append("problem")
         elif t == "stopping":
             self.phase, self.stop_reason, self.ended = "stopping", msg["reason"], now
+            if msg["reason"] == WINDOW_ENDED or (msg["reason"] == "duration" and self.measuring_since is not None):
+                sounds.append("measured")          # falling: play on, the recording has stopped
+            elif msg["reason"] == NO_START:
+                sounds.append("problem")
         elif t == "saving":
             self.phase, self.frames_saved = "saving", msg["frames"]
         elif t == "saved":

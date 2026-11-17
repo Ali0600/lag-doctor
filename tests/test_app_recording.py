@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 
 from lagdoctor import cli, control
+from lagdoctor.capture import session as sess
 from lagdoctor.app import main as app_main
 from lagdoctor.app import recording, sounds, views
 from lagdoctor.app import window as app_window
@@ -98,8 +99,44 @@ def test_the_recorder_runs_watch_in_control_mode_with_this_trees_code():
     assert argv[0] == str(recording.python()) and argv[1:5] == ["-B", "-E", "-s", "-m"]
     args = cli.build_parser().parse_args(argv[6:])
     assert args.cmd == "watch" and args.control == "stdio" and args.elevate and args.duration == recording.LENGTH_S
-    # The whole session until the app has a start key of its own (M5's app half): its screen, clock and words say so.
-    assert args.start_key == "none"
+    # Measured from the app's own start key (M5c), with watch's own numbers, which the running screen's words name.
+    assert (args.start_key, args.window, args.start_by) == (recording.START_KEY, recording.WINDOW_S,
+                                                            recording.START_BY_S)
+    assert (recording.START_KEY, recording.WINDOW_S, recording.START_BY_S) == (
+        cli.DEFAULT_START_KEY, cli.DEFAULT_WINDOW_S, cli.DEFAULT_START_BY_S)
+    # Without a start key, the whole session for 10 minutes, as M4 recorded.
+    whole = cli.build_parser().parse_args(recording.recorder_argv(start_key=None)[6:])
+    assert (whole.start_key, whole.duration) == ("none", recording.WINDOW_S)
+
+
+def test_the_recordings_limit_never_cuts_the_window_of_a_press_that_came_in_time():
+    # watch stops at --duration before it looks at the start key's window (capture/session.py), so a limit inside the
+    # last window a press could start would end it early as "duration": the screen's "of 10:00" would never be
+    # reached, and with --duration 600 a press could never get its window at all.
+    assert recording.LENGTH_S > recording.START_BY_S + recording.WINDOW_S + sess.WINDOW_TAIL_S
+    assert recording.LENGTH_S <= recording.START_BY_S + recording.WINDOW_S + 120       # and no longer than that
+
+
+def test_the_app_asks_its_recorder_for_its_start_key_and_follows_it(tmp_path):
+    app = app_main.App(home=tmp_path, runtime={"version": "1.0.0.0", "build": 4000}, create_fn=None,
+                       log=lambda s: None, play=lambda n: None, flash=lambda on: None, launcher=lambda *a, **k: None)
+    args = cli.build_parser().parse_args(app.recorder()[6:])
+    assert app.start_key == recording.START_KEY and args.start_key == recording.START_KEY
+    assert ["Start measuring: press once in the game, at the spot to measure", "Ctrl+Alt+S"] in \
+        views.settings_view({}, "x", None, "1", "ctrl+alt+l", app.start_key)["keys"]
+    app.recorder = lambda: [str(fake_recorder.BASE_PY), "-I", "-c", "pass"]
+    app.do_record()
+    assert app.rec_state.keyed is True
+    app.rec.proc.wait(30)
+    # Before the recorder names the key, the screen names the one the app asked for.
+    app.rec_state.apply(KEYED[5], 100.0)
+    assert app.recording_view()["stage"] == "setup" and "Ctrl+Alt+S ready" in app.recording_view()["detail"]
+    whole = app_main.App(home=tmp_path / "w", runtime={"version": "1.0.0.0", "build": 4000}, create_fn=None,
+                         log=lambda s: None, play=lambda n: None, flash=lambda on: None,
+                         launcher=lambda *a, **k: None, start_key=None)
+    assert cli.build_parser().parse_args(whole.recorder()[6:]).start_key == "none"
+    assert [k for k, _ in views.settings_view({}, "x", None, "1", "ctrl+alt+l", None)["keys"]] == [
+        "Mark a lag while recording"]
 
 
 # ------------------------------------------------------------------------------------------- the state --
@@ -302,6 +339,117 @@ def test_a_failure_with_nothing_said_names_the_log_and_promises_nothing_below():
     assert v["said"] and "recorder.log" not in v["detail"]
 
 
+# A recording measured from the app's start key (M5c): what the recorder says of the key, then the press, then the end.
+KEYED = RUN[:5] + [
+    {"t": "recording", "duration_s": recording.LENGTH_S, "hotkey": True, "frames": True, "network": True},
+    {"t": "start_key", "key": "ctrl+alt+s", "registered": True, "window_s": 600.0, "start_by_s": 1200.0}]
+PRESS = {"t": "measuring", "at": 70.0, "until": 670.0}
+WINDOW_END = [{"t": "stopping", "reason": sess.WINDOW_ENDED}, {"t": "saving", "frames": 10},
+              {"t": "saved", "session": "20261117-120000-demo"},
+              {"t": "done", "reason": "completed", "code": 0, "session": "20261117-120000-demo"}]
+
+
+def keyed(*msgs: dict, now: float = 100.0) -> tuple[recording.RecordingState, list[str]]:
+    s = recording.RecordingState(keyed=True)
+    return s, feed(s, *msgs, now=now)
+
+
+def test_a_start_key_recording_chimes_ready_then_at_the_press_then_as_its_window_ends():
+    # The plan's chimes (LAUNCHER-PLAN, Play step by step): ready once the key is live, rising at the press,
+    # falling when the measured window is over, and the results' own chime once it is analysed.
+    s, heard = keyed(*KEYED, PRESS, {"t": "mark", "at": 90.0}, *WINDOW_END)
+    assert heard == ["ready", "start", "mark", "measured", "done"]
+    assert s.ok and (s.key, s.key_on, s.window_s, s.start_by_s) == ("ctrl+alt+s", True, 600.0, 1200.0)
+    assert (s.measure_at, s.measure_until, s.measuring_since) == (70.0, 670.0, 107.0)
+    _, no_press = keyed(*KEYED, {"t": "stopping", "reason": sess.NO_START}, *WINDOW_END[1:])
+    assert no_press == ["ready", "problem", "done"]
+    _, refused = keyed(*KEYED[:-1], dict(KEYED[-1], registered=False, start_by_s=None),
+                       {"t": "stopping", "reason": "duration"}, *WINDOW_END[1:])
+    assert refused == ["problem", "done"]                  # never a "measured": nothing was
+    _, cut = keyed(*KEYED, PRESS, {"t": "stopping", "reason": "duration"}, *WINDOW_END[1:])
+    assert cut == ["ready", "start", "measured", "done"]   # a limit that ended the window ends the measuring too
+    assert feed(recording.RecordingState(), *RUN[:6]) == ["start"]          # no start key: the recording's own
+
+
+def test_the_running_screen_asks_for_the_press_then_counts_the_measured_window():
+    s, _ = keyed(*KEYED[:-1])                               # the key is not said yet: never ask for it before
+    v = views.recording_view(s, 120.0, "ctrl+alt+l", start_key="ctrl+alt+s")
+    assert v["stage"] == "setup" and "wait for its chime" in v["detail"] and "Ctrl+Alt+S" in v["detail"]
+    s.apply(KEYED[-1], 106.0)
+    v = views.recording_view(s, 172.5, "ctrl+alt+l")
+    assert (v["stage"], v["title"], v["action"]) == ("startup", "Recording the startup", "stop")
+    assert (v["elapsed_s"], v["length_s"]) == (67.5, None)    # counted from the start: no end to count to yet
+    for words in ("press Ctrl+Alt+S", "the next 10 minutes", "within 20 minutes", "Press Ctrl+Alt+L"):
+        assert words in v["detail"], words
+    s.apply(PRESS, 200.0)
+    v = views.recording_view(s, 632.0, "ctrl+alt+l")
+    assert (v["stage"], v["title"], v["elapsed_s"], v["length_s"]) == ("measuring", "Measuring", 432.0, 600.0)
+    assert "measuring 10 minutes from your press" in v["detail"] and "falling chime" in v["detail"]
+    s.apply({"t": "stopping", "reason": sess.WINDOW_ENDED}, 803.0)
+    v = views.recording_view(s, 804.0, "ctrl+alt+l")
+    assert (v["stage"], v["title"], v["action"]) == (None, "Measured", None)
+    assert v["detail"].startswith("lag-doctor measured 10 minutes from your start key, so the recording stops.")
+    feed(s, *WINDOW_END[1:], now=805.0)
+    v = views.recording_view(s, 900.0, "ctrl+alt+l")
+    assert (v["title"], v["detail"]) == ("Measured", "lag-doctor measured 10 minutes from your start key, and "
+                                                     "they are analysed.")
+    assert v["elapsed_s"] == 803.0 - 105.0 and v["ok"]       # the whole recording's length, at the end
+
+
+def test_the_measured_window_is_counted_in_the_recorders_milliseconds():
+    # until = round(at + 600, 3): for a press at 424.033 s, until - at is 599.9999999999999 in floats, which the
+    # page's clock would floor to "of 09:59", and which is no whole number of minutes.
+    s, _ = keyed(*KEYED, {"t": "measuring", "at": 424.033, "until": 1024.033})
+    v = views.recording_view(s, 120.0, "ctrl+alt+l")
+    assert v["length_s"] == 600.0 and "measuring 10 minutes from your press" in v["detail"]
+
+
+def test_a_press_the_stop_overtook_changes_nothing():
+    # Session.start sends "measuring" after its lock, so a stop at that moment can reach the app first.
+    s, heard = keyed(*KEYED, {"t": "stopping", "reason": control.STOPPED_REASON}, PRESS)
+    assert heard == ["ready"] and s.measuring_since is None and s.phase == "stopping"
+
+
+def test_a_window_the_recording_limit_cut_counts_to_where_it_stops():
+    s, _ = keyed(*KEYED, {"t": "measuring", "at": 70.0, "until": 130.0})
+    assert views.recording_view(s, 120.0, "ctrl+alt+l")["length_s"] == 60.0
+    assert "measuring 1m from your press" in views.recording_view(s, 120.0, "ctrl+alt+l")["detail"]
+    s, _ = keyed(*KEYED[:-1], dict(KEYED[-1], window_s=None), {"t": "measuring", "at": 70.0, "until": None})
+    v = views.recording_view(s, 120.0, "ctrl+alt+l")
+    assert v["length_s"] is None and "until the recording stops after 31 minutes" in v["detail"]
+
+
+def test_no_press_in_time_says_so_and_that_all_of_it_is_analysed():
+    s, _ = keyed(*KEYED, {"t": "stopping", "reason": sess.NO_START})
+    v = views.recording_view(s, 1400.0, "ctrl+alt+l")
+    assert v["title"] == "Stopping the recording" and "not pressed within 20 minutes" in v["detail"]
+    feed(s, *WINDOW_END[1:], now=1401.0)
+    v = views.recording_view(s, 1500.0, "ctrl+alt+l")
+    assert v["title"] == "Recorded" and v["detail"] == (
+        "The start key was not pressed within 20 minutes, so the recording stopped there. All of it is analysed, "
+        "startup included.")
+    # Stopped from the window or by the game, it says so as before: Results say which part was analysed.
+    s, _ = keyed(*KEYED, PRESS, {"t": "stopping", "reason": control.STOPPED_REASON}, *WINDOW_END[1:3],
+                 {"t": "done", "reason": "stopped", "code": 0, "session": "20261117-120000-demo"})
+    assert views.recording_view(s, 900.0, "ctrl+alt+l")["detail"] == "The recording was stopped and is analysed."
+
+
+def test_a_measured_window_whose_analysis_failed_says_so_not_measured():
+    s, _ = keyed(*KEYED, PRESS, *WINDOW_END[:3], {"t": "exited", "code": 1})
+    v = views.recording_view(s, 900.0, "ctrl+alt+l")
+    assert (s.reason, v["title"]) == ("analysis_failed", "Saved, not analysed")
+
+
+def test_a_start_key_windows_did_not_give_is_said_off_and_the_recording_has_its_limit():
+    s, _ = keyed(*KEYED[:-1], dict(KEYED[-1], registered=False, start_by_s=None))
+    v = views.recording_view(s, 172.5, "ctrl+alt+l")
+    assert (v["stage"], v["title"], v["elapsed_s"], v["length_s"]) == (None, "Recording", 67.5, recording.LENGTH_S)
+    assert "after 31 minutes" in v["detail"] and "Ctrl+Alt+S" not in v["detail"]
+    assert any(n.startswith("The start key is off for this recording: Windows did not give lag-doctor Ctrl+Alt+S")
+               and "All of the recording is analysed" in n for n in v["notes"]), v["notes"]
+    assert not any("start key" in n for n in views.recording_view(keyed(*KEYED)[0], 172.5, "ctrl+alt+l")["notes"])
+
+
 def test_a_fault_of_the_apps_own_leads_the_notes():
     s = recording.RecordingState()
     feed(s, *RUN[:2], {"t": "fault", "why": recording.NOT_THE_RECORDER_PID},
@@ -464,6 +612,20 @@ def test_a_recorder_that_exits_without_done_is_seen_to_exit(tmp_path):
     assert "done" not in [m["t"] for m in msgs] and msgs[-1] == {"t": "exited", "code": 3}
 
 
+@pytest.mark.parametrize("end, reason", [("window", sess.WINDOW_ENDED), ("no_start", sess.NO_START)])
+def test_a_start_keys_messages_reach_the_app_through_the_real_channel(tmp_path, end, reason):
+    key = {"registered": True, "window_s": 600.0, "start_by_s": 1200.0}
+    plan = {"start_key": key, "press_at": 70.0 if end == "window" else None, "end": end, "session": "20261117-1-x"}
+    _, got, _ = start_fake(tmp_path, plan)
+    msgs = take(got, "exited")
+    s = recording.RecordingState(keyed=True)
+    heard = feed(s, *msgs)
+    assert {"t": "start_key", "key": "ctrl+alt+s", **key} in msgs
+    assert ({"t": "measuring", "at": 70.0, "until": 670.0} in msgs) is (end == "window")
+    assert next(m for m in msgs if m["t"] == "done")["reason"] == "completed" and s.stop_reason == reason
+    assert heard == (["ready", "start", "measured", "done"] if end == "window" else ["ready", "problem", "done"])
+
+
 def test_lines_that_break_the_protocol_are_logged_and_the_rest_still_read(tmp_path):
     rec, got, logs = start_fake(tmp_path, {"garbage": True, "end": "complete"})
     msgs = take(got, "exited")
@@ -611,17 +773,19 @@ class Window:
         self.queued.append(fn)
 
 
-def app_for(tmp_path, in_front: bool, recorder=None):
-    """An App with no window, whose recorder would be a Python that does nothing and whose prompt refuses."""
+def app_for(tmp_path, in_front: bool, recorder=None, start_key=None):
+    """An App with no window, whose recorder would be a Python that does nothing and whose prompt refuses; with no
+    start key unless given one, as M4 recorded."""
     played = []
 
     def no_prompt(*args, **kwargs):
         raise OSError("no prompt in this test")
     app = app_main.App(home=tmp_path, runtime={"version": "1.0.0.0", "build": 4000}, create_fn=None,
                        log=lambda s: None, play=played.append, flash=lambda on: None, launcher=no_prompt,
-                       recorder=recorder or (lambda: [str(fake_recorder.BASE_PY), "-I", "-c", "pass"]))
+                       recorder=recorder or (lambda: [str(fake_recorder.BASE_PY), "-I", "-c", "pass"]),
+                       start_key=start_key)
     app.window = Window(in_front)
-    app.rec, app.rec_state = object(), recording.RecordingState()
+    app.rec, app.rec_state = object(), recording.RecordingState(keyed=start_key is not None)   # as do_record makes it
     return app, played
 
 
@@ -644,6 +808,18 @@ def test_the_app_follows_a_recording_and_wants_attention_only_with_another_windo
     assert app.window.recording[-1] is False
     app.on_recorder(app.rec, {"t": "exited", "code": 0})
     assert app.window.attention == (0 if in_front else 2) and len(app.window.posted) == len(RUN)
+
+
+@pytest.mark.parametrize("in_front", [False, True])
+def test_the_app_follows_a_recording_measured_from_its_start_key(tmp_path, in_front):
+    app, played = app_for(tmp_path, in_front, start_key=recording.START_KEY)
+    for m in KEYED + [PRESS, {"t": "mark", "at": 90.0}] + WINDOW_END:
+        app.on_recorder(app.rec, m)
+    assert played == ([] if in_front else ["ask"]) + ["ready", "start", "mark", "measured", "done"]
+    stages = [p["data"].get("stage") for p in app.window.posted]
+    assert stages[-7:] == ["startup", "measuring", "measuring", None, None, None, None]      # and from the stop on
+    assert app.window.recording.count(True) == 4            # recording, the key, the press, a mark: hidden throughout
+    assert app.window.recording[-1] is False and app.window.posted[-1]["data"]["title"] == "Measured"
 
 
 def test_nothing_is_posted_to_a_hidden_view(tmp_path):
@@ -894,6 +1070,16 @@ def _note_spans(notes) -> list[tuple[int, int]]:
         spans.append((at, at + n))
         at += n + (int(sounds.RATE * sounds.GAP_S) if i < len(notes) - 1 else 0)
     return spans
+
+
+def test_the_window_ends_on_its_own_falling_chime_not_on_the_results_one():
+    # Play step 6: "a falling chime plays: play on, recording has stopped", seconds before "done" says the results
+    # are ready, so the two must differ; and it is the press's rising chime turned round.
+    measured = [hz for hz, _ in sounds.SOUNDS["measured"]]
+    assert measured == sorted(measured, reverse=True) and len(set(measured)) > 1
+    assert sounds.SOUNDS["measured"] != sounds.SOUNDS["done"]
+    assert measured == [hz for hz, _ in reversed(sounds.SOUNDS["start"])]
+    assert len(set(sounds.SOUNDS.values())) == len(sounds.SOUNDS)       # no two sound alike
 
 
 @pytest.mark.parametrize("name", sorted(sounds.SOUNDS))

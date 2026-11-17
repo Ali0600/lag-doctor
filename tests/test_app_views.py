@@ -641,16 +641,99 @@ def test_results_say_which_part_a_start_key_measured_and_draw_only_its_presses(t
     part = views.results_view(entry, diagnose(crop(cap, 70.0, 130.0, how="key")), cap, main_chain(cap),
                               is_last=False, has_report=False)
     assert part["part"].startswith("Analysed 1m, from 1m 10s to 2m 10s of the recording (measured from your start "
-                                   "key)") and part["part"].endswith(" The charts below show the whole recording.")
+                                   "key)") and part["part"].endswith(" It is shaded on the charts.")
     assert part["frames"]["marks"] == [100.0]
+    # The rest is shaded on every chart (to the recording's last sample, the system table's), and the press there is
+    # drawn apart.
+    assert part["frames"]["rest"] == [[0.0, 70.0], [130.0, cap.system["t"][-1]]] and part["frames"]["outside"] == [20.0]
     later = views.results_view(entry, diagnose(crop(cap, 130.0, 180.0, how="key")), cap, main_chain(cap),
                                is_last=False, has_report=False)
     assert later["frames"]["marks"] == []                 # a part without a press: never the presses it left out
     whole = views.results_view(entry, diagnose(cap), cap, main_chain(cap), is_last=False, has_report=False)
     assert whole["part"] == "" and whole["frames"]["marks"] == [20.0, 100.0]
+    assert (whole["frames"]["rest"], whole["frames"]["outside"]) == ([], [])
     # The header's figures: the part's length beside the part's frames, as the HTML report's header says them.
     assert (part["length"], part["analysed"], whole["analysed"]) == ("3m", "1m analysed", "")
     assert part["frames_text"] != whole["frames_text"] and part["frames_text"].endswith(" frames")
+
+
+def test_the_rest_is_shaded_to_the_last_sample_when_a_chart_runs_past_the_recordings_length(tmp_path):
+    from lagdoctor.analysis.crop import crop
+    cap, entry = _keyed_session(tmp_path)
+    cap.duration_s = 179.0                                  # a sampler's last row came after the length was taken
+    d = diagnose(crop(cap, 70.0, 130.0, how="key"))
+    last_system = cap.system["t"][-1]
+    assert last_system > 179.0
+    v = views.results_view(entry, d, cap, main_chain(cap), is_last=False, has_report=False)
+    assert v["frames"]["rest"] == [[0.0, 70.0], [130.0, last_system]]
+    # And to the last frame, when the frames run on past every other table and the length.
+    cap.system = {name: column[:len(column) // 2] for name, column in cap.system.items()}
+    cap.duration_s, last_frame = 150.0, cap.frames["t"][-1]
+    v = views.results_view(entry, d, cap, main_chain(cap), is_last=False, has_report=False)
+    assert last_frame > max([150.0] + [c["t"][-1] for c in v["charts"] if c.get("t")])
+    assert v["frames"]["rest"] == [[0.0, 70.0], [130.0, last_frame]]
+
+
+def test_a_part_that_leaves_nothing_out_says_nothing_is_shaded(tmp_path):
+    from lagdoctor.analysis.crop import crop
+    cap, entry = _keyed_session(tmp_path)
+    v = views.results_view(entry, diagnose(crop(cap, 0.0, 200.0, how="set")), cap, main_chain(cap),
+                           is_last=False, has_report=False)
+    assert v["frames"]["rest"] == [] and v["part"].startswith("Analysed 3m") and "shaded" not in v["part"]
+
+
+def test_the_frame_charts_scale_is_the_reports_from_the_frames_the_analysis_counted(tmp_path):
+    """A short part that starts inside a load (tests/test_report.py's capture): the frame that carried the wait is in
+    the part by its time, yet the analysis leaves it out (crop.frames_inside), and so must the scale, which a part of
+    fewer than a thousand frames would take from it. The app's top is the HTML report's own (html.frame_scale)."""
+    from lagdoctor.analysis.crop import crop
+    from lagdoctor.report import html
+    from tests.test_report import _loading_capture
+    cap = _loading_capture()
+    cap.target = {"pid": 20000, "create_time": 5, "name": "Friend.exe"}
+    folder = tmp_path / "sessions" / "20261110-010000-friend"
+    folder.mkdir(parents=True)
+    cap.save(folder / library.CAPTURE_NAME)
+    [entry] = library.scan(tmp_path / "sessions")
+    load_end = cap.frames[F.T][600]
+    d = diagnose(crop(cap, load_end - 0.5, load_end + 12.0, how="set"))
+    v = views.results_view(entry, d, cap, main_chain(cap, d.stats.get("main_chain")), is_last=False, has_report=False)
+    t, ms = html._main_frames(d, cap)
+    assert v["frames"]["top"] == html.frame_scale(d, cap, t, ms)[0] < 100.0     # the wait was 5000 ms
+    whole = diagnose(cap)
+    cap.frames = {name: [] for name in cap.frames}                              # no frames: the page's own fallback
+    assert views.results_view(entry, whole, cap, main_chain(cap), is_last=False, has_report=False)["frames"]["top"] is None
+
+
+@pytest.mark.parametrize("key, why", [
+    ({"key": "ctrl+alt+s", "registered": True, "window_s": 60.0, "at": None}, "was not pressed in time"),
+    ({"key": "ctrl+alt+s", "registered": False, "window_s": 60.0, "at": None}, "could not be registered"),
+])
+def test_a_start_key_that_measured_nothing_says_the_whole_recording_was_analysed(tmp_path, key, why):
+    # The owner's choice for the app (DECISIONS 2026-11-17): the whole recording, labelled, as in the terminal; the
+    # terminal's own advice (a command to type) is not the window's.
+    cap, entry = _keyed_session(tmp_path)
+    cap.start_key = key
+    v = views.results_view(entry, diagnose(cap), cap, main_chain(cap), is_last=False, has_report=False)
+    assert v["part"] == (f"The start key Ctrl+Alt+S {why}, so the whole recording was analysed, startup included.")
+    assert v["analysed"] == "" and v["frames"]["rest"] == [] and "lagdoctor" not in v["part"]
+    cap.start_key = None                                    # no start key at all: nothing to say
+    assert views.results_view(entry, diagnose(cap), cap, main_chain(cap), is_last=False, has_report=False)["part"] == ""
+
+
+def test_a_moment_at_a_parts_edge_shades_what_the_part_left_out(tmp_path):
+    from lagdoctor.analysis.crop import crop
+    from lagdoctor.model import LagEvent
+    cap, entry = _keyed_session(tmp_path)
+    cap.marks = [67.0, 72.0]                                # one press just before the part, one in it
+    d = diagnose(crop(cap, 70.0, 130.0, how="key"))
+    d.events.append(LagEvent(id=999, kind="stutter", t_start=71.0, t_end=71.1, severity=80.0))
+    m = views.moment_view(cap, d, main_chain(cap), 999)
+    assert m["span"] == [66.0, 76.1] and m["rest"] == [[0.0, 70.0], [130.0, 180.0]]
+    assert (m["marks"], m["outside"]) == ([72.0], [67.0])
+    whole = views.moment_view(cap, diagnose(cap), main_chain(cap), next(e.id for e in diagnose(cap).events
+                                                                         if e.kind != "mark"))
+    assert whole["rest"] == [] and whole["outside"] == []
 
 
 def test_a_part_with_no_frames_of_its_own_says_so_while_the_chart_draws_the_rest(tmp_path):

@@ -16,10 +16,12 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
+from lagdoctor.analysis import crop
 from lagdoctor.analysis.window import window as cut_window
 from lagdoctor.app.library import Entry, read_diagnosis
+from lagdoctor.capture import session as sess
 from lagdoctor.model import Capture, Diagnosis, G, N, S, clean_note
-from lagdoctor.report import labels
+from lagdoctor.report import html, labels
 from lagdoctor.report.charts import fmt_elapsed, number
 from lagdoctor.report.summary import CHECKED, NOT_UNREAL, headroom_fields
 
@@ -251,7 +253,7 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
                "causes": ", ".join(labels.cause_text(c) for c in ev.causes if isinstance(c, str)) or "no clear cause"}
               for ev in sorted(kept, key=lambda ev: number(ev.t_start))]
     marks = labels.marks(stats, d.events)
-    part = labels.measured_part(stats)          # a terminal watch measured from its start key (M5)
+    part = labels.measured_part(stats)          # a watch measured from its start key, or a part set (M5)
     # Without the diagnosis' own marks, every press the capture kept; for a part, never those its analysis left out.
     mark_times = [t for t, _, _ in marks] or ([] if part else
                                               [m for m in (number(x) for x in _list(cap.marks)) if m is not None])
@@ -263,6 +265,19 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
                  "summary": f.summary, "evidence": [x.text for x in f.evidence if isinstance(x.text, str)],
                  "fixes": _fixes(f, is_last)} for f in d.findings]
     any_fix = any(fx["can_apply"] for f in findings for fx in f["fixes"])
+    charts = [_chart(cap, spec) for spec in CHARTS]
+    # The charts' right edge: the recording's length, or the last sample when that is later (report/html._x1).
+    end = max([v for v in (number(cap.duration_s), *(number(x) for x in _list(main.get("t"))[-1:]),
+                           *(number(c["t"][-1]) for c in charts if c.get("t"))) if v is not None] or [0.0])
+    rest = [[a, b] for a, b in labels.rest_spans(part, end)]
+    unmeasured = None
+    if part is None:                            # a start key that measured nothing: the whole recording was analysed
+        unmeasured = labels.unmeasured_note(crop.key_part(cap)[1], pickable=False)
+    # The frame chart's top, by the HTML report's own rule (html.frame_scale): from the frames the analysis counted, so
+    # neither a loading screen before the part, nor the wait the part starts in, nor time behind another window sets
+    # it; None when the report would draw no frames.
+    t, ms = html._main_frames(d, cap)
+    top = html.frame_scale(d, cap, t, ms)[0] if t and any(v is not None for v in ms) else None
     return {
         "session": entry.id,
         "game": labels.game_name(target),
@@ -270,9 +285,10 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
         "when": when_text(started),
         "length": fmt_elapsed(cap.duration_s),
         "note": clean_note(cap.note) or "",
-        # Which part the numbers below cover; the charts show all of it until M5's app half shades the rest.
-        "part": (labels.part_note(part, len(labels.outside_marks(cap.marks, part))) + " The charts below show the "
-                 "whole recording.") if part else "",
+        # Which part the numbers below cover, shaded on the charts as the HTML report shades it; or why a recording
+        # with a start key was analysed whole (no press in time, a key Windows did not give: DECISIONS 2026-11-17).
+        "part": (labels.part_note(part, len(labels.outside_marks(cap.marks, part))) +
+                 (" It is shaded on the charts." if rest else "")) if part else (unmeasured or ""),
         "analysed": f"{labels.part_length(part)} analysed" if part else "",     # as the HTML report's header says
         "frames_text": f"{fmt(stats.get('frames'))} frames" if frames_ok else labels.no_frames_text(d.measured),
         "verdict": {"key": d.lag_type if isinstance(d.lag_type, str) else "unknown", "title": lag_text(d.lag_type),
@@ -290,8 +306,10 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
                    "drops": [[number(ev.t_start), number(ev.t_end)] for ev in d.events if ev.kind == "fps_drop"],
                    "stutters": [s for s in stutters if s[0] is not None and s[1] is not None],
                    "marks": mark_times, "missing": "" if frames_ok else _missing(cap, "frames"),
-                   "label": labels.column_text("frame_ms")},
-        "charts": [_chart(cap, spec) for spec in CHARTS],
+                   "label": labels.column_text("frame_ms"),
+                   # What the part leaves out, shaded on every chart, and the presses there, drawn apart.
+                   "rest": rest, "outside": labels.outside_marks(cap.marks, part), "top": top},
+        "charts": charts,
         "events": events,
         "events_note": "" if timed else ("No lag events were found." if frames_ok else
                                          "Frame timing was not measured, so stutters could not be looked for."),
@@ -340,14 +358,18 @@ def moment_view(cap: Capture, d: Diagnosis, main: dict[str, list], event_id: int
     w = cut_window(cap, lo, hi, frames=main)
     why = _dict(ev.detail).get("why")
     frames_t, frames_series = _series(w["frames"], ("frame_ms",))
+    part = labels.measured_part(d.stats)        # a moment at a part's edge shows time the analysis left out, shaded
+    outside = labels.outside_marks(w["marks"], part)
     return {"id": ev.id, "what": labels.event_text(ev), "when": fmt_elapsed(t0), "t0": t0, "t1": t1,
-            "span": [lo, hi],
+            "span": [lo, hi], "rest": [[a, b] for a, b in labels.rest_spans(part, max(hi, number(cap.duration_s)
+                                                                                        or 0.0))],
+            "outside": outside,
             "causes": [labels.cause_text(c) for c in ev.causes if isinstance(c, str)],
             "why": [x for x in why if isinstance(x, str)] if isinstance(why, list) else [],
             "frames": {"t": frames_t, "series": frames_series} if frames_series else None,
             "charts": [_chart(cap, spec, w[spec[4]]) for spec in MOMENT_CHARTS],
             "programs": _programs(w["others"]),
-            "marks": w["marks"]}
+            "marks": [m for m in w["marks"] if m not in outside]}
 
 
 # ------------------------------------------------------------------------------------------------ compare --
@@ -506,11 +528,13 @@ def compare_view(a: Entry, b: Entry) -> dict[str, Any]:
 # ----------------------------------------------------------------------------------------------- settings --
 
 def settings_view(readiness: dict[str, Any], sessions_dir: str, runtime_version: str | None, app_version: str,
-                  lag_key: str) -> dict[str, Any]:
+                  lag_key: str, start_key: str | None = None) -> dict[str, Any]:
     """Screen 7: readiness, the keys, a sound test (one of the recording's own sounds) and where sessions are kept. A
-    start key and a choice of length come later; the library's stores come with Play."""
+    choice of keys and length comes later; the library's stores come with Play."""
+    start = [["Start measuring: press once in the game, at the spot to measure", start_key.title()]] if start_key \
+        else []
     return {"readiness": readiness,
-            "keys": [["Mark a lag while recording", lag_key.title()]],
+            "keys": start + [["Mark a lag while recording", lag_key.title()]],
             "sessions_folder": sessions_dir,
             "library_sources": "Games you have recorded. Steam and Epic libraries come with Play.",
             "about": [["lag-doctor", app_version], ["WebView2 Runtime", runtime_version or "-"]]}
@@ -582,6 +606,30 @@ RECORDING_ENDS = {
     "private_copy": ("Not recorded", "lag-doctor cannot record from here."),
     "failed": ("Not recorded", "Something went wrong."),
 }
+# A recording measured from the app's start key (M5c), in "recording" by where it has got to: the key not said yet,
+# the startup before the press, and the measured window; then the stop and the end by why it stopped
+# (RecordingState.stop_reason, capture/session.py: both reach the app as done's "completed").
+STILL = "This window stays still while you play, so it does not change what is measured."
+KEY_SETUP = ("Play normally. " + STILL + " lag-doctor is getting {key} ready: wait for its chime before you press it.")
+KEY_STARTUP = ("Play normally: the startup, menus and loading are recorded but not counted. When you reach the spot "
+               "you want measured, press {key}: a rising chime plays, and lag-doctor measures {window}.{by} " + STILL)
+KEY_NO_PRESS = " With no press within {start_by}, the recording stops by itself and all of it is analysed."
+KEY_MEASURING = ("Play on: lag-doctor is measuring {window} from your press. When they are over, a falling chime "
+                 "plays and the recording stops by itself, to be analysed while you play on. It also stops when the "
+                 "game closes. " + STILL)
+KEY_MEASURING_TO_END = ("Play on: lag-doctor is measuring from your press until the recording stops{length}, or when "
+                        "the game closes. " + STILL)
+KEY_STOPPING = {
+    sess.WINDOW_ENDED: ("Measured", "lag-doctor measured {window} from your start key, so the recording stops. Play on: "
+                                    "it is saved and analysed while you play."),
+    sess.NO_START: ("Stopping the recording", "The start key was not pressed within {start_by}, so the recording "
+                                              "stops, and all of it will be analysed, startup included."),
+}
+KEY_ENDS = {
+    sess.WINDOW_ENDED: ("Measured", "lag-doctor measured {window} from your start key, and they are analysed."),
+    sess.NO_START: ("Recorded", "The start key was not pressed within {start_by}, so the recording stopped there. All "
+                                "of it is analysed, startup included."),
+}
 PROMPT_TEXTS = {"declined": "Windows' prompt was declined",
                 "refused": "lag-doctor's window refused the prompt's command",
                 "failed": "Windows' prompt could not be shown"}
@@ -590,16 +638,59 @@ SAID_SHOWN = 12                       # lines the recorder said, shown when a re
 CONSOLE_ONLY = re.compile(r"--[a-z]|Ctrl\+C|`lagdoctor ")
 
 
-def recording_view(state: Any, now: float, lag_key: str, log: Any = None) -> dict[str, Any]:
+def _length_words(s: float | None) -> str:
+    """'10 minutes', '1m 30s': a length the running screen names."""
+    if s is None:
+        return ""
+    return f"{int(s // 60)} minutes" if s >= 120 and s % 60 == 0 else fmt_elapsed(s)
+
+
+def _stage(state: Any) -> str | None:
+    """Where a recording measured from its start key has got to while it records: "setup" until the recorder says
+    whether Windows gave the key, "startup" until the press, then "measuring"; None without a start key, or with
+    one Windows did not give (the whole recording is analysed, as without one)."""
+    if not getattr(state, "keyed", False) or state.phase != "recording" or state.key_on is False:
+        return None
+    if state.key_on is None:
+        return "setup"
+    return "measuring" if state.measuring_since is not None else "startup"
+
+
+def _measured_s(state: Any) -> float | None:
+    """How long the start key's window measures: from the press to the end the recorder said (its `until`), or the
+    window it was given; None when it runs to the recording's end."""
+    if state.measure_at is not None and state.measure_until is not None:
+        # In the recorder's milliseconds: 600.0, never the 599.9999999999999 a press at 424.033 s would give.
+        return max(0.0, round(state.measure_until - state.measure_at, 3))
+    return state.window_s
+
+
+def _key_words(text: str, state: Any, key: str) -> str:
+    """`text` with its key, its measured window ('10 minutes') and the time a press had to come by."""
+    measured = _measured_s(state)
+    return text.format(key=key, window=_length_words(measured) if measured else "the part",
+                       start_by=_length_words(state.start_by_s) or "the time it had")
+
+
+def recording_view(state: Any, now: float, lag_key: str, log: Any = None,
+                   start_key: str | None = None) -> dict[str, Any]:
     """Screen 3, the running state of a recording the app started (recording.RecordingState): where it has got to,
     the one thing to press now (Cancel before it records, Stop while it does), what is off, and at the end how it
     ended, with what the recorder said (`log`: the recorder's log, named when something went wrong). {"active":
-    False, "phase": None} when the app has started none."""
+    False, "phase": None} when the app has started none. With a start key (`start_key`, the one the app asked for, or
+    the one the recorder named), it says when to press it, and its clock counts the measured window from the press:
+    "07:12 of 10:00"."""
     if state is None:
         return {"active": False, "phase": None}
-    elapsed = None
+    elapsed, length = None, state.length_s
     if state.started is not None:
         elapsed = max(0.0, (state.ended if state.ended is not None else now) - state.started)
+    stage = _stage(state)
+    key = (state.key or start_key or "").title() or "the start key"
+    if stage == "measuring":
+        elapsed, length = max(0.0, now - state.measuring_since), _measured_s(state)
+    elif stage in ("setup", "startup"):
+        length = None                               # no end to count to: the press starts the measured window
     notes = []
     if state.fault:
         notes.append(f"lag-doctor stopped this recording: {state.fault}.")
@@ -612,14 +703,21 @@ def recording_view(state: Any, now: float, lag_key: str, log: Any = None) -> dic
     if state.started is not None and not state.hotkey:
         notes.append(f"The lag key is off for this recording: Windows did not give lag-doctor {lag_key.title()}, so "
                      "another program may be using it.")
+    if getattr(state, "keyed", False) and state.key_on is False:
+        notes.append(f"The start key is off for this recording: Windows did not give lag-doctor {key}, so another "
+                     "program may be using it. All of the recording is analysed, startup included.")
     if state.frames_lost:
         notes.append(f"Frame timing stopped during the recording: {state.frames_lost}")
     if state.marks:
         notes.append(f"Lag marked {state.marks} time{'' if state.marks == 1 else 's'}.")
     failed = state.phase == "done" and not state.ok and (state.reason != "cancelled" or state.fault is not None)
     said = [line for line in state.said if not CONSOLE_ONLY.search(line)][-SAID_SHOWN:] if failed else []
+    keyed_end = getattr(state, "keyed", False) and state.stop_reason in KEY_ENDS
     if state.phase == "done":
         title, detail = RECORDING_ENDS.get(state.reason or "failed", RECORDING_ENDS["failed"])
+        if keyed_end and state.reason == "completed":
+            title, detail = KEY_ENDS[state.stop_reason]
+            detail = _key_words(detail, state, key)
         if state.fault:
             title, detail = "Not recorded", "lag-doctor stopped it."
         if said:
@@ -630,15 +728,30 @@ def recording_view(state: Any, now: float, lag_key: str, log: Any = None) -> dic
         title, detail = RECORDING_TITLES[state.phase], RECORDING_DETAILS[state.phase]
         if state.phase == "preparing":
             detail = PREPARING_DETAILS.get(state.prompt or "", detail)
+        if state.phase == "stopping" and keyed_end:
+            title, detail = KEY_STOPPING[state.stop_reason]
+            detail = _key_words(detail, state, key)
         if state.phase == "recording":
-            length = state.length_s
-            words = f"{int(length // 60)} minutes" if length and length >= 120 and length % 60 == 0 else \
-                fmt_elapsed(length)
-            detail = detail.format(length=f" after {words}" if length else "")
+            after = f" after {_length_words(state.length_s)}" if state.length_s else ""
+            if stage == "setup":
+                detail = _key_words(KEY_SETUP, state, key)
+            elif stage == "startup":
+                title = "Recording the startup"
+                measured = _measured_s(state)
+                by = KEY_NO_PRESS.format(start_by=_length_words(state.start_by_s)) if state.start_by_s else \
+                    (f" The recording stops by itself{after}, or when the game closes." if after else "")
+                detail = KEY_STARTUP.format(key=key, by=by, window=f"the next {_length_words(measured)}" if measured
+                                            else "from your press on")
+            elif stage == "measuring":
+                title = "Measuring"
+                detail = _key_words(KEY_MEASURING, state, key) if _measured_s(state) else \
+                    KEY_MEASURING_TO_END.format(length=after)
+            else:
+                detail = detail.format(length=after)
             if state.hotkey:
                 detail += f" Press {lag_key.title()} the moment it lags."
-    return {"active": state.active, "phase": state.phase, "title": title, "detail": detail, "game": state.game,
-            "elapsed_s": elapsed, "length_s": state.length_s, "notes": notes,
+    return {"active": state.active, "phase": state.phase, "stage": stage, "title": title, "detail": detail,
+            "game": state.game, "elapsed_s": elapsed, "length_s": length, "notes": notes,
             "action": ("cancel" if state.phase in ("starting", "waiting", "asking", "preparing") else
                        "stop" if state.phase == "recording" else None),
             "ok": state.phase == "done" and state.ok,

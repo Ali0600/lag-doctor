@@ -143,35 +143,50 @@ function width(node) {
   return Math.max(320, (node.clientWidth || view().clientWidth - 60) - 24);
 }
 
-// Shaded spans ([t0, t1]), vertical marks and a reference line, drawn under and over a uPlot chart.
-function overlays(spans, marks, ref) {
+// Drawn under and over a uPlot chart (opts): `rest`, the time a measured part leaves out, shaded in its own colour;
+// `spans` ([t0, t1]) shaded; `marks`, the lag-key presses, as lines; `outside`, the presses the analysis left out,
+// dashed; and `ref`, a reference line. Each is kept inside the plot, which a zoom or a span past the data would
+// otherwise paint over the axes.
+function overlays(opts) {
+  const fill = (u, list, colour) => {
+    const left = u.bbox.left, right = u.bbox.left + u.bbox.width;
+    u.ctx.fillStyle = css(colour);
+    for (const [a, b] of list || []) {
+      const x0 = Math.max(left, u.valToPos(a, 'x', true)), x1 = Math.min(right, u.valToPos(b, 'x', true));
+      if (x1 > x0 - 1) u.ctx.fillRect(x0, u.bbox.top, Math.max(1, x1 - x0), u.bbox.height);
+    }
+  };
+  const lines = (u, list) => {
+    for (const m of list || []) {
+      const x = u.valToPos(m, 'x', true);
+      if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) continue;
+      u.ctx.beginPath(); u.ctx.moveTo(x, u.bbox.top); u.ctx.lineTo(x, u.bbox.top + u.bbox.height); u.ctx.stroke();
+    }
+  };
   return {
     drawClear: [(u) => {
-      const ctx = u.ctx;
-      ctx.save();
-      ctx.fillStyle = css('--band');
-      for (const [a, b] of spans || []) {
-        const x0 = u.valToPos(a, 'x', true), x1 = u.valToPos(b, 'x', true);
-        ctx.fillRect(x0, u.bbox.top, Math.max(1, x1 - x0), u.bbox.height);
-      }
-      ctx.restore();
+      u.ctx.save();
+      fill(u, opts.rest, '--skip');
+      fill(u, opts.spans, '--band');
+      u.ctx.restore();
     }],
     draw: [(u) => {
       const ctx = u.ctx;
       ctx.save();
-      if (ref) {
-        const y = u.valToPos(ref, 'y', true);
+      if (opts.ref) {
+        const y = u.valToPos(opts.ref, 'y', true);
         ctx.strokeStyle = css('--ref');
         ctx.setLineDash([4, 4]);
         ctx.beginPath(); ctx.moveTo(u.bbox.left, y); ctx.lineTo(u.bbox.left + u.bbox.width, y); ctx.stroke();
         ctx.setLineDash([]);
       }
-      ctx.strokeStyle = css('--mark');
       ctx.lineWidth = 2;
-      for (const m of marks || []) {
-        const x = u.valToPos(m, 'x', true);
-        ctx.beginPath(); ctx.moveTo(x, u.bbox.top); ctx.lineTo(x, u.bbox.top + u.bbox.height); ctx.stroke();
-      }
+      ctx.strokeStyle = css('--mark');
+      lines(u, opts.marks);
+      ctx.strokeStyle = css('--ref');
+      ctx.setLineDash([3, 3]);
+      lines(u, opts.outside);
+      ctx.setLineDash([]);
       ctx.restore();
     }],
   };
@@ -188,8 +203,10 @@ function plot(box, data, series, opts) {
     axes: [{values: (u, splits) => splits.map(fmtElapsed), stroke: css('--muted'), grid: {stroke: css('--line')}},
       {label: opts.unit || '', stroke: css('--muted'), grid: {stroke: css('--line')}, size: 56}],
     cursor: {drag: {x: true, y: false}},
-    hooks: overlays(opts.spans, opts.marks, opts.ref),
+    hooks: overlays(opts),
   }, data, box);
+  // What is shaded as left out, on the chart's box too: a test reads it there, since a canvas shows it only as pixels.
+  if (opts.rest && opts.rest.length) box.setAttribute('data-rest', opts.rest.map(([a, b]) => `${a}-${b}`).join(' '));
   charts.push(u);
   return u;
 }
@@ -339,21 +356,30 @@ const SCREENS = {
         'the moment it happens.')];
     const lateCharts = [];
     const frameBox = chartBox({id: 'frames', title: 'Frame times'},
-      'Higher is slower; spikes are stutters. Drag across the chart to zoom in, double-click to zoom out.');
+      'Higher is slower; spikes are stutters. Drag across the chart to zoom in, double-click to zoom out.' +
+      (r.frames.rest.length ? ' The grey part of each chart was not analysed; an upright dashed line is a lag-key ' +
+        'press there.' : ''));
+    // Every time chart shades what a measured part left out, and draws the presses there apart.
+    const shade = {rest: r.frames.rest, outside: r.frames.outside, marks: r.frames.marks};
     if (frames && frames.t.length) {
       const ms = Array.from(frames.ms, (v) => (Number.isNaN(v) ? null : v));
-      const vals = ms.filter((v) => v !== null).sort((a, b) => a - b);
-      const p999 = vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.999))] || 20;
-      let top = Math.min(vals[vals.length - 1] * 1.05, Math.max(p999 * 1.6, 40));
-      top = Math.max(top, (r.frames.refresh_ms || 0) * 2.2, 20);
+      // The scale is the HTML report's (r.frames.top, from the frames the analysis counted), so a loading screen
+      // before a measured part, or the wait it starts in, is drawn clamped at the top; from every frame without one.
+      let top = r.frames.top;
+      if (typeof top !== 'number') {
+        const vals = ms.filter((v) => v !== null).sort((a, b) => a - b);
+        const p999 = vals[Math.min(vals.length - 1, Math.floor(vals.length * 0.999))] || 20;
+        top = Math.max(Math.min(vals[vals.length - 1] * 1.05, Math.max(p999 * 1.6, 40)),
+          (r.frames.refresh_ms || 0) * 2.2, 20);
+      }
       lateCharts.push(() => plot(frameBox, [frames.t, ms], [{label: r.frames.label}],
-        {unit: 'ms', yMax: top, spans: r.frames.drops, marks: r.frames.marks, ref: r.frames.refresh_ms, height: 260}));
+        Object.assign({unit: 'ms', yMax: top, spans: r.frames.drops, ref: r.frames.refresh_ms, height: 260}, shade)));
     } else {
       frameBox.append(el('p', {class: 'muted'}, ...prose(r.frames.missing || (r.frames_token
         ? 'The frame times did not reach this window; the report page shows them.' : 'No frame times were recorded.'))));
     }
     const others = r.charts.map((spec) => {
-      const [box, draw] = seriesChart(spec, {marks: r.frames.marks});
+      const [box, draw] = seriesChart(spec, shade);
       if (draw) lateCharts.push(draw);
       return box;
     });
@@ -417,8 +443,10 @@ const SCREENS = {
         el('td', null, el('code', null, key)))))),
       el('h2', null, 'Sound'),
       el('p', {class: 'muted'}, 'While a recording runs, lag-doctor plays short sounds: a double knock when Windows ' +
-        'asks for permission while the game is in front, a chime when it starts, a blip when it hears the lag key, a ' +
-        'chime when it ends, and a low tone when something stops working. Check that you can hear this one.'), sound,
+        'asks for permission while the game is in front, one note when the start key is ready, a rising chime when ' +
+        'you press it and measuring starts, a blip when it hears the lag key, a falling chime when the measured time ' +
+        'is over, a chime when the results are ready, and a low tone when something stops working. Check that you ' +
+        'can hear this one, the rising chime.'), sound,
       el('h2', null, 'Library'), el('p', null, s.library_sources),
       el('h2', null, 'Where recordings are kept'),
       el('div', {class: 'row'}, el('code', null, s.sessions_folder),
@@ -526,7 +554,7 @@ function drawRecording() {
       'Back to the library'));
   }
   const clock = r.phase === 'recording' ? el('p', {class: 'clock', id: 'rec-clock'}, clockText(r)) : null;
-  show(el('div', {class: 'running', id: 'running', 'data-phase': r.phase},
+  show(el('div', {class: 'running', id: 'running', 'data-phase': r.phase, 'data-stage': r.stage},
     el('h1', {id: 'rec-title'}, r.title),
     r.game ? el('p', {class: 'rec-game', id: 'rec-game'}, r.game) : null,
     clock,
@@ -553,14 +581,15 @@ async function openMoment(session, eventId, box) {
   }
   const draws = [];
   const span = [[m.t0, Math.max(m.t1, m.t0 + 0.05)]];
+  const around = {spans: span, marks: m.marks, rest: m.rest, outside: m.outside, height: 160};
   const cards = [];
   if (m.frames) {
     const [b, d] = seriesChart({id: 'm-frames', title: 'Frame times', unit: 'ms', t: m.frames.t, series: m.frames.series},
-      {spans: span, marks: m.marks, height: 160});
+      around);
     cards.push(b); if (d) draws.push(d);
   }
   for (const spec of m.charts) {
-    const [b, d] = seriesChart(spec, {spans: span, marks: m.marks, height: 160});
+    const [b, d] = seriesChart(spec, around);
     cards.push(b); if (d) draws.push(d);
   }
   box.replaceChildren(el('div', {class: 'card moment'},

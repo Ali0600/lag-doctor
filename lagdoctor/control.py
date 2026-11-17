@@ -226,7 +226,8 @@ def done_reason(code: int, seen: set[str] | frozenset[str], stopped_by: str, *, 
         return "failed"
     if code == 0:
         # A recording that stopped by itself completed: its duration, the start key's window, or no press in time
-        # (then all of it was analysed). The app's words for these come with its start key (M5's app half).
+        # (then all of it was analysed). The app tells the last two apart by the "stopping" reason it was sent
+        # (app/views.KEY_ENDS), so the protocol keeps one reason for all three.
         ends = {"duration": "completed", sess.WINDOW_ENDED: "completed", sess.NO_START: "completed",
                 "game exited": "game_exited"}
         return ends.get(stopped_by, "stopped")
