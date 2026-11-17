@@ -38,7 +38,11 @@ GAME = GAME_DIR + "\\Lantern\\Binaries\\Win64\\lantern_.exe"
 STUB = GAME_DIR + "\\lantern.exe"
 SINCE = 133_000_000_000_000_000     # a create time: the wait looks only at processes created after it
 SECOND = 10_000_000                 # one second in create-time units
-ME = os.getpid()
+# lag-doctor's own process in a made-up world: a made-up number too (target._own_pid), never this test process's real
+# one, which a runner can hand out among the numbers the made-up processes use (a CI run gave it one between 1000 and
+# 1512, where a test starts 513 processes, 2026-11-17). Not a multiple of 4, as Windows' process ids are in practice, so
+# no real process holds it either.
+ME = 4_000_001
 FULL_HD = 2_073_600
 
 
@@ -68,6 +72,7 @@ class World:
         self.fail_at_once = False                    # a failing sample raises before any time passes
         self.fg: int | None = None
         self.statuses: list[tuple[str, dict]] = []
+        monkeypatch.setattr(tgt, "_own_pid", lambda: ME)
         monkeypatch.setattr(tgt, "_snapshot", self.snapshot)
         monkeypatch.setattr(tgt.ntquery, "image_path", self.image_path)
         monkeypatch.setattr(tgt.windows, "top_windows", self.top_windows)
@@ -83,6 +88,8 @@ class World:
               before: bool = False, window: int | None = None, draw: float | None = None, cls: str = "GameWindow",
               create: int | None = None) -> int:
         """A process started at `at` (or before the wait's `since`), optionally with a window and 3D use from then."""
+        if pid == ME:
+            raise ValueError(f"a made-up process took lag-doctor's own made-up number ({ME})")
         if create is None:
             create = SINCE - SECOND if before else SINCE + int(at * SECOND) + 1
         nm = name or (image.rsplit("\\", 1)[-1] if image else "unknown.exe")
@@ -637,6 +644,7 @@ def test_a_cancel_during_the_last_sample_still_cancels(world):
 
 
 def test_cancel_wakes_the_wait_s_own_pause_at_once(monkeypatch):
+    monkeypatch.setattr(tgt, "_own_pid", lambda: ME)
     monkeypatch.setattr(tgt, "_snapshot", lambda threads_for=(): {ME: proc(ME, SINCE - SECOND, "python.exe")})
     monkeypatch.setattr(tgt.windows, "top_windows", lambda: [])
     monkeypatch.setattr(tgt.windows, "foreground_pid", lambda: None)
@@ -744,6 +752,19 @@ def test_one_round_reads_at_most_max_reads_per_round_new_paths(world, monkeypatc
     assert found["create_time"] == game_ct
     assert rounds[1] == tgt.MAX_READS_PER_ROUND                   # the first round read 512, the next the rest
     assert sum(world.reads.values()) == n + 1
+
+
+def test_a_made_up_program_holding_this_test_processs_real_number_is_a_program_like_any_other(world):
+    # The world's lag-doctor is ME; the real number of the process running this test means nothing to it, so a
+    # made-up program that holds it is found and read like the rest (it was "lag-doctor itself" while the wait asked
+    # os.getpid()).
+    real = os.getpid()
+    game_ct = world.start(0.0, real, GAME, window=FULL_HD, draw=50.0)     # listed from the wait's first round
+    found = world.wait()
+    assert (found["pid"], found["create_time"]) == (real, game_ct)
+    assert world.reads[real] == 1 and world.reads[ME] == 0
+    listed = tgt.running_from(FORMS)
+    assert [p["pid"] for p in listed["running"]] == [real]
 
 
 def test_by_default_a_process_from_just_before_the_wait_still_counts_and_an_older_one_does_not(world):

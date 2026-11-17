@@ -205,9 +205,15 @@ def descendants(procs: dict[int, ProcInfo], pid: int, create_time: int) -> set[i
     return out
 
 
+def _own_pid() -> int:
+    """lag-doctor's own process id. Its own seam, so a test's made-up process table names this process by a made-up
+    number too, and a real number that happens to be one of the table's made-up ones never makes that one lag-doctor."""
+    return os.getpid()
+
+
 def self_and_ancestors(procs: dict[int, ProcInfo], me: int | None = None) -> set[int]:
     """Our own PID and the processes that started us (the venv launcher, the shell, the terminal ...)."""
-    me = os.getpid() if me is None else me
+    me = _own_pid() if me is None else me
     out = {me}
     cur = procs.get(me)
     while cur is not None and cur.ppid not in out:
@@ -557,7 +563,7 @@ def running_from(folders: tuple[str, ...], procs: dict[int, ProcInfo] | None = N
     after it began."""
     folders = check_forms(folders)
     procs = _snapshot() if procs is None else procs
-    me = procs.get(os.getpid())
+    me = procs.get(_own_pid())
     if me is None:
         raise OSError("lag-doctor's own process is not in Windows' process list")
     mine = self_and_ancestors(procs)
@@ -953,7 +959,7 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
             pause(WAIT_POLL_S)
             continue
         round_fails = 0
-        me = procs.get(os.getpid())
+        me = procs.get(_own_pid())
         if me is None:
             raise OSError("lag-doctor's own process is not in Windows' process list")
         mine = self_and_ancestors(procs)
