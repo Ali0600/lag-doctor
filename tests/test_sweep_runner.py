@@ -237,14 +237,29 @@ def test_a_start_key_another_program_holds_stops_the_sweep_before_the_player_sta
     assert ini.read_bytes() == RAW
 
 
-def test_presses_before_the_recording_began_and_after_it_stopped_are_ignored(tmp_path):
-    sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
-    plays = steady_plays(sweep)
-    plays[0] = Play(press_early=True, press_late=True)
-    world = World(tmp_path, sweep, FPS, answers=[GO] * 4, plays=plays)
-    assert runner.run(sweep, folder, world.seams()) == 0
-    assert sweep.runs[0].start_t == pytest.approx(PRESS_T)            # the early press did not start the window
-    assert world.sounds.count("start") == len(sweep.slots)            # nor did the late one (World asserts no timer)
+@pytest.mark.parametrize("answers,code", [(["q"], 0), ([], 1)])
+def test_a_sweep_stopped_at_the_start_the_game_prompt_lets_go_of_its_start_key(tmp_path, answers, code):
+    # The run never reaches its recording, whose own release would hide a missing one here.
+    sweep, folder, _ = new_sweep(tmp_path, seed=1)
+    world = World(tmp_path, sweep, FPS, answers=answers)
+    assert runner.run(sweep, folder, world.seams()) == code
+    assert world.held_at_ask[:1] == [True] and world.argv == []                   # held at the prompt, never recorded
+    assert [(key.started, key.stopped) for key in world.listeners] == [(True, True)]
+
+
+def test_the_sounds_a_sweep_prepares_are_the_chimes_its_runs_play(tmp_path):
+    from lagdoctor.sweep import command
+    played: set[str] = set()
+    for n, play in enumerate([Play(), Play(press=False), Play(key_taken=True), Play(frames=False)]):
+        home = tmp_path / str(n)
+        home.mkdir()
+        sweep, folder, _ = new_sweep(home, seed=1)
+        world = World(home, sweep, FPS, answers=[GO], plays=[play])
+        runner.run(sweep, folder, world.seams())
+        assert len(world.argv) == 1, play                                   # each play was recorded
+        played |= set(world.sounds)
+    # prepared before any run (command.real_seams), so none is written on the start key's thread as it plays
+    assert played == set(command.SWEEP_SOUNDS)
 
 
 def test_the_file_is_never_changed_while_the_game_runs(tmp_path):
@@ -411,7 +426,8 @@ def test_the_interrupt_guard_raises_the_first_press_and_counts_the_rest():
 def test_a_press_after_a_recording_that_ended_by_itself_is_ignored(tmp_path):
     # The game exited before the key: the session stops without the stop event, so only "stopping" closes the key.
     sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
-    world = World(tmp_path, sweep, FPS, answers=[GO, "q"], plays=[Play(ends_by_itself=True)])
+    # watch counts a press that lands as the game closes but tells it after "stopping" (outside its lock).
+    world = World(tmp_path, sweep, FPS, answers=[GO, "q"], plays=[Play(ends_by_itself=True, press_raced=True)])
     assert runner.run(sweep, folder, world.seams()) == 0
     assert sweep.runs[0].state == "failed" and "before the start key was pressed" in sweep.runs[0].why
     assert "start" not in world.sounds
@@ -443,3 +459,61 @@ def test_a_chime_that_cannot_play_is_said_once_after_the_run(tmp_path):
     assert runner.run(sweep, folder, world.seams()) == 0
     notes = [line for line in world.said if "could not be played" in line]
     assert len(notes) == len(sweep.slots) and "the window ends 60 s after your press" in notes[0]
+
+
+# ----------------------------------------------------------- watch's start key measures each run (M5) ---
+
+def test_each_run_measures_with_watchs_own_start_key_window_and_wait(tmp_path):
+    sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
+    world = World(tmp_path, sweep, FPS, answers=[GO] * 4, plays=steady_plays(sweep))
+    assert runner.run(sweep, folder, world.seams()) == 0
+    for argv in world.argv:
+        assert argv[argv.index("--start-key") + 1] == sweep.start_key
+        assert float(argv[argv.index("--window") + 1]) == sweep.window_s
+        assert float(argv[argv.index("--start-by") + 1]) == runner.START_WAIT_S
+    # Each run's check let the key go before its recording, which registers it itself (World asserts it then).
+    assert len(world.listeners) == len(sweep.slots) and all(lst.started and lst.stopped for lst in world.listeners)
+
+
+def test_a_start_key_taken_after_the_check_fails_the_run_with_the_low_chime(tmp_path):
+    sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
+    plays = steady_plays(sweep)
+    plays[0] = Play(key_taken=True)
+    world = World(tmp_path, sweep, FPS, answers=[GO, "n", GO, GO, GO], plays=plays)
+    assert runner.run(sweep, folder, world.seams()) == 0
+    assert sweep.runs[0].state == "failed"
+    assert sweep.runs[0].why == ("the recording could not register the start key Ctrl+Alt+S (said above), so it "
+                                 "could not be pressed. If another program took it, close that program and try "
+                                 "again, or stop (q) and go on with another key: lagdoctor sweep --resume "
+                                 "--start-key KEY")
+    assert world.sounds[:3] == ["problem", "ready", "start"]        # never "ready" in that run; the next run's
+    assert world.sounds[0] == "problem" and world.sounds.count("start") == len(sweep.slots) - 1
+
+
+def test_a_run_the_sweep_stopped_as_it_began_chimes_only_its_problem(tmp_path):
+    # watch tells such a run no start_key (tests/test_session.py), so neither "ready" nor a press comes from it.
+    sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
+    plays = steady_plays(sweep)
+    plays[0] = Play(frames=False)
+    world = World(tmp_path, sweep, FPS, answers=[GO, "n", GO, GO, GO], plays=plays)
+    assert runner.run(sweep, folder, world.seams()) == 0
+    assert sweep.runs[0].why == "frame timing was off (was the UAC prompt declined?)"
+    assert world.sounds[0] == "problem" and world.sounds.count("start") == len(sweep.slots) - 1
+    assert world.sounds[:3] == ["problem", "ready", "start"]        # no "ready" in the run the sweep had stopped
+
+
+def test_the_sweep_holds_its_start_key_while_the_game_starts_and_lets_go_before_the_recording(tmp_path):
+    # Held from before the game starts, so a program that registers the key as the game starts cannot have it; let go
+    # as the recording starts, which registers it for itself (World checks that, one listener at a time).
+    sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
+    world = World(tmp_path, sweep, FPS, answers=[GO] * 4, plays=steady_plays(sweep))
+    assert runner.run(sweep, folder, world.seams()) == 0
+    assert world.held_at_ask == [True] * len(sweep.slots)
+    assert all(lst.stopped for lst in world.listeners)
+
+
+def test_each_run_chimes_once_watchs_start_key_is_ready(tmp_path):
+    sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
+    world = World(tmp_path, sweep, FPS, answers=[GO] * 4, plays=steady_plays(sweep))
+    assert runner.run(sweep, folder, world.seams()) == 0
+    assert world.sounds[:2] == ["ready", "start"] and world.sounds.count("ready") == len(sweep.slots)

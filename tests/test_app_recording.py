@@ -98,6 +98,8 @@ def test_the_recorder_runs_watch_in_control_mode_with_this_trees_code():
     assert argv[0] == str(recording.python()) and argv[1:5] == ["-B", "-E", "-s", "-m"]
     args = cli.build_parser().parse_args(argv[6:])
     assert args.cmd == "watch" and args.control == "stdio" and args.elevate and args.duration == recording.LENGTH_S
+    # The whole session until the app has a start key of its own (M5's app half): its screen, clock and words say so.
+    assert args.start_key == "none"
 
 
 # ------------------------------------------------------------------------------------------- the state --
@@ -920,8 +922,8 @@ def test_the_player_writes_each_sound_once_and_mends_a_changed_one(tmp_path, mon
     played, writes = [], []
     import winsound
     monkeypatch.setattr(winsound, "PlaySound", lambda *a: played.append(a))
-    real_replace = sounds.os.replace
-    monkeypatch.setattr(sounds.os, "replace", lambda a, b: (writes.append(b), real_replace(a, b)))
+    real_replace = sounds._replace
+    monkeypatch.setattr(sounds, "_replace", lambda a, b: (writes.append(b), real_replace(a, b)))
     p = sounds.Player(tmp_path, log=lambda s: None)
     assert p.play("start") and p.play("start")
     path = tmp_path / sounds.FOLDER / "start.wav"
@@ -931,6 +933,20 @@ def test_the_player_writes_each_sound_once_and_mends_a_changed_one(tmp_path, mon
     path.write_bytes(b"not a sound")
     assert sounds.Player(tmp_path, log=lambda s: None).play("start")
     assert path.read_bytes() == sounds.wav(sounds.SOUNDS["start"]) and writes == [path, path]
+
+
+def test_prepared_sounds_are_written_before_they_play_so_a_play_writes_nothing(tmp_path, monkeypatch):
+    played, writes = [], []
+    import winsound
+    monkeypatch.setattr(winsound, "PlaySound", lambda *a: played.append(a))
+    real_replace = sounds._replace
+    monkeypatch.setattr(sounds, "_replace", lambda a, b: (writes.append(Path(b).name), real_replace(a, b)))
+    p = sounds.Player(tmp_path, log=lambda s: None)
+    p.prepare(("start", "done"))
+    assert writes == ["start.wav", "done.wav"] and played == []          # written, nothing played yet
+    assert p.play("start") and p.play("done") and writes == ["start.wav", "done.wav"]
+    p.prepare()                                                          # all of them by default
+    assert sorted(writes) == sorted(f"{name}.wav" for name in sounds.SOUNDS)
 
 
 def test_a_sound_that_cannot_play_or_be_written_is_left_out_and_logged(tmp_path, monkeypatch):

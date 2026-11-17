@@ -123,8 +123,8 @@ def test_a_part_that_runs_to_the_end_keeps_a_press_just_after_it():
     (100.0, 150.0, "the recording ended at 1m 40s"),
     (50.0, 50.0, "not after its start"),
     (60.0, 40.0, "not after its start"),
-    (95.0, 120.0, "at least 10 s"),
-    (20.0, 29.9, "at least 10 s"),
+    (95.0, 120.0, "at least 11 s"),
+    (20.0, 30.9, "at least 11 s"),
 ])
 def test_check_span_refuses_what_is_not_a_part_of_the_recording(t0, t1, said):
     with pytest.raises(ValueError, match=re.escape(said)):
@@ -134,16 +134,16 @@ def test_check_span_refuses_what_is_not_a_part_of_the_recording(t0, t1, said):
 
 
 def test_check_span_ends_a_span_past_the_recording_at_its_end():
-    assert check_span(rich_capture(), 90.0, 500.0) == (90.0, 100.0)
+    assert check_span(rich_capture(), 89.0, 500.0) == (89.0, 100.0)
     assert check_span(rich_capture(), 0.0, MIN_SPAN_S) == (0.0, MIN_SPAN_S)
 
 
 def test_a_part_of_exactly_the_minimum_is_taken_and_a_shorter_one_says_how_short():
-    """To the millisecond: 16.4 - 6.4 is 9.999999999999998 in floats. A refused length is rounded down, never up to
+    """To the millisecond: 17.4 - 6.4 is 10.999999999999998 in floats. A refused length is rounded down, never up to
     the minimum it is refused against."""
-    assert check_span(rich_capture(), 6.4, 16.4) == (6.4, 16.4)
-    with pytest.raises(ValueError, match=re.escape("it would be 9.9 s long, and a part needs at least 10 s")):
-        check_span(rich_capture(), 20.0, 29.96)
+    assert check_span(rich_capture(), 6.4, 17.4) == (6.4, 17.4)
+    with pytest.raises(ValueError, match=re.escape("it would be 10.9 s long, and a part needs at least 11 s")):
+        check_span(rich_capture(), 20.0, 30.96)
 
 
 def test_a_part_of_a_part_is_refused():
@@ -197,8 +197,8 @@ def test_each_chains_first_frame_whose_interval_began_before_the_span_is_left_ou
 
 def test_every_chain_that_began_before_the_part_loses_its_first_frame():
     cap = _two_chains()                                  # at 35 s both chains have presented already
-    inside = [t for t in cap.frames[F.T] if 35.0 <= t <= 45.0]
-    assert len(crop(cap, 35.0, 45.0).frames[F.T]) == len(inside) - 2
+    inside = [t for t in cap.frames[F.T] if 35.0 <= t <= 46.0]
+    assert len(crop(cap, 35.0, 46.0).frames[F.T]) == len(inside) - 2
 
 
 def test_a_chain_shown_long_after_the_screen_last_changed_loses_its_first_frame():
@@ -559,3 +559,95 @@ def test_a_file_never_says_it_holds_a_part(tmp_path):
     cap = Capture.load(p)
     assert cap.span is None and any("span" in n for n in cap.notes)
     assert math.isclose(cap.duration_s, 100.0)
+
+
+# ----------------------------------------------------------------- the start key's part (M5) ---
+
+def _keyed(at=20.0, window=30.0, registered=True, key="ctrl+alt+s", **rec) -> Capture:
+    cap = rich_capture()                                            # 100 s
+    cap.start_key = {"key": key, "registered": registered, "window_s": window, "at": at, **rec}
+    return cap
+
+
+def test_the_start_keys_part_runs_from_its_press_for_its_window():
+    assert crop_mod.key_part(_keyed()) == ((20.0, 50.0), "")
+    assert crop_mod.key_part(_keyed(at=80.0)) == ((80.0, 100.0), "")         # the recording ended first
+    assert crop_mod.key_part(_keyed(window=None)) == ((20.0, 100.0), "")      # measured to the recording's end
+    assert crop_mod.key_part(_keyed(window=1e7)) == ((20.0, 100.0), "")       # past every time: the recording's end
+    assert crop_mod.key_part(_keyed(at=0, window=11)) == ((0.0, 11.0), "")    # a whole number, exactly the minimum
+
+
+def test_a_recording_without_a_start_key_has_no_part_and_no_word_about_one():
+    assert crop_mod.key_part(rich_capture()) == (None, "")
+    assert crop_mod.key_part(crop(_keyed(), 20.0, 50.0)) == (None, "")        # a cut copy is a part already
+
+
+@pytest.mark.parametrize("change,why", [
+    ({"registered": False}, "the start key Ctrl+Alt+S could not be registered"),
+    ({"at": None}, "the start key Ctrl+Alt+S was not pressed in time"),
+    ({"at": 95.0}, "the start key Ctrl+Alt+S was pressed only 5.0 s before the recording ended, and a part needs at "
+                   "least 11 s"),
+    ({"at": 89.01}, "the start key Ctrl+Alt+S was pressed only 10.9 s before the recording ended, and a part needs "
+                    "at least 11 s"),
+    ({"at": 100.0}, "the start key Ctrl+Alt+S was pressed after the recording ended"),
+    ({"window": 5.0}, "the start key Ctrl+Alt+S's window was 5.0 s long, and a part needs at least 11 s"),
+    ({"window": 10.96}, "the start key Ctrl+Alt+S's window was 10.9 s long, and a part needs at least 11 s"),
+])
+def test_a_start_key_that_measured_nothing_says_why(change, why):
+    args = {"at": change.get("at", 20.0), "window": change.get("window", 30.0),
+            "registered": change.get("registered", True)}
+    assert crop_mod.key_part(_keyed(**args)) == (None, why)
+
+
+@pytest.mark.parametrize("record", [
+    ["ctrl+alt+s", 20.0], {"key": "ctrl+alt+s", "registered": "yes", "window_s": 30.0, "at": 20.0},
+    {"key": "ctrl+alt+s", "registered": True, "window_s": 30.0, "at": "20"},
+    {"key": "ctrl+alt+s", "registered": True, "window_s": 30.0, "at": -1.0},
+    {"key": "ctrl+alt+s", "registered": True, "window_s": 0, "at": 20.0},
+    {"key": "ctrl+alt+s", "registered": True, "window_s": "30", "at": 20.0},
+    {"key": "ctrl+alt+s", "registered": True, "window_s": 30.0, "at": 10 ** 400},
+    {"key": "ctrl+alt+s", "registered": True, "window_s": float("nan"), "at": 20.0},
+    {"key": "ctrl+alt+s", "registered": True, "at": 20.0},              # the session writes all four keys
+    {"key": "ctrl+alt+s", "registered": True, "window_s": 30.0},
+])
+def test_a_damaged_start_key_record_measures_nothing_and_never_raises(record):
+    cap = rich_capture()
+    cap.start_key = record
+    part, why = crop_mod.key_part(cap)
+    assert part is None and why.endswith("record in the capture is damaged")
+
+
+@pytest.mark.parametrize("key,named", [("ctrl+alt+s", "the start key Ctrl+Alt+S"), ("x" * 41, "the start key"),
+                                       ("ctrl+alt+\x1b[31m", "the start key"), (7, "the start key"),
+                                       ("", "the start key")])
+def test_a_start_keys_name_from_a_file_is_shown_only_when_short_and_plain(key, named):
+    assert crop_mod.key_part(_keyed(at=None, key=key)) == (None, f"{named} was not pressed in time")
+
+
+def test_a_recording_of_unknown_length_cannot_find_its_start_keys_part():
+    cap = _keyed()
+    cap.duration_s = float("nan")
+    assert crop_mod.key_part(cap) == (None, "the start key Ctrl+Alt+S's part cannot be found: the recording's "
+                                            "length is not known")
+
+
+def test_the_cut_copy_holds_its_own_start_key_record():
+    cap = _keyed()
+    part = crop(cap, 20.0, 50.0, how="key")
+    assert part.start_key == cap.start_key and part.start_key is not cap.start_key
+    part.start_key["at"] = 0.0
+    assert cap.start_key["at"] == 20.0                              # crop stays pure
+
+
+@pytest.mark.parametrize("mode", ["gpu", "cpu", "smooth", "pace"])
+def test_a_part_of_exactly_the_shortest_length_can_get_a_verdict_on_what_limits_the_game(mode):
+    # A part's steady frames sum to a little under its length (the frame that began before it is left out), so the
+    # shortest part is a second past frames.BOUND_MIN_S: one of exactly 10 s never got a verdict (found 2026-11-10).
+    from lagdoctor.analysis import events, frames
+    full = synth.laglab(mode, duration_s=60.0).cap
+    for start in (20.0, 33.3):
+        part = crop(full, start, start + MIN_SPAN_S)
+        fr = frames.main_chain(part)
+        b = frames.bound(part, fr, events.find_events(part, fr, frames.frame_stats(fr, part.duration_s)))
+        assert b["steady_s"] >= frames.BOUND_MIN_S, (mode, start, b["steady_s"])
+        assert not any("a verdict needs" in note for note in b["notes"] or []), (mode, start, b["notes"])

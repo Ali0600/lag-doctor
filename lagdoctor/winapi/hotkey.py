@@ -48,7 +48,7 @@ def parse_hotkey(text: str) -> tuple[int, int]:
         if m not in _MODS:
             raise ValueError(f"unknown modifier {m!r} in {text!r} (use ctrl, alt, shift, win)")
         flags |= _MODS[m]
-    if len(key) == 1 and key.isalnum():
+    if len(key) == 1 and key.isascii() and key.isalnum():       # a letter's virtual key is its capital's code
         vk = ord(key.upper())
     elif key in _NAMED_KEYS:
         vk = _NAMED_KEYS[key]
@@ -57,6 +57,23 @@ def parse_hotkey(text: str) -> tuple[int, int]:
     else:
         raise ValueError(f"unknown key {key!r} in {text!r}")
     return flags, vk
+
+
+_MOD_ORDER = (("ctrl", MOD_CONTROL), ("alt", MOD_ALT), ("shift", MOD_SHIFT), ("win", MOD_WIN))
+
+
+def hotkey_name(text: str) -> str:
+    """The key's one spelling: each modifier once, in a fixed order, then the key ('Alt + CONTROL+s' ->
+    'ctrl+alt+s'). Raises ValueError as parse_hotkey does."""
+    flags, vk = parse_hotkey(text)
+    named = {code: name for name, code in _NAMED_KEYS.items()}
+    if vk in named:
+        key = named[vk]
+    elif 0x70 <= vk <= 0x87:
+        key = f"f{vk - 0x6F}"
+    else:
+        key = chr(vk).lower()
+    return "+".join([name for name, bit in _MOD_ORDER if flags & bit] + [key])
 
 
 class HotkeyListener:
@@ -73,6 +90,7 @@ class HotkeyListener:
         self._ready = threading.Event()
         self.registered = False
         self.error: str | None = None
+        self.taken = False             # Windows refused it because another hotkey holds the combination
 
     def start(self, timeout: float = 5.0) -> bool:
         """Register the hotkey. False (with .error set) if another program already owns it."""
@@ -96,8 +114,9 @@ class HotkeyListener:
         self._thread_id = _kernel32.GetCurrentThreadId()
         if not _user32.RegisterHotKey(None, self._ID, self._mods | MOD_NOREPEAT, self._vk):
             err = ctypes.get_last_error()
-            self.error = (f"{self.hotkey} is already used by another program" if err == ERROR_HOTKEY_ALREADY_REGISTERED
-                          else f"RegisterHotKey failed (error {err})")
+            self.taken = err == ERROR_HOTKEY_ALREADY_REGISTERED
+            self.error = (f"{self.hotkey} is already used by another program" if self.taken
+                          else f"Windows refused it (error {err})")
             self._ready.set()
             return
         self.registered = True

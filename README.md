@@ -23,7 +23,10 @@ ones.*
 
 - **Records while you play**: every frame's timing (Intel PresentMon), the game's CPU per thread, GPU load
   and video memory, disk, RAM, CPU/GPU throttling, and the network path (router, internet, the game server's
-  packet stream). Press **Ctrl+Alt+L** the moment it lags; the analysis looks at what happened just before.
+  packet stream). Once it says **Ctrl+Alt+S** is ready (a short chime), press it at the spot you want measured: the
+  10 minutes after the press are analysed, not the game starting up, and a rising chime says the press counted. With
+  no press in time, or a recording that ends within 11 s of it, all of the recording is analysed, and the report
+  says so. Press **Ctrl+Alt+L** the moment it lags; the analysis looks at what happened just before.
 - **Explains**: the lag type, the likely causes ranked with their evidence ("9 of 9 stutters and FPS drops
   coincided with the game reading from disk"), what was **checked and fine**, and what **could not be
   checked** and why. Nothing unmeasured is ever reported as fine.
@@ -77,6 +80,8 @@ uv run lagdoctor setup                                  # download + verify Pres
 uv run lagdoctor check                                  # settings check-up, no game needed
 uv run lagdoctor watch --game eldenring.exe             # or --pid PID; with neither, the busiest game
 uv run lagdoctor watch --note "shadows to low"          # what you changed, kept with the recording
+uv run lagdoctor watch --window 300 --no-sound          # measure 5 minutes from Ctrl+Alt+S, without chimes
+uv run lagdoctor watch --start-key none                 # analyse the whole recording, as before the start key
 uv run lagdoctor fix --list                             # the automatic fixes the last report suggested
 uv run lagdoctor fix power_plan                         # shows before -> after and asks
 uv run lagdoctor undo                                   # what lag-doctor changed; undo an ID, or --all
@@ -134,8 +139,12 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
 - **`lagdoctor` is a command in `.venv`**: after `.venv\Scripts\activate`, plain `lagdoctor watch ...` works in that
   window. `uv build` makes a wheel of the `lagdoctor` package alone (`dist\`); nothing is published yet.
 
-- **A recording ends** with Ctrl+C, after `--duration S`, or when the game exits. After the first Ctrl+C it
-  says it is stopping and saving, and a second press cannot lose the capture.
+- **A recording ends** 3 s after the start key's window (`--window S`, default 600), with Ctrl+C, after
+  `--duration S`, or when the game exits; with no Ctrl+Alt+S press within 20 minutes (`--start-by S`) it stops, and
+  all of it is analysed, the report saying so. A start key Windows did not give is said at the start, and that
+  recording ends only in the other ways. A press less than 11 s before `--duration`'s end measures nothing, and says
+  so; a `--duration` of 11 s or less has no start key. After the first Ctrl+C it says it is stopping and saving,
+  and a second press cannot lose the capture. `lagdoctor analyze CAPTURE` analyses the same part again.
 - **Frame timing uses Windows event tracing (ETW), which needs admin rights.** `watch` offers one UAC prompt
   per recording (`--elevate` skips the question, `--no-elevate` records without frame timing). Only PresentMon and
   the network trace then run elevated, in lag-doctor's relay: a background process with no window, which passes
@@ -340,14 +349,14 @@ connection to Microsoft, as the runtime does on its own.
   says how far off the next limit is (the CPU, the GPU or the screen, and how
   many times faster the limiting part must get), from thread CPU time rather than PresentMon's CPU Busy, which
   read 16.55 ms of a 16.9 ms GPU-bound frame.
-- **Testing that proves itself**: 4,841 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 4,971 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 43 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 3,493 deliberate
-  sabotages in 58 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 3,662 deliberate
+  sabotages in 59 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes, and a settings sweep that edits a game's settings file
   between runs and puts it back byte for byte, all behind a write-ahead journal, readback verification, undo and
   crash healing, with a handle-free identity check before touching any process; the sweep compares settings by

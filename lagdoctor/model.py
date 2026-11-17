@@ -251,6 +251,9 @@ class Capture:
     schema: str = CAPTURE_SCHEMA
     tool_version: str = ""
     note: str | None = None                  # the player's own words about this recording (watch --note): clean_note
+    # watch's start key, when it had one (M5): {key, registered, window_s, at}, `at` the press that counts in seconds
+    # from t = 0 (None: never pressed). analysis/crop.key_part reads the measured part from it.
+    start_key: dict[str, Any] | None = None
     # Set only on a copy cut to part of the recording (analysis/crop.py): {from_s, to_s, recorded_s, how}. Never saved
     # or read from a file, which always holds the whole recording.
     span: dict[str, Any] | None = field(default=None, init=False)
@@ -356,7 +359,8 @@ class Capture:
 _CAPTURE_TYPES: dict[str, type | tuple[type, ...]] = {
     "started_at": str, "clock_origin": (int, float), "duration_s": (int, float), "target": dict, "sources": dict,
     "inventory": dict, "frames": dict, "system": dict, "gpu": dict, "network": dict, "others": list,
-    "net_flows": dict, "marks": list, "notes": list, "schema": str, "tool_version": str, "note": (str, type(None))}
+    "net_flows": dict, "marks": list, "notes": list, "schema": str, "tool_version": str, "note": (str, type(None)),
+    "start_key": (dict, type(None))}
 
 
 def _shown(value: object, limit: int = 60) -> str:

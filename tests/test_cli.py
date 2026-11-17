@@ -27,7 +27,7 @@ from pathlib import Path
 
 import pytest
 
-from lagdoctor import cli, paths
+from lagdoctor import cli, clock, paths
 from lagdoctor.capture import session as sess
 from lagdoctor.capture import target as tgt
 from lagdoctor.capture.base import Collector
@@ -42,7 +42,7 @@ BASE_PY = getattr(sys, "_base_executable", sys.executable)
 STORE: dict[str, object] = {}
 GAME = {"pid": 4242, "create_time": 133000000000000001, "name": "Game.exe", "exe": r"C:\Games\Game.exe",
         "window_title": "Game", "monitor_device": None, "adapter_luid": None, "how": "pid", "candidates": []}
-WATCH = ["watch", "--pid", "4242", "--duration", "0.2", "--no-network", "--hotkey", "none"]
+WATCH = ["watch", "--pid", "4242", "--duration", "0.2", "--no-network", "--hotkey", "none", "--start-key", "none"]
 FAKE_GAME_S = 10.0             # the faked game exits after this (see fake_world)
 
 
@@ -355,8 +355,11 @@ def fake_world(monkeypatch):
                     Quick("frames", {"columns": {"t": [0.1, 0.12, 0.14], "frame_ms": [16.7, 16.6, 16.8]}})]
             # The fake game ends by itself: a recording a test did not expect (no --duration) ends, never hangs.
             ends = time.monotonic() + FAKE_GAME_S
+            if seen.get("on_tick") is not None:                   # a test's hook, in the recording loop itself
+                observers = sess.Joined(observers or sess.Observers(), sess.Observers(on_tick=seen["on_tick"]))
             super().__init__(target, opts, collectors=cols, inventory=inventory or {"adapters": []},
-                             alive=lambda: time.monotonic() < ends, printer=lambda line: None, observers=observers)
+                             alive=lambda: time.monotonic() < ends, printer=lambda line: None, observers=observers,
+                             hotkey_factory=seen.get("keys"))      # a test's stand-in keys; none: the real listener
     monkeypatch.setattr(sess, "Session", QuickSession)
     return seen
 
@@ -367,15 +370,15 @@ def test_auto_is_chosen_only_when_no_game_was_named(fake_world, tmp_path):
                        (["--pid", "4242"], {"auto": False, "pid": 4242, "name": None}),
                        (["--game", "Game.exe"], {"auto": False, "pid": None, "name": "Game.exe"})):
         fake_world["find"].clear()
-        code = cli.main(["watch", *argv, "--duration", "0.1", "--no-network", "--hotkey", "none", "--no-elevate",
-                         "--out", str(tmp_path / "out")])
+        code = cli.main(["watch", *argv, "--duration", "0.1", "--no-network", "--hotkey", "none", "--start-key", "none",
+                         "--no-elevate", "--out", str(tmp_path / "out")])
         assert code == 0 and fake_world["find"] == [want]
 
 
 @pytest.mark.parametrize("flags", [[], ["--elevate"], ["--game", "Game.exe"]])
 def test_a_watch_without_presentmon_stops_before_it_even_looks_for_the_game(fake_world, capsys, tmp_path, flags):
     # A 14-minute recording was once made this way, its frames missing, the reason only in the report afterwards.
-    assert cli.main(["watch", *flags, "--no-network", "--hotkey", "none",
+    assert cli.main(["watch", *flags, "--no-network", "--hotkey", "none", "--start-key", "none",
                      "--out", str(tmp_path / "out")]) == cli.EXIT_NOT_READY
     out = capsys.readouterr().out
     assert out.startswith("Frame timing is not available: PresentMon is not installed (test)")
@@ -388,7 +391,7 @@ def test_a_watch_without_presentmon_stops_before_it_even_looks_for_the_game(fake
 
 def test_a_watch_without_frame_timing_says_so_before_it_records(fake_world, capsys, tmp_path):
     assert cli.main(["watch", "--pid", "4242", "--no-elevate", "--duration", "0.1", "--no-network",
-                     "--hotkey", "none", "--out", str(tmp_path / "out")]) == 0
+                     "--hotkey", "none", "--start-key", "none", "--out", str(tmp_path / "out")]) == 0
     out = capsys.readouterr().out
     said = out.find("Frame timing is off for this recording: PresentMon is not installed (test)")
     assert 0 <= said < out.index("Recording. Play normally")
@@ -602,7 +605,7 @@ def test_an_elevated_watch_records_here_with_frame_timing_through_the_relay(fake
     sess.Session.run = run
     try:
         assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.2", "--hotkey", "none",
-                         "--out", str(tmp_path / "out")]) == 0
+                         "--start-key", "none", "--out", str(tmp_path / "out")]) == 0
     finally:
         sess.Session.run = real_run
     (launch,) = fake_relay["launches"]
@@ -662,7 +665,7 @@ def test_with_a_relay_closing_the_window_leaves_the_network_trace_to_the_relay(f
         real(self, stop, saved, network, **kw)
     monkeypatch.setattr(cli._ConsoleControl, "__init__", init)
     assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.2", "--hotkey", "none",
-                     "--out", str(tmp_path / "out")]) == 0
+                     "--start-key", "none", "--out", str(tmp_path / "out")]) == 0
     assert seen == [False]                  # this window never stops the relay's ETW session by name
 
 
@@ -678,7 +681,7 @@ def test_a_declined_prompt_records_here_still_holding_the_lock(fake_relay, monke
         return real_run(self, *a, **k)
     monkeypatch.setattr(sess.Session, "run", run)
     assert cli.main(["watch", "--pid", "4242", "--duration", "0.1", "--elevate", "--no-network", "--hotkey", "none",
-                     "--out", str(tmp_path / "out")]) == 0
+                     "--start-key", "none", "--out", str(tmp_path / "out")]) == 0
     out = capsys.readouterr().out
     assert "The UAC prompt was declined, so lag-doctor records without frame timing." in out
     assert held_while_recording == [True]
@@ -736,7 +739,7 @@ def test_a_relative_lagdoctor_home_still_hands_the_relay_an_absolute_presentmon(
     monkeypatch.setenv("LAGDOCTOR_HOME", "relative-home")
     monkeypatch.setattr(cli, "_presentmon_exe", lambda: (Path("relative-home") / "PresentMon-2.6.0-x64.exe", ""))
     assert cli.main(["watch", "--pid", "4242", "--elevate", "--duration", "0.1", "--no-network", "--hotkey",
-                     "none"]) == 0
+                     "none", "--start-key", "none"]) == 0
     exe = fake_relay["launches"][0]["presentmon_exe"]
     assert exe.is_absolute() and exe == (tmp_path / "relative-home" / "PresentMon-2.6.0-x64.exe").resolve()
 
@@ -858,7 +861,7 @@ def test_an_elevated_watch_starts_the_real_relay_through_the_real_launch(fake_wo
         rec = ShellExecuteRelay(server.Parts(verify=lambda exe: None, etw=Etw))
         monkeypatch.setattr(elevation, "_ShellExecuteExW", rec)
         assert cli.main(["watch", "--pid", str(game.pid), "--elevate", "--duration", "0.2", "--hotkey", "none",
-                         "--out", str(tmp_path / "out")]) == 0
+                         "--start-key", "none", "--out", str(tmp_path / "out")]) == 0
     finally:
         game.stdin.close()
         game.wait(10)
@@ -879,7 +882,7 @@ def test_an_elevated_watch_starts_the_real_relay_through_the_real_launch(fake_wo
 # ------------------------------------------- watch for a caller other than this console (M2's seams) ---
 
 def _watch_args(*extra):
-    return cli.build_parser().parse_args(["watch", "--pid", "4242", "--hotkey", "none", *extra])
+    return cli.build_parser().parse_args(["watch", "--pid", "4242", "--hotkey", "none", "--start-key", "none", *extra])
 
 
 def test_a_watch_says_every_line_through_the_say_it_was_given(fake_world, tmp_path, capsys):
@@ -1225,9 +1228,9 @@ def test_an_absurdly_long_time_is_refused_in_a_short_line():
 
 
 @pytest.mark.parametrize("args,said", [
-    (["--from", "175"], "at least 10 s"),
+    (["--from", "175"], "at least 11 s"),
     (["--from", "170.04"], "it would be 9.9 s long"),
-    (["--to", "0:05"], "at least 10 s"),
+    (["--to", "0:05"], "at least 11 s"),
     (["--from", "200"], "the recording ended at 3m"),
     (["--from", "100", "--to", "50"], "is not after its start"),
 ])
@@ -1333,8 +1336,8 @@ class Fake(sess.Session):
 sess.Session = Fake
 tgt.find_target = lambda **kw: {"pid": 4242, "create_time": 1, "name": "Game.exe", "how": "pid"}
 cli._presentmon_exe = lambda: (None, "frame timing was skipped: test")
-code = cli.main(["watch", "--pid", "4242", "--no-elevate", "--no-network", "--hotkey", "none",
-                 "--out", os.path.join(out, "sessions")])
+code = cli.main(["watch", "--pid", "4242", "--no-elevate", "--no-network", "--hotkey", "none", "--start-key", "none",
+                 "--no-sound", "--out", os.path.join(out, "sessions")])
 mark("main_returned", str(code))
 raise SystemExit(code)
 '''
@@ -1388,3 +1391,246 @@ def test_a_real_console_event_while_recording_still_saves_the_capture(tmp_path, 
     assert Capture.load(caps[0]).target["stop_reason"] == STOP_REASON[mode]
     if mode != "close":                     # after a close Windows ends the process once the save is done
         assert code == 0 and (out / "main_returned").read_text(encoding="utf-8") == "0"
+
+
+# --------------------------------------------------------------------- watch's start key (M5) ---
+
+def test_watch_measures_from_its_start_key_by_default_and_none_turns_it_off():
+    p = cli.build_parser()
+    a = p.parse_args(["watch"])
+    assert (a.start_key, a.window, a.start_by, a.no_sound) == ("ctrl+alt+s", 600.0, 1200.0, False)
+    assert (cli.DEFAULT_START_KEY, cli.DEFAULT_WINDOW_S, cli.DEFAULT_START_BY_S) == ("ctrl+alt+s", 600.0, 1200.0)
+    assert [p.parse_args(["watch", "--start-key", k]).start_key for k in ("none", "OFF", "", "Alt+Win+F7")] == \
+        ["none", "none", "none", "alt+win+f7"]
+    a = p.parse_args(["watch", "--window", "11", "--start-by", "0.5", "--no-sound"])
+    assert (a.window, a.start_by, a.no_sound) == (11.0, 0.5, True)
+    # One spelling of each key, so a key is as short as it can be and two spellings of one key are one key.
+    spelled = [p.parse_args(["watch", "--start-key", k]).start_key for k in
+               ("Control + ALT + s", "alt+ctrl+s", "control+control+control+control+control+alt+s", "win+shift+f7")]
+    assert spelled == ["ctrl+alt+s", "ctrl+alt+s", "ctrl+alt+s", "shift+win+f7"]
+    assert p.parse_args(["watch", "--window", "3600"]).window == cli.MAX_WINDOW_S
+
+
+@pytest.mark.parametrize("bad", [["--start-key", "s"], ["--start-key", "shift+s"], ["--start-key", "ctrl+alt+"],
+                                 ["--start-key", "ctrl+alt+" + chr(0xE9)], ["--window", "10.99"],
+                                 ["--window", "9.99"], ["--window", "3600.5"], ["--window", "nan"],
+                                 ["--window", "ten"], ["--start-by", "0"], ["--start-by", "nan"],
+                                 ["--start-by", "86401"]])
+def test_a_start_key_window_or_wait_watch_cannot_use_is_refused_by_the_parser(bad):
+    with pytest.raises(SystemExit):
+        cli.build_parser().parse_args(["watch", *bad])
+
+
+def test_the_shortest_window_is_the_shortest_part_and_the_sweeps_start_key_is_watchs():
+    from lagdoctor.analysis import crop
+    from lagdoctor.sweep import plan, runner
+    assert cli.WINDOW_MIN_S == crop.MIN_SPAN_S == sess.MIN_PART_S and plan.START_KEY == cli.DEFAULT_START_KEY
+    assert runner.TAIL_S == sess.WINDOW_TAIL_S
+
+
+@pytest.mark.parametrize("start,lag", [("ctrl+alt+l", "ctrl+alt+l"), ("alt+ctrl+l", "control+alt+l")])
+def test_a_start_key_that_is_the_lag_key_is_refused_before_anything_starts(fake_world, capsys, start, lag):
+    assert cli.main(["watch", "--pid", "4242", "--hotkey", lag, "--start-key", start, "--no-network"]) == \
+        cli.EXIT_BAD_ARGS
+    assert fake_world["find"] == [] and fake_world["sessions"] == []
+    assert ("The start key and the lag key are the same key (Ctrl+Alt+L): give --start-key another one."
+            in capsys.readouterr().out)
+
+
+def test_a_console_watch_gets_the_consoles_chimes_unless_no_sound(monkeypatch, _no_real_keys_or_sounds):
+    got = []
+    monkeypatch.setattr(cli, "cmd_watch", lambda args, **kw: got.append(kw["sound"]) or 0)
+    assert cli.main(["watch", "--pid", "4242"]) == 0
+    assert cli.main(["watch", "--pid", "4242", "--no-sound"]) == 0
+    assert got[1] is None and got[0] is not None and got[0]("start") is True
+    assert _no_real_keys_or_sounds.played == ["start"] and _no_real_keys_or_sounds.players == 1
+
+
+def test_the_consoles_chimes_follow_the_recording_and_one_that_fails_is_kept():
+    played = []
+    cues = cli._Cues(lambda name: played.append(name) or name != "mark")
+    for kind, data in [("recording", {}), ("start_key", {"registered": True}), ("measuring", {"at": 1.0}),
+                       ("mark", {"t": 1.5}), ("frames_lost", {"why": "x"}), ("stopping", {"reason": sess.WINDOW_ENDED}),
+                       ("saving", {}), ("saved", {})]:
+        cues.on_event(kind, data)
+    assert played == ["ready", "start", "mark", "problem", "done"] and cues.failed == {"mark"}
+    for kind, data, sound in [("stopping", {"reason": sess.NO_START}, "problem"), ("stopping", {"reason": "Ctrl+C"},
+                              None), ("stopping", {"reason": "duration"}, None),      # nothing measured: no end
+                              ("start_key", {"registered": False}, "problem")]:
+        played.clear()
+        cli._Cues(lambda name: played.append(name) or True).on_event(kind, data)
+        assert played == ([sound] if sound else []), (kind, data)
+    raising = cli._Cues(lambda name: 1 / 0)
+    raising.on_event("measuring", {})                # a chime is never worth the recording
+    assert raising.failed == {"start"}
+
+
+def test_the_recording_line_says_when_to_press_what_is_measured_and_when_it_stops():
+    assert cli._recording_line("ctrl+alt+s", "ctrl+alt+l", 600.0, 1200.0, None, chimes=True) == (
+        "Recording. Once Ctrl+Alt+S is ready (said below, with a short chime), go to the spot you want measured and "
+        "press it to start 10 minutes of measuring, with a rising chime, so the startup before it is not counted. "
+        "Press Ctrl+Alt+L the moment it lags. Ctrl+C stops. With no Ctrl+Alt+S press within 20 minutes, it stops "
+        "and analyses all of it.")
+    # A set length shorter than the window: what is measured is the rest of the recording, and no press is waited
+    # for past the set length.
+    short = cli._recording_line("ctrl+alt+s", None, 90.0, 1200.0, 30.0, chimes=False)
+    assert short == ("Recording. Once Ctrl+Alt+S is ready (said below), go to the spot you want measured and press "
+                     "it to start measuring for the rest of the recording, so the startup before it is not counted. "
+                     "Ctrl+C stops. Stops by itself after 30 s.")
+    longer = cli._recording_line("ctrl+alt+s", None, 90.0, 1200.0, 1800.0, chimes=False)
+    assert "start 90 s of measuring," in longer and longer.endswith("within 20 minutes, it stops and analyses all of it.")
+
+
+class _StartKeys:
+    """watch's listeners in a test, one per key; `press_on_first_tick` presses the start key in the recording loop's
+    first tick (fake_world's on_tick hook), so the press always lands once the key counts, never racing a timer."""
+
+    def __init__(self) -> None:
+        self.made, self.live, self.pressed = [], {}, False
+
+    def __call__(self, key, on_press):
+        keys = self
+        self.made.append(key)
+
+        class Listener:
+            error = None
+
+            def start(self):
+                keys.live[key] = on_press
+                return True
+
+            def stop(self):
+                keys.live.pop(key, None)
+        return Listener()
+
+    def press_on_first_tick(self, elapsed, live):
+        if not self.pressed:
+            self.pressed = True
+            self.live[cli.DEFAULT_START_KEY](clock.now())
+
+
+def test_a_watch_too_short_for_a_part_turns_its_start_key_off(fake_world, tmp_path, capsys, _no_real_keys_or_sounds):
+    # A 0.6 s recording leaves no room for an 11 s part after any press, so watch turns the key off before anything
+    # starts: never registered, no chime, no start key in the capture, analysed whole as with --start-key none.
+    keys = _StartKeys()
+    fake_world["keys"] = keys
+    assert cli.main(["watch", "--pid", "4242", "--duration", "0.6", "--window", "300", "--start-by", "900",
+                     "--no-network", "--no-elevate", "--out", str(tmp_path / "out")]) == 0
+    assert keys.made == [cli.DEFAULT_HOTKEY] and keys.live == {}             # the lag key only, let go
+    assert fake_world["sessions"][0]["opts"].start_key is None
+    [made] = list((tmp_path / "out").iterdir())
+    cap = Capture.load(made / cli.CAPTURE_NAME)
+    assert cap.start_key is None and _no_real_keys_or_sounds.played == []
+    assert _no_real_keys_or_sounds.players == 1
+    assert "span" not in json.loads((made / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8"))["stats"]
+    out = " ".join(capsys.readouterr().out.split())               # the summary wraps at the console's width
+    assert ("Recording. Play normally; press Ctrl+Alt+L the moment it lags; Ctrl+C stops. Stops by itself after 1 s. "
+            "Ctrl+Alt+S is off for this recording: a part needs at least 11 s after the press, and the recording "
+            "stops after 0.6 s, so all of it is analysed.") in out, out
+    assert "not pressed in time" not in out and "could not be registered" not in out   # no report note of a key
+
+
+def test_the_start_key_is_off_for_a_set_length_no_longer_than_a_part():
+    assert cli._too_short_for_a_part(cli.WINDOW_MIN_S) and cli._too_short_for_a_part(0.6)
+    assert not cli._too_short_for_a_part(cli.WINDOW_MIN_S + 0.001) and not cli._too_short_for_a_part(None)
+
+
+def test_a_chime_that_could_not_play_is_said_once_after_the_recording(fake_world, tmp_path, capsys, monkeypatch,
+                                                                      _no_real_keys_or_sounds):
+    _no_real_keys_or_sounds.sound_ok = False
+    monkeypatch.setattr(cli, "WINDOW_MIN_S", 0.0)       # a part fits in a 0.5 s recording: the key is on, and
+    monkeypatch.setattr(sess, "MIN_PART_S", 0.0)        # the press counts, so three chimes play and fail
+    keys = _StartKeys()
+    fake_world["keys"], fake_world["on_tick"] = keys, keys.press_on_first_tick
+    assert cli.main(["watch", "--pid", "4242", "--duration", "0.5", "--window", "300", "--start-by", "900",
+                     "--no-network", "--no-elevate", "--out", str(tmp_path / "out")]) == 0
+    assert keys.made == [cli.DEFAULT_HOTKEY, cli.DEFAULT_START_KEY] and keys.live == {}     # one per key, let go
+    opts = fake_world["sessions"][0]["opts"]
+    assert (opts.start_key, opts.window_s, opts.start_by_s, opts.start_advice) == ("ctrl+alt+s", 300.0, 900.0, True)
+    assert _no_real_keys_or_sounds.played == ["ready", "start", "done"] and _no_real_keys_or_sounds.players == 1
+    out = capsys.readouterr().out
+    assert out.count("(A chime could not be played during the recording") == 1
+    assert ("Recording. Once Ctrl+Alt+S is ready (said below, with a short chime), go to the spot you want measured "
+            "and press it to start measuring for the rest of the recording, with a rising chime") in " ".join(out.split())
+
+
+def _keyed_capture(tmp_path: Path, *, pressed: bool = True) -> Path:
+    from tests import synth
+    cap = synth.startup_then_smooth(startup_s=60.0, total_s=180.0)
+    cap.target = {"pid": 20000, "create_time": 5, "name": "Friend.exe"}
+    cap.start_key = {"key": "ctrl+alt+s", "registered": True, "window_s": 60.0, "at": 70.0 if pressed else None}
+    return cap.save(tmp_path / "keyed.ldcap.json.gz")
+
+
+def _made(folder: Path) -> tuple[dict, dict, str]:
+    return (json.loads((folder / cli.DIAGNOSIS_NAME).read_text(encoding="utf-8")),
+            json.loads((folder / "summary.json").read_text(encoding="utf-8")),
+            (folder / cli.REPORT_NAME).read_text(encoding="utf-8"))
+
+
+def test_a_watch_analyses_the_part_its_start_key_measured(tmp_path):
+    p = _keyed_capture(tmp_path)
+    out_dir = tmp_path / "session"
+    out_dir.mkdir()
+    assert cli._analyze_saved(Capture.load(p), p, out_dir, remember=False, show_summary=False) == 0
+    d, summary, page = _made(out_dir)
+    assert d["stats"]["span"] == {"from_s": 70.0, "to_s": 130.0, "recorded_s": 180.0, "how": "key"}
+    assert d["lag_type"] == "none" and summary["kind"] == "watch" and summary["measured_how"] == "key"
+    assert "(measured from your start key)" in page
+
+
+def test_a_watch_whose_start_key_was_not_pressed_analyses_all_of_it_and_both_reports_say_so(tmp_path, capsys):
+    p = _keyed_capture(tmp_path, pressed=False)
+    out_dir = tmp_path / "session"
+    out_dir.mkdir()
+    assert cli._analyze_saved(Capture.load(p), p, out_dir, remember=False) == 0
+    d, summary, page = _made(out_dir)
+    assert "span" not in d["stats"] and d["lag_type"] == "stutter" and summary["measured_how"] is None
+    note = "The start key Ctrl+Alt+S was not pressed in time, so the whole recording was analysed, startup included."
+    assert note in " ".join(capsys.readouterr().out.split()) and note in page
+
+
+def test_analyze_takes_the_start_keys_part_by_default_and_from_0_takes_all_of_it(tmp_path):
+    p = _keyed_capture(tmp_path)
+    assert cli.main(["analyze", str(p)]) == 0
+    [first] = list(paths.sessions_dir().iterdir())
+    assert cli.main(["analyze", str(p), "--from", "0"]) == 0
+    [second] = [f for f in paths.sessions_dir().iterdir() if f != first]
+    (d1, _, page1), (d2, _, page2) = _made(first), _made(second)
+    assert d1["stats"]["span"]["how"] == "key" and "span" not in d2["stats"]
+    # Each footer's command makes the same analysis again: none needed for the start key's part, --from 0 for all.
+    assert "keyed.ldcap.json.gz&quot;</code>" in page1 and "keyed.ldcap.json.gz&quot; --from 0</code>" in page2
+    assert "was not pressed" not in page2                       # all of it, as asked: no word of the start key
+
+
+CUE_EVENTS = [("start_key", {"registered": True}), ("start_key", {"registered": False}), ("measuring", {"at": 1.0}),
+              ("mark", {"t": 1.5}), ("frames_lost", {"why": "x"}), ("stopping", {"reason": sess.WINDOW_ENDED}),
+              ("stopping", {"reason": sess.NO_START})]
+
+
+def test_every_chime_a_console_watch_plays_is_written_before_the_recording_and_is_a_tone_that_exists(
+        _no_real_keys_or_sounds, monkeypatch):
+    import winsound
+
+    from lagdoctor.app import sounds
+    played = []
+    cues = cli._Cues(lambda name: played.append(name) or True)
+    for kind, data in CUE_EVENTS:
+        cues.on_event(kind, dict(data))
+    assert set(played) == set(cli.CONSOLE_SOUNDS) and set(cli.CONSOLE_SOUNDS) <= set(sounds.SOUNDS)
+    calls = []
+    monkeypatch.setattr(winsound, "PlaySound", lambda *a: calls.append(a))       # this test's own: it counts
+    play = _no_real_keys_or_sounds.real_console_sound()
+    folder = paths.home() / sounds.FOLDER
+    written = {p.name: p.stat().st_mtime_ns for p in folder.iterdir()}
+    assert set(written) == {f"{name}.wav" for name in cli.CONSOLE_SOUNDS} and calls == []   # before any play
+    assert play("start") is True and len(calls) == 1
+    assert {p.name: p.stat().st_mtime_ns for p in folder.iterdir()} == written            # the play wrote nothing
+
+
+def test_the_set_length_ending_a_measuring_plays_its_closing_chime():
+    played = []
+    cues = cli._Cues(lambda name: played.append(name) or True)
+    cues.on_event("measuring", {"at": 1.0, "until": 30.0})
+    cues.on_event("stopping", {"reason": "duration"})
+    assert played == ["start", "done"]

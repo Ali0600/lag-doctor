@@ -126,6 +126,25 @@ def test_a_capture_keeps_its_note_and_one_from_before_notes_has_none(tmp_path):
     assert old.note is None and not old.notes
 
 
+def test_a_capture_keeps_its_start_key_and_one_from_before_the_start_key_has_none(tmp_path):
+    cap = _capture()
+    cap.start_key = {"key": "ctrl+alt+s", "registered": True, "window_s": 600.0, "at": 192.345}
+    back = Capture.load(cap.save(tmp_path / "c.ldcap.json.gz"))
+    assert back.start_key == cap.start_key and not back.notes         # to the millisecond, as saved
+    raw = _capture().to_json()
+    del raw["start_key"]                                                # a capture saved before the start key existed
+    _gz(tmp_path / "old.gz", raw)
+    old = Capture.load(tmp_path / "old.gz")
+    assert old.start_key is None and not old.notes
+
+
+def test_a_start_key_record_that_is_not_one_makes_the_capture_damaged(tmp_path):
+    _gz(tmp_path / "c.gz", dict(_capture().to_json(), start_key=["ctrl+alt+s", 192.3]))
+    with pytest.raises(CaptureError, match="its start_key is a list") as info:
+        Capture.load(tmp_path / "c.gz")
+    assert info.value.kind == "damaged"
+
+
 def test_a_note_read_from_a_file_is_cleaned_and_a_longer_one_cut_never_refused(tmp_path):
     # A newer build may keep a longer note; text a file holds is shown only as safe characters.
     _gz(tmp_path / "c.gz", dict(_capture().to_json(), note="a\x1b]0;x\x07b " + "c" * 300))

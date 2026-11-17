@@ -861,16 +861,16 @@ def _part(cap: Capture, t0: float, t1: float) -> Diagnosis:
 
 def test_a_measured_part_is_named_in_both_headers_and_shaded_on_every_chart():
     cap = make_capture()                      # about 25 s, a lag-key press at 5 s
-    d = _part(cap, 10.0, 20.0)
+    d = _part(cap, 9.0, 20.0)
     page = html_report.render(d, cap, capture_path=Path(r"C:\Users\Jo Tester\cap.ldcap.json.gz"))
-    assert "25s recorded &middot; 10s analysed &middot; " in page
-    assert ("Analysed 10s, from 10s to 20s of the recording (the part you chose); the rest is not counted, nor the 1 "
+    assert "25s recorded &middot; 11s analysed &middot; " in page
+    assert ("Analysed 11s, from 9s to 20s of the recording (the part you chose); the rest is not counted, nor the 1 "
             "lag-key press in it. It is shaded on the charts.") in page
     assert page.count('class="band skip"') == 8              # before and after the part, on all four time charts
-    assert html_report.OUTSIDE_MARK in page and "--from 10 --to 20</code>" in page
+    assert html_report.OUTSIDE_MARK in page and "--from 9 --to 20</code>" in page
     text = console.render(d, cap)
-    assert "lag-doctor report: game.exe (25s recorded, 10s analysed, started 2026-11-04 15:30)" in text
-    assert "Analysed 10s, from 10s to 20s of the recording (the part you chose)" in text
+    assert "lag-doctor report: game.exe (25s recorded, 11s analysed, started 2026-11-04 15:30)" in text
+    assert "Analysed 11s, from 9s to 20s of the recording (the part you chose)" in text
 
 
 def test_a_report_of_the_whole_recording_shades_and_names_no_part():
@@ -944,6 +944,49 @@ def test_the_frame_charts_note_never_names_a_frame_behind_another_window():
     assert re.search(r"the worst took 30\d\d ms", html_report.render(diagnose(cap), cap))
 
 
+def test_frames_that_all_came_behind_another_window_are_never_said_not_recorded():
+    """The frames were recorded, yet none was judged: both headers say why, for a whole recording and for a part."""
+    from lagdoctor.analysis.crop import crop
+    whole = synth.laglab("smooth").cap
+    n = len(whole.frames[F.T])
+    whole.frames[F.DISPLAYED] = [0] * (n - 1) + [1]
+    whole.frames[F.DISPLAY_MS] = [None] * (n - 1) + [1000.0 * (whole.frames[F.T][-1] - whole.frames[F.T][0])]
+    whole.system[S.GAME_FOCUSED] = [0 if v is not None else None for v in whole.system[S.GAME_FOCUSED]]
+    covered = synth.laglab("smooth", covered=[(5.0, 25.0)]).cap
+    for d, cap in ((diagnose(whole), whole), (diagnose(crop(covered, 9.5, 20.5)), covered)):
+        assert labels.no_frames_text(d.measured) == "every frame came while another window was in front", d.measured
+        page = html_report.render(d, cap)
+        assert "every frame came while another window was in front" in page and "frame timing not recorded" not in page
+    assert labels.no_frames_text({"frames": "PresentMon ran but recorded no frames from the game"}) == \
+        "frame timing not recorded"
+
+
+def test_a_parts_frame_chart_takes_the_time_behind_another_window_from_the_parts_own_chain():
+    """A part can run on another swap chain than the whole recording's main one (a game that made a new chain after
+    its menus): the chart judges the part's time behind another window on the part's chain, as its analysis did."""
+    from lagdoctor.analysis import frames as fa
+
+    def two_chains(focus_behind):
+        cap = synth.laglab("smooth").cap
+        fr = cap.frames
+        keep = [i for i, x in enumerate(fr[F.T]) if not 20.0 < x < 23.0]
+        cap.frames = {k: [v[i] for i in keep] for k, v in fr.items()}
+        cap.frames[F.SWAP_CHAIN] = ["0xA" if x < 16.0 else "0xB" for x in cap.frames[F.T]]
+        k = next(i for i, x in enumerate(cap.frames[F.T]) if x >= 23.0)
+        gap = 1000.0 * (cap.frames[F.T][k] - cap.frames[F.T][k - 1])
+        cap.frames[F.FRAME_MS][k] = cap.frames[F.DISPLAY_MS][k] = gap
+        cap.system[S.GAME_FOCUSED] = [(0 if 20.0 <= t <= 23.0 and focus_behind else 1) if v is not None else None
+                                      for t, v in zip(cap.system[S.T], cap.system[S.GAME_FOCUSED])]
+        return cap
+    cap = two_chains(True)
+    assert set(fa.main_chain(cap)[F.SWAP_CHAIN]) == {"0xA"}   # the whole recording's main chain is the other one
+    d = _part(cap, 16.5, 30.0)
+    assert d.stats["main_chain"] == "0xB"
+    assert "the worst took" not in html_report.render(d, cap)
+    cap = two_chains(False)                                  # in front: a frozen screen, named
+    assert re.search(r"the worst took 30\d\d ms", html_report.render(_part(cap, 16.5, 30.0), cap))
+
+
 def test_presses_outside_the_part_are_counted_as_the_recording_keeps_them():
     """A part that ends with the recording keeps a press up to 1 s past its end, as the recording does."""
     to_end = {"from_s": 10.0, "to_s": 25.0, "recorded_s": 25.0, "how": "set"}
@@ -963,13 +1006,13 @@ def test_the_summary_keeps_the_recordings_length_and_the_part_apart(tmp_path):
     import json
     from lagdoctor.report import summary
     cap = make_capture()
-    s = summary.build(_part(cap, 10.0, 20.0), cap, "watch")
-    assert s["duration_s"] == 10.0 and s["recorded_s"] == pytest.approx(cap.duration_s)
-    assert (s["measured_from_s"], s["measured_to_s"], s["measured_how"]) == (10.0, 20.0, "set")
+    s = summary.build(_part(cap, 9.0, 20.0), cap, "watch")
+    assert s["duration_s"] == 11.0 and s["recorded_s"] == pytest.approx(cap.duration_s)
+    assert (s["measured_from_s"], s["measured_to_s"], s["measured_how"]) == (9.0, 20.0, "set")
     (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps(s), encoding="utf-8")
     back = summary.read(tmp_path)
     assert (back["duration_s"], back["measured_from_s"], back["measured_to_s"], back["measured_how"]) == \
-        (10.0, 10.0, 20.0, "set")
+        (11.0, 9.0, 20.0, "set")
     whole = summary.build(diagnose(cap), cap, "watch")
     assert whole["duration_s"] == whole["recorded_s"] == pytest.approx(cap.duration_s)
     assert whole["measured_from_s"] is None and whole["measured_to_s"] is None and whole["measured_how"] is None
@@ -990,7 +1033,100 @@ def test_a_summarys_part_that_cannot_be_one_reads_back_as_none(tmp_path, bad):
     import json
     from lagdoctor.report import summary
     cap = make_capture()
-    s = dict(summary.build(_part(cap, 10.0, 20.0), cap, "watch"), **bad)
+    s = dict(summary.build(_part(cap, 9.0, 20.0), cap, "watch"), **bad)
     (tmp_path / summary.SUMMARY_NAME).write_text(json.dumps(s), encoding="utf-8")
     back = summary.read(tmp_path)
     assert back["measured_from_s"] is None and back["measured_to_s"] is None and back["measured_how"] is None
+
+
+# ------------------------------------------------------------------ the start key (M5) ---
+
+def _keyed(at, registered=True):
+    cap = make_capture()                      # about 25 s
+    cap.start_key = {"key": "ctrl+alt+s", "registered": registered, "window_s": 15.0, "at": at}
+    return cap
+
+
+def test_a_start_key_that_measured_nothing_is_said_in_both_reports_and_a_part_or_none_says_nothing():
+    note = ("The start key Ctrl+Alt+S was not pressed in time, so the whole recording was analysed, startup included. "
+            "To analyse only part of it, run lagdoctor analyze on the capture with --from (and --to).")
+    assert labels.unmeasured_note("the start key Ctrl+Alt+S was not pressed in time", pickable=True) == note
+    assert labels.unmeasured_note("", pickable=True) is None
+    cap = _keyed(None)
+    d = diagnose(cap)
+    assert note in html_report.render(d, cap) and note in " ".join(console.render(d, cap).split())
+    for quiet in (make_capture(), _keyed(5.0)):           # no start key; one whose part was analysed whole, as asked
+        d = diagnose(quiet)
+        assert "startup included" not in " ".join((html_report.render(d, quiet) + console.render(d, quiet)).split())
+    from lagdoctor.analysis.crop import crop
+    keyed = _keyed(5.0)
+    d = diagnose(crop(keyed, 5.0, 20.0, how="key"))        # the start key's part: its own note, none of this one
+    assert "startup included" not in " ".join((html_report.render(d, keyed) + console.render(d, keyed)).split())
+
+
+def _shown(cap) -> str:
+    return " ".join((html_report.render(diagnose(cap), cap) + console.render(diagnose(cap), cap)).split())
+
+
+def test_a_recording_of_unknown_length_is_not_told_to_pick_a_part_analyze_would_refuse():
+    cap = _keyed(5.0)
+    cap.duration_s = 0.0                                  # a damaged file: no part can be picked from it
+    from lagdoctor.analysis.crop import key_part, part_pickable
+    why = key_part(cap)[1]
+    assert why == "the start key Ctrl+Alt+S's part cannot be found: the recording's length is not known"
+    assert not part_pickable(cap)
+    assert labels.unmeasured_note(why, pickable=False) == (
+        "The start key Ctrl+Alt+S's part cannot be found: the recording's length is not known, so the whole recording "
+        "was analysed, startup included.")
+    shown = _shown(cap)
+    assert "length is not known, so the whole recording was analysed" in shown and "--from" not in shown
+    cap = _keyed(None, registered=False)                  # another why, the same unknown length
+    cap.duration_s = 0.0
+    assert "could not be registered, so the whole" in _shown(cap) and "--from" not in _shown(cap)
+
+
+def test_a_recording_no_longer_than_a_part_is_not_told_to_pick_one():
+    from lagdoctor.analysis.crop import MIN_SPAN_S, part_pickable
+    cap = _keyed(None)                                    # not pressed in time, and only 8 s long
+    cap.duration_s = 8.0
+    assert not part_pickable(cap) and "was not pressed in time, so the whole" in _shown(cap)
+    assert "--from" not in _shown(cap)
+    cap.duration_s = MIN_SPAN_S                           # a part of all of it only: still none to pick
+    assert not part_pickable(cap)
+    cap.duration_s = MIN_SPAN_S + 0.5
+    assert part_pickable(cap) and "run lagdoctor analyze on the capture with --from" in _shown(cap)
+
+
+def test_a_header_with_no_frames_says_whether_a_part_or_the_recording_had_none():
+    from lagdoctor.analysis.crop import EMPTY_IN_SPAN
+    assert labels.no_frames_text({"frames": EMPTY_IN_SPAN}) == "no frame timing in the measured part"
+    for measured in ({"frames": "not recorded in this capture"}, {}, None):
+        assert labels.no_frames_text(measured) == "frame timing not recorded"
+    d = diagnose(make_capture())
+    d.measured = dict(d.measured, frames=EMPTY_IN_SPAN)
+    assert html_report._frames_text(d) == "no frame timing in the measured part"
+
+
+def test_the_footers_command_makes_the_same_analysis_again():
+    keyed, plain = _keyed(5.0), make_capture()
+    assert html_report.rerun_args(None, plain) == ""                       # the whole recording: as analyze does
+    assert html_report.rerun_args(None, _keyed(None)) == ""                # no part was measured: the same
+    assert html_report.rerun_args(None, keyed) == " --from 0"              # all of a recording that measured one
+    from lagdoctor.analysis.crop import crop
+    key_part = crop(keyed, 5.0, 20.0, how="key").span
+    assert html_report.rerun_args(key_part, keyed) == ""                   # analyze finds the start key's part
+    set_part = crop(keyed, 9.0, 20.0, how="set").span
+    assert html_report.rerun_args(set_part, keyed) == html_report.part_args(set_part) == " --from 9 --to 20"
+    # A set part that is the whole recording to the millisecond: its own arguments are none, which now means the
+    # start key's part, so the footer asks for all of it.
+    whole_set = crop(keyed, 0.0, keyed.duration_s - 0.0005, how="set").span
+    assert html_report.part_args(whole_set) == "" and html_report.rerun_args(whole_set, keyed) == " --from 0"
+    assert html_report.rerun_args(whole_set, plain) == ""
+
+
+def test_a_part_the_player_set_says_nothing_of_a_start_key_that_measured_nothing():
+    from lagdoctor.analysis.crop import crop
+    cap = _keyed(None)                                    # the start key was not pressed
+    d = diagnose(crop(cap, 5.0, 20.0, how="set"))
+    shown = " ".join((html_report.render(d, cap) + console.render(d, cap)).split())
+    assert "the part you chose" in shown and "startup included" not in shown

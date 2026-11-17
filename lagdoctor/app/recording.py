@@ -29,7 +29,9 @@ ROOT = Path(__file__).resolve().parents[2]      # the folder holding lagdoctor/:
 LENGTH_S = 600                                  # a recording's length unless stopped first: the plan's 10 minutes
 LOG_NAME = "recorder.log"                       # the recorder's stderr, under lag-doctor's home
 OLD_LOG_NAME = "recorder-previous.log"
-RECORDER_HEAD = ["-B", "-E", "-s", "-m", "lagdoctor", "watch", "--control", "stdio", "--elevate"]
+# --start-key none: the app records the whole session until its own start key comes (M5's app half), so its screen,
+# clock and words stay true (DECISIONS 2026-11-09, the start key).
+RECORDER_HEAD = ["-B", "-E", "-s", "-m", "lagdoctor", "watch", "--control", "stdio", "--elevate", "--start-key", "none"]
 RELAY_HEAD = ["-B", "-E", "-s", "-m", "lagdoctor.relay"]    # relay/client.relay_argv's, before the relay's own
 MAX_SAID = 40                                   # lines the recorder said, kept for the running screen
 EXIT_WAIT_S = 10.0                              # for the recorder to end once its output has ended

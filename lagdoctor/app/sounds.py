@@ -21,9 +21,11 @@ VOLUME = 0.3                     # of full scale
 FADE_S = 0.008                   # each note fades in and out over this, so it starts and ends without a click
 GAP_S = 0.025                    # silence between two notes
 FOLDER = "sounds"
+_replace = os.replace            # the seam a test patches: never os.replace itself, which every module shares
 # (frequency in Hz, seconds) of each note.
 SOUNDS = {
     "ask": ((880.0, 0.07), (880.0, 0.07)),                        # a double knock: Windows asks, behind the game
+    "ready": ((659.25, 0.15),),                                   # one note: the start key is ready to press
     "start": ((523.25, 0.09), (783.99, 0.14)),                    # rising: the recording has begun
     "mark": ((1046.5, 0.06),),                                    # a blip: the lag key was heard
     "problem": ((392.0, 0.12), (311.13, 0.2)),                    # falling and low: something stopped working
@@ -78,12 +80,19 @@ class Player:
                 self.folder.mkdir(parents=True, exist_ok=True)
                 part = path.with_name(path.name + ".part")
                 part.write_bytes(data)
-                os.replace(part, path)
+                _replace(part, path)
         except OSError as exc:
             self.log(f"the {name} sound could not be written: {exc}")
             return None
         self.ready[name] = path
         return path
+
+    def prepare(self, names: tuple[str, ...] | None = None) -> None:
+        """Write each sound's file now (all of SOUNDS by default), so playing it later is only the play: a recording's
+        sounds play on the thread a key arrived on, which must return at once. One that cannot be written is logged;
+        each play of it tries the write again and returns False."""
+        for name in names or tuple(SOUNDS):
+            self.path(name)
 
     def play(self, name: str) -> bool:
         """Start the sound and return at once; False when it could not start."""

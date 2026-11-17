@@ -566,7 +566,7 @@
  {
   "name": "0 frames for frame timing not recorded",
   "file": "lagdoctor/report/html.py",
-  "old": "    return f\"{_fmt(_dict(d.stats).get('frames'))} frames\" if _ran(d, \"frames\") else \"frame timing not recorded\"",
+  "old": "    return f\"{_fmt(_dict(d.stats).get('frames'))} frames\" if _ran(d, \"frames\") else labels.no_frames_text(d.measured)",
   "new": "    return f\"{_fmt(_dict(d.stats).get('frames'))} frames\"",
   "tests": [
    "tests/test_report.py::test_the_header_names_the_game_by_its_window_and_says_when_frame_timing_was_not_recorded"

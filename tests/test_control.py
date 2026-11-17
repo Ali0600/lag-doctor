@@ -65,6 +65,10 @@ def test_what_the_recorder_sends_is_checked_too():
             dict(t="target", name="Game.exe", pid=4242, how="auto"), dict(t="target", name=None, pid=4242, how=None),
             dict(t="elevate", argv=[r"C:\Python313\pythonw.exe", "-B"], cwd=r"C:\lag-doctor"),
             dict(t="recording", duration_s=None, hotkey=True, frames=False, network=True), dict(t="mark", at=12.5),
+            dict(t="start_key", key="ctrl+alt+s", registered=True, window_s=600.0, start_by_s=1200.0),
+            dict(t="start_key", key="ctrl+alt+s", registered=False, window_s=None, start_by_s=None),
+            dict(t="measuring", at=192.345, until=792.345), dict(t="measuring", at=0, until=None),
+            dict(t="measuring", at=10.0, until=10.0),          # pressed in the instant the set length ran out
             dict(t="frames_lost", why="PresentMon stopped"), dict(t="stopping", reason="duration"),
             dict(t="saving", frames=12_000), dict(t="saved", session="20261109-140000-Game"),
             dict(t="say", text="Recording. Play normally"),
@@ -78,6 +82,17 @@ def test_what_the_recorder_sends_is_checked_too():
                 dict(t="recording", duration_s=True, hotkey=True, frames=True, network=True),
                 dict(t="recording", duration_s=None, hotkey="yes", frames=True, network=True),
                 dict(t="mark", at="soon"), dict(t="mark", at=True),
+                dict(t="start_key", key="x" * 41, registered=True, window_s=600.0, start_by_s=None),
+                dict(t="start_key", key="ctrl+alt+s", registered=1, window_s=600.0, start_by_s=None),
+                dict(t="start_key", key="ctrl+alt+s", registered=True, window_s=-1.0, start_by_s=None),
+                dict(t="start_key", key="ctrl+alt+s", registered=True, window_s=600.0),
+                dict(t="measuring", at=-0.5, until=None), dict(t="measuring", at=10.0, until=9.5),
+                dict(t="measuring", at=None, until=20.0), dict(t="measuring", at=10.0),
+                dict(t="measuring", at=10.0, until="later"), dict(t="measuring", at=10.0, until=True),
+                dict(t="start_key", key="ctrl+alt+s", registered=True, window_s=600.0, start_by_s=-1.0),
+                dict(t="start_key", key="ctrl+alt+s", registered=True, window_s=600.0, start_by_s="soon"),
+                dict(t="start_key", key="ctrl+alt+s", registered=True, window_s=600.0, start_by_s=True),
+                dict(t="measuring", t_at=10.0, at=10.0, until=None),
                 dict(t="saving", frames=-1), dict(t="say", text="x" * (control.MAX_SAY + 1))):
         with pytest.raises(control.ProtocolError):
             control.from_recorder(control.encode(**msg))
@@ -93,6 +108,8 @@ def test_a_line_longer_than_the_protocol_allows_is_never_made():
 @pytest.mark.parametrize("code,seen,stopped_by,failed,reason", [
     (0, {"target", "recording"}, "duration", False, "completed"),
     (0, {"target", "recording"}, "game exited", False, "game_exited"),
+    (0, {"target", "recording", "measuring"}, sess.WINDOW_ENDED, False, "completed"),    # the start key's window ran
+    (0, {"target", "recording"}, sess.NO_START, False, "completed"),          # no press in time: all of it analysed
     (0, {"target", "recording"}, control.STOPPED_REASON, False, "stopped"),
     (0, {"target", "recording"}, "", False, "stopped"),
     (cli.EXIT_CANCELLED, {"target"}, "", False, "cancelled"),
@@ -398,11 +415,23 @@ def test_a_mark_reaches_the_window_under_a_name_that_is_not_the_messages():
     assert window.messages == [{"t": "mark", "at": 61.25}] and window.errors == []
 
 
+def test_the_start_keys_events_reach_the_window_as_the_session_tells_them():
+    window = Window()
+    channel = _channel(window)
+    told = [("start_key", {"key": "ctrl+alt+s", "registered": True, "window_s": 600.0, "start_by_s": 1200.0}),
+            ("measuring", {"at": 70.125, "until": 670.125})]
+    for kind, data in told:                         # what session.Observers is told
+        channel.event(kind, dict(data))
+    channel.close(5.0)
+    window.finish()
+    assert window.messages == [{"t": kind, **data} for kind, data in told] and window.errors == []
+
+
 # ------------------------------------------------------------ whole recordings, as the window drives them ---
 
 def _args(tmp_path, *extra):
     return cli.build_parser().parse_args(["watch", "--control", "stdio", "--pid", "4242", "--hotkey", "none",
-                                          "--out", str(tmp_path / "out"), *extra])
+                                          "--start-key", "none", "--out", str(tmp_path / "out"), *extra])
 
 
 def _serve(window, args):
@@ -416,7 +445,7 @@ def _no_session(tmp_path):
     return not (tmp_path / "out").exists() or not any((tmp_path / "out").iterdir())
 
 
-def test_a_recording_the_window_drives_runs_from_hello_to_done(fake_world, tmp_path):
+def test_a_recording_the_window_drives_runs_from_hello_to_done(fake_world, tmp_path, _no_real_keys_or_sounds):
     window = Window()
     assert _serve(window, _args(tmp_path, "--no-elevate", "--duration", "0.2")) == 0
     assert window.kinds() == ["hello", "waiting", "target", "recording", "stopping", "saving", "saved", "done"]
@@ -426,6 +455,7 @@ def test_a_recording_the_window_drives_runs_from_hello_to_done(fake_world, tmp_p
     for text in ("Watching Game.exe", "Recording. Play normally", "Analysing...", cli.REPORT_NAME):
         assert text in window.said()
     assert fake_world["sessions"][-1]["printer"] is cli._silent        # no status line: nobody reads a console
+    assert _no_real_keys_or_sounds.players == 0                         # the window plays its own sounds
 
 
 def test_a_refusal_before_anything_starts_reaches_the_window(fake_world, monkeypatch, tmp_path):
@@ -594,7 +624,7 @@ def _recorder(tmp_path):
     env = {**os.environ, "LAGDOCTOR_HOME": str(tmp_path / "home"), "TEMP": str(tmp_path), "TMP": str(tmp_path)}
     lock = f"Local\\lagdoctor-test-{uuid.uuid4().hex}"
     argv = [sys.executable, "-c", CHILD, lock, "watch", "--control", "stdio", "--pid", "4000000000", "--no-elevate",
-            "--hotkey", "none"]
+            "--hotkey", "none", "--start-key", "none"]
     return argv, env
 
 
@@ -652,7 +682,8 @@ WAITS_FOR_STOP = ("import sys\nfrom lagdoctor import cli\n"
 
 def test_the_windows_stop_reaches_a_real_recorder_over_its_stdin(tmp_path):
     env = {**os.environ, "LAGDOCTOR_HOME": str(tmp_path / "home"), "TEMP": str(tmp_path), "TMP": str(tmp_path)}
-    argv = [sys.executable, "-c", WAITS_FOR_STOP, "watch", "--control", "stdio", "--no-elevate", "--hotkey", "none"]
+    argv = [sys.executable, "-c", WAITS_FOR_STOP, "watch", "--control", "stdio", "--no-elevate", "--hotkey", "none",
+            "--start-key", "none"]
     log = tmp_path / "recorder.log"
     with open(log, "wb") as err:
         proc = subprocess.Popen(argv, cwd=ROOT, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err)

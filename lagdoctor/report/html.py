@@ -259,6 +259,18 @@ def part_args(part: dict | None) -> str:
     return out
 
 
+def rerun_args(part: dict | None, cap: Capture) -> str:
+    """The `analyze` arguments that make this report again: none for the start key's part, which analyze finds by
+    itself (analysis/crop.key_part), " --from 0" for the whole of a recording that has one, else part_args'."""
+    from lagdoctor.analysis.crop import key_part
+    all_of_it = " --from 0" if key_part(cap)[0] is not None else ""
+    if part is None:
+        return all_of_it
+    if part["how"] == "key":
+        return ""
+    return part_args(part) or all_of_it         # a set part that is the whole recording to the millisecond
+
+
 # ------------------------------------------------------------------ sections --
 
 def _tiles(d: Diagnosis) -> str:
@@ -324,8 +336,11 @@ def _frame_chart(d: Diagnosis, cap: Capture) -> str:
     # the top, and never named the worst, and neither is one behind another window (frames.HIDDEN: a game that stops
     # drawing there shows one frame as long as the time behind). A part without frames of its own takes the whole
     # recording's scale and says nothing of frames cut off.
+    # Time behind another window as the analysis judged it: a part on the part cut as its analysis cut it, since its
+    # main chain can be another than the whole recording's, and a cover its edge cuts is judged on what is left.
     from lagdoctor.analysis import frames as fa
-    behind = fa.hidden_spans(fa.main_chain(cap))
+    from lagdoctor.analysis.crop import crop
+    behind = fa.hidden_spans(fa.main_chain(crop(cap, part["from_s"], part["to_s"]) if part else cap))
     starts = [a for a, _ in behind]
     seen = [v for x, v in zip(t, ms) if v is not None and not fa._in_spans(x, behind, starts)]
     vals = _analysed_frames(d, cap, part, behind) if part else seen
@@ -464,7 +479,7 @@ def _no_events(d: Diagnosis) -> str:
 
 def _frames_text(d: Diagnosis) -> str:
     """The frames the analysis had, for the header: "0 frames" once stood for frame timing that never ran."""
-    return f"{_fmt(_dict(d.stats).get('frames'))} frames" if _ran(d, "frames") else "frame timing not recorded"
+    return f"{_fmt(_dict(d.stats).get('frames'))} frames" if _ran(d, "frames") else labels.no_frames_text(d.measured)
 
 
 def _events(d: Diagnosis) -> str:
@@ -647,6 +662,11 @@ def _head(d: Diagnosis, cap: Capture, game: str) -> str:
     if part:
         note += (f'<p class="note">{e(labels.part_note(part, len(labels.outside_marks(cap.marks, part))))} '
                  "It is shaded on the charts.</p>")
+    else:
+        from lagdoctor.analysis.crop import key_part, part_pickable
+        unmeasured = labels.unmeasured_note(key_part(cap)[1], pickable=part_pickable(cap))
+        if unmeasured:
+            note += f'<p class="note">{e(unmeasured)}</p>'
     return (f"<header><h1>Lag report: {e(game)}</h1><p class=\"meta\">{exe}{e(when)} &middot; "
             f"{fmt_elapsed(cap.duration_s)} recorded &middot; {analysed}{e(_frames_text(d))}</p>{note}</header>"
             f'<section class="verdict {e(d.lag_type)}"><div class="badge">{e(lag)}</div>'
@@ -662,8 +682,8 @@ def render(d: Diagnosis, cap: Capture, capture_path: Path | None = None) -> str:
     footer = f"lag-doctor {e(__version__)}"
     if capture_path:
         footer += (f" &middot; capture saved at <code>{e(capture_path)}</code> &middot; re-run the analysis in "
-                   f"PowerShell with <code>lagdoctor analyze {e(powershell_path(capture_path))}{e(part_args(part))}"
-                   "</code>")
+                   f"PowerShell with <code>lagdoctor analyze {e(powershell_path(capture_path))}"
+                   f"{e(rerun_args(part, cap))}</code>")
     return (
         '<!doctype html><html lang="en"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'

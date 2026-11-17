@@ -251,7 +251,10 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
                "causes": ", ".join(labels.cause_text(c) for c in ev.causes if isinstance(c, str)) or "no clear cause"}
               for ev in sorted(kept, key=lambda ev: number(ev.t_start))]
     marks = labels.marks(stats, d.events)
-    mark_times = [t for t, _, _ in marks] or [m for m in (number(x) for x in _list(cap.marks)) if m is not None]
+    part = labels.measured_part(stats)          # a terminal watch measured from its start key (M5)
+    # Without the diagnosis' own marks, every press the capture kept; for a part, never those its analysis left out.
+    mark_times = [t for t, _, _ in marks] or ([] if part else
+                                              [m for m in (number(x) for x in _list(cap.marks)) if m is not None])
     refresh = number(stats.get("refresh_hz"))
     stutters = [[number(_dict(ev.detail).get("worst_t", ev.t_start)), number(ev.severity)]
                 for ev in d.events if ev.kind == "stutter"]
@@ -267,7 +270,11 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
         "when": when_text(started),
         "length": fmt_elapsed(cap.duration_s),
         "note": clean_note(cap.note) or "",
-        "frames_text": f"{fmt(stats.get('frames'))} frames" if frames_ok else "frame timing not recorded",
+        # Which part the numbers below cover; the charts show all of it until M5's app half shades the rest.
+        "part": (labels.part_note(part, len(labels.outside_marks(cap.marks, part))) + " The charts below show the "
+                 "whole recording.") if part else "",
+        "analysed": f"{labels.part_length(part)} analysed" if part else "",     # as the HTML report's header says
+        "frames_text": f"{fmt(stats.get('frames'))} frames" if frames_ok else labels.no_frames_text(d.measured),
         "verdict": {"key": d.lag_type if isinstance(d.lag_type, str) else "unknown", "title": lag_text(d.lag_type),
                     "headline": d.headline},
         "tiles": [["Average FPS", fmt(stats.get("avg_fps"))], ["1% low FPS", fmt(stats.get("low1_fps"))],

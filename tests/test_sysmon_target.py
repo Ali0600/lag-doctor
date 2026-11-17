@@ -266,7 +266,8 @@ def test_watch_says_how_to_name_the_game_once_whatever_the_refusal(fake_machine,
     # auto refusal carried the advice and the console added it again.
     from lagdoctor import cli
     monkeypatch.setattr(tgt, "sample_3d", lambda seconds, **kw: {(656, NV): 89.0})   # only the windowless job draws
-    assert cli.main(["watch", *argv, "--no-elevate", "--no-network", "--hotkey", "none"]) == cli.EXIT_BAD_ARGS
+    code = cli.main(["watch", *argv, "--no-elevate", "--no-network", "--hotkey", "none", "--start-key", "none"])
+    assert code == cli.EXIT_BAD_ARGS
     out = capsys.readouterr().out
     assert f"Could not find the game: {reason}" in out
     assert out.count("Start the game first") == 1 and out.count("--pid PID") == 1, out

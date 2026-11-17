@@ -326,6 +326,34 @@ def part_note(part: dict[str, Any], outside_marks: int = 0) -> str:
     return text + "."
 
 
+def unmeasured_note(why: str, *, pickable: bool) -> str | None:
+    """What the reports say when a recording had a start key but the whole of it was analysed (analysis/crop.key_part's
+    `why`, e.g. 'the start key Ctrl+Alt+S was not pressed in time'); None without a why. It says how to pick a part
+    only when one can be picked (`pickable`, crop.part_pickable), since analyze --from would refuse every other."""
+    if not why:
+        return None
+    text = f"{why[0].upper()}{why[1:]}, so the whole recording was analysed, startup included."
+    if not pickable:
+        return text
+    return text + " To analyse only part of it, run lagdoctor analyze on the capture with --from (and --to)."
+
+
+def no_frames_text(measured: Any) -> str:
+    """The header's words for an analysis that had no frames (Diagnosis.measured): a measured part with none of its own
+    says so, since the charts may still draw the recording's frames outside it, and frames that all came behind
+    another window (analysis/rules.no_frames_why) were recorded, just never judged."""
+    from lagdoctor.analysis.crop import EMPTY_IN_SPAN
+    frames = measured.get("frames") if isinstance(measured, dict) else None
+    if frames == EMPTY_IN_SPAN:
+        return "no frame timing in the measured part"
+    if isinstance(frames, str) and frames.startswith("every frame of the ") and COVERED_FRAMES in frames:
+        return "every frame came while another window was in front"
+    return "frame timing not recorded"
+
+
+COVERED_FRAMES = "came while another window was in front"   # rules.no_frames_why's words for frames none of which was judged
+
+
 def marks(stats: dict, events: list) -> list[tuple[float, list, list[str]]]:
     """CC-5: (time, [the lag events in its window], [signals that moved]) for each of the user's lag-key presses,
     from Diagnosis.stats["marks"] (analysis/diagnose.mark_list); entries a damaged file spoiled are left out."""

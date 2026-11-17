@@ -88,7 +88,13 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   redirected for every test by `tests/conftest.py`; the real PresentMon exe and PresentMon's gold ETL
   captures come from the `presentmon_exe` and `gold_etl_dir` fixtures, which check them against the tests' own
   pins in `tests/downloads.py`. Absent, they skip with the reason, unless `LAGDOCTOR_REQUIRE` names them (CI
-  does): then they fail, because there a missing download means a broken download step.
+  does): then they fail, because there a missing download means a broken download step. No test registers a real
+  key or makes a sound: `watch` measures from a start key by default (Ctrl+Alt+S, which the owner's own watch or
+  sweep may hold), so `tests/conftest.py`'s `_no_real_keys_or_sounds` fails a test that registers any key but
+  Ctrl+Alt+Shift+F23 or F24 or plays a sound, and gives a console `watch` a stand-in player (its `played` list). A
+  stand-in session takes a stand-in `hotkey_factory`; a test that runs `watch` in a child process, out of the
+  guard's reach, passes `--hotkey none --start-key none` (and `--no-sound` for a console `watch`): the lag key
+  Ctrl+Alt+L is a real key too.
 - **Red first.** A new guard ships with a mutation in `tests/redfirst/*.json` that turns its test red;
   `scripts/redfirst.py` must report every mutation `CAUGHT`. Never weaken a test to make it pass. A pytest run that
   outlives `TIMEOUT_S` (10 minutes; `REDFIRST_TIMEOUT_S` sets it in seconds) is ended with every process under it (a
@@ -190,7 +196,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   it is cut; `tests/test_crop.py` scans every string rules.py and diagnose.py show for text naming the whole capture,
   recording or session). A new `net_flows` key needs its decision in `crop.NET_FLOWS` (a test fails until it has
   one); a total over the whole recording becomes None in a part. A cropped capture is never saved (`Capture.save`
-  refuses it).
+  refuses it). watch's start key keeps its press in the capture's `start_key`, and every path that analyses a
+  recording finds its part through `crop.key_part` (the end of a watch, `analyze` without `--from/--to`, the reports'
+  "why the whole recording was analysed" note); never derive it anywhere else.
 - **One clock**: `lagdoctor.clock.now()` (QPC seconds). PresentMon runs with `--qpc_time`; its rows are
   timed by `TimeInQPC`, never by when they arrive (they arrive 0.1–2 s late, in bursts).
 - **PresentMon**: parse its CSV by header name; on a pipe it is Latin-1 text, not UTF-16. Stop it with

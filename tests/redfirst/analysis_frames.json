@@ -2865,5 +2865,14 @@
   "tests": [
    "tests/test_analysis_frames_attribute.py::test_a_move_the_turbo_veto_rules_out_never_reads_nothing_else_moved_either"
   ]
+ },
+ {
+  "name": "a chain asked for by name never picked",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if isinstance(chain, str) and chain in rows:      # the chain asked for by name; a saved record can hold anything",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_app_views.py::test_the_app_draws_the_swap_chain_its_diagnosis_analysed"
+  ]
  }
 ]

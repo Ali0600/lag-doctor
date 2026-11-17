@@ -1115,6 +1115,19 @@ reads links rather than refusing them.
 **Takeaway**: when a path must not leave the local disks, walk it part by part with lstat and readlink, judging each
 link's target, never open it to find out.
 
+### A side effect turned on by default reaches every test that runs the real entry point
+When a change makes something happen by default that a test must never do on the developer's own machine (register a
+global hotkey, play a sound, open a window), every existing test that drives the real entry point starts doing it,
+silently: the code under test swallows the errors a refusal would raise, by design. The protection is a suite-wide
+tripwire, added in the same change and before the first test run: an autouse fixture that replaces the side effect
+with one that records the attempt, and fails the test at its end, since raising inside swallowed code would pass.
+**Why it came up**: M5b turned watch's start key on by default. Tests that build a real session without a stand-in
+key would have registered Ctrl+Alt+S on the owner's PC, where their own watch or sweep may hold it, and a console
+watch would have played its chimes. `tests/conftest.py`'s `_no_real_keys_or_sounds` caught the sweep's real-watch test
+doing exactly that on its first run.
+**Takeaway**: before the first test run of a change that turns a side effect on by default, guard the whole suite
+with a tripwire that records and fails at teardown, then fix each test it catches.
+
 ### A timeout that kills the child leaves the processes the child started
 `subprocess.run(..., timeout=)` ends a run that hangs with `Popen.kill()`, which on Windows is `TerminateProcess` on
 the direct child only: Windows has no process groups, so whatever that child started keeps running. Through a venv
@@ -1285,3 +1298,14 @@ Counting every program in that folder as Windows' own also turned a `svchost.exe
 look-alike, into Windows' own, so the folder counts for `explorer.exe` alone.
 **Takeaway**: for "where Windows keeps its own files", call the System-prefixed function, and widen a trust rule only
 for the names that needed it.
+
+### The busiest item of a whole is not the busiest item of each part
+A pick such as "the swap chain with the most displayed frames" depends on the range it is taken over: a game that
+draws its menus on one chain and its play on another has one main chain for the whole recording and another for a
+part of it. Code that takes the whole recording's pick to describe a part's analysis describes the wrong rows.
+**Why it came up**: merging main into M5b, a review found the HTML chart taking a measured part's time behind another
+window from the whole recording's main chain while the part's analysis used the part's own, so the chart could name a
+9 s frame the analysis had left out; the app drew the whole recording's chain, with none of the part's frames. The
+analysis records the chain it used (`main_chain` in its stats), and both now follow it.
+**Takeaway**: when a result was computed over a subset, read every "main", "top" or "busiest" pick from what that
+computation recorded, never recompute it over the whole.
