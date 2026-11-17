@@ -1298,3 +1298,14 @@ Counting every program in that folder as Windows' own also turned a `svchost.exe
 look-alike, into Windows' own, so the folder counts for `explorer.exe` alone.
 **Takeaway**: for "where Windows keeps its own files", call the System-prefixed function, and widen a trust rule only
 for the names that needed it.
+
+### The busiest item of a whole is not the busiest item of each part
+A pick such as "the swap chain with the most displayed frames" depends on the range it is taken over: a game that
+draws its menus on one chain and its play on another has one main chain for the whole recording and another for a
+part of it. Code that takes the whole recording's pick to describe a part's analysis describes the wrong rows.
+**Why it came up**: merging main into M5b, a review found the HTML chart taking a measured part's time behind another
+window from the whole recording's main chain while the part's analysis used the part's own, so the chart could name a
+9 s frame the analysis had left out; the app drew the whole recording's chain, with none of the part's frames. The
+analysis records the chain it used (`main_chain` in its stats), and both now follow it.
+**Takeaway**: when a result was computed over a subset, read every "main", "top" or "busiest" pick from what that
+computation recorded, never recompute it over the whole.
