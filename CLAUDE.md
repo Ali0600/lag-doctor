@@ -493,6 +493,13 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   that long: a real leftover, not that lag. `test_a_hang_is_a_timeout_whose_processes_all_end_and_the_
   run_goes_on` still reads its leftovers once, right after the runner exits: if it fails the same way, give it
   `_still_listed` too.
+  `tests/test_folder_wait.py::test_one_round_reads_at_most_max_reads_per_round_new_paths` failed once on main's push
+  run (2026-11-17, PR #53's merge; `assert 513 == (513 + 1)`, green on rerun): its made-up world named lag-doctor by
+  the test process's real number, `os.getpid()`, and the runner had handed out one between 1000 and 1512, where the
+  test makes up 513 processes, so one of them read as lag-doctor and was never read (forcing `os.getpid` to 1004
+  failed it every time). Since then the folder wait asks `target._own_pid()`, the world's fixture makes it `ME`
+  (4,000,001, a number no real process holds), and `World.start` refuses that number. A fake process table elsewhere
+  names lag-doctor by a made-up number through a seam too, never by mixing the real one in with made-up ones.
   Never run two pytest processes here at once (a review agent's tests beside the suite): they share
   `%TEMP%\pytest-of-<user>` and its keep-three cleanup, and on 2026-11-08
   `tests/test_downloads.py::test_fetch_gold_takes_the_pinned_commits_gold_folder_byte_for_byte` failed twice that way
