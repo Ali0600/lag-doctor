@@ -104,8 +104,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   BAD-BASE, so grep the specs for a test's old name when you rename it. Before merging, rerun every mutation whose
   `file` or tests the change touches, picked by path from all of `tests/redfirst/`, never from a list kept by hand
   (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). Every mutation on
-  `lagdoctor/analysis/rules.py` (441 after PR #51) takes up to an hour here (PR #50's 494 picked mutations took about
-  70 minutes, PR #51's 744 about 36 on a quiet PC): start it in the background as soon as the code is settled, and
+  `lagdoctor/analysis/rules.py` (456 after PR #52) takes up to an hour here (PR #50's 494 picked mutations took about
+  70 minutes, PR #51's 744 about 36 and PR #52's 643 about 38 on a quiet PC): start it in the background as soon as the code is settled, and
   review meanwhile with agents that run no tests (no second pytest meanwhile, so write the next change's tests without
   running them; the full suite may run beside such agents, about 8.5 minutes). A guard a later edit makes redundant
   (PR #51: `return out or None` after an `if not proc_ded: return None`) leaves its mutation equivalent, so it can
@@ -175,7 +175,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `ram_pressure` and `vram_overflow` name programs (fewer keep their old line word for word); 5 to 7 fields are an
   older capture, judged by name. `explorer.exe` is judged by where it runs only when `target["windows_folder"]` is
   True (since 2026-11-16 the folder check covers the Windows folder itself, where Windows runs it); without it, by
-  name. A memory figure is read at the system rows' own ticks (`rules._when`), so a hand-built others table must carry the system table's times (`synth.system_table`'s 0.25 s steps). The sampler reads memory
+  name. A memory figure is read at the system rows' own ticks (`rules._when`), so a hand-built others table must
+  carry the system table's times (`synth.system_table`'s 0.25 s steps). A test of the half second that reaches the
+  nearest memory reading (`MEMORY_NEAR_S`) needs a window holding no reading of its own: `tests/test_analysis_rules.py`'s `stutter` lasts 0.15 s and attribution looks from 0.5 s before
+  to 0.25 s after, so with memory read on whole seconds a stutter at x.6 s ends its window exactly on one (PR #52's first
+  version passed without the reach, and only the gate's SURVIVED showed it); one at x.55 s holds none. The sampler reads memory
   once a second (`memory_every_s`): a `SystemSampler` test at `period_s=0.05` sees it on every 20th row unless it
   passes `memory_every_s` too. A `SystemSampler` test with a fake snapshotter calls the real
   `ntquery.image_path` on its made-up PIDs unless it passes `system_folders=sysmon.SystemFolders(...)`, whose fake
