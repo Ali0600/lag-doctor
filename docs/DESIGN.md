@@ -1061,7 +1061,7 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
   is cut and "the measured part" after. `tests/test_crop.py` scans every string rules.py and diagnose.py can show
   (each f-string whole) for "in", "of", "during", "over", "through", "throughout", "across" or "for" the capture, the
   recording or the session, and checks a cut diagnosis's shown texts, its headline among them.
-- **The cut**: the four tables, the other programs' samples and the lag-key presses keep their rows with
+- **The cut**: the five tables, the other programs' samples and the lag-key presses keep their rows with
   t0 <= t <= t1, every column kept even where its cut is empty (`analysis.window`); a part that runs to the
   recording's end keeps a press up to 1 s past it, as the recording does. A frame whose own interval began before t0
   is left out (`crop.frames_inside`): any row whose MsBetweenPresents reaches back past t0, and each chain's first
@@ -2019,7 +2019,7 @@ owner's run.
 
 ```python
 # analysis/window.py
-def window(cap, t0, t1, frames=None) -> dict      # {t0, t1, frames, system, gpu, network, others, marks}: each
+def window(cap, t0, t1, frames=None) -> dict      # {t0, t1, frames, system, gpu, network, fans, others, marks}: each
                                                   # table's rows with t0 <= t <= t1, columns kept aligned; frames is
                                                   # the table to cut (the main chain; default the capture's own);
                                                   # ValueError unless t0 and t1 are finite and in order

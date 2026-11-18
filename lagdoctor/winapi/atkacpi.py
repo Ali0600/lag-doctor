@@ -29,6 +29,7 @@ PRESENT = 0x0001                     # the high word of a fan's status: the firm
 # 0xFFFFFFFE (no such method) and 0xFFFFFFFF (no such device) have bit 16 set, so a presence BIT test would take them
 # for a fan at 6,553,400 RPM; the whole high word must be PRESENT instead, which refuses them and 0 (no such fan).
 RPM_STEP = 100                       # the low word counts hundreds of RPM
+MAX_RPM = 12_000                     # past it a reading is corrupt: G-Helper refuses a low word over 120 too
 BUFFER_BYTES = 16                    # method id, argument length, device id, a second argument (0)
 ARGS_BYTES = 8
 FILE_SHARE_READ, FILE_SHARE_WRITE = 0x1, 0x2
@@ -58,6 +59,10 @@ class NoSuchFan(Exception):
     """The firmware says this laptop has no such fan."""
 
 
+class BadReading(OSError):
+    """The firmware gave a speed past MAX_RPM: a corrupt reading, to be counted as a failed one."""
+
+
 def dsts_buffer(fan: str) -> bytes:
     """The 16 bytes of one DSTS call on a fan: method id, argument length 8, the fan's id, 0. KeyError for a name
     that is not in FAN_IDS."""
@@ -74,11 +79,14 @@ def is_fan_read(buf: bytes) -> bool:
 
 def decode(raw: int) -> int:
     """RPM from a fan's 32-bit status. NoSuchFan when the firmware has no such fan (unsupported, or no presence
-    bit). 0 is a fan standing still, never a missing reading."""
+    word); BadReading for a speed past MAX_RPM. 0 is a fan standing still, never a missing reading."""
     raw &= 0xFFFFFFFF
     if raw >> 16 != PRESENT:
         raise NoSuchFan(f"the firmware has no such fan (status 0x{raw:08X})")
-    return (raw & 0xFFFF) * RPM_STEP
+    rpm = (raw & 0xFFFF) * RPM_STEP
+    if rpm > MAX_RPM:
+        raise BadReading(f"the firmware gave a fan speed of {rpm:,} RPM (status 0x{raw:08X}), past {MAX_RPM:,}")
+    return rpm
 
 
 def _call(handle: int, buf: bytes) -> int:
@@ -115,7 +123,8 @@ class FanReader:
 
     def read(self, fan: str) -> int:
         """The fan's speed in RPM (steps of 100). NoSuchFan when the laptop has no such fan; OSError when the call
-        failed; ValueError when the reader is closed or the name is not a fan."""
+        failed, BadReading (an OSError) for a corrupt speed; ValueError when the reader is closed or the name is not
+        a fan."""
         if self._handle is None:
             raise ValueError("the fan reader is closed")
         if fan not in FAN_IDS:

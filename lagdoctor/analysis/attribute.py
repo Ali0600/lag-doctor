@@ -118,7 +118,9 @@ MAX_COUNT = 1e15             # [inferred] a size, rate or count past 1e15 (a pet
                              # times, ms and % are bounded by frames.MAX_ABS_VALUE
 NV_MAX_MHZ = 10_000.0        # [inferred] a GPU clock past 10 GHz is corrupt (an RTX 3070 Laptop tops out at 2.1 GHz)
 NV_MAX_W = 2_000.0           # [inferred] a GPU drawing past 2 kW, or limited there, is corrupt
-# G-Helper refuses a fan reading past 120 hundred RPM as corrupt (its AsusACPI.cs GetFan; docs/research/asus-fans.md)
+# G-Helper refuses a fan reading past 120 hundred RPM as corrupt (its AsusACPI.cs GetFan; docs/research/asus-fans.md);
+# the reader refuses one at the source too (atkacpi.MAX_RPM, held equal by tests/test_fans.py), so only a damaged
+# capture holds one
 FAN_MAX_RPM = 12_000.0
 FAN_NEAR_S = 1.0             # an NVIDIA reading's fan speed: the nearest fan reading within one fan period (1 s)
 FANS = ((C.CPU_FAN_RPM, "CPU fan"), (C.GPU_FAN_RPM, "GPU fan"), (C.MID_FAN_RPM, "middle fan"))

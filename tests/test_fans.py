@@ -12,6 +12,7 @@ import dataclasses
 import re
 import struct
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -74,9 +75,18 @@ def test_anything_but_a_fan_read_is_refused_before_it_reaches_the_device(monkeyp
     assert sent == []
 
 
-@pytest.mark.parametrize("raw, rpm", [(0x00010023, 3500), (0x00010025, 3700), (0x00010000, 0), (0x00010045, 6900)])
+@pytest.mark.parametrize("raw, rpm", [(0x00010023, 3500), (0x00010025, 3700), (0x00010000, 0), (0x00010045, 6900),
+                                      (0x00010078, 12_000)])
 def test_a_fans_status_is_hundreds_of_rpm_and_zero_is_a_fan_standing_still(raw, rpm):
     assert atkacpi.decode(raw) == rpm
+
+
+@pytest.mark.parametrize("raw", [0x00010079, 0x0001028F, 0x0001FFFF])
+def test_a_speed_past_the_bound_is_a_corrupt_reading_never_a_speed_or_a_missing_fan(raw):
+    with pytest.raises(atkacpi.BadReading) as err:
+        atkacpi.decode(raw)
+    assert isinstance(err.value, OSError) and not isinstance(err.value, atkacpi.NoSuchFan)
+    assert atkacpi.MAX_RPM == attribute.FAN_MAX_RPM          # the reader and the analysis hold one bound
 
 
 @pytest.mark.parametrize("raw", [0x00000000, 0xFFFFFFFE, 0xFFFFFFFF, 0x00020023, 0x00030000, 0x00000023, -2])
@@ -156,6 +166,21 @@ def test_no_test_reaches_the_real_device(_no_real_asus_device):
     _no_real_asus_device.clear()
 
 
+def test_the_device_guard_fails_a_test_that_reached_the_device():
+    from tests.conftest import asus_device_guard
+    mp = pytest.MonkeyPatch()
+    try:
+        guard = asus_device_guard(mp)
+        caught = next(guard)
+        with pytest.raises(OSError):
+            atkacpi.FanReader.open()
+        assert caught == ["a test tried to open the real ASUS device"]
+        with pytest.raises(AssertionError, match="a test tried to open the real ASUS device"):
+            next(guard)
+    finally:
+        mp.undo()
+
+
 def test_a_pc_without_the_asus_driver_cannot_open_it(monkeypatch):
     def refuse(*a):
         ctypes.set_last_error(2)
@@ -170,25 +195,39 @@ def _strings(tree: ast.AST) -> list[str]:
     return [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str)]
 
 
+# The reader's own ways into the device: another module that names one reaches past _call.
+READER_INSIDES = ("_ioctl", "_open", "_close", "_kernel32", "_call", "IOCTL_ATK", "PATH", "dsts_buffer")
+
+
 def device_mentions(root: Path) -> list[str]:
-    """Each module under `root` but winapi/atkacpi.py that names the ASUS device, its control code or the firmware's
-    set method, and the reader itself if it holds the set method's id: the reader is the one way in, and it only
-    reads."""
+    """Each module under `root` but winapi/atkacpi.py that names the ASUS device (in any string, any case, any
+    separators), its control code, the firmware's set method or one of the reader's insides, and the reader itself
+    if it holds the set method's id: the reader is the one way in, and it only reads."""
     found = []
-    # the device by its name (any case in a path, upper case alone: the module's own name is how code reaches it)
-    code = re.compile(r"\\\\\.\\atkacpi|0x0*22240c|\b2237452\b", re.IGNORECASE)
+    code = re.compile(r"0x0*22240c|\b2237452\b", re.IGNORECASE)
     set_id = re.compile(r"0x0*53564544|\b1398162756\b", re.IGNORECASE)
     for path in sorted(root.rglob("*.py")):
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(root).as_posix()
         if rel == "winapi/atkacpi.py":
-            if set_id.search(text):
+            if set_id.search(text) or any(b"DEVS" in n.value for n in ast.walk(ast.parse(text))
+                                          if isinstance(n, ast.Constant) and isinstance(n.value, bytes)):
                 found.append(f"{rel} holds the set method's id")
             continue
-        if code.search(text) or "ATKACPI" in text:
+        tree = ast.parse(text)
+        # a string naming the device: every spelling but the module's own path (winapi/atkacpi.py, atkacpi.FanReader)
+        named = [v for v in _strings(tree) if re.search(r"atkacpi(?![._a-z])", v, re.IGNORECASE)
+                 or re.search(r"[\\/]atkacpi(?![._a-z])", v, re.IGNORECASE)]
+        if named or code.search(text) or "ATKACPI" in text:
             found.append(f"{rel} names the ASUS device")
         if set_id.search(text) or re.search(r"\bDEVS\b", text):
             found.append(f"{rel} names the set method")
+        insides = {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute) and n.attr in READER_INSIDES
+                   and isinstance(n.value, ast.Name) and n.value.id == "atkacpi"}
+        insides |= {a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and (n.module or "").endswith(
+            "atkacpi") for a in n.names if a.name in READER_INSIDES}
+        if insides:
+            found.append(f"{rel} reaches into the reader ({', '.join(sorted(insides))})")
     return found
 
 
@@ -199,28 +238,71 @@ def test_only_the_reader_names_the_asus_device_and_nothing_names_the_set_method(
 def test_the_device_scan_finds_a_planted_mention(tmp_path):
     (tmp_path / "winapi").mkdir()
     (tmp_path / "winapi" / "atkacpi.py").write_text('PATH = "ATKACPI"\nIOCTL = 0x0022240C\n', encoding="utf-8")
-    (tmp_path / "other.py").write_text('DEVICE = r"\\\\.\\atkacpi"\n', encoding="utf-8")
-    (tmp_path / "code.py").write_text("CODE = 0x0022240c\n", encoding="utf-8")
-    (tmp_path / "setter.py").write_text("METHOD = 0x53564544\n", encoding="utf-8")
-    (tmp_path / "winapi" / "more.py").write_text("SET = 1398162756\n", encoding="utf-8")
-    assert sorted(device_mentions(tmp_path)) == ["code.py names the ASUS device", "other.py names the ASUS device",
-                                                 "setter.py names the set method", "winapi/more.py names the set method"]
-    (tmp_path / "words.py").write_text('SAID = "a DEVS call sets"\n', encoding="utf-8")
-    assert "words.py names the set method" in device_mentions(tmp_path)
-    (tmp_path / "words.py").unlink()
+    plants = {
+        "raw.py": 'DEVICE = r"\\\\.\\atkacpi"\n',              # the raw string, lower case
+        "escaped.py": 'DEVICE = "\\\\\\\\.\\\\AtkAcpi"\n',      # an escaped string, mixed case
+        "slashes.py": 'DEVICE = "//./atkacpi"\n',
+        "upper.py": "NAME = 'ATKACPI'\n",
+        "code.py": "CODE = 0x0022240c\n",
+        "setter.py": "METHOD = 0x53564544\n",
+        "words.py": 'SAID = "a DEVS call sets"\n',
+        "inside.py": "from lagdoctor.winapi import atkacpi\natkacpi._ioctl(1, 2, 3)\n",
+        "fromimport.py": "from lagdoctor.winapi.atkacpi import _call\n",
+        "winapi/more.py": "SET = 1398162756\n",
+        "fine.py": "from lagdoctor.winapi import atkacpi\nr = atkacpi.FanReader.open()  # winapi/atkacpi.py\n",
+    }
+    for name, text in plants.items():
+        (tmp_path / name).write_text(text, encoding="utf-8")
+    assert device_mentions(tmp_path) == [
+        "code.py names the ASUS device", "escaped.py names the ASUS device",
+        "fromimport.py reaches into the reader (_call)", "inside.py reaches into the reader (_ioctl)",
+        "raw.py names the ASUS device", "setter.py names the set method", "slashes.py names the ASUS device",
+        "upper.py names the ASUS device", "winapi/more.py names the set method", "words.py names the set method"]
     (tmp_path / "winapi" / "atkacpi.py").write_text("DEVS = 0x53564544\n", encoding="utf-8")
     assert "winapi/atkacpi.py holds the set method's id" in device_mentions(tmp_path)
-    assert len(device_mentions(tmp_path)) == 5
+    (tmp_path / "winapi" / "atkacpi.py").write_text("METHOD = b'DEVS'\n", encoding="utf-8")
+    assert "winapi/atkacpi.py holds the set method's id" in device_mentions(tmp_path)
+
+
+def device_reaches(tree: ast.AST) -> list[str]:
+    """Where a module reaches the device but through _call: each load of _ioctl outside _call, and each
+    DeviceIoControl or _kernel32 inside a function or lambda (at module level they only bind and describe it)."""
+    out = []
+
+    def walk(node: ast.AST, func: str | None) -> None:
+        for child in ast.iter_child_nodes(node):
+            inner = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else (
+                "<lambda>" if isinstance(child, ast.Lambda) else func)
+            if isinstance(child, ast.Name) and child.id == "_ioctl" and isinstance(child.ctx, ast.Load) \
+                    and func != "_call":
+                out.append(f"_ioctl in {func or 'the module'}")
+            if func is not None and (isinstance(child, ast.Attribute) and child.attr == "DeviceIoControl"
+                                     or isinstance(child, ast.Name) and child.id == "_kernel32"):
+                out.append(f"{getattr(child, 'attr', None) or child.id} in {func}")
+            walk(child, inner)
+    walk(tree, None)
+    return out
 
 
 def test_the_reader_reaches_the_device_only_through_its_guarded_call():
     tree = ast.parse((ROOT / "lagdoctor" / "winapi" / "atkacpi.py").read_text(encoding="utf-8"))
-    callers = {f.name for f in ast.walk(tree) if isinstance(f, ast.FunctionDef)
-               for n in ast.walk(f) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_ioctl"}
-    assert callers == {"_call"}
+    assert device_reaches(tree) == []
     call = next(f for f in ast.walk(tree) if isinstance(f, ast.FunctionDef) and f.name == "_call")
     first = next(s for s in call.body if not (isinstance(s, ast.Expr) and isinstance(s.value, ast.Constant)))
     assert isinstance(first, ast.If) and "is_fan_read" in ast.unparse(first.test)       # the check comes first
+    assert sum(1 for n in ast.walk(call) if isinstance(n, ast.Name) and n.id == "_ioctl") == 1
+
+
+@pytest.mark.parametrize("planted, said", [
+    ("def poke(h, b):\n    return _kernel32.DeviceIoControl(h, 1, b, 16, None, 0, None, None)\n",
+     ["DeviceIoControl in poke", "_kernel32 in poke"]),
+    ("poke = lambda h, b: _ioctl(h, IOCTL_ATK, b, 16, None, 0, None, None)\n", ["_ioctl in <lambda>"]),
+    ("send = _ioctl\n", ["_ioctl in the module"]),
+    ("def again(h, b):\n    return _ioctl(h, 1, b, 16, None, 0, None, None)\n", ["_ioctl in again"]),
+])
+def test_the_guarded_call_check_finds_each_way_around_it(planted, said):
+    text = (ROOT / "lagdoctor" / "winapi" / "atkacpi.py").read_text(encoding="utf-8") + "\n" + planted
+    assert device_reaches(ast.parse(text)) == said
 
 
 # ------------------------------------------------------------------------------------------- the collector ---
@@ -260,7 +342,9 @@ def sample(script, ticks=4, period=0.02):
             done.set()
     c.series.add = add
     c.start(0.0)
-    assert done.wait(5.0) or c.ended, "the fan sampler wrote no rows"
+    deadline = time.monotonic() + 5.0
+    while not done.wait(0.01) and not c.ended:
+        assert time.monotonic() < deadline, "the fan sampler wrote too few rows"
     c.stop()
     return c, r
 
@@ -303,6 +387,45 @@ def test_a_fan_whose_first_reads_fail_joins_when_it_answers():
     assert c.result()["columns"][C.CPU_FAN_RPM][:3] == [None, 3500, 3500]
     assert c.result()["device"] == {"fans": ["cpu"]} and c.status().state == "partial"
     assert c.status().detail.startswith("CPU fan, ")
+
+
+def test_a_corrupt_reading_is_a_failed_reading():
+    c, _ = sample({"cpu": [3500, atkacpi.BadReading("6,553,500 RPM"), 3500], "gpu": [NONE], "mid": [NONE]}, ticks=3)
+    assert c.result()["columns"][C.CPU_FAN_RPM][:3] == [3500, None, 3500]
+    assert c.status().state == "partial" and c.status().detail.endswith("; 1 fan reading failed")
+
+
+def test_a_fan_that_never_answers_is_given_up_without_spoiling_the_others():
+    # an absent fan whose id errors with something else than "no such fan": tried UNKNOWN_TRIES times, never counted
+    busy = OSError(None, "busy", None, 31)
+    c, r = sample({"cpu": [3500], "gpu": [3700], "mid": [busy]}, ticks=fanmon.UNKNOWN_TRIES + 3)
+    assert r.reads["mid"] == fanmon.UNKNOWN_TRIES and r.reads["cpu"] >= fanmon.UNKNOWN_TRIES + 3
+    st = c.status()
+    assert st.state == "ok" and st.detail.endswith("; the middle fan never answered"), st
+    assert c.result()["device"] == {"fans": ["cpu", "gpu"]}
+
+
+def test_a_device_whose_every_reading_fails_is_failed_with_the_last_error():
+    busy = OSError(None, "busy", None, 31)
+    c, r = sample({"cpu": [busy], "gpu": [busy], "mid": [NONE]}, ticks=fanmon.UNKNOWN_TRIES + 5)
+    n = fanmon.UNKNOWN_TRIES
+    assert len(c.result()["columns"][C.T]) == n and r.reads["cpu"] == n and c.result()["device"] is None
+    assert c.status() == SourceStatus("failed", f"the ASUS System Control Interface answered no fan reading in {n} "
+                                                f"tries (the last error: {busy})", fanmon.TOOL)
+
+
+def test_a_recording_stopped_before_the_first_reading_is_partial():
+    gate = threading.Event()
+
+    def slow():
+        gate.wait(5.0)
+        return FakeReader({"cpu": [3500], "gpu": [3700], "mid": [NONE]})
+    c = fanmon.FanSampler(reader_factory=slow, period_s=0.02)
+    c.start(0.0)
+    c._stop_event.set()
+    gate.set()
+    c.stop()
+    assert c.status() == SourceStatus("partial", "stopped before the first fan reading", fanmon.TOOL)
 
 
 @pytest.mark.parametrize("code, said", [(2, fanmon.NO_DEVICE), (3, fanmon.NO_DEVICE),
@@ -455,8 +578,11 @@ def test_the_fan_median_counts_only_hot_readings_near_a_fan_reading():
     assert fan_line(throttle(heated(fans, gpu))) == fan_line(res)
     far = fan_table(200.0, start=100.0, gpu_fan_rpm=3000)          # after every GPU reading (1 to 30 s)
     assert fan_line(throttle(heated(far))) == []
-    near = fan_table(30.0, start=1.9, gpu_fan_rpm=3000)            # 0.9 s from the 1 s reading: within reach
-    assert attribute.fans_while(heated(near), attribute.heat_named) == [("GPU fan", 3000.0, 3000.0)]
+    hot_last = heat(idle=29)                                       # one hot reading, at 30 s
+    near = fan_table(30.9, start=30.9, gpu_fan_rpm=3000)           # 0.9 s from it: within FAN_NEAR_S
+    assert attribute.fans_while(heated(near, hot_last), attribute.heat_named) == [("GPU fan", 3000.0, 3000.0)]
+    past = fan_table(31.1, start=31.1, gpu_fan_rpm=3000)           # 1.1 s from it: out of reach
+    assert attribute.fans_while(heated(past, hot_last), attribute.heat_named) == []
 
 
 def test_a_corrupt_fan_reading_is_left_out():
@@ -466,10 +592,12 @@ def test_a_corrupt_fan_reading_is_left_out():
 
 
 def test_a_gpu_at_its_lowered_power_cap_rather_than_held_by_heat_gets_no_fan_line():
-    # the fan line speaks of heat: a GPU at a lowered cap (a quiet mode's 55 W of an 80 W default) gets none
+    # the fan line speaks of heat held: a GPU at a lowered cap (a quiet mode's 55 W of an 80 W default) gets none,
+    # though some readings name heat too (so fans_while finds readings; only "held" keeps the line out)
     gpu = synth.gpu_table(30, nv_util_pct=99.0, nv_throttle_pct=0.0, nv_power_cap_pct=98.0, nv_temp_c=70.0,
                           nv_clock_mhz=1200, nv_clock_max_mhz=2100, nv_power_w=54.8, nv_power_limit_w=55.0,
-                          nv_reasons="sw_power_cap")
+                          nv_reasons=lambda t: "sw_power_cap,sw_thermal_slowdown" if t <= 3 else "sw_power_cap")
+    assert attribute.fans_while(heated(fan_table(30.0, gpu_fan_rpm=3000), gpu), attribute.heat_named)
     res = throttle(heated(fan_table(30.0, gpu_fan_rpm=3000), gpu))
     assert is_finding(res) and res.evidence[1].text.startswith("At its power cap")
     assert fan_line(res) == []
@@ -477,13 +605,16 @@ def test_a_gpu_at_its_lowered_power_cap_rather_than_held_by_heat_gets_no_fan_lin
 
 def test_the_diagnosis_keeps_each_fans_median_and_the_summary_carries_it():
     cap = synth.capture(synth.frames_table([1000.0 / 60] * 600), synth.system_table(10.0, cpu_total_pct=10.0),
-                        duration=10.0, fans=fan_table(10.0, cpu_fan_rpm=lambda t: 3000 + 100 * t, gpu_fan_rpm=None))
+                        duration=10.0, fans=fan_table(10.0, cpu_fan_rpm=lambda t: 3000 + 100 * t,
+                                                      gpu_fan_rpm=lambda t: 0 if t <= 5 else 3000))
     cap.sources = synth.sources(("frames", "system", "fans"))
     d = diagnose(cap)
-    assert (d.stats["fan_cpu_rpm"], d.stats["fan_gpu_rpm"]) == (3550.0, None)
+    assert (d.stats["fan_cpu_rpm"], d.stats["fan_gpu_rpm"]) == (3550.0, 1500.0)    # a still fan's 0 counts
+    assert attribute.fan_readings(cap)[C.GPU_FAN_RPM][0] == (1.0, 0.0)
     assert attribute.fan_stats(synth.capture()) == {"fan_cpu_rpm": None, "fan_gpu_rpm": None}
     fields = summary.headroom_fields(d.stats)
-    assert (fields["fan_cpu_rpm"], fields["fan_gpu_rpm"]) == (3550.0, None)
+    assert (fields["fan_cpu_rpm"], fields["fan_gpu_rpm"]) == (3550.0, 1500.0)
+    assert summary.headroom_fields({"fan_gpu_rpm": None})["fan_gpu_rpm"] is None
     assert summary.headroom_fields({})["fan_cpu_rpm"] is None                  # a summary from before the fans
 
 
@@ -495,7 +626,12 @@ def test_the_report_draws_the_fans_and_says_why_when_they_were_not_measured():
     d = diagnose(cap)
     page = html.render(d, cap)
     fans = page[page.index("<h2>Fans</h2>"):page.index("<h2>Video memory</h2>")]
-    assert "<svg" in fans and "CPU fan" in fans and "GPU fan" in fans and "middle fan" not in fans and " RPM" in fans
+    assert "<svg" in fans and "CPU fan" in fans and "GPU fan" in fans and "middle fan" not in fans
+    assert "Fan speeds (RPM)" in fans and not re.search(r"\d RPM</text>", fans)    # no tick wider than its margin
+    damaged = heated(fan_table(30.0, cpu_fan_rpm=lambda t: 6_553_500 if t == 9 else 3500))
+    damaged.frames = cap.frames
+    tops = [float(x) for x in re.findall(r">(\d+)</text>", html._fan_chart(diagnose(damaged), damaged))]
+    assert tops and max(tops) <= attribute.FAN_MAX_RPM * 1.1        # one corrupt reading never sets the scale
     cap = heated(None)
     cap.frames = synth.frames_table([1000.0 / 60] * 1700)
     cap.sources["fans"] = SourceStatus("unavailable", fanmon.NO_DEVICE, fanmon.TOOL)

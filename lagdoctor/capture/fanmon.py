@@ -20,6 +20,7 @@ from lagdoctor.model import C, SeriesBuilder
 from lagdoctor.winapi import atkacpi
 
 PERIOD_S = 1.0
+UNKNOWN_TRIES = 10       # a fan that errors this many times before it ever answers is given up on
 TOOL = "ASUS System Control Interface"
 COLUMN = {"cpu": C.CPU_FAN_RPM, "gpu": C.GPU_FAN_RPM, "mid": C.MID_FAN_RPM}
 FAN_WORDS = {"cpu": "CPU fan", "gpu": "GPU fan", "mid": "middle fan"}
@@ -76,42 +77,50 @@ class FanSampler(Collector):
 
     # ---- the loop -------------------------------------------------------
     def _loop(self, reader: Any) -> None:
-        unknown = list(atkacpi.FAN_IDS)          # not yet answered: read each tick until the firmware says
+        unknown = {fan: 0 for fan in atkacpi.FAN_IDS}    # not yet answered: fan -> its failed tries so far
         present: list[str] = []
+        silent: dict[str, str] = {}                      # no answer in UNKNOWN_TRIES tries: fan -> its last error
         failed = 0
         for t in self.ticks(self.period_s):
             row: dict[str, Any] = {C.T: round(t, 3)}
             start = clock.now()
-            for fan in present + unknown:
+            for fan in present + list(unknown):
                 try:
                     row[COLUMN[fan]] = reader.read(fan)
                 except atkacpi.NoSuchFan:
                     if fan in unknown:           # never had it: drop it for good
-                        unknown.remove(fan)
+                        del unknown[fan]
                     else:                        # had it a moment ago: a failed reading this second
                         failed += 1
-                except OSError:
-                    failed += 1
+                except OSError as exc:           # a corrupt reading (atkacpi.BadReading) included
+                    if fan not in unknown:
+                        failed += 1
+                    else:                        # not yet answered: a failure only once it answers
+                        unknown[fan] += 1
+                        if unknown[fan] >= UNKNOWN_TRIES:
+                            del unknown[fan]
+                            silent[fan] = str(exc) or type(exc).__name__
                 else:
                     if fan in unknown:
-                        unknown.remove(fan)
+                        failed += unknown.pop(fan)
                         present.append(fan)
             ms = (clock.now() - start) * 1000.0
             with self._lock:
                 self.series.add(**row)
                 self._present = [f for f in atkacpi.FAN_IDS if f in present]
                 self._cost_ms.append(ms)
-            if not present and not unknown:      # the firmware has none of the fans
+            if not present and not unknown:      # nothing left to read
                 break
-        self._finish(present, unknown, failed)
+        self._finish(present, list(unknown), silent, failed)
 
-    def _finish(self, present: list[str], unknown: list[str], failed: int) -> None:
+    def _finish(self, present: list[str], unknown: list[str], silent: dict[str, str], failed: int) -> None:
+        none = not present and not unknown and not silent       # the firmware has none of the fans
         with self._lock:
-            if not present and not unknown:      # rows of nothing but times say nothing: keep none
+            if none:                             # rows of nothing but times say nothing: keep none
                 self.series = SeriesBuilder(C.ALL)
             n = len(self.series)
             cost = _cost(self._cost_ms)
-        if not present and not unknown:
+        if none:
             self.set_status("unavailable", "the ASUS System Control Interface opened but reported no fans", tool=TOOL)
             return
         if n == 0:
@@ -121,13 +130,17 @@ class FanSampler(Collector):
                 self.set_status("failed", "no fan reading was recorded", tool=TOOL)
             return
         if not present:
-            self.set_status("failed", f"the ASUS System Control Interface answered no fan reading in {n} tries",
-                            tool=TOOL)
+            last = next(iter(silent.values()), None)
+            self.set_status("failed", f"the ASUS System Control Interface answered no fan reading in {n} tries"
+                                      + (f" (the last error: {last})" if last else ""), tool=TOOL)
             return
         fans = " and ".join(FAN_WORDS[f] for f in atkacpi.FAN_IDS if f in present)
         detail = f"{fans}, {n} readings once every {self.period_s:g} s"
         if cost:
             detail += f"; {cost['median_ms']:.1f} ms a reading (max {cost['max_ms']:.1f} ms)"
+        quiet = [FAN_WORDS[f] for f in atkacpi.FAN_IDS if f in silent or f in unknown]
+        if quiet:                                # neither a fan nor a failure: never known to exist
+            detail += f"; the {' and the '.join(quiet)} never answered"
         if failed:
             self.set_status("partial", f"{detail}; {failed} fan reading{'' if failed == 1 else 's'} failed", tool=TOOL)
         else:

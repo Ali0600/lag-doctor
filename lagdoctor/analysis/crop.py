@@ -7,7 +7,7 @@ diagnose() then runs on it. Times stay the recording's own, seconds from its t =
 and moments land on the whole recording's charts as they are, and a time the report shows is the time the player saw
 on the status line. What the cut does:
 
-- the four tables (frames, system, gpu, network), the other programs' samples and the lag-key presses keep their rows
+- the five tables (frames, system, gpu, network, fans), the other programs' samples and the lag-key presses keep their rows
   with t0 <= t <= t1, every column kept even where its cut is empty (analysis.window);
 - a frame whose own interval began before t0 is left out, since it measured time outside the span (a start set at the
   end of a loading screen would make the whole wait a frame of the part): frames_inside, which the report's frame

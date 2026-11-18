@@ -837,7 +837,7 @@ def main(argv: list[str] | None = None) -> int:
                     help="keep the frames of LagLab's planted hitches (by default they are left out: hitches every "
                          "N s keep a fixed phase with the samplers and would read as an effect)")
     ap.add_argument("--sources", default=DEFAULT_SOURCES,
-                    help=f"comma-separated, from system, gpu, network, each optionally @grid (default "
+                    help=f"comma-separated, from {', '.join(SOURCES)}, each optionally @grid (default "
                          f"{DEFAULT_SOURCES})")
     ap.add_argument("--shifts", type=int, default=DEFAULT_SHIFTS,
                     help="shifts per source at least --exclude-ms from zero (>= 500); about 30 %% more are drawn "
@@ -864,7 +864,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             source_cfg(s)
         except KeyError:
-            ap.error(f"unknown source {s!r}; use system, gpu or network, optionally with @grid")
+            ap.error(f"unknown source {s!r}; use one of {', '.join(SOURCES)}, optionally with @grid")
     if args.shifts < 500:
         print(f"phase_lock: note: {args.shifts} shifts is below the 500 the test is designed for", file=sys.stderr)
 
@@ -896,7 +896,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.plant:
         parts = args.plant.split(":")
         if len(parts) not in (2, 3) or parts[0] not in SOURCES:
-            ap.error("--plant takes SOURCE:MS[:PROB] with SOURCE one of system, gpu, network")
+            ap.error(f"--plant takes SOURCE:MS[:PROB] with SOURCE one of {', '.join(SOURCES)}")
         planted = plant(ends, ms, rows_by_base[parts[0]], parts[0], float(parts[1]),
                         float(parts[2]) if len(parts) == 3 else 1.0, args.seed)
     opts = {"shifts": args.shifts, "exclude_ms": args.exclude_ms, "bin_ms": args.bin_ms, "local_n": args.local_n,

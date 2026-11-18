@@ -377,14 +377,16 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   download, not CI's "tests that use a download" count (45, one of which skips there): read a counter at the commit
   that set a figure before
   correcting the figure against it.
-- **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies. (Its High
+- **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors, ping replies or ASUS fan device
+  (`asus_acpi`, declared before a CI run showed it: a GitHub VM has no ASUS firmware). (Its High
   performance plan has no power-mode slider; `slider_mode()` reads the plan's personality, so the power tests hold
   there undeclared.) The workflow declares that in `LAGDOCTOR_ABSENT`, and a test that needs one of those carries
   `@pytest.mark.needs(name)` (names in `tests/capabilities.py`), so it skips there with the reason; undeclared, a
   missing capability fails. Never make a test skip on a detected absence that a regression could also cause (the NVIDIA
   fixtures used to), and mark a test only when a CI run shows it failing for that lack: a test that passes on the
   runner keeps running there, even on another branch (elevated, the ETW tests check the real-time session). A PC
-  without an NVIDIA GPU sets `LAGDOCTOR_ABSENT=nvidia`. The runner has the WebView2 Runtime and a desktop (M0's
+  without an NVIDIA GPU sets `LAGDOCTOR_ABSENT=nvidia`, and one that is not an ASUS laptop adds `asus_acpi`. The
+  runner has the WebView2 Runtime and a desktop (M0's
   probe), so the app's window tests carry `needs("webview2")` and CI declares nothing for them. The runner's account
   is an administrator with UAC off, so `tests/test_cli.py` models an unelevated owner unless a test says otherwise,
   and the app's own `run()`, which refuses an elevated start, is never what a test opens: `tests/app_harness.py`

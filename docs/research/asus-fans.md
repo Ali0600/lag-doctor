@@ -265,14 +265,17 @@ code, after the research.
   (`capture/fanmon.py`) on a thread of its own rather than the system sampler's: a slow or stuck firmware call then
   delays only the fan rows, never the 4 Hz CPU, GPU and disk ones.
 - One function builds the input, with DSTS fixed in it and the three fan ids as its only allowed ids, the second
-  argument 0, and no method parameter. A source scan in the spirit of `tests/test_no_handles.py` refuses DEVS, INIT,
-  WDOG and the two event control codes anywhere in `lagdoctor/`, and a stand-in `DeviceIoControl` asserts that every
-  buffer sent starts with `DSTS` and names an allowed id; each guard gets a red-first mutation (DSTS changed to DEVS,
-  a fourth id added).
+  argument 0, and no method parameter (the advice). As built: `atkacpi._call` refuses any buffer but a DSTS read
+  of a fan id before DeviceIoControl, and `tests/test_fans.py` checks that no other module under `lagdoctor/`
+  names the device (in any spelling), its control code, the set method or the reader's insides, that the reader
+  reaches DeviceIoControl only from `_call`, and that a stand-in `DeviceIoControl` saw only DSTS buffers; each
+  guard has a red-first sabotage in `tests/redfirst/fans.json`. INIT, WDOG and the event control codes are not
+  scanned for: `_call` refuses any method but DSTS, and only its one control code is sent.
 - Decoding, strictest of the two sources: check DeviceIoControl's return value and that at least 4 bytes came back
   (else "failed", with the error); then `0xFFFFFFFE` and `0xFFFFFFFF` are "unsupported"; then the high word must be
   exactly `0x0001` (presence bit, no other high bits), else "absent" with the raw value in the reason; then RPM is the
-  low word x 100, where `0x00010000` is a real 0 RPM. A failed sample is None, never 0.
+  low word x 100, where `0x00010000` is a real 0 RPM. A failed sample is None, never 0. As built, a speed past
+  12,000 RPM (G-Helper's own bound) is a corrupt reading, counted as a failed one.
 - On a PC without the device the source is `unavailable`, with the CreateFileW error and "no ASUS System Control
   Interface device", and rules that need fan speed list it as unchecked. A fan the firmware says is absent (many
   laptops have no middle fan) is "absent", not "unavailable".

@@ -257,10 +257,11 @@ uv run python scripts/overhead/bench.py cycles --suite intel-cpu --out <dir>   #
 - **CI** (`.github/workflows/ci.yml`) runs the suite on GitHub's Windows Server 2025 runners for Python 3.13, the
   version the MSI ships, on every pull request and on every push to `main` except one that changes only `docs/`,
   `CLAUDE.md` or `.github/SECURITY.md`: no job reads those, and a test scans everything the jobs run to keep that
-  true. A runner has no GPU, no NVIDIA driver, no thermal sensors and no ping replies: the workflow declares that in
-  `LAGDOCTOR_ABSENT`, and the tests marked as needing those skip there with the reason. Its High performance plan
-  needs no declaring: the power tests hold on any plan. On a PC without an NVIDIA GPU, set
-  `$env:LAGDOCTOR_ABSENT = "nvidia"` before running the tests, or the NVIDIA ones fail.
+  true. A runner has no GPU, no NVIDIA driver, no thermal sensors, no ping replies and no ASUS fan device: the
+  workflow declares that in `LAGDOCTOR_ABSENT`, and the tests marked as needing those skip there with the reason.
+  Its High performance plan needs no declaring: the power tests hold on any plan. On a PC without an NVIDIA GPU,
+  set `$env:LAGDOCTOR_ABSENT = "nvidia"` before running the tests, or the NVIDIA ones fail; on one that is not an
+  ASUS laptop, add `asus_acpi` (`"nvidia,asus_acpi"`), or the two tests that read the real fans fail.
 - **The wheel, installed**: a second CI job builds the wheel, installs it into a fresh venv and runs `lagdoctor`
   there, outside the checkout (`scripts/wheel_check.py`). The wheel must hold exactly the files git tracks under
   `lagdoctor/`, every module must import from that venv, `--version` must name the wheel's version, and `analyze`

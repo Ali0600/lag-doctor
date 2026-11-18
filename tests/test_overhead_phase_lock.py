@@ -107,6 +107,26 @@ def test_a_laglab_log_is_cut_to_the_capture_and_refused_when_it_misses_it(tmp_pa
         pl.frames_from_laglab(log, 125.0, 20.0, keep_hitches=False)                 # covers 5 s of a 20 s capture
 
 
+def test_an_asus_recordings_fan_readings_are_a_source_and_a_capture_without_them_has_none(tmp_path, capsys):
+    rng = random.Random(12)
+    frame_ms = [16.7 * math.exp(rng.gauss(0.0, 0.08)) for _ in range(2400)]
+    fans = {"t": [float(t) + 0.3 for t in range(1, 41)], "cpu_fan_rpm": [3500] * 40, "gpu_fan_rpm": [3700] * 40,
+            "mid_fan_rpm": [None] * 40}
+    cap = synth.capture(synth.frames_table(frame_ms), synth.system_table(41.0), duration=41.0, fans=fans)
+    path = cap.save(tmp_path / "x.ldcap.json.gz")
+    out = tmp_path / "out.json"
+    assert pl.main([str(path), "--sources", "fans,fans@grid", "--shifts", "500", "--workers", "1",
+                    "--json", str(out)]) == 0
+    res = json.loads(out.read_text(encoding="utf-8"))
+    assert res["sources"]["fans"]["events"] == 40 and res["sources"]["fans@grid"]["events"] >= 38
+    assert "fans" not in pl.DEFAULT_SOURCES.split(",")           # only an ASUS laptop's recordings have the table
+    bare = synth.capture(synth.frames_table(frame_ms), synth.system_table(41.0), duration=41.0)
+    assert pl.events_of(bare, pl.SOURCES["fans"]["table"]) == []
+    with pytest.raises(SystemExit):
+        pl.main([str(path), "--sources", "pumps"])
+    assert "use one of system, gpu, network, fans" in capsys.readouterr().err
+
+
 def test_the_command_reads_a_saved_capture_and_writes_its_aggregates(tmp_path, capsys):
     rng = random.Random(11)
     frame_ms = [16.7 * math.exp(rng.gauss(0.0, 0.08)) for _ in range(2400)]

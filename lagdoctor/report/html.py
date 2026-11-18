@@ -651,14 +651,16 @@ FAN_CHART_MIN_RPM = 1000.0          # the fan chart's top, at least: a quiet fan
 
 def _fan_chart(d: Diagnosis, cap: Capture) -> str:
     """The laptop's fans (ASUS), in RPM: a fan held back while the GPU ran hot shows here, beside the GPU finding's
-    own fan line."""
+    own fan line. The unit is in the title, not on each tick: "6000 RPM" is wider than the chart's left margin. The
+    top stays at or under the analysis's bound, so a corrupt reading in a damaged capture never flattens the rest."""
+    from lagdoctor.analysis.attribute import FAN_MAX_RPM
     part = labels.measured_part(d.stats)
     top = max([v for c in (C.CPU_FAN_RPM, C.GPU_FAN_RPM, C.MID_FAN_RPM) for v in _points(cap.fans, c)[1]
-               if v is not None] + [FAN_CHART_MIN_RPM])
-    return _series_chart("Fan speeds", cap, cap.fans,
+               if v is not None and v <= FAN_MAX_RPM] + [FAN_CHART_MIN_RPM])
+    return _series_chart("Fan speeds (RPM)", cap, cap.fans,
                          [(C.CPU_FAN_RPM, "s1", "CPU fan"), (C.GPU_FAN_RPM, "s2", "GPU fan"),
                           (C.MID_FAN_RPM, "s3", "middle fan")],
-                         top * 1.1, " RPM", "fans", marks=mark_times(d, cap), part=part,
+                         top * 1.1, "", "fans", marks=mark_times(d, cap), part=part,
                          outside=labels.outside_marks(cap.marks, part))
 
 

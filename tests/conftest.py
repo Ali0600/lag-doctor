@@ -86,10 +86,15 @@ def _no_real_asus_device(request, monkeypatch):
     fans collector is in every real session, so a test that reaches it would read this laptop's fans and pass or
     fail on what the PC has. A reach is caught, answered as a PC without the device, and fails the test at its end.
     A test's own patch of atkacpi._open overrides this; a test that asks for this fixture gets the list of reaches."""
-    marker = request.node.get_closest_marker("needs")
-    if marker is not None and "asus_acpi" in marker.args:
+    if any("asus_acpi" in m.args for m in request.node.iter_markers("needs")):
         yield
         return
+    yield from asus_device_guard(monkeypatch)
+
+
+def asus_device_guard(monkeypatch):
+    """_no_real_asus_device's body: refuses the real open while it is suspended, yields the list of reaches, and
+    raises AssertionError at its end if anything reached (tests/test_fans.py drives it to prove that)."""
     import ctypes
 
     from lagdoctor.winapi import atkacpi
