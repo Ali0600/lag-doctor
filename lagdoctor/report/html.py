@@ -27,7 +27,7 @@ from typing import Any, Callable
 
 from lagdoctor import __version__
 from lagdoctor.analysis.stats import percentile
-from lagdoctor.model import Capture, Diagnosis, F, N, S, clean_note
+from lagdoctor.model import C, Capture, Diagnosis, F, N, S, clean_note
 from lagdoctor.report import labels
 from lagdoctor.report.charts import Chart, fmt_elapsed, number
 
@@ -646,6 +646,24 @@ def _cpu_gpu_chart(d: Diagnosis, cap: Capture) -> str:
         100.0, "%", "system", marks=mark_times(d, cap), part=part, outside=labels.outside_marks(cap.marks, part))
 
 
+FAN_CHART_MIN_RPM = 1000.0          # the fan chart's top, at least: a quiet fan never fills it
+
+
+def _fan_chart(d: Diagnosis, cap: Capture) -> str:
+    """The laptop's fans (ASUS), in RPM: a fan held back while the GPU ran hot shows here, beside the GPU finding's
+    own fan line. The unit is in the title, not on each tick: "6000 RPM" is wider than the chart's left margin. The
+    top stays at or under the analysis's bound, so a corrupt reading in a damaged capture never flattens the rest."""
+    from lagdoctor.analysis.attribute import FAN_MAX_RPM
+    part = labels.measured_part(d.stats)
+    top = max([v for c in (C.CPU_FAN_RPM, C.GPU_FAN_RPM, C.MID_FAN_RPM) for v in _points(cap.fans, c)[1]
+               if v is not None and v <= FAN_MAX_RPM] + [FAN_CHART_MIN_RPM])
+    return _series_chart("Fan speeds (RPM)", cap, cap.fans,
+                         [(C.CPU_FAN_RPM, "s1", "CPU fan"), (C.GPU_FAN_RPM, "s2", "GPU fan"),
+                          (C.MID_FAN_RPM, "s3", "middle fan")],
+                         top * 1.1, "", "fans", marks=mark_times(d, cap), part=part,
+                         outside=labels.outside_marks(cap.marks, part))
+
+
 def _head(d: Diagnosis, cap: Capture, game: str) -> str:
     try:
         when = datetime.fromisoformat(cap.started_at).strftime("%d %b %Y %H:%M")
@@ -693,6 +711,7 @@ def render(d: Diagnosis, cap: Capture, capture_path: Path | None = None) -> str:
         f"<h2>Frame times</h2>{_section(lambda: _frame_chart(d, cap))}"
         f"<h2>What is causing it</h2>{_section(lambda: _findings(d))}"
         f"<h2>CPU and GPU</h2>{_section(lambda: _cpu_gpu_chart(d, cap))}"
+        f"<h2>Fans</h2>{_section(lambda: _fan_chart(d, cap))}"
         f"<h2>Video memory</h2>{_section(lambda: _memory_chart(cap, part))}"
         f"<h2>Network</h2>{_section(lambda: _network_chart(cap, mark_times(d, cap), part, outside))}"
         f"<h2>Worst moments</h2>{_section(lambda: _events(d))}"

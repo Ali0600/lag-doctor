@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterable
 from lagdoctor.analysis import events as ev_mod
 from lagdoctor.analysis import frames as fa
 from lagdoctor.analysis import stats as st
-from lagdoctor.model import F, G, S, Capture, LagEvent
+from lagdoctor.model import C, F, G, S, Capture, LagEvent
 from lagdoctor.report import labels
 
 # ---- windows and baselines (LC 5.2) --------------------------------------------------------------
@@ -118,6 +118,12 @@ MAX_COUNT = 1e15             # [inferred] a size, rate or count past 1e15 (a pet
                              # times, ms and % are bounded by frames.MAX_ABS_VALUE
 NV_MAX_MHZ = 10_000.0        # [inferred] a GPU clock past 10 GHz is corrupt (an RTX 3070 Laptop tops out at 2.1 GHz)
 NV_MAX_W = 2_000.0           # [inferred] a GPU drawing past 2 kW, or limited there, is corrupt
+# G-Helper refuses a fan reading past 120 hundred RPM as corrupt (its AsusACPI.cs GetFan; docs/research/asus-fans.md);
+# the reader refuses one at the source too (atkacpi.MAX_RPM, held equal by tests/test_fans.py), so only a damaged
+# capture holds one
+FAN_MAX_RPM = 12_000.0
+FAN_NEAR_S = 1.0             # an NVIDIA reading's fan speed: the nearest fan reading within one fan period (1 s)
+FANS = ((C.CPU_FAN_RPM, "CPU fan"), (C.GPU_FAN_RPM, "GPU fan"), (C.MID_FAN_RPM, "middle fan"))
 
 CPU_SIDE = ("game_cpu_spike", "asset_streaming", "memory_paging", "background_cpu", "cpu_throttle")
 GPU_SIDE = ("gpu_throttle", "vram_overflow")
@@ -423,6 +429,61 @@ def nvidia_stats(cap: Capture) -> dict[str, float | None]:
     """Diagnosis.stats' NVIDIA keys (DESIGN): nvidia_depth over every reading that is not idle, each None without it."""
     d = nvidia_depth(cap) or {}
     return {key: d.get(part) for key, part in NVIDIA_STATS.items()}
+
+
+def fan_readings(cap: Capture) -> dict[str, list[tuple[float, float]]]:
+    """Each fan column's (t, rpm) readings in time order, those with a real time and a speed from 0 to FAN_MAX_RPM
+    (0 is a fan standing still; past the bound is corrupt, so left out); a fan with no reading is left out."""
+    fans = cap.fans if isinstance(cap.fans, dict) else {}
+    t = fa._col(fans, C.T)
+    out: dict[str, list[tuple[float, float]]] = {}
+    for col, _ in FANS:
+        vals = fa._col(fans, col)
+        pairs = []
+        for i, ti in enumerate(t):
+            x, when = fa._num(fa._at(vals, i)), fa._bounded(ti)
+            if when is not None and x is not None and 0 <= x <= FAN_MAX_RPM:
+                pairs.append((float(when), float(x)))
+        if pairs:
+            out[col] = sorted(pairs)
+    return out
+
+
+def fans_while(cap: Capture, keep: Callable[[Any], bool]) -> list[tuple[str, float, float]]:
+    """[(fan in words, median rpm, fastest rpm)] for each fan with readings: its median over the NVIDIA readings that
+    do not name gpu_idle and that `keep` accepts (given the reading's nv_reasons cell), each matched to the fan's
+    nearest reading within FAN_NEAR_S; its fastest over every reading of the capture (or part). A fan with no reading
+    near any such NVIDIA reading is left out."""
+    gpu = cap.gpu if isinstance(cap.gpu, dict) else {}
+    t, why = fa._col(gpu, G.T), fa._col(gpu, G.REASONS)
+    when = [w for i, ti in enumerate(t) if (w := fa._bounded(ti)) is not None
+            and not idle_named(fa._at(why, i)) and keep(fa._at(why, i))]
+    out = []
+    readings = fan_readings(cap)
+    for col, words in FANS:
+        pairs = readings.get(col)
+        if not pairs or not when:
+            continue
+        times = [p[0] for p in pairs]
+        near = []
+        for w in when:
+            k = bisect.bisect_left(times, w)
+            best = min((j for j in (k - 1, k) if 0 <= j < len(pairs)), key=lambda j: abs(times[j] - w))
+            if abs(times[best] - w) <= FAN_NEAR_S:
+                near.append(pairs[best][1])
+        if near:
+            out.append((words, st.median(near), max(p[1] for p in pairs)))
+    return out
+
+
+FAN_STATS = {"fan_cpu_rpm": C.CPU_FAN_RPM, "fan_gpu_rpm": C.GPU_FAN_RPM}
+
+
+def fan_stats(cap: Capture) -> dict[str, float | None]:
+    """Diagnosis.stats' fan keys (DESIGN): each fan's median speed over the capture (or part), None without it."""
+    readings = fan_readings(cap)
+    return {key: (st.median([x for _, x in readings[col]]) if col in readings else None)
+            for key, col in FAN_STATS.items()}
 
 
 def _gpu_heat(cap: Capture) -> _Series:

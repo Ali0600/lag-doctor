@@ -110,7 +110,7 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
 
 - **`lagdoctor app` opens lag-doctor's own window** (or **lag-doctor** in the Start menu, once installed): every game
   you have recorded, each game's recordings, and Results to explore (the verdict and causes, zoomable frame-time,
-  CPU/GPU, NVIDIA and ping charts, the lag moments with what the PC did around each, checked and fine, not
+  CPU/GPU, NVIDIA, fan and ping charts, the lag moments with what the PC did around each, checked and fine, not
   measured), plus Compare for two recordings of a game, with the conditions each ran under and what changed in the
   game itself between them. **Record the game that's running** records the busiest game with a window for 10
   minutes (Stop, or the game's exit, ends it sooner), with one UAC prompt from the window for frame timing. While you
@@ -170,6 +170,8 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
 
 - **GPU heat, clocks and throttling are NVIDIA-only** (NVML). On other GPUs the load and video memory still
   come from Windows counters.
+- **Fan speeds are ASUS-only**: read, never set, through the ASUS System Control Interface driver that ASUS
+  laptops have; on any other PC the report says they were not measured.
 - **The headroom is a rough estimate**, not a benchmark: how much a faster GPU or CPU would help comes from the
   GPU's time per frame and the game's busiest thread (which read high when several threads were busy in recordings
   made before lag-doctor kept its lead thread), and work a game does per second does not grow with its frame rate,
@@ -205,6 +207,7 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
 ```
  game (untouched) ──► ETW ──► PresentMon ──► frames ─┐
  Windows counters (PDH), NtQuerySystemInformation ──► system (4 Hz) ─┤
+ ASUS driver (read only) ──► laptop fan speeds ──► fans (1 Hz) ──────┤
  NVML ──► NVIDIA clocks, temperature, throttling ──► gpu (1 Hz) ─────┼─► capture ─► analysis ─► report
  ICMP, Wi-Fi, NIC counters ──► network (2 Hz) ───────────────────────┤        (one QPC clock)   + fixes
  ETW Kernel-Network ──► the game server's packet stream ─────────────┘
@@ -254,10 +257,11 @@ uv run python scripts/overhead/bench.py cycles --suite intel-cpu --out <dir>   #
 - **CI** (`.github/workflows/ci.yml`) runs the suite on GitHub's Windows Server 2025 runners for Python 3.13, the
   version the MSI ships, on every pull request and on every push to `main` except one that changes only `docs/`,
   `CLAUDE.md` or `.github/SECURITY.md`: no job reads those, and a test scans everything the jobs run to keep that
-  true. A runner has no GPU, no NVIDIA driver, no thermal sensors and no ping replies: the workflow declares that in
-  `LAGDOCTOR_ABSENT`, and the tests marked as needing those skip there with the reason. Its High performance plan
-  needs no declaring: the power tests hold on any plan. On a PC without an NVIDIA GPU, set
-  `$env:LAGDOCTOR_ABSENT = "nvidia"` before running the tests, or the NVIDIA ones fail.
+  true. A runner has no GPU, no NVIDIA driver, no thermal sensors, no ping replies and no ASUS fan device: the
+  workflow declares that in `LAGDOCTOR_ABSENT`, and the tests marked as needing those skip there with the reason.
+  Its High performance plan needs no declaring: the power tests hold on any plan. On a PC without an NVIDIA GPU,
+  set `$env:LAGDOCTOR_ABSENT = "nvidia"` before running the tests, or the NVIDIA ones fail; on one that is not an
+  ASUS laptop, add `asus_acpi` (`"nvidia,asus_acpi"`), or the two tests that read the real fans fail.
 - **The wheel, installed**: a second CI job builds the wheel, installs it into a fresh venv and runs `lagdoctor`
   there, outside the checkout (`scripts/wheel_check.py`). The wheel must hold exactly the files git tracks under
   `lagdoctor/`, every module must import from that venv, `--version` must name the wheel's version, and `analyze`
@@ -328,7 +332,7 @@ connection to Microsoft, as the runtime does on its own.
 
 ## Experience Gained
 
-- **Windows systems programming from Python**: 20 ctypes modules over 19 Windows DLLs plus NVIDIA's NVML
+- **Windows systems programming from Python**: 21 ctypes modules over 19 Windows DLLs plus NVIDIA's NVML
   (real-time and private ETW sessions, PDH, NtQuerySystemInformation, DXGI/DXCore, ICMP, WLAN) and no third-party
   package at run time, with zero handles opened to the game and imports limited to the 264 standard-library modules
   the shipped Python runtime itself reports it can import, both enforced by syntax-tree scans of the code, as is every
@@ -337,8 +341,9 @@ connection to Microsoft, as the runtime does on its own.
   desktop app in its own WebView2 window over raw COM vtables, with no loader DLL and its 100 slots and 35 IIDs pinned
   against Microsoft's SDK IDL, whose tests drive the real window on CI through a whole recording (a stand-in recorder
   on the real control channel) and crash its page and its browser process mid-recording to prove both recover.
-- **Telemetry on one clock**: 5 collectors (per-frame timing, a 4 Hz system sampler, 1 Hz NVIDIA telemetry,
-  2 Hz network probes, an ETW packet tracker) stamped by QueryPerformanceCounter, so a stutter lines up with
+- **Telemetry on one clock**: 6 collectors (per-frame timing, a 4 Hz system sampler, 1 Hz NVIDIA telemetry,
+  1 Hz laptop fan speeds through ASUS's driver, read-only by construction, 2 Hz network probes, an ETW packet
+  tracker) stamped by QueryPerformanceCounter, so a stutter lines up with
   the samples around it; the recorder takes 5–10 % of one logical CPU in a real game recording, and attaching and
   detaching it in turns on a test game (without frame timing, which needs admin rights) moved the mean frame time by
   less than 0.1 % in a CPU-bound workload.
@@ -349,14 +354,14 @@ connection to Microsoft, as the runtime does on its own.
   says how far off the next limit is (the CPU, the GPU or the screen, and how
   many times faster the limiting part must get), from thread CPU time rather than PresentMon's CPU Busy, which
   read 16.55 ms of a 16.9 ms GPU-bound frame.
-- **Testing that proves itself**: 5,065 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 5,136 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 44 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 3,731 deliberate
-  sabotages in 60 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 3,785 deliberate
+  sabotages in 61 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes, and a settings sweep that edits a game's settings file
   between runs and puts it back byte for byte, all behind a write-ahead journal, readback verification, undo and
   crash healing, with a handle-free identity check before touching any process; the sweep compares settings by

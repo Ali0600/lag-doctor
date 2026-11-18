@@ -11,12 +11,14 @@ from dataclasses import asdict
 
 import pytest
 
-from lagdoctor.model import (CAPTURE_SCHEMA, NOTE_CUT, NOTE_MAX, F, G, N, S, Capture, CaptureError, Diagnosis,
-                             Evidence, Finding, SeriesBuilder, SourceStatus, clean_note)
+from lagdoctor.model import (CAPTURE_SCHEMA, COLUMN_CLASSES, NOTE_CUT, NOTE_MAX, F, G, N, S, Capture,
+                             CaptureError, Diagnosis, Evidence, Finding, SeriesBuilder, SourceStatus,
+                             clean_note)
 
 
 def test_column_sets_have_unique_names_and_a_time_column():
-    for cls in (F, S, G, N):
+    assert set(COLUMN_CLASSES) >= {F, S, G, N}
+    for cls in COLUMN_CLASSES:
         assert len(set(cls.ALL)) == len(cls.ALL), cls.__name__
         assert cls.ALL[0] == "t"
         declared = {v for k, v in vars(cls).items() if k.isupper() and isinstance(v, str)}

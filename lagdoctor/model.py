@@ -1,7 +1,7 @@
 """The shared data model: what a capture holds and what a diagnosis says.
 
 Every module codes against the names defined here. Collectors write columns
-named by the F, S, G and N classes; the analysis reads them by the same names.
+named by the F, S, G, N and C classes; the analysis reads them by the same names.
 A SeriesBuilder refuses unknown column names, so a typo fails loudly at the
 writer instead of silently producing an empty column at the reader.
 
@@ -157,6 +157,19 @@ class G:
            THROTTLE_PCT, POWER_CAP_PCT)
 
 
+class C:
+    """Laptop fan columns (cooling), about 1 per second, from ASUS's System Control Interface (winapi/atkacpi.py).
+    Absent on other PCs. RPM in the firmware's steps of 100: 0 is a fan standing still; None is a reading that failed,
+    or a fan this laptop does not have."""
+
+    T = "t"
+    CPU_FAN_RPM = "cpu_fan_rpm"
+    GPU_FAN_RPM = "gpu_fan_rpm"
+    MID_FAN_RPM = "mid_fan_rpm"        # a third fan some ASUS laptops have between the two
+
+    ALL = (T, CPU_FAN_RPM, GPU_FAN_RPM, MID_FAN_RPM)
+
+
 class N:
     """Network columns (2 per second: one probe round every 0.5 s). RTT None in a row = that probe was lost or not
     sent this tick.
@@ -181,6 +194,9 @@ class N:
 
     ALL = (T, GW_RTT_MS, INET_RTT_MS, SERVER_RTT_MS, WIFI_SIGNAL_PCT, WIFI_RSSI_DBM, WIFI_BSSID,
            WIFI_CHANNEL, WIFI_RX_MBPS, WIFI_TX_MBPS, WIFI_RETRIES_PS, NIC_RX_BPS, NIC_TX_BPS)
+
+
+COLUMN_CLASSES = (F, S, G, N, C)       # every table's column class: the tests that check each column read this
 
 
 class SeriesBuilder:
@@ -254,6 +270,7 @@ class Capture:
     # watch's start key, when it had one (M5): {key, registered, window_s, at}, `at` the press that counts in seconds
     # from t = 0 (None: never pressed). analysis/crop.key_part reads the measured part from it.
     start_key: dict[str, Any] | None = None
+    fans: dict[str, list] = field(default_factory=dict)      # C columns (ASUS laptops; empty elsewhere)
     # Set only on a copy cut to part of the recording (analysis/crop.py): {from_s, to_s, recorded_s, how}. Never saved
     # or read from a file, which always holds the whole recording.
     span: dict[str, Any] | None = field(default=None, init=False)
@@ -358,7 +375,7 @@ class Capture:
 # Capture fields and the JSON types they must have (bool is refused where a number is wanted).
 _CAPTURE_TYPES: dict[str, type | tuple[type, ...]] = {
     "started_at": str, "clock_origin": (int, float), "duration_s": (int, float), "target": dict, "sources": dict,
-    "inventory": dict, "frames": dict, "system": dict, "gpu": dict, "network": dict, "others": list,
+    "inventory": dict, "frames": dict, "system": dict, "gpu": dict, "network": dict, "fans": dict, "others": list,
     "net_flows": dict, "marks": list, "notes": list, "schema": str, "tool_version": str, "note": (str, type(None)),
     "start_key": (dict, type(None))}
 

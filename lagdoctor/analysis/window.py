@@ -10,7 +10,7 @@ from typing import Any
 
 from lagdoctor.model import Capture
 
-TABLES = ("system", "gpu", "network")
+TABLES = ("system", "gpu", "network", "fans")
 
 
 def _time(v: Any) -> float | None:
@@ -37,8 +37,8 @@ def _cut(table: Any, t0: float, t1: float) -> dict[str, list]:
 
 
 def window(cap: Capture, t0: float, t1: float, frames: dict[str, list] | None = None) -> dict[str, Any]:
-    """{"t0", "t1", "frames", "system", "gpu", "network", "others", "marks"} for the span [t0, t1] in capture seconds,
-    both ends included.
+    """{"t0", "t1", "frames", "system", "gpu", "network", "fans", "others", "marks"} for the span [t0, t1] in capture
+    seconds, both ends included.
 
     `frames` is the frame table to cut: the analysis's main swap chain (analysis.frames.main_chain), which a caller
     showing several moments computes once; by default the capture's own frame table, every chain. "others" keeps the

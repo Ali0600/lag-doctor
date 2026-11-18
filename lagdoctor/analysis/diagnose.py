@@ -36,6 +36,7 @@ def diagnose(cap: Capture) -> Diagnosis:
     stats.update(bound=b["verdict"], bound_r=b["r"], gpu_busy_pct=b["gpu_busy_pct"], refresh_hz=b["refresh_hz"])
     stats.update(headroom_stats(b))
     stats.update(attribute.nvidia_stats(cap))
+    stats.update(attribute.fan_stats(cap))
     stats.update(events.summary_stats(cap, evs, stats.get("hidden_s")))
     stats["main_chain"] = next((c for c in fr.get(F.SWAP_CHAIN) or [] if isinstance(c, str)), None)
     span = getattr(cap, "span", None)
@@ -95,7 +96,7 @@ def measured(cap: Capture, stats: dict[str, Any]) -> dict[str, str]:
         out["frames"] = rules.no_frames_why(stats)
     elif out.get("frames", "").startswith("partial") and not stats.get("frames"):   # PresentMon's own problem after it
         out["frames"] = f"{rules.no_frames_why(stats)}; {out['frames']}"
-    for name, table in (("system", cap.system), ("gpu", cap.gpu), ("network", cap.network)):
+    for name, table in (("system", cap.system), ("gpu", cap.gpu), ("network", cap.network), ("fans", cap.fans)):
         if out.get(name) == "ok" and not frames._col(table, "t"):   # the rules point here for why (rules._Env.need)
             out[name] = "it ran but recorded nothing"
     return out
