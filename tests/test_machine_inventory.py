@@ -131,7 +131,8 @@ def test_collect_returns_every_design_key(machine):
     inv = collect(machine, {"exe": EXE, "monitor_device": PANEL["device"], "adapter_luid": NVIDIA["luid"]},
                   ["explorer.exe"])
     assert set(inv) == {"os", "cpu", "ram_gb", "laptop", "adapters", "displays", "power", "settings", "game", "oem",
-                        "network", "nvidia", "errors"}
+                        "network", "nvidia", "fans", "errors"}
+    assert inv["fans"] is None                       # the session fills it from the fans collector
     for key, fields in DESIGN_KEYS.items():
         assert set(inv[key]) == fields, key
     assert inv["errors"] == {}
