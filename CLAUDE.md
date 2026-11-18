@@ -365,8 +365,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
   for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
   to land recounts on main: a total its PR did not touch goes stale without a merge conflict (after #4 and #5, and
-  again after #7). The PresentMon figure (43 since `--track_pc_latency` was dropped) is the tests that run on CI with a
-  download, not CI's "tests that use a download" count (44, one of which skips there): read a counter at the commit
+  again after #7). The PresentMon figure (44 since M6d's live relay test for a folder) is the tests that run on CI with a
+  download, not CI's "tests that use a download" count (45, one of which skips there): read a counter at the commit
   that set a figure before
   correcting the figure against it.
 - **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies. (Its High
