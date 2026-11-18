@@ -324,14 +324,17 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   copy leaves alone. The relay is also the protocol of Stage 4's capture service (`docs/INSTALLER-PLAN.md`), so Stage
   4 work starts from that plan too.
 - **The relay** (`lagdoctor/relay/`, DESIGN.md "The relay") runs PresentMon and the Kernel-Network session with
-  administrator rights for a recording in the user's own window. Everything it does comes from its command line
+  administrator rights for a recording in the user's own window. What it may record comes from its command line
   (`client.relay_argv`, parsed by `server.parse_args` on both sides of the prompt; the player's note is never on it,
-  which `test_the_note_stays_with_the_recorder_and_never_goes_to_the_relay` holds); from the pipe it takes only `start`
-  and `stop`, and it passes back only what `protocol.py` lists: the game's frame rows and events, the recorder's own
-  events, and per-program byte totals for the recorder's Windows session (DECISIONS 2026-11-08). A new message or field
-  goes through `protocol.from_relay` or `from_recorder` with its checks. `tests/test_relay_live.py` starts the real
-  relay elevated and runs only on GitHub's runner (`scripts/stage2/guard.py`); the other relay tests run its code on a
-  thread here, unelevated. An agent never starts `python -m lagdoctor.relay` itself: only `watch` does.
+  which `test_the_note_stays_with_the_recorder_and_never_goes_to_the_relay` holds): the running game, or for Play the
+  forms of its install folder and how long to wait for it. From the pipe it takes only `start`, `stop` and, for Play,
+  `game` naming the process the recorder found, which it records only once `target.check_proposed` accepts it on the
+  relay's own snapshots (DECISIONS 2026-11-17); the relay resolves no path and reads no folder. It passes back only
+  what `protocol.py` lists: the game's frame rows and events, the recorder's own events, per-program byte totals for
+  the recorder's Windows session (DECISIONS 2026-11-08) and its answer about each game. A new message or field goes
+  through `protocol.from_relay` or `from_recorder` with its checks, and changes `protocol.VERSION`.
+  `tests/test_relay_live.py` starts the real relay elevated and runs only on GitHub's runner
+  (`scripts/stage2/guard.py`); the other relay tests run its code on a thread here, unelevated. An agent never starts `python -m lagdoctor.relay` itself: only `watch` does.
 - **The relay and the capture service talk only through `lagdoctor/winapi/pipe.py`.** Name a pipe through
   `pipe.path` (Windows folds `..` in a `\\.\` path, so a name holding one opened an ordinary file), build its
   descriptor with `pipe.client_dacl` (a SID string can carry entries of its own), and check who answered: a server
@@ -362,8 +365,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
   for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
   to land recounts on main: a total its PR did not touch goes stale without a merge conflict (after #4 and #5, and
-  again after #7). The PresentMon figure (43 since `--track_pc_latency` was dropped) is the tests that run on CI with a
-  download, not CI's "tests that use a download" count (44, one of which skips there): read a counter at the commit
+  again after #7). The PresentMon figure (44 since M6d's live relay test for a folder) is the tests that run on CI with a
+  download, not CI's "tests that use a download" count (45, one of which skips there): read a counter at the commit
   that set a figure before
   correcting the figure against it.
 - **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies. (Its High
@@ -487,6 +490,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   M6c's branch, which touches nothing the sweep imports: exit 2, so the settings were not all put back), then passed
   3 of 3 alone and twice in its file. Its fake world's journal waits 0.3 s for its lock, which a loaded PC may
   outrun (not measured); rerun it alone before blaming a change.
+  `tests/test_folder_wait.py::test_a_real_laglab_window_is_found_by_its_folder` (needs a GPU, so not on CI) failed on
+  2026-11-17 with "a window from the game's folder (python.exe) never drew within 20 seconds", alone and on main's own
+  `target.py` alike, with no other LagLab window open and the screen unlocked: LagLab's draws did not reach the GPU
+  counters then. Run that control before blaming a change.
   `tests/test_redfirst.py::test_the_job_counts_every_process_under_pytest_and_ending_it_ends_them_all` failed once on
   main's push run (2026-11-11, 5ea3f80; the PR's run of the same tree and the rerun passed): right after `job.end()`,
   with the job counting none of them, the snapshot still listed one of the tree's four processes (the parent's

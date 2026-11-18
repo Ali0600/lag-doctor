@@ -1,22 +1,29 @@
 """The relay process: PresentMon and the Kernel-Network session with administrator rights, for one recorder.
 
 Run as `pythonw -B -E -s -m lagdoctor.relay ...` through one UAC prompt (relay/client.launch), with no console
-window. Everything it does comes from that command line, which the prompt approved: the pipe's random name, the
-recorder (pid, create time, account SID), the running game (pid, create time), and whether to run frame timing (with
-the PresentMon file the recorder verified) and the network tracker. In order:
+window. Everything it may do comes from that command line, which the prompt approved: the pipe's random name, the
+recorder (pid, create time, account SID), the game (a running one by pid and create time; or for Play the forms of its
+install folder, with how long the recorder will wait for the store to start it), and whether to run frame timing
+(with the PresentMon file the recorder verified) and the network tracker. The pipe brings only the capture clock's
+origin and, for Play, the processes the recorder found, which the relay judges for itself. In order:
 
-1. Its own handle-free snapshot must show the recorder and the game running as exactly those processes, in the
-   relay's own Windows session (target.accept_target, which the recorder called before the prompt).
+1. Its own handle-free snapshot must show the recorder running as exactly that process in the relay's own Windows
+   session, and with --game the game too (target.accept_target, which the recorder called before the prompt).
 2. PresentMon must pass its check again here (setup.verify).
 3. It creates the pipe: first instance only, remote clients refused, a DACL for the recorder's account, a medium
    label, and Administrators as its owner, which only an elevated token may set (the recorder checks it).
 4. Only the recorder may stay connected: its pid and session are checked; anyone else is let go.
-5. On `start` it runs PresentMon on the game (rows forwarded, not kept: PresentMonSource's `forward`) and the
+5. For Play, each process the recorder names (`game`, up to protocol.MAX_GAMES) is judged by the folder rule on the
+   relay's own snapshots and its own read of the program's path (target.check_proposed): started after the relay, in
+   its session, a program under one of the forms, none of lag-doctor's own, and the recorder still running. It
+   answers `game` (that one is recorded) or `refused` with why, and waits on; it gives up when none is accepted by the
+   recorder's wait plus GAME_SLACK_S, and whenever the recorder is gone.
+6. On `start` it runs PresentMon on the game (rows forwarded, not kept: PresentMonSource's `forward`) and the
    Kernel-Network session. It forwards the game's frame rows, the events of the game's processes (the game and what
    it started, from its own snapshot once a second) and of the recorder (its DNS self-test), whole; for every other
    program it counts bytes received and sent and passes on the totals only for programs in the recorder's session
    (DECISIONS 2026-11-08). Events of other programs never leave it.
-6. On `stop`, or when the recorder hangs up, it stops both, sends what is left and the final statuses, then `end`.
+7. On `stop`, or when the recorder hangs up, it stops both, sends what is left and the final statuses, then `end`.
 
 It writes no file and prints nothing (pythonw has nowhere to print): before the pipe is up its exit code says what
 went wrong (protocol.EXIT_*), after that the pipe does.
@@ -32,14 +39,19 @@ import struct
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
 from lagdoctor.relay import protocol
 
 CLIENT_WAIT_S = 30.0          # the recorder connects as soon as the prompt's launch returns
-START_WAIT_S = 300.0          # the recorder reads the PC's details before its collectors start
+START_WAIT_S = 300.0          # the recorder reads the PC's details before its collectors start (Play: after the game)
+# Play: how long past the recorder's own wait (--wait-s) the relay waits for a game it accepts: one round of the wait
+# past its deadline, the re-arm's hold (target.REARM_HOLD_S) and the recorder's own check of the game (client.AIM_S).
+# A test holds it above their sum and below GAME_SLACK_MAX_S: the relay's approval of the folder lasts no longer.
+GAME_SLACK_S = 60.0
+GAME_SLACK_MAX_S = 120.0
 TICK_S = 0.1                  # rows and events go out this often
 STATUS_EVERY_S = 1.0          # the game's processes, sessions, totals and statuses this often
 WRITE_TIMEOUT_S = 10.0        # a recorder that reads nothing for this long is taken for gone
@@ -58,13 +70,16 @@ _LOCAL_PATH = re.compile(r"[A-Za-z]:\\(?![\\/])[^\x00-\x1f]{1,255}")
 
 @dataclass(frozen=True)
 class Config:
+    """What the UAC prompt approved (parse_args)."""
     pipe: str
     recorder: tuple[int, int]               # (pid, create_time)
     sid: str                                # the recorder's account: the only one the pipe lets in
-    game: tuple[int, int]
+    game: tuple[int, int] | None            # the running game (--game, M3); None for Play
     frames: bool
     network: bool
     presentmon_exe: Path | None
+    folders: tuple[str, ...] | None = None  # Play: the forms of the game's install folder (--folder)
+    wait_s: float | None = None             # Play: how long the recorder waits for the store to start the game
 
 
 class _Parser(argparse.ArgumentParser):
@@ -84,13 +99,25 @@ def _identity(text: str) -> tuple[int, int]:
     return int(m.group(1)), int(m.group(2))
 
 
+def _seconds(text: str) -> float:
+    """Play's --wait-s: a number of seconds the folder wait may take (more than 0, at most target.MAX_WAIT_S)."""
+    from lagdoctor.capture.target import MAX_WAIT_S
+    if not re.fullmatch(r"[0-9]{1,4}(?:\.[0-9]{1,3})?", text) or not 0 < float(text) <= MAX_WAIT_S:
+        raise ValueError(f"not a wait of more than 0 and at most {MAX_WAIT_S:g} seconds: {text!r}")
+    return float(text)
+
+
 def parse_args(argv: list[str]) -> Config:
-    """The relay's command line, as relay/client.relay_argv builds it; ValueError for anything else."""
+    """The relay's command line, as relay/client.relay_argv builds it; ValueError for anything else. The game is
+    either the running one (--game) or, for Play, the forms of its install folder (--folder, once per form, checked
+    by target.check_forms and never resolved here) with how long the recorder waits for it (--wait-s)."""
     p = _Parser(prog="lagdoctor.relay", add_help=False, allow_abbrev=False)
     p.add_argument("--pipe", required=True)
     p.add_argument("--recorder", required=True, type=_identity)
     p.add_argument("--sid", required=True)
-    p.add_argument("--game", required=True, type=_identity)
+    p.add_argument("--game", type=_identity)
+    p.add_argument("--folder", action="append")
+    p.add_argument("--wait-s", type=_seconds)
     p.add_argument("--frames", action="store_true")
     p.add_argument("--presentmon-exe")
     p.add_argument("--network", action="store_true")
@@ -99,6 +126,16 @@ def parse_args(argv: list[str]) -> Config:
         raise ValueError("not a relay pipe name")
     if not _SID.fullmatch(a.sid):
         raise ValueError("not a SID")
+    if (a.game is None) == (a.folder is None):
+        raise ValueError("name the running game (--game) or its install folder (--folder), one of the two")
+    folders = None
+    if a.folder is not None:
+        from lagdoctor.capture.target import check_forms
+        folders = check_forms(a.folder)
+        if a.wait_s is None:
+            raise ValueError("--folder needs --wait-s")
+    elif a.wait_s is not None:
+        raise ValueError("--wait-s goes with --folder")
     if not (a.frames or a.network):
         raise ValueError("nothing to run: neither --frames nor --network")
     exe = None
@@ -108,9 +145,9 @@ def parse_args(argv: list[str]) -> Config:
         exe = Path(a.presentmon_exe)
     elif a.presentmon_exe is not None:
         raise ValueError("--presentmon-exe without --frames")
-    if a.recorder[0] == a.game[0]:
+    if a.game is not None and a.recorder[0] == a.game[0]:
         raise ValueError("the recorder is not the game")
-    return Config(a.pipe, a.recorder, a.sid, a.game, a.frames, a.network, exe)
+    return Config(a.pipe, a.recorder, a.sid, a.game, a.frames, a.network, exe, folders, a.wait_s)
 
 
 # ------------------------------------------------------------------------------------------ the parts ---
@@ -148,6 +185,11 @@ def _etw_session(on_event: Callable[[Any], None]):
     return etw.RealtimeSession(netflows.SESSION_NAME, providers, on_event)
 
 
+def _image_path(pid: int) -> str | None:
+    from lagdoctor.winapi import ntquery
+    return ntquery.image_path(pid)
+
+
 @dataclass
 class Parts:
     """What the relay runs, made replaceable for tests; the defaults are the real ones."""
@@ -156,6 +198,7 @@ class Parts:
     frames: Callable[..., Any] = _frames_source             # (cfg, forward, alive) -> a frames Collector
     etw: Callable[..., Any] = _etw_session                  # (on_event) -> an ETW session
     me: int = field(default_factory=os.getpid)
+    image: Callable[[int], str | None] = _image_path        # Play: a process's program path, read without a handle
 
 
 # ---------------------------------------------------------------------------------------- the process ---
@@ -179,8 +222,9 @@ def main(argv: list[str] | None = None, *, owner: str | None = None, parts: Part
     rec = procs.get(cfg.recorder[0])
     if me is None or rec is None or rec.create_time != cfg.recorder[1] or rec.session_id != me.session_id:
         return protocol.EXIT_TARGET
-    if target.accept_target(procs, *cfg.game, session=me.session_id, approved=cfg.game) is not None:
-        return protocol.EXIT_TARGET
+    if cfg.game is not None:                      # Play's game does not exist yet: it is judged when it is named
+        if target.accept_target(procs, *cfg.game, session=me.session_id, approved=cfg.game) is not None:
+            return protocol.EXIT_TARGET
     if cfg.frames:
         try:
             parts.verify(cfg.presentmon_exe)
@@ -194,7 +238,7 @@ def main(argv: list[str] | None = None, *, owner: str | None = None, parts: Part
     with server:
         if not wait_for_recorder(server, cfg, me.session_id):
             return protocol.EXIT_NO_CLIENT
-        relay = Relay(cfg, server, me.session_id, parts)
+        relay = Relay(cfg, server, me.session_id, parts, since=me.create_time)
         try:
             return relay.serve()
         except Exception as exc:  # noqa: BLE001 - say why on the pipe if it is still there; the code says the rest
@@ -220,12 +264,15 @@ def wait_for_recorder(server, cfg: Config, session: int, wait_s: float | None = 
 
 
 class Relay:
-    """One recording: started by `start`, ended by `stop` or by the recorder hanging up."""
+    """One recording: started by `start`, ended by `stop` or by the recorder hanging up. `since`: the relay's own
+    create time, after which Play's game must have started."""
 
-    def __init__(self, cfg: Config, server, session: int, parts: Parts) -> None:
-        self.cfg, self.server, self.session, self.parts = cfg, server, session, parts
-        self._commands: queue.Queue = queue.Queue()  # start, then stop: the reader queues nothing else (at most 3)
-        self._took: set[str] = set()                # the commands the reader has queued
+    def __init__(self, cfg: Config, server, session: int, parts: Parts, since: int | None = None) -> None:
+        self.cfg, self.server, self.session, self.parts, self.since = cfg, server, session, parts, since
+        # Play's games (at most protocol.MAX_GAMES), then start, then stop: the reader queues nothing else.
+        self._commands: queue.Queue = queue.Queue()
+        self._took: set[str] = set()                # the commands the reader has queued (start, stop)
+        self._games = 0                             # Play's game proposals the reader has queued
         self._gone = threading.Event()          # the recorder hung up, or a write could not reach it
         self._broke = ""                        # the recorder sent what the protocol does not allow
         self._write_lock = threading.Lock()
@@ -234,7 +281,9 @@ class Relay:
         self._events: collections.deque = collections.deque()
         self._rows_lost = self._events_lost = 0
         self._pending: dict[int, list[int]] = {}
-        self._game: dict[int, int] = {cfg.game[0]: cfg.game[1]}     # the game's processes: pid -> create time
+        # The game it records: the one the prompt approved, or for Play the one it last accepted (None until then).
+        self.game: tuple[int, int] | None = cfg.game
+        self._game: dict[int, int] = {} if cfg.game is None else {cfg.game[0]: cfg.game[1]}   # its processes
         self._game_pids: frozenset[int] = frozenset(self._game)
         self._programs: dict[int, tuple[int, bool]] = {}     # pid -> (create_time, in the recorder's session)
         self._totals: dict[int, list[int]] = {}
@@ -278,12 +327,34 @@ class Relay:
                 return
             if "stop" in self._took:
                 continue                        # after stop nothing more is taken; reading goes on to see the hang-up
-            if msg["t"] in self._took:
-                self._broke = f"a second {msg['t']}"
+            why = self._out_of_turn(msg["t"])
+            if why is not None:
+                self._broke = why
                 self._commands.put({"t": "broken"})
                 return
-            self._took.add(msg["t"])
+            if msg["t"] == "game":
+                self._games += 1
+            else:
+                self._took.add(msg["t"])
             self._commands.put(msg)
+
+    def _out_of_turn(self, t: str) -> str | None:
+        """Why the recorder may not send this now, or None. `game` only for Play (the prompt approved a folder), only
+        before `start`, at most protocol.MAX_GAMES times; `start` and `stop` once each, and for Play `start` only once
+        a `game` has come."""
+        if t == "game":
+            if self.cfg.folders is None:
+                return "a game, though the UAC prompt approved the game itself"
+            if "start" in self._took:
+                return "a game after the start"
+            if self._games >= protocol.MAX_GAMES:
+                return f"more than {protocol.MAX_GAMES} games"
+            return None
+        if t in self._took:
+            return f"a second {t}"
+        if t == "start" and self.cfg.folders is not None and not self._games:
+            return "a start before any game"
+        return None
 
     def _command(self, timeout: float) -> dict | None:
         try:
@@ -299,20 +370,16 @@ class Relay:
 
     # ---- the recording ------------------------------------------------------------------------------
     def serve(self) -> int:
-        if not self._write(protocol.hello(self.parts.me, self.cfg.game, self.cfg.frames, self.cfg.network)):
+        if not self._write(protocol.hello(self.parts.me, self.cfg.game, self.cfg.folders, self.cfg.frames,
+                                          self.cfg.network)):
             return protocol.EXIT_OK
         threading.Thread(target=self._read_loop, name="relay-read", daemon=True).start()
-        deadline = time.monotonic() + START_WAIT_S
-        while True:
-            cmd = self._command(min(TICK_S * 5, max(0.0, deadline - time.monotonic())))
-            if cmd is not None:
-                break
-            if self._gone.is_set():
-                return protocol.EXIT_OK
-            if time.monotonic() >= deadline:
-                self._write(protocol.error("the recording did not start in time"))
-                self._write(protocol.end())
-                return protocol.EXIT_NO_CLIENT
+        if self.cfg.folders is None:
+            cmd = self._next(time.monotonic() + START_WAIT_S, "the recording did not start in time")
+        else:
+            cmd = self._play()
+        if isinstance(cmd, int):
+            return cmd
         if cmd["t"] == "broken":
             self.fail(f"the recording window sent a message the relay does not take ({self._broke})")
             return protocol.EXIT_PROTOCOL
@@ -320,6 +387,10 @@ class Relay:
             self._write(protocol.end())
             self._goodbye()
             return protocol.EXIT_OK
+        if self.game is None:                         # never a recording of a game the relay did not accept
+            self.fail("the recording window started the recording before the relay had accepted a game")
+            self._goodbye()
+            return protocol.EXIT_PROTOCOL
         try:
             self._start_sources(cmd["origin"])
             code = self._run()
@@ -331,6 +402,79 @@ class Relay:
         self._write(protocol.end())
         self._goodbye()
         return code
+
+    def _next(self, deadline: float, late: str) -> dict | int:
+        """The recorder's next command, or the exit code when there is none: it hung up (EXIT_OK), its snapshot shows
+        it gone while its pipe lives on, perhaps in another process (EXIT_TARGET), or nothing came by `deadline` (then
+        `late` is said, EXIT_NO_CLIENT). The recorder is looked for once every STATUS_EVERY_S."""
+        next_look = 0.0
+        while True:
+            cmd = self._command(min(TICK_S * 5, max(0.0, deadline - time.monotonic())))
+            if cmd is not None:
+                return cmd
+            if self._gone.is_set():
+                return protocol.EXIT_OK
+            now = time.monotonic()
+            if now >= deadline:
+                self._write(protocol.error(late))
+                self._write(protocol.end())
+                return protocol.EXIT_NO_CLIENT
+            if now >= next_look:
+                next_look = now + STATUS_EVERY_S
+                if self._recorder_left():
+                    self._write(protocol.error("the recording window is no longer running"))
+                    self._write(protocol.end())
+                    return protocol.EXIT_TARGET
+
+    def _recorder_left(self) -> bool:
+        """True when the relay's own snapshot shows the recorder gone, someone else holding its number, or it in
+        another session; a snapshot that fails says nothing (the next one is asked)."""
+        try:
+            rec = self.parts.snapshot().get(self.cfg.recorder[0])
+        except OSError:
+            return False
+        return rec is None or rec.create_time != self.cfg.recorder[1] or rec.session_id != self.session
+
+    def _play(self) -> dict | int:
+        """Play: each `game` the recorder names is judged (_judge) and answered, and a later one takes the place of
+        the one before; the game recorded is the last one accepted. With none accepted the relay gives up at the
+        recorder's own wait plus GAME_SLACK_S, counted from its hello; once one is, it waits START_WAIT_S for `start`,
+        never past that same point plus START_WAIT_S. Returns the command that ends the wait, or the exit code."""
+        game_by = time.monotonic() + self.cfg.wait_s + GAME_SLACK_S
+        by = game_by
+        while True:
+            late = ("no game the relay could record started in time" if self.game is None
+                    else "the recording did not start in time")
+            cmd = self._next(by, late)
+            if isinstance(cmd, int) or cmd["t"] != "game":
+                return cmd
+            proposed = cmd["game"]
+            self._take(None)                          # this one takes the place of any game accepted before it
+            why, retry = self._judge(proposed)
+            if why is None:
+                self._take(proposed)
+                self._write(protocol.game(proposed))
+                by = min(game_by + START_WAIT_S, time.monotonic() + START_WAIT_S)
+            else:
+                self._write(protocol.refused(proposed, why, retry))
+                by = game_by
+
+    def _judge(self, proposed: tuple[int, int]) -> tuple[str | None, bool]:
+        """Play's folder rule on a process the recorder named, on the relay's own snapshots and its own read of the
+        program's path (target.check_proposed): in the relay's session, started after the relay (`since`), a program
+        under one of the forms the prompt approved, none of lag-doctor's own (the recorder's tree and the relay's),
+        and the recorder still running. (why not, in one line of plain text, and whether asking again may help), or
+        (None, False). This is where Stage 4's service will put its own policy (the caller's session and account)."""
+        from lagdoctor.capture import target
+        return target.check_proposed(
+            self.parts.snapshot, self.parts.image, *proposed, session=self.session, folders=self.cfg.folders,
+            since=self.since, own=(self.cfg.recorder, (self.parts.me, self.since)), alive=(self.cfg.recorder,))
+
+    def _take(self, game: tuple[int, int] | None) -> None:
+        """Play: the game it will record, accepted just now (None: none, until the next one is)."""
+        self.game = None if game is None else (game[0], game[1])
+        self._game = {} if game is None else {game[0]: game[1]}
+        self._game_pids = frozenset(self._game)
 
     def _run(self) -> int:
         next_status = 0.0
@@ -355,6 +499,8 @@ class Relay:
 
     def _start_sources(self, origin: float) -> None:
         self._refresh()                                   # the game's processes before its first event
+        if self._gone.is_set():                           # the recorder is gone (its pipe may live on elsewhere)
+            return
         self._refresher = threading.Thread(target=self._refresh_loop, name="relay-refresh", daemon=True)
         self._refresher.start()
         if self.cfg.network:
@@ -375,19 +521,22 @@ class Relay:
                 self._frames_final = True
                 self._write(protocol.frames_status("failed", f"PresentMon was not started: {why}", TOOL, final=True))
                 return
-            self._frames = self.parts.frames(self.cfg, self._on_row, self._game_alive)
+            # The frame source is told the game it records: the approved one, or Play's accepted one.
+            self._frames = self.parts.frames(replace(self.cfg, game=self.game), self._on_row, self._game_alive)
             self._frames.start(origin)
             self._send_frames()
 
     def _game_refused(self) -> str | None:
-        """accept_target again, on a fresh snapshot, just before PresentMon opens the game by its pid: minutes may
-        have passed since the relay's first check, and a pid Windows gave away must not be traced."""
+        """accept_target again, on a fresh snapshot, just before PresentMon opens the game by its pid: the network
+        trace's start took a moment, and with --game minutes may have passed since the relay's first check, and a pid
+        Windows gave away must not be traced. The game is the one it accepted, as that exact process (Play's folder
+        rule judged it already, and a process's program never changes)."""
         from lagdoctor.capture.target import accept_target
         try:
             procs = self.parts.snapshot()
         except OSError as exc:
             return f"the game could not be checked again ({exc})"
-        return accept_target(procs, *self.cfg.game, session=self.session, approved=self.cfg.game)
+        return accept_target(procs, *self.game, session=self.session, approved=self.game)
 
     def _stop_sources(self) -> None:
         """The network trace first (milliseconds; its last events are delivered inside stop), then PresentMon (up to
@@ -423,10 +572,10 @@ class Relay:
     # ---- frames ---------------------------------------------------------------------------------------
     def _game_alive(self) -> bool:
         try:
-            p = self.parts.snapshot().get(self.cfg.game[0])
+            p = self.parts.snapshot().get(self.game[0])
         except OSError:
             return True                            # cannot tell this second: ask again the next
-        return p is not None and p.create_time == self.cfg.game[1]
+        return p is not None and p.create_time == self.game[1]
 
     def _on_row(self, row: dict[str, Any]) -> None:
         """PresentMonSource's forward: one of the game's rows, on PresentMon's reader thread."""
@@ -513,7 +662,7 @@ class Relay:
             # The recorder is gone (its pipe handle may live on in another process): its number is someone else's
             # now. The recording ends, and nothing more is written.
             self._gone.set()
-        tree = descendants(procs, *self.cfg.game)
+        tree = descendants(procs, *self.game)
         game: dict[int, int] = {}
         for pid in tree | set(self._game):
             p = procs.get(pid)

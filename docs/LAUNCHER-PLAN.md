@@ -34,7 +34,8 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   app's half, which the owner tries before it merges.
 - [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
-  below). The relay's folder policy, `watch --wait-folder`, screen 6 and the art are not built yet.
+  below) and the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
+  names). `watch --wait-folder`, screen 6 and the art are not built yet.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -175,28 +176,32 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
 |---|---|---|---|
 | **app**: the window (`pythonw.exe`) | the user | the library, Play, results, compare; asks for UAC with its own window | records, holds the capture lock, touches the game, draws anything that moves while a game records |
 | **recorder**: `lagdoctor watch` in a control mode, started by the app with no window | the user | the lock, readiness, the wait for the game, the inventory, the Session (system sampler, NVIDIA, pings, hotkeys), save, analysis, report; status to the app | elevates, opens the game |
-| **relay** | an administrator, through one UAC prompt, today; the LocalService capture service from Stage 4 | runs PresentMon on the approved game and the Kernel-Network session, and forwards only that game's frame rows and network events (plus the recorder's own, for the tracker's DNS self-test) | writes a file, takes PresentMon's or ETW's arguments from the pipe, serves two recordings at once |
+| **relay** | an administrator, through one UAC prompt, today; the LocalService capture service from Stage 4 | runs PresentMon on the game it accepts (the approved running game, or for Play the one the recorder names, from under the approved install folder) and the Kernel-Network session, and forwards only that game's frame rows and network events (plus the recorder's own, for the tracker's DNS self-test) and per-program byte totals of the recorder's session | writes a file, reads a folder, records a game its own check did not accept, takes any other PresentMon or ETW argument from the pipe, serves two recordings at once |
 
 - **The app never runs a Session.** A crash or a closed window cannot lose a recording, and the samplers do not share
   an interpreter with the UI. In the CLI, the recorder runs in the user's own console: one recording path.
 - **The relay decides from what the prompt approved.** Its command line, approved at the prompt, carries:
   - a random pipe name;
   - the recorder's pid, create time and SID;
-  - either the approved running game or the approved install folder.
+  - either the approved running game or the approved install folder's forms (`target.folder_forms`, worked out on the
+    player's side before the prompt) with how long the recorder will wait for the game.
 - **It accepts a game only on its own evidence.** In its own handle-free snapshot, the proposed game must be in the
   same Windows session as the relay and the recorder. Then it must either be the approved running game, matched by pid
   and create time (M3's mode, where the game started before the relay), or have started after the relay and run from
   under the approved folder (Play, M6). One `accept_target` predicate in `target.py` is called by both sides, so they
-  cannot drift: M3 ships it with the running-game rule, and M6 adds the folder rule.
+  cannot drift: M3 shipped it with the running-game rule, M6's folder wait added the folder rule (PR #36), and the
+  relay judges the game Play's `game` message names by it (M6d, `target.check_proposed`), reading the program's path
+  itself and no folder.
 - **It talks only over a pipe it creates**: first instance only, remote clients refused, a DACL for the recorder's SID,
-  a medium integrity label, and the client's pid and session checked. Installed, it reads nothing the user can write
-  after approval: its code and PresentMon are under Program Files. From a git checkout its code is the user's to
+  a medium integrity label, and the client's pid and session checked. Installed, it runs nothing the user can write
+  after approval: its code and PresentMon are under Program Files. What the recorder sends after approval (the clock's
+  origin and, for Play, the game) it judges for itself. From a git checkout its code is the user's to
   change, as today's elevated child's is (DESIGN, Privileges and elevation), and its PresentMon is the hash-pinned
   per-user copy.
 - **This is the capture service's protocol** (INSTALLER-PLAN Stage 4: the target in the caller's session, one game's
   rows and events, no file writes), built once. Stage 4 moves the same core into the service and changes its policy:
-  a fixed pipe name its trigger starts, the target judged by the caller's own session, and the client checking the
-  server's pid.
+  a fixed pipe name its trigger starts; the game a `game` message names (as Play's relay takes it since M6d) judged by
+  the caller's own session and account instead of what a prompt approved; and the client checking the server's pid.
 - **What counts as lag-doctor's own in the analysis**, so it is never named as a cause or counted as background CPU:
   - the app, by its exact pid and create time;
   - its WebView2 group, about six processes per window (measured for other apps);
@@ -489,8 +494,10 @@ it merges, as with M1.
 The recorder's half was built on 2026-11-09 (DESIGN.md, The control channel):
 - The messages are those above, and also `hello` first, `say` for every line watch says, `mark`, `frames_lost`,
   `stopping`, `saving` and `saved`. The app's side adds `elevate_refused` and `elevate_failed`.
-- `elevate` comes after `target`, not before `waiting` as the list above has it: the relay's approved command line
-  names the running game (M3), so the game must be found first. Play's folder rule (M6) can move it before.
+- `elevate` comes after `target` for a running game, not before `waiting` as the list above has it: the relay's
+  approved command line names that game (M3), so it must be found first. For Play it comes first: the command line
+  names the install folder, and the game the wait finds after the launch is named to the relay (`RelayLink.aim`,
+  M6d). The link should be opened only once the relay has said hello, which comes after its own PresentMon check.
 - The app raises the prompt with its own window and hands the relay's process handle to the recorder
   (`ElevatedChild.hand_over` and `adopt`, DECISIONS 2026-11-09), so the recorder checks the relay as it always
   has and reads its exit codes itself.
@@ -622,17 +629,30 @@ analysed and labelled when the key measured nothing, and chimes in a terminal wi
   samples in a row. `running_from` lists what already runs from the folder, for the pre-flight. `ntquery` now names
   a volume mounted on a folder (no drive letter) by that folder, and an 8.3 short name is written out long first.
   The re-arm itself (a chosen process that exits within about 20 s) is the recorder's, with `watch --wait-folder`.
-- For the relay step, from the folder wait's review (2026-11-09):
-  - Its start deadline must cover the wait: today the relay gives up when `start` has not come within
-    `START_WAIT_S` (300 s), which the wait's own 300 s deadline, the inventory and Steam's steps can outrun. Derive
-    the one from the other, and pin the inequality in a test.
-  - The re-arm and the relay's one `start`: a launcher that draws, then leaves, would already have had `start`
-    sent for it, and a fresh relay would refuse the game, which started before it. Either hold `start` until the
-    chosen process has run about 20 s and still owns its window, or let the protocol take one re-target, checked by
-    the same folder rule. `exclude` helps only while the tried process still runs; a launcher that hides in the
-    tray but keeps drawing nothing never exits, so the re-arm should also fire when the chosen process loses its
-    window or stops drawing early.
-- The relay's folder policy, so the prompt comes at Play, before the game starts.
+- [x] The relay's folder mode (M6d, DECISIONS 2026-11-17, the owner's option A), so the prompt comes at Play, before
+  the game starts: `--folder` forms and `--wait-s` on its command line, and the recorder names the game it found in a
+  `game` message (`RelayLink.aim`), which the relay judges on its own snapshots by its own read of the program's path
+  (`target.check_proposed`), answering `game` or `refused` and waiting on (up to 8 before `start`, a later one taking
+  the place of the one before). Its wait for a game is the recorder's own plus `server.GAME_SLACK_S`, which a test
+  holds above one round of the wait, the re-arm's hold and the recorder's check, and below 120 s; then `START_WAIT_S`
+  for `start`. It reads no folder (an 8.3 short name is refused with the reason) and ends when the recorder is gone.
+  The live test on GitHub's runner records a stand-in started from the base interpreter's folder and refuses PING.EXE.
+- For `watch --wait-folder` (M6e), from the folder wait's review (2026-11-09) and M6d's:
+  - The re-arm: hold `aim` until the chosen process has run `target.REARM_HOLD_S` (20 s, a feel number) and still
+    owns its window, and wait again (with it in `exclude`) when it exits, loses its window or stops drawing before
+    then; a refused game (`client.GameRefused`) re-arms too, excluding it only when `retry` is False. `exclude` helps
+    only while the tried process still runs, and a launcher that hides in the tray but keeps drawing nothing never
+    exits.
+  - One deadline for all of it: the first wait's `deadline_s` is the `--wait-s` the relay was approved with, and every
+    re-armed wait gets what is left of it, `pick` included; `aim` refuses past `RelayLink.aim_by`.
+  - The wait runs with `since=link.create_time` (the relay's, which it refuses before), passes over lag-doctor's
+    own processes as the relay does (`own=`: the recorder's tree and the relay's), and judges a program's path as
+    the relay does, never writing an 8.3 short name out long (`program_reason(resolve=False)`), so it never picks a
+    game the relay refuses; a test pins the two agreeing.
+  - `aim` takes `protocol.MAX_GAMES` games for one recording and raises `RelayFailed` past it or past `aim_by`:
+    the re-arm stops there. `GameRefused` never goes through `cli._relay_failure`, which reads `RelayFailed.code`.
+  - `cli._relay_failure` names a refused game in Play's words: its exit 3 text assumes the game exited while the
+    prompt was up, which cannot happen when the prompt came first.
 - Screen 6, and the folder wait for games without Play. The CLI gets it too: `watch --wait-folder`.
 
 What a check against FINAL FANTASY VII REBIRTH found on 2026-11-09 (research note, section 14), as parts of the items
@@ -641,14 +661,14 @@ above:
   lag-doctor's, so a store process started there would never be blamed (`tests/test_session.py` pins the window's
   case).
 - The relay learns the game after the prompt. The prompt approves the folder; the game's pid and create time then come
-  in `start`, and the folder rule checks them on the relay's own snapshot, the seam Stage 4 needs too. That changes the
-  rule that the relay takes only `start` and `stop` from the pipe and never a PresentMon argument (the table above,
-  DESIGN.md, CLAUDE.md, `relay/protocol.py`), so it goes through DECISIONS. The folder wait, Steam's own steps and the
-  inventory read then share the relay's `START_WAIT_S` (300 s), which an update download can outrun.
+  over the pipe, and the folder rule checks them on the relay's own snapshot, the seam Stage 4 needs too. Built in
+  M6d with a `game` message of its own before `start` (DECISIONS 2026-11-17), and the relay's wait for it follows the
+  recorder's own (`--wait-s`), which an update download can still outrun: M6e's wait says so.
 - The control channel gets Play's order (elevate, launch, waiting, target, recording) with a test that pins it: today's
   tests pin only that `waiting` comes before `target`.
-- The folder rule needs the process's image path and the relay's own start time, which `accept_target` lacks today.
-  Store paths fold case and slashes before the test, and an image path left in NT form says why it cannot match.
+- The folder rule needs the process's image path and the relay's own start time (`accept_target`'s `image=` and
+  `since=`, since PR #36). Store paths fold case and slashes before the test, and an image path left in NT form says
+  why it cannot match.
 - Unreal's bootstrap stub runs beside the game for the whole session and never draws, so the wait passes over it
   throughout, not only at the start. When it shows a message box instead (a missing runtime), the deadline's message
   says that a window from the folder never drew.
@@ -679,8 +699,8 @@ above:
   (`--window`, `--start-by`, `--window 3600` for the hour) and its chimes, whose tones are feel numbers too (a
   new one says the key is ready). Ctrl+Alt+S is AltGr+S on keyboard layouts with AltGr (the Polish layout types
   "ś" with it), so a player on one loses that letter while recording, as Ctrl+Alt+L already takes "ł". Play
-  adds the folder wait's 5-minute deadline (`target.WAIT_DEADLINE_S`) and the 20 s within which a chosen process
-  that exits re-arms the wait.
+  adds the folder wait's 5-minute deadline (`target.WAIT_DEADLINE_S`, which the relay's approval follows) and the 20 s
+  within which a chosen process that exits re-arms the wait (`target.REARM_HOLD_S`).
 - **Fixes from a trimmed span.** Should a trimmed span feed `lagdoctor fix`? Today `analyze` never does. A watch
   measured from its start key does: its diagnosis covers the part, and it is the one `fix` acts on.
 - **A fork the planning session settled** (DECISIONS 2026-11-08), open to the owner: measuring from a start key,

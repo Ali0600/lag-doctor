@@ -198,6 +198,77 @@
 - **An explorer.exe look-alike in a capture recorded before the folder check covered the Windows folder** is judged
   by its name, as Windows' shell: such a capture cannot tell it from the real one. Revisit hook: none needed unless a
   recording from 2026-11-15 or 2026-11-16 shows one (DECISIONS 2026-11-16, the store app and Windows' shell).
+- **Play's relay writes an 8.3 short name out long**, so a game a launcher starts through a short path (C:\PROGRA~2\...)
+  matches its folder there too, as it does in the folder wait: worth doing if a Play run is ever refused for that
+  reason, by having the player's side approve the folder's short form as one more form before the prompt (the relay
+  must still read no folder itself). Revisit hook: `target.folder_forms` and `program_reason(resolve=False)`
+  (DECISIONS 2026-11-17, M6d).
+- **A relay that follows a re-targeted game after `start`** (stop PresentMon, start it on the new process, move the
+  game's tree), for a launcher the re-arm's hold missed: worth trying if Play recordings show the hold delaying too
+  much of a game's start. Revisit hook: `Relay._out_of_turn` ("a game after the start") and `_start_sources` in
+  relay/server.py (DECISIONS 2026-11-17, M6d).
+
+---
+
+## 2026-11-17: The relay for Play judges the game the recorder names, against the install folder the prompt approved (M6d)
+
+Play's UAC prompt must come before the store starts the game (the player presses Play, approves the prompt, then the
+store starts it), so the relay cannot be approved for a running game as M3's is. Put to the owner on 2026-11-10 with A
+recommended, and answered on 2026-11-17 in the window-side session ("A, pass it on to the Play session"):
+- **A: the recorder finds the game and names it; the relay judges it (chosen by the owner)**: the prompt approves the
+  game's install folder (its forms, `target.folder_forms`, worked out on the player's side) and how long the recorder
+  will wait for it. The recorder's folder wait finds the game as before and names it to the relay by its pid and create
+  time; the relay judges it on its own snapshots, by its own read of the program's path. Less code runs with
+  administrator rights, the game is found in one place, and Stage 4's capture service takes the same request.
+  - **B: the relay runs the folder wait itself**: rejected by the owner. The pipe would keep carrying only start and
+    stop, but the wait's GPU samples, window reads and image reads would all run with administrator rights, and the
+    recorder would still need the game for its own collectors: two places finding it.
+
+How it was built, after a design review and a code review (each a fork of the implementing session, not the
+owner's):
+- **A `game` message of its own before `start` (chosen)**: the relay answers `game` (it will record that one) or
+  `refused` with why, and the recording starts only on a game it accepted, so a refused game ends `watch` with the
+  reason before the session starts (as 2026-11-08's "A relay that cannot record ends the watch" wants) and M3's
+  `start` stays as it was.
+  - **The game inside `start`**: rejected. `start` goes out from a collector's thread after the PC's details are read,
+    so a refusal would leave the recording running without frame timing.
+- **A refusal is an answer, and the relay waits on (chosen)**: up to `protocol.MAX_GAMES` (8) games before `start`, a
+  later one taking the place of the one before. A launcher that draws and then leaves, or a read that failed
+  (`retry`), costs a new proposal, not a new UAC prompt: a new relay's `since` would refuse a game that started
+  before it.
+  - **A refusal ends the relay**: rejected. Nothing it protects: any process the folder rule passes may be recorded
+    anyway, and the recorder can read every fact the relay reads.
+- **The relay reads no folder (chosen)**: it compares the program's path as Windows gave it (`resolve=False`). Writing
+  an 8.3 short name out long reads the folders along the path, which the player's side can change, with administrator
+  rights: a link swapped in could lead it onto a share. A short-name path is refused there with the reason; writing
+  it out long is in the Backlog above.
+- **Its wait for the game is the recorder's own (chosen)**: `--wait-s`, at most `target.MAX_WAIT_S`, plus
+  `server.GAME_SLACK_S` (60 s: one round of the wait past its deadline, the re-arm's hold `target.REARM_HOLD_S` and
+  the recorder's own check), which a test holds above their sum and below 120 s. The folder's approval lasts no
+  longer than the recording asked.
+  - **A fixed constant from `target.MAX_WAIT_S`**: rejected. Simpler (no new argument), but every Play relay would
+    take a game for over an hour.
+- **The checks both sides make are one function**, `target.check_proposed`: the program's path is read between two
+  snapshots that both list the process with its create time (a number never names two processes at once, so the
+  path is its own), the recorder must still run at the end, and lag-doctor's own processes (the recorder's tree and
+  the relay's) are never the game. The recorder asks it first (`RelayLink.aim`), so a game the relay would refuse is
+  never sent.
+- **The Windows folder from Windows itself** (`GetSystemWindowsDirectoryW`), never the SystemRoot variable, on both
+  sides: the relay checks the forms its prompt approved by it, and an environment is the caller's to set.
+- **The app refuses a relay command for a folder** until Play's half of the app chooses the game: nothing the window
+  chose would bound what the relay may record.
+
+Limits, accepted:
+- Another account's process from the folder, or an elevated or protected one, in the player's Windows session passes
+  the rule, as in M3: the handle-free snapshot names no account or integrity level.
+- A program another local account wrote into a writable game folder passes it, if it starts after the relay.
+- A folder form as wide as `C:\Program Files`, which a store's library file could name, takes in every program under
+  it; the rule refuses only a drive's root and the Windows folder.
+- With the clock stepped back after the relay started, a game's create time can fall before `since`: it is then
+  refused, never wrongly taken.
+
+Revisit hooks: `target.check_proposed` and `accept_target(own=, resolve=)`, `Relay._play`, `_judge` and
+`_out_of_turn` in relay/server.py, `RelayLink.aim` in relay/client.py, and `recording.relay_problem` (Play's app half).
 
 ---
 
@@ -1417,6 +1488,9 @@ of them (marked below).
 - **One relay protocol with two hosts (chosen)**: a relay elevated by one UAC prompt per recording first, and the
   Stage 4 LocalService service later. Under the prompt it takes every decision from its approved command line; the
   service checks the target against the caller's own session instead. Either way it talks over a pipe it creates.
+  (Amended by M6d, 2026-11-17, above: for Play the prompt approves the install folder, and the game comes over the
+  pipe in a `game` message that the relay judges by that folder; the service will judge the same request by the
+  caller's session.)
   From M3 it replaces 2026-11-04's elevated child, which recorded in its own window and wrote the capture, for
   `watch --elevate` too.
   - **A waiting elevated child steered by files in the user's session folder**: rejected. User-writable files would
