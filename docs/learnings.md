@@ -1321,3 +1321,14 @@ the recorder names by its program's path. The first design read the path and the
 showed the older holder's path could pass for the newer process.
 **Takeaway**: when a check reads something about a process by its id, bracket the read with two snapshots that both
 show the same identity, and refuse when either does not.
+
+### A device whose reads and writes share one control code cannot be made read-only by its handle
+Windows checks a handle's rights per control code: a code declared FILE_ANY_ACCESS is passed to the driver for any
+handle at all, even one opened with no rights. ASUS's ATKACPI device takes every firmware call through one such code,
+and the first four bytes of the buffer pick the method: DSTS reads a device's status, DEVS sets it, and DEVS on the same
+fan ids pins a fan at full speed. Opening the device "read only" therefore protects nothing.
+**Why it came up**: recording an ASUS laptop's fan speeds (`lagdoctor/winapi/atkacpi.py`, PR #57). The research
+found the shared code; the measured open with no rights read both fans, which shows the rights were never checked.
+**Takeaway**: when one control code carries both reads and writes, build read-only into the code (one function that
+can only build the read, checked again right before the call), and hold it with a source scan that refuses any other
+way to the device.
