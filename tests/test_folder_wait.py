@@ -268,10 +268,23 @@ def test_check_folder_shows_a_long_value_it_refuses_cut_short():
 
 
 def test_the_windows_folder_is_the_one_windows_says(monkeypatch):
+    # Windows' own answer (GetSystemWindowsDirectoryW), never the SystemRoot variable: an environment is the caller's
+    # to set, and the elevated relay checks the folder its prompt approved by this.
     monkeypatch.setenv("SystemRoot", "D:\\WinNT")
+    assert tgt._windows_folder() == winfolders.windows_folder() and "winnt" not in tgt._windows_folder().lower()
+    monkeypatch.setattr(tgt.winfolders, "windows_folder", lambda: "D:\\WinNT")
+    monkeypatch.setenv("SystemRoot", "C:\\Windows")
     assert tgt.check_folder("C:\\Windows\\Lantern") == "C:\\Windows\\Lantern"
     with pytest.raises(ValueError, match="Windows folder"):
         tgt.check_folder("d:/winnt/Lantern")
+
+
+def test_a_windows_folder_windows_cannot_give_lets_no_folder_through(monkeypatch):
+    def fails():
+        raise OSError(5, "Access is denied")
+    monkeypatch.setattr(tgt.winfolders, "windows_folder", fails)
+    with pytest.raises(ValueError, match="the Windows folder could not be read"):
+        tgt.check_folder(GAME_DIR)
 
 
 def test_fold_path_turns_slashes_into_one_backslash_and_folds_case():
@@ -328,9 +341,27 @@ def test_program_reason_writes_a_short_name_out_long_first(monkeypatch):
     assert "is not in the game's folder" in tgt.program_reason("C:\\GAMES~1\\LANTER~1\\lantern.exe", FORMS)
 
 
+def test_the_relays_folder_rule_reads_no_folder_and_compares_a_short_name_as_written(monkeypatch):
+    # In the relay the rule runs with administrator rights: writing a short name out long would read folders the
+    # player can change (a link swapped in could lead onto a share), so there the path is judged as Windows gave it.
+    monkeypatch.setattr(tgt.winfolders, "long_path", lambda path: pytest.fail("a folder was read for the relay"))
+    why = tgt.program_reason("C:\\GAMES~1\\LANTER~1\\lantern.exe", FORMS, resolve=False)
+    assert "is not in the game's folder" in why and "8.3 short names, which the relay compares as written" in why
+    assert tgt.program_reason(GAME, FORMS, resolve=False) is None
+    assert tgt.program_reason("D:\\x.exe", FORMS, resolve=False).endswith("is not in the game's folder "
+                                                                         f"({GAME_DIR})")
+    # A long name with a tilde in it is no short name, and is not said to be one.
+    assert tgt.program_reason("D:\\Mods~Pack\\x.exe", FORMS, resolve=False).endswith(f"({GAME_DIR})")
+    procs = {80: proc(80, SINCE + SECOND, "LANTER~1.EXE")}
+    assert "8.3 short names" in tgt.accept_target(procs, 80, SINCE + SECOND, session=1, folders=FORMS, since=SINCE,
+                                                  image="C:\\GAMES~1\\LANTER~1\\lantern.exe", resolve=False)
+
+
 def test_check_forms_takes_one_to_four_checked_folders():
     assert tgt.check_forms(["c:/games/lantern drift"]) == ("C:\\games\\lantern drift",)
-    for bad in [(), "C:\\Games\\Lantern Drift", (GAME_DIR,) * 5, ("C:\\",), (GAME_DIR, "\\\\server\\share\\x"), None]:
+    five = tuple(f"{GAME_DIR} {i}" for i in range(tgt.MAX_FORMS + 1))       # five different folders: one too many
+    for bad in [(), "C:\\Games\\Lantern Drift", five, ("C:\\",), (GAME_DIR, "\\\\server\\share\\x"), None,
+                (GAME_DIR, "c:/games/lantern drift/")]:                 # one folder twice: the hello would refuse it
         with pytest.raises(ValueError):
             tgt.check_forms(bad)
 
@@ -391,11 +422,137 @@ def test_accept_target_takes_one_mode_and_checks_the_forms():
                {"folders": FORMS, "since": True, "image": GAME},
                {"folders": ("C:\\",), "since": SINCE, "image": GAME},
                {"folders": ("\\\\server\\share\\x",), "since": SINCE, "image": GAME},
-               {"folders": GAME_DIR, "since": SINCE, "image": GAME}, {"folders": (), "since": SINCE, "image": GAME}]:
+               {"folders": GAME_DIR, "since": SINCE, "image": GAME}, {"folders": (), "since": SINCE, "image": GAME},
+               # own= and resolve= judge a game that was looked for, so they go with folders= alone
+               {"approved": (80, SINCE + SECOND), "own": ((70, SINCE),)},
+               {"approved": (80, SINCE + SECOND), "resolve": False},
+               {"folders": FORMS, "since": SINCE, "image": GAME, "own": "70"},
+               {"folders": FORMS, "since": SINCE, "image": GAME, "own": ((70,),)},
+               {"folders": FORMS, "since": SINCE, "image": GAME, "own": ((0, SINCE),)},
+               {"folders": FORMS, "since": SINCE, "image": GAME, "own": ((70, -1),)},
+               {"folders": FORMS, "since": SINCE, "image": GAME, "resolve": "no"}]:
         with pytest.raises(ValueError):
             tgt.accept_target(procs, 80, SINCE + SECOND, session=1, **kw)
     assert tgt.accept_target(procs, 80, SINCE + SECOND, session=1, approved=(80, SINCE + SECOND)) is None
     assert tgt.accept_target(procs, 80, SINCE + SECOND, session=1, folders=FORMS, since=SINCE, image=GAME) is None
+    assert tgt.accept_target(procs, 80, SINCE + SECOND, session=1, folders=FORMS, since=SINCE, image=GAME,
+                             own=[(70, SINCE)], resolve=False) is None
+
+
+def test_accept_target_never_takes_one_of_lag_doctors_own_processes():
+    recorder, relay = (70, SINCE - SECOND), (71, SINCE)
+    procs = {70: proc(70, SINCE - SECOND, "python.exe"), 71: proc(71, SINCE, "pythonw.exe"),
+             80: proc(80, SINCE + SECOND, "lantern_.exe", ppid=70),      # the recorder's child
+             81: proc(81, SINCE + SECOND, "lantern_.exe", ppid=71),      # the relay's (its PresentMon, say)
+             82: proc(82, SINCE + 2 * SECOND, "lantern_.exe", ppid=80),  # a grandchild of the recorder
+             83: proc(83, SINCE + SECOND, "lantern_.exe", ppid=9),       # nobody's: the game
+             84: proc(84, SINCE + SECOND, "lantern_.exe", ppid=70)}      # ... and one whose parent's number is reused
+
+    def accept(pid, own):
+        return tgt.accept_target(procs, pid, procs[pid].create_time, session=1, folders=FORMS, since=SINCE,
+                                 image=GAME, own=own)
+
+    own = (recorder, relay)
+    for pid in (80, 81, 82):
+        assert "is one of lag-doctor's own processes, never the game" in accept(pid, own), pid
+    assert accept(83, own) is None and accept(80, ()) is None              # nobody's, or no roots given: the rule
+    assert "one of lag-doctor's own" in accept(81, (relay,)) and accept(80, (relay,)) is None
+    # The relay itself (create time == since) and the recorder are lag-doctor's own before they are anything else.
+    assert "one of lag-doctor's own" in tgt.accept_target(procs, 71, SINCE, session=1, folders=FORMS, since=SINCE,
+                                                          image=GAME, own=own)
+    # A child older than the process now holding its parent's number is not that process's child.
+    procs[70] = proc(70, SINCE + 3 * SECOND, "python.exe")
+    assert accept(84, ((70, SINCE + 3 * SECOND), relay)) is None
+
+
+def _bracket(tables: list, images: dict):
+    """check_proposed's seams over `tables`, one snapshot each call (the last one repeats), and `images` by pid; each
+    entry may be an exception to raise. The calls are counted."""
+    calls = Counter()
+
+    def snapshot():
+        calls["snapshot"] += 1
+        table = tables[min(calls["snapshot"], len(tables)) - 1]
+        if isinstance(table, Exception):
+            raise table
+        return dict(table)
+
+    def image_of(pid):
+        calls["image"] += 1
+        got = images[pid]
+        if isinstance(got, list):
+            got = got.pop(0) if len(got) > 1 else got[0]
+        if isinstance(got, Exception):
+            raise got
+        return got
+    return snapshot, image_of, calls
+
+
+RECORDER = (70, SINCE - SECOND)
+OWN = (RECORDER, (71, SINCE))
+
+
+def _proposed(snapshot, image_of, pid, create, **kw):
+    return tgt.check_proposed(snapshot, image_of, pid, create, session=1, folders=FORMS, since=SINCE, own=OWN,
+                              alive=(RECORDER,), **kw)
+
+
+def test_check_proposed_takes_a_game_from_under_the_folder_judged_between_two_snapshots():
+    table = {70: proc(*RECORDER, "python.exe"), 80: proc(80, SINCE + SECOND, "lantern_.exe")}
+    snapshot, image_of, calls = _bracket([table, table], {80: GAME})
+    assert _proposed(snapshot, image_of, 80, SINCE + SECOND) == (None, False)
+    assert calls == {"snapshot": 2, "image": 1}
+    why, retry = _proposed(*_bracket([table], {80: "D:\\Other\\x.exe"})[:2], 80, SINCE + SECOND)
+    assert "is not in the game's folder" in why and retry is False
+    child = {**table, 81: proc(81, SINCE + SECOND, "lantern_.exe", ppid=70)}       # the recorder's own child
+    assert "one of lag-doctor's own" in _proposed(*_bracket([child], {81: GAME})[:2], 81, SINCE + SECOND)[0]
+
+
+def test_check_proposed_never_takes_a_path_read_while_the_number_named_another_process():
+    # The number held by an older process from the folder (Q) at the first snapshot, and by a newer one (X, the one
+    # named) at the second: the path read in between may be Q's, so X is not taken on it.
+    q = proc(80, SINCE - 9 * SECOND, "lantern_.exe")
+    x = proc(80, SINCE + SECOND, "notepad.exe")
+    rec = proc(*RECORDER, "python.exe")
+    snapshot, image_of, calls = _bracket([{70: rec, 80: q}, {70: rec, 80: x}], {80: GAME})
+    why, retry = _proposed(snapshot, image_of, 80, SINCE + SECOND)
+    assert "no longer running" in why and retry is False and calls["image"] == 0
+    # Gone by the second snapshot: what was read may have been someone else's by then.
+    snapshot, image_of, calls = _bracket([{70: rec, 80: x}, {70: rec}], {80: GAME})
+    assert "no longer running" in _proposed(snapshot, image_of, 80, SINCE + SECOND)[0] and calls["image"] == 1
+    # In another session at either snapshot: never taken.
+    elsewhere = dataclasses.replace(x, session_id=2)
+    for tables in ([{70: rec, 80: elsewhere}], [{70: rec, 80: x}, {70: rec, 80: elsewhere}]):
+        assert "another Windows session" in _proposed(*_bracket(tables, {80: GAME})[:2], 80, SINCE + SECOND)[0]
+
+
+def test_check_proposed_takes_nothing_once_the_recording_window_has_gone(monkeypatch):
+    rec = proc(*RECORDER, "python.exe")
+    game = proc(80, SINCE + SECOND, "lantern_.exe")
+    for tables in ([{80: game}], [{70: rec, 80: game}, {80: game}],
+                   [{70: dataclasses.replace(rec, create_time=SINCE + 4 * SECOND), 80: game}],
+                   [{70: rec, 80: game}, {70: dataclasses.replace(rec, session_id=2), 80: game}]):
+        assert _proposed(*_bracket(tables, {80: GAME})[:2], 80, SINCE + SECOND) == (
+            "the recording window is no longer running", False)
+    # The relay's rule reads no folder: a short name is compared as Windows gave it.
+    monkeypatch.setattr(tgt.winfolders, "long_path", lambda path: pytest.fail("a folder was read for the relay"))
+    short = proc(80, SINCE + SECOND, "LANTER~1.EXE")
+    why, retry = _proposed(*_bracket([{70: rec, 80: short}], {80: "C:\\GAMES~1\\LANTER~1\\lantern.exe"})[:2],
+                           80, SINCE + SECOND)
+    assert "8.3 short names" in why and retry is False
+
+
+def test_check_proposed_tries_a_failed_read_again_and_then_says_it_could_not_check():
+    table = {70: proc(*RECORDER, "python.exe"), 80: proc(80, SINCE + SECOND, "lantern_.exe")}
+    failed = OSError(5, "Access is denied")
+    snapshot, image_of, calls = _bracket([table, table], {80: [failed, failed, GAME]})
+    assert _proposed(snapshot, image_of, 80, SINCE + SECOND) == (None, False) and calls["image"] == 3
+    snapshot, image_of, calls = _bracket([table], {80: [failed]})
+    why, retry = _proposed(snapshot, image_of, 80, SINCE + SECOND)
+    assert why == "process 80 could not be checked (Access is denied)" and retry is True
+    assert calls["image"] == tgt.IMAGE_TRIES == 3
+    snapshot, image_of, calls = _bracket([failed], {80: GAME})
+    assert _proposed(snapshot, image_of, 80, SINCE + SECOND, tries=2)[1] is True and calls["snapshot"] == 2
 
 
 def test_running_from_lists_this_sessions_processes_from_the_folder_whenever_they_started(world):

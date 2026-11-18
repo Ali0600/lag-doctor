@@ -1309,3 +1309,15 @@ window from the whole recording's main chain while the part's analysis used the 
 analysis records the chain it used (`main_chain` in its stats), and both now follow it.
 **Takeaway**: when a result was computed over a subset, read every "main", "top" or "busiest" pick from what that
 computation recorded, never recompute it over the whole.
+
+### Tie a process's path to the process by reading it between two snapshots
+Windows reuses process ids, and a path read by pid (`NtQuerySystemInformation` class 88, which opens no handle) names
+whichever process holds that number at the moment of the read. A process is the pair (pid, create time), and a number
+never names two live processes at once, so a path read between two snapshots that both list the same (pid, create time)
+is that process's own: it held the number from before the read to after it. One snapshot is not enough either way: read
+after it, the path can be a newer holder's; read before it, an older one's.
+**Why it came up**: M6d's relay (`target.check_proposed`), which runs with administrator rights and judges the process
+the recorder names by its program's path. The first design read the path and then took one snapshot; a design review
+showed the older holder's path could pass for the newer process.
+**Takeaway**: when a check reads something about a process by its id, bracket the read with two snapshots that both
+show the same identity, and refuse when either does not.

@@ -79,6 +79,8 @@ def relay_problem(argv: Any, cwd: Any, *, recorder: tuple[int, int], sid: str, p
         return "the command names another process as the recorder"
     if cfg.sid != sid:
         return "the command lets another account in"
+    if cfg.folders is not None:                    # Play's half of the app chooses the folder (M6), not the recorder
+        return "the command would record a game from a folder, and the window chose no game to play"
     return None
 
 
