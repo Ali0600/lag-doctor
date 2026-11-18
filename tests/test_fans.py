@@ -630,8 +630,10 @@ def test_the_report_draws_the_fans_and_says_why_when_they_were_not_measured():
     assert "Fan speeds (RPM)" in fans and not re.search(r"\d RPM</text>", fans)    # no tick wider than its margin
     damaged = heated(fan_table(30.0, cpu_fan_rpm=lambda t: 6_553_500 if t == 9 else 3500))
     damaged.frames = cap.frames
-    tops = [float(x) for x in re.findall(r">(\d+)</text>", html._fan_chart(diagnose(damaged), damaged))]
+    # the y ticks print as {:g}: 2000 or, at millions, 2e+06
+    tops = [float(x) for x in re.findall(r">(\d[\d.]*(?:e\+\d+)?)</text>", html._fan_chart(diagnose(damaged), damaged))]
     assert tops and max(tops) <= attribute.FAN_MAX_RPM * 1.1        # one corrupt reading never sets the scale
+    assert float("2e+06") in [float(x) for x in re.findall(r">(\d[\d.]*(?:e\+\d+)?)</text>", ">2e+06</text>")]
     cap = heated(None)
     cap.frames = synth.frames_table([1000.0 / 60] * 1700)
     cap.sources["fans"] = SourceStatus("unavailable", fanmon.NO_DEVICE, fanmon.TOOL)
