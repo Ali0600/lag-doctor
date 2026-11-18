@@ -354,6 +354,7 @@ def in_folder(image: str | None, folder: str) -> bool:
 
 
 MAX_FORMS = 4           # forms of one folder the rule takes: the folder itself and its resolved path, with room
+_SHORT_NAME = re.compile(r"~[0-9]")     # an 8.3 short name's tilde and number (PROGRA~2), never a long name's ~
 
 
 DRIVE_NOT_THERE = 1             # GetDriveTypeW's DRIVE_NO_ROOT_DIR: no disk at that root now (an unplugged one, say)
@@ -545,7 +546,10 @@ def check_forms(folders: object) -> tuple[str, ...]:
     """A folder's forms as the folder rule takes them (folder_forms' tuple, each checked again); ValueError if not."""
     if isinstance(folders, str) or not isinstance(folders, (tuple, list)) or not 1 <= len(folders) <= MAX_FORMS:
         raise ValueError(f"not 1 to {MAX_FORMS} forms of a folder: {folders!r}")
-    return tuple(check_folder(f) for f in folders)
+    forms = tuple(check_folder(f) for f in folders)
+    if len({fold_path(f) for f in forms}) != len(forms):
+        raise ValueError(f"the forms of a folder name one folder twice: {_shown(forms)}")
+    return forms
 
 
 def program_reason(image: str | None, folders: tuple[str, ...], *, resolve: bool = True) -> str | None:
@@ -565,7 +569,7 @@ def program_reason(image: str | None, folders: tuple[str, ...], *, resolve: bool
         if why is None:
             return None
         first = first or why
-    if not resolve and image and "~" in image:
+    if not resolve and image and _SHORT_NAME.search(image):
         return f"{first} (Windows gave that path with 8.3 short names, which the relay compares as written)"
     return first
 
@@ -677,13 +681,23 @@ def check_proposed(snapshot: Callable[[], dict[int, ProcInfo]], image_of: Callab
     The program's path is read between two snapshots (`snapshot`, `image_of`: ntquery's, or a test's), and both must
     list the process with that create time: a number never names two processes at once, so the path read is that
     process's own, never that of one that held the number before or after it. `alive`: processes that must run in
-    `session` in both, or nothing is taken (the relay names the recorder: a proposal from a pipe handle that outlived
-    it is never taken). A failed read is tried again, up to `tries` times; past that the game could not be checked,
-    which a later proposal may change (`tries` defaults to IMAGE_TRIES, the wait's own). The path is compared as
-    Windows gave it (accept_target's resolve=False): the relay reads no folder with administrator rights."""
+    `session` at the end of the check, so throughout it, or nothing is taken (the relay names the recorder: a proposal
+    from a pipe handle that outlived it is never taken). A failed read is tried again, TRY_PAUSE_S apart, up to
+    `tries` times; past that the game could not be checked, which a later proposal may change (`tries` defaults to
+    IMAGE_TRIES, the wait's own). The path is compared as Windows gave it (accept_target's resolve=False): the relay
+    reads no folder with administrator rights. The reason is one line of printable text (a program's name can hold
+    characters that turn the text around), the same on both sides."""
+    why, retry = _proposed(snapshot, image_of, pid, create_time, session=session, folders=folders, since=since,
+                           own=own, alive=alive, tries=tries)
+    return (None, False) if why is None else ("".join(c if c.isprintable() else "?" for c in why), retry)
+
+
+def _proposed(snapshot, image_of, pid, create_time, *, session, folders, since, own, alive, tries):
     _check_identity(pid, create_time)
     why = f"process {pid} could not be checked"
-    for _ in range(max(1, IMAGE_TRIES if tries is None else tries)):
+    for attempt in range(max(1, IMAGE_TRIES if tries is None else tries)):
+        if attempt:
+            time.sleep(TRY_PAUSE_S)
         try:
             before = snapshot()
             if not _listed(before, (pid, create_time), session):     # accept_target says which: gone, or elsewhere
@@ -889,6 +903,7 @@ MAX_NAMES = 3                   # programs from the folder that a message names
 # leaves re-arms the wait instead (docs/LAUNCHER-PLAN.md, M6: a feel number the owner has not judged yet). The re-arm
 # itself is the recorder's (watch --wait-folder); the relay's wait for the game leaves room for it (server.GAME_SLACK_S).
 REARM_HOLD_S = 20.0
+TRY_PAUSE_S = 0.1               # check_proposed: between two tries of a read that failed
 _FILETIME_1970 = 116_444_736_000_000_000   # 1970-01-01 as a create time (100 ns since 1601)
 
 

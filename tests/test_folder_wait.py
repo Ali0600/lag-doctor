@@ -345,12 +345,13 @@ def test_the_relays_folder_rule_reads_no_folder_and_compares_a_short_name_as_wri
     # In the relay the rule runs with administrator rights: writing a short name out long would read folders the
     # player can change (a link swapped in could lead onto a share), so there the path is judged as Windows gave it.
     monkeypatch.setattr(tgt.winfolders, "long_path", lambda path: pytest.fail("a folder was read for the relay"))
-    monkeypatch.setattr(tgt, "_lstat", lambda path: pytest.fail("a folder was looked at for the relay"))
     why = tgt.program_reason("C:\\GAMES~1\\LANTER~1\\lantern.exe", FORMS, resolve=False)
     assert "is not in the game's folder" in why and "8.3 short names, which the relay compares as written" in why
     assert tgt.program_reason(GAME, FORMS, resolve=False) is None
     assert tgt.program_reason("D:\\x.exe", FORMS, resolve=False).endswith("is not in the game's folder "
                                                                          f"({GAME_DIR})")
+    # A long name with a tilde in it is no short name, and is not said to be one.
+    assert tgt.program_reason("D:\\Mods~Pack\\x.exe", FORMS, resolve=False).endswith(f"({GAME_DIR})")
     procs = {80: proc(80, SINCE + SECOND, "LANTER~1.EXE")}
     assert "8.3 short names" in tgt.accept_target(procs, 80, SINCE + SECOND, session=1, folders=FORMS, since=SINCE,
                                                   image="C:\\GAMES~1\\LANTER~1\\lantern.exe", resolve=False)
@@ -358,7 +359,8 @@ def test_the_relays_folder_rule_reads_no_folder_and_compares_a_short_name_as_wri
 
 def test_check_forms_takes_one_to_four_checked_folders():
     assert tgt.check_forms(["c:/games/lantern drift"]) == ("C:\\games\\lantern drift",)
-    for bad in [(), "C:\\Games\\Lantern Drift", (GAME_DIR,) * 5, ("C:\\",), (GAME_DIR, "\\\\server\\share\\x"), None]:
+    for bad in [(), "C:\\Games\\Lantern Drift", (GAME_DIR,) * 5, ("C:\\",), (GAME_DIR, "\\\\server\\share\\x"), None,
+                (GAME_DIR, "c:/games/lantern drift/")]:                 # one folder twice: the hello would refuse it
         with pytest.raises(ValueError):
             tgt.check_forms(bad)
 

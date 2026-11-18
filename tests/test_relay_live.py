@@ -109,13 +109,16 @@ def test_the_real_relay_for_a_folder_judges_each_game_by_its_own_read_and_record
     from lagdoctor.winapi import folders as winfolders
     assert elevation.is_elevated(), "GitHub's runner account is an administrator with UAC off"
     snap = ntquery.Snapshotter()
-    forms = tgt.folder_forms(os.path.dirname(os.path.realpath(BASE_PY)))      # the stand-in game's own folder
+    forms = tgt.folder_forms(os.path.dirname(BASE_PY))           # the stand-in's folder, and its real path
     me = snap.snapshot()[os.getpid()]
     link = client.launch(None, folders=forms, wait_s=60, presentmon_exe=Path(presentmon_exe).resolve(), frames=True,
                          network=True, recorder=(me.pid, me.create_time), sid=elevation.token_user_sid())
     started: list[int] = []
+    procs: dict = {}
     try:
-        assert link.folders == forms and link.game is None and link.create_time is not None
+        assert link.folders == forms and link.game is None
+        relay_ct = snap.snapshot()[link.pid].create_time             # Play's `since`: the relay's, not this one's
+        assert link.create_time == relay_ct != me.create_time
         # Both started after the relay, outside this test's tree: one from outside the folder, one from inside it.
         ping = os.path.join(winfolders.system_folders()[0], "PING.EXE")
         started.append(_detached([ping, "-n", "90", "127.0.0.1"]))
@@ -143,11 +146,13 @@ def test_the_real_relay_for_a_folder_judges_each_game_by_its_own_read_and_record
         tracker.stop()
     finally:
         code = link.close(wait_s=5)
-        for pid in started:
-            try:
-                os.kill(pid, 9)                          # the test's own stand-ins
-            except OSError:
-                pass
+        now = snap.snapshot()
+        for pid, ct in ((p, procs[p].create_time) for p in started if p in procs):
+            if now.get(pid) is not None and now[pid].create_time == ct:       # still the test's own stand-in
+                try:
+                    os.kill(pid, 9)
+                except OSError:
+                    pass
     st = frames.status()
     assert st.state == "failed" and st.detail.startswith("PresentMon ran but"), st      # it never draws
     assert frames.result()["presentmon"]["relay"]["pid"] == link.pid

@@ -145,9 +145,9 @@
  },
  {
   "name": "play: a refusal sends a program's name as it is",
-  "file": "lagdoctor/relay/server.py",
-  "old": "        return \"\".join(c if c.isprintable() else \"?\" for c in why), retry",
-  "new": "        return why, retry",
+  "file": "lagdoctor/capture/target.py",
+  "old": "    return (None, False) if why is None else (\"\".join(c if c.isprintable() else \"?\" for c in why), retry)",
+  "new": "    return (None, False) if why is None else (why, retry)",
   "tests": [
    "tests/test_relay.py::test_a_play_relays_refusal_shows_a_programs_name_as_plain_text"
   ]
@@ -159,7 +159,8 @@
   "new": "                if False:",
   "tests": [
    "tests/test_relay.py::test_a_play_relay_whose_recording_window_left_while_it_waited_for_the_game_ends",
-   "tests/test_relay.py::test_a_play_relay_takes_nothing_once_the_recording_window_has_gone_and_ends"
+   "tests/test_relay.py::test_a_play_relay_takes_nothing_once_the_recording_window_has_gone_and_ends",
+   "tests/test_relay.py::test_a_relay_for_the_running_game_ends_when_its_recorder_leaves_before_the_start"
   ]
  },
  {
@@ -274,8 +275,8 @@
  {
   "name": "play: a relay's no is taken as a yes",
   "file": "lagdoctor/relay/client.py",
-  "old": "            if reply is not None and reply[\"t\"] == \"game\":",
-  "new": "            if reply is not None:",
+  "old": "                taken = reply is not None and reply[\"t\"] == \"game\" and",
+  "new": "                taken = reply is not None and",
   "tests": [
    "tests/test_relay.py::test_aim_hears_the_relays_own_no_and_the_relay_waits_on"
   ]
@@ -346,8 +347,8 @@
  {
   "name": "play: aim asks after the relay's wait for a game is over",
   "file": "lagdoctor/relay/client.py",
-  "old": "        if over or (self.aim_by is not None and time.monotonic() > self.aim_by):",
-  "new": "        if over:",
+  "old": "        if self.aim_by is not None and time.monotonic() > self.aim_by:",
+  "new": "        if False:",
   "tests": [
    "tests/test_relay.py::test_aim_is_for_a_relay_approved_for_a_folder_and_one_at_a_time"
   ]
@@ -373,8 +374,8 @@
  {
   "name": "play: a link this window ended reads as a clean end",
   "file": "lagdoctor/relay/client.py",
-  "old": "        why = self.why or (f\"the relay ended: {self.relay_error}\" if self.relay_error else \"the relay ended\")",
-  "new": "        why = (f\"the relay ended: {self.relay_error}\" if self.relay_error else \"the relay ended\")",
+  "old": "        why = self._reason()     # a link this window ended first",
+  "new": "        why = (f\"the relay ended: {self.relay_error}\" if self.relay_error else \"the relay ended\")  #",
   "tests": [
    "tests/test_relay.py::test_frames_of_another_process_than_the_accepted_game_record_nothing"
   ]
@@ -418,7 +419,7 @@
  {
   "name": "play: a short name the relay compared as written is not said so",
   "file": "lagdoctor/capture/target.py",
-  "old": "    if not resolve and image and \"~\" in image:",
+  "old": "    if not resolve and image and _SHORT_NAME.search(image):",
   "new": "    if False:",
   "tests": [
    "tests/test_folder_wait.py::test_the_relays_folder_rule_reads_no_folder_and_compares_a_short_name_as_written"
@@ -494,6 +495,105 @@
   "new": "    if False:",
   "tests": [
    "tests/test_app_recording.py::test_anything_but_that_command_is_refused_before_any_prompt"
+  ]
+ },
+ {
+  "name": "play: aim names a ninth game",
+  "file": "lagdoctor/relay/client.py",
+  "old": "        if sent >= protocol.MAX_GAMES:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_relay.py::test_aim_names_at_most_max_games_and_asks_no_more"
+  ]
+ },
+ {
+  "name": "play: aim names a game once the recording stopped while it checked it",
+  "file": "lagdoctor/relay/client.py",
+  "old": "            if self._started or self._stop_sent:\n                raise RelayFailed(",
+  "new": "            if False:\n                raise RelayFailed(",
+  "tests": [
+   "tests/test_relay.py::test_aim_names_nothing_once_the_recording_stopped_while_it_checked_the_game"
+  ]
+ },
+ {
+  "name": "play: the recorder keeps the game accepted before a refused one",
+  "file": "lagdoctor/relay/client.py",
+  "old": "            self.game = None                        # the relay forgets the one before as this one arrives",
+  "new": "            pass",
+  "tests": [
+   "tests/test_relay.py::test_a_game_the_relay_refuses_takes_the_place_of_the_one_it_accepted_on_both_sides"
+  ]
+ },
+ {
+  "name": "play: an answer about another game than the one named is taken",
+  "file": "lagdoctor/relay/client.py",
+  "old": "            if self._aiming is None or msg[\"game\"] != self._aiming or self._reply is not None:",
+  "new": "            if self._aiming is None or self._reply is not None:",
+  "tests": [
+   "tests/test_relay.py::test_the_relays_answer_counts_only_for_the_game_named_and_only_once"
+  ]
+ },
+ {
+  "name": "play: a second answer about the game is taken",
+  "file": "lagdoctor/relay/client.py",
+  "old": "            if self._aiming is None or msg[\"game\"] != self._aiming or self._reply is not None:",
+  "new": "            if self._aiming is None or msg[\"game\"] != self._aiming:",
+  "tests": [
+   "tests/test_relay.py::test_the_relays_answer_counts_only_for_the_game_named_and_only_once"
+  ]
+ },
+ {
+  "name": "play: the link's reason leaves out what the relay said",
+  "file": "lagdoctor/relay/client.py",
+  "old": "        return self.why or (f\"the relay ended: {self.relay_error}\" if self.relay_error else \"the relay ended\")",
+  "new": "        return self.why or \"the relay ended\"",
+  "tests": [
+   "tests/test_relay.py::test_aim_says_the_relays_own_reason_and_exit_code_when_the_link_ends"
+  ]
+ },
+ {
+  "name": "play: the relay takes how long to wait for a game it was already approved for",
+  "file": "lagdoctor/relay/server.py",
+  "old": "    elif a.wait_s is not None:",
+  "new": "    elif False:",
+  "tests": [
+   "tests/test_relay.py::test_a_play_relay_takes_only_a_command_line_lag_doctor_builds"
+  ]
+ },
+ {
+  "name": "play: the relay starts its trace and PresentMon for a recorder that is gone",
+  "file": "lagdoctor/relay/server.py",
+  "old": "        if self._gone.is_set():                           # the recorder is gone (its pipe may live on elsewhere)",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_relay.py::test_a_relay_whose_recorder_is_gone_by_the_start_starts_nothing"
+  ]
+ },
+ {
+  "name": "play: the forms may name one folder twice",
+  "file": "lagdoctor/capture/target.py",
+  "old": "    if len({fold_path(f) for f in forms}) != len(forms):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_folder_wait.py::test_check_forms_takes_one_to_four_checked_folders"
+  ]
+ },
+ {
+  "name": "play: any tilde reads as a short name",
+  "file": "lagdoctor/capture/target.py",
+  "old": "_SHORT_NAME = re.compile(r\"~[0-9]\")",
+  "new": "_SHORT_NAME = re.compile(r\"~\")",
+  "tests": [
+   "tests/test_folder_wait.py::test_the_relays_folder_rule_reads_no_folder_and_compares_a_short_name_as_written"
+  ]
+ },
+ {
+  "name": "play: the game is judged on the snapshot taken before its path was read",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        return accept_target(after, pid, create_time, session=session, folders=folders",
+  "new": "        return accept_target(before, pid, create_time, session=session, folders=folders",
+  "tests": [
+   "tests/test_folder_wait.py::test_check_proposed_never_takes_a_path_read_while_the_number_named_another_process"
   ]
  }
 ]

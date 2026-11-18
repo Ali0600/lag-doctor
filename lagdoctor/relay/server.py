@@ -464,14 +464,11 @@ class Relay:
         program's path (target.check_proposed): in the relay's session, started after the relay (`since`), a program
         under one of the forms the prompt approved, none of lag-doctor's own (the recorder's tree and the relay's),
         and the recorder still running. (why not, in one line of plain text, and whether asking again may help), or
-        (None, False)."""
+        (None, False). This is where Stage 4's service will put its own policy (the caller's session and account)."""
         from lagdoctor.capture import target
-        why, retry = target.check_proposed(
+        return target.check_proposed(
             self.parts.snapshot, self.parts.image, *proposed, session=self.session, folders=self.cfg.folders,
             since=self.since, own=(self.cfg.recorder, (self.parts.me, self.since)), alive=(self.cfg.recorder,))
-        if why is None:
-            return None, False
-        return "".join(c if c.isprintable() else "?" for c in why), retry
 
     def _take(self, game: tuple[int, int] | None) -> None:
         """Play: the game it will record, accepted just now (None: none, until the next one is)."""
@@ -502,6 +499,8 @@ class Relay:
 
     def _start_sources(self, origin: float) -> None:
         self._refresh()                                   # the game's processes before its first event
+        if self._gone.is_set():                           # the recorder is gone (its pipe may live on elsewhere)
+            return
         self._refresher = threading.Thread(target=self._refresh_loop, name="relay-refresh", daemon=True)
         self._refresher.start()
         if self.cfg.network:

@@ -143,8 +143,8 @@ def launch(target: dict[str, Any] | None = None, *, presentmon_exe: Path | None,
         aim_by = time.monotonic() + wait_s + _game_slack() - AIM_S if folders is not None else None
         since, session = _relay_and_session(child.pid, recorder[0])
         if folders is not None and (since is None or session is None):
-            raise RelayFailed("when the relay started could not be read here, so no game it might record could be "
-                              "checked; nothing was recorded through it")
+            raise RelayFailed("the relay's start time could not be read here, so no game it might record could be "
+                              "checked")
         link = RelayLink(client, child, hello, create_time=since, recorder=recorder, session=session, aim_by=aim_by)
         client = child = None
         return link
@@ -221,6 +221,8 @@ class RelayLink:
         self.game: tuple[int, int] | None = hello.get("game")
         self.recorder, self.session, self.aim_by = recorder, session, aim_by
         self._aiming: tuple[int, int] | None = None         # Play: the game named, until the relay answers
+        self._games_sent = 0                                # Play: `game` messages sent (protocol.MAX_GAMES at most)
+        self._broke_lock = threading.Lock()
         self._reply: dict[str, Any] | None = None
         self._replied = threading.Event()
         self._client, self._child = client, child
@@ -267,8 +269,7 @@ class RelayLink:
         """A collector made after the link ended (the tracker makes its session only when it starts) learns why at
         once, instead of waiting out its own deadline."""
         if self.ended.is_set():
-            sink.relay_gone(self.why or (f"the relay ended: {self.relay_error}" if self.relay_error else
-                                         "the relay ended"))
+            sink.relay_gone(self._reason())
 
     def tool_procs(self) -> tuple[tuple[int, int], ...]:
         """The relay as (pid, create_time): lag-doctor's own, with its PresentMon, never blamed for the lag."""
@@ -281,8 +282,10 @@ class RelayLink:
         (target.check_proposed with the arguments the relay will use, on `snapshot` and `image`: this process's own
         by default), so a game the relay would refuse is never sent; then the relay judges it on its own snapshots.
         Returns once the relay has accepted it: the recording may start. GameRefused when either says no (the relay
-        waits on for another); RelayFailed when the link ended, the relay did not answer within AIM_S or its wait
-        for a game is over (the link is closed then, and the relay's exit code is in it); ValueError for a relay
+        waits on for another); RelayFailed when the link ended or the relay did not answer within AIM_S (the link is
+        closed then, with the relay's reason and its exit code), when the recording already started or stopped, or
+        when no more games may be named: the relay takes protocol.MAX_GAMES for one recording, and none past aim_by
+        (the link stays open then, and a game accepted before stays the one recorded). ValueError for a relay
         approved for the running game itself; RuntimeError while another aim is under way. Each aim takes the place
         of the one before, as on the relay's side, until the recording starts."""
         from lagdoctor.capture.target import check_proposed
@@ -292,35 +295,57 @@ class RelayLink:
                 raise ValueError("the relay was approved for the running game itself, so it takes no other")
             if self._aiming is not None:
                 raise RuntimeError("another game is being named to the relay")
-            over = self._started or self._stop_sent or self.ended.is_set()
-        if over or (self.aim_by is not None and time.monotonic() > self.aim_by):
-            raise RelayFailed(self.why or "the relay no longer takes a game for this recording")
+            started, ended, sent = self._started or self._stop_sent, self.ended.is_set(), self._games_sent
+        if ended:
+            raise self._over()
+        if started:
+            raise RelayFailed("the recording already started or stopped, so the relay takes no game now")
+        if sent >= protocol.MAX_GAMES:
+            raise RelayFailed(f"the relay takes at most {protocol.MAX_GAMES} games for one recording")
+        if self.aim_by is not None and time.monotonic() > self.aim_by:
+            raise RelayFailed("the relay's wait for the game is over")
         why, retry = check_proposed(snapshot or _snapshot_now, image or _image_path, *proposed, session=self.session,
                                     folders=self.folders, since=self.create_time,
                                     own=(self.recorder, (self.pid, self.create_time)))
         if why is not None:
             raise GameRefused(why, retry, sent=False)
         with self._state_lock:
-            if self._aiming is not None or self._started or self._stop_sent:
-                raise RuntimeError("the relay's game changed hands while it was being named")
+            if self._aiming is not None:
+                raise RuntimeError("another game is being named to the relay")
+            if self._started or self._stop_sent:
+                raise RelayFailed("the recording started or stopped while its game was being checked")
             self._aiming, self._reply = proposed, None
+            self._games_sent += 1
             self._replied.clear()
             self.game = None                        # the relay forgets the one before as this one arrives
-        self._send(protocol.game(proposed))
-        deadline = time.monotonic() + AIM_S
-        while not self._replied.wait(0.05):
-            if self.ended.is_set() or time.monotonic() >= deadline:
-                break
-        with self._state_lock:
-            reply, self._aiming = self._reply, None
-            if reply is not None and reply["t"] == "game":
-                self.game = proposed
-        if reply is None:
+        try:
+            self._send(protocol.game(proposed))
+            deadline = time.monotonic() + AIM_S
+            while not self._replied.wait(0.05):
+                if self.ended.is_set() or time.monotonic() >= deadline:
+                    break
+        finally:
+            with self._state_lock:
+                reply, self._aiming = self._reply, None
+                taken = reply is not None and reply["t"] == "game" and not self._stop_sent and not self.ended.is_set()
+                if taken:
+                    self.game = proposed
+        if reply is None or self.ended.is_set():
             self._broke(f"the relay did not answer about the game within {AIM_S:.0f} s")
-            code = self.close(wait_s=GOODBYE_WAIT_S)
-            raise RelayFailed(self.why or "the relay ended", code)
+            raise self._over()
         if reply["t"] == "refused":
             raise GameRefused(reply["why"], reply["retry"], sent=True)
+        if not taken:
+            raise RelayFailed("the recording stopped while its game was being named")
+
+    def _reason(self) -> str:
+        """Why the link is over, in plain words: this window's reason, else what the relay said."""
+        return self.why or (f"the relay ended: {self.relay_error}" if self.relay_error else "the relay ended")
+
+    def _over(self) -> RelayFailed:
+        """The link has ended: hang up (the relay then ends, if it has not) and give its reason and exit code."""
+        code = self.close(wait_s=GOODBYE_WAIT_S)
+        return RelayFailed(self._reason(), code)
 
     def _take_reply(self, msg: dict[str, Any]) -> bool:
         """The relay's answer about a game (`game` or `refused`), on the reader's thread: kept for aim when it names
@@ -458,17 +483,17 @@ class RelayLink:
         """`end` came: a collector still waiting for its final status gets the relay's reason (it stopped before the
         recording began, or on a problem it named); one that has its final keeps it."""
         self.ended.set()
-        # A link this window ended first (_give_up: it told the relay to stop) keeps its own reason.
-        why = self.why or (f"the relay ended: {self.relay_error}" if self.relay_error else "the relay ended")
+        why = self._reason()     # a link this window ended first (_give_up: it told the relay to stop) keeps its own
         for sink in (self._frames_sink, self._net_sink):
             if sink is not None:
                 sink.relay_gone(why)
 
     def _broke(self, why: str) -> None:
-        if self.ended.is_set():
-            return
-        self.why = why if self.relay_error is None else f"{why}: {self.relay_error}"
-        self.ended.set()
+        with self._broke_lock:                      # the first reason stays: two threads may end it at once
+            if self.ended.is_set():
+                return
+            self.why = why if self.relay_error is None else f"{why}: {self.relay_error}"
+            self.ended.set()
         for sink in (self._frames_sink, self._net_sink):
             if sink is not None:
                 sink.relay_gone(self.why)
