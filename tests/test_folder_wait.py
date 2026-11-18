@@ -359,7 +359,8 @@ def test_the_relays_folder_rule_reads_no_folder_and_compares_a_short_name_as_wri
 
 def test_check_forms_takes_one_to_four_checked_folders():
     assert tgt.check_forms(["c:/games/lantern drift"]) == ("C:\\games\\lantern drift",)
-    for bad in [(), "C:\\Games\\Lantern Drift", (GAME_DIR,) * 5, ("C:\\",), (GAME_DIR, "\\\\server\\share\\x"), None,
+    five = tuple(f"{GAME_DIR} {i}" for i in range(tgt.MAX_FORMS + 1))       # five different folders: one too many
+    for bad in [(), "C:\\Games\\Lantern Drift", five, ("C:\\",), (GAME_DIR, "\\\\server\\share\\x"), None,
                 (GAME_DIR, "c:/games/lantern drift/")]:                 # one folder twice: the hello would refuse it
         with pytest.raises(ValueError):
             tgt.check_forms(bad)
