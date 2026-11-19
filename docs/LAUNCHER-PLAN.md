@@ -31,7 +31,7 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   second merged ("It works, merge it").
 - [ ] M5: measuring the right part, in four pull requests: the analysis of a part (`crop`, `analyze --from/--to`,
   merged 2026-11-09, PR #37), the start key in `watch` (merged 2026-11-17, PR #53, on by default in a terminal), the
-  app's half (M5c, built 2026-11-17; the owner tries it before it merges), then the trim handles in Results.
+  app's half (M5c, merged 2026-11-19, PR #55, on the owner's go), then the trim handles in Results.
 - [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
   below) and the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
@@ -597,9 +597,9 @@ analysed and labelled when the key measured nothing, and chimes in a terminal wi
   diagnosis again for that part. For the app half: words of its own for those two ends, the rest of the recording
   shaded on Results' charts, and its own start key.
 
-The app's half (M5c) was built on 2026-11-17 (DESIGN.md, The app; DECISIONS 2026-11-17). The owner chose two of its
-forks on a question card: the trim handles come in a pull request of their own, next, and a recording whose start
-key measured nothing is analysed whole and labelled, as in the terminal.
+The app's half (M5c) was built on 2026-11-17 and merged on 2026-11-19, PR #55 (DESIGN.md, The app; DECISIONS
+2026-11-17). The owner chose two of its forks on a question card: the trim handles come in a pull request of their
+own, next, and a recording whose start key measured nothing is analysed whole and labelled, as in the terminal.
 - The recorder runs `watch --control stdio --elevate --start-key ctrl+alt+s --window 600 --start-by 1200 --duration
   1860`: the terminal's numbers, held equal to `cli`'s by a test, and a limit past every window a press in time
   starts, which ends a recording only when Windows did not give the key (then all of it is analysed, and the screen
