@@ -1471,7 +1471,9 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
 `driver_dpc`, `gpu_spike`, `game_stall` (from the lift test), and the network rules `wifi_weak`, `wifi_roaming`,
 `wifi_scan_spikes`, `bufferbloat`, `isp_latency`, `server_lag`, `packet_loss`, `vpn_route`, `bandwidth_hog`.
 - `wrong_gpu`: the game rendered (by its 3D engine's LUID) on an integrated adapter while a discrete one
-  exists; likely when GPU-bound, possible otherwise.
+  exists; likely when GPU-bound, possible otherwise. At the display's rate (90 % of the refresh or more) under a
+  `gpu` or `mixed` verdict, where `gpu_limit` clears itself (`rules._gpu_reaches_display`, the one predicate both
+  read), it is possible and says the integrated GPU costs no frames seen yet, the discrete one only headroom.
 - `hybrid_copy`: the game rendered on the discrete adapter but its window is on a display driven by the
   integrated one (`HybridPresent = 1` is strong evidence, 0 is not evidence).
 - `gpu_contention`: other programs keep the game's GPU ≥ 10 % busy (median of steady 1 s windows); stronger when

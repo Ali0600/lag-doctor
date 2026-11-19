@@ -712,8 +712,12 @@ def _wrong_gpu(cap: Capture, ctx: dict) -> Any:
     c.support("gpu_engine", W_DIRECT, f"the game's 3D work ran on {_name(game)} (integrated) although "
                                       f"{_name(best)} (discrete) is in this PC")
     v, fps = e.verdict, e.avg_fps
+    paced = _gpu_reaches_display(e)    # as gpu_limit clears itself there: the integrated GPU costs no frames seen
     if not e.frames_measured:
         c.lack("frame_timing", W_STEADY, e.need("frames"))
+    elif paced:                        # before the engine's fallback, which gpu_limit clears there too
+        c.against("frame_timing", W_STEADY, f"at {fps:.0f} FPS the game already reaches the {e.refresh:.0f} Hz "
+                                            "display, so the faster GPU would mostly add headroom")
     elif _engine_fallback(e):          # the 3D engine named the GPU, not frame timing: no second point for one reading
         c.neutral("frame_timing", _engine_fallback(e))
     elif v == "gpu":
@@ -727,11 +731,13 @@ def _wrong_gpu(cap: Capture, ctx: dict) -> Any:
         c.against("frame_timing", W_STEADY, f"right now the frame rate is limited by {labels.BOUND.get(v, v)}, "
                                             "not by the GPU, so the faster GPU would mostly add headroom")
     fixes = [_gpu_preference_fix(e, best)]
-    limited = v == "gpu"
+    limited = v == "gpu" and not paced
     summary = (f"Windows ran the game on {_name(game)} instead of {_name(best)}. "
                + ("That integrated GPU is probably what holds the frame rate down: its 3D engine stayed busy."
                   if limited and _gpu_by_engine(e) else
                   "That integrated GPU is what holds the frame rate down." if limited else
+                  f"At {fps:.0f} FPS the game already reaches the {e.refresh:.0f} Hz display, so that integrated "
+                  "GPU costs it no frames now, but the discrete GPU would give it far more headroom." if paced else
                   "It is not the limit at the moment, but the discrete GPU would give the game far more headroom."))
     return c.conclude(f"The game ran on the integrated GPU, not on {_name(best)}", summary, fixes)
 
@@ -796,6 +802,13 @@ def _fps_reaches_display(e: _Env) -> bool:
     return fps is not None and hz is not None and fps >= LIMIT_FPS_FRAC * hz
 
 
+def _gpu_reaches_display(e: _Env) -> bool:
+    """Frame timing names the GPU the limit or a share of it ("gpu", "mixed", the 3D engine's fallback too), yet the
+    game already reaches the display (LIMIT_FPS_FRAC): the display sets the pace, so the GPU costs no frames the
+    player sees. One predicate for gpu_limit's firm clear there and wrong_gpu's, so the two never disagree."""
+    return e.frames_measured and e.verdict in ("gpu", "mixed") and _fps_reaches_display(e)
+
+
 def _gpu_by_engine(e: _Env) -> bool:
     """A "gpu" verdict the 3D engine gave, never frame timing: r never computed (too few steady frames, or none). It
     says nothing of the CPU, so no CPU-side cause is gated, cleared or ruled out by it."""
@@ -818,10 +831,10 @@ def _gpu_limit(cap: Capture, ctx: dict) -> Any:
     b, v = e.bound, e.verdict
     r = _fin(b.get("r"))
     fallback = _engine_fallback(e)
+    if _gpu_reaches_display(e):
+        return Cleared("gpu_limit", _sentence(f"the GPU sets the pace, but at {e.avg_fps:.0f} FPS the game "
+                                              f"already reaches the {e.refresh:.0f} Hz display"), firm=True)
     if e.frames_measured:
-        if v in ("gpu", "mixed") and _fps_reaches_display(e):
-            return Cleared("gpu_limit", _sentence(f"the GPU sets the pace, but at {e.avg_fps:.0f} FPS the game "
-                                                  f"already reaches the {e.refresh:.0f} Hz display"), firm=True)
         g, ft = _fin(b.get("gpu_ms")), _fin(b.get("ft_ms"))
         detail = f" (r = {r:.2f})" if r is not None else ""
         notes = [n for n in b.get("notes") or [] if isinstance(n, str)]
