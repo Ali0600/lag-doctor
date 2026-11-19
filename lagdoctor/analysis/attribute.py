@@ -124,6 +124,16 @@ NV_MAX_W = 2_000.0           # [inferred] a GPU drawing past 2 kW, or limited th
 FAN_MAX_RPM = 12_000.0
 FAN_NEAR_S = 1.0             # an NVIDIA reading's fan speed: the nearest fan reading within one fan period (1 s)
 FANS = ((C.CPU_FAN_RPM, "CPU fan"), (C.GPU_FAN_RPM, "GPU fan"), (C.MID_FAN_RPM, "middle fan"))
+# What the fans' speeds say while heat held the GPU down (fan_verdict). No read-only firmware call gives a fan's
+# top speed or the fan mode in force (docs/research/asus-fans.md, section 10), so a recording is judged by itself
+# and by the range where ASUS laptops' CPU and GPU fans top out, from G-Helper's per-model table.
+FAN_TOP_MIN_RPM = 5_500.0    # the slowest top speed in that table
+FAN_TOP_MAX_RPM = 7_800.0    # the fastest
+FAN_SLOW_RPM = 4_000.0       # held back under this while hot: under 3/4 of the slowest top
+FAN_HIGH_PCT = 95.0          # a fan's high in the part: this percentile of its readings, so a stray one sets none
+FAN_STEADY_SHARE = 0.9       # near its high: a median while hot of at least this share of it
+FAN_SLOWED_SHARE = 0.75      # held back: a median while hot under this share of it
+FANS_JUDGED = (C.CPU_FAN_RPM, C.GPU_FAN_RPM)   # a middle fan tops out higher (to 9,200 RPM): shown, never judged
 
 CPU_SIDE = ("game_cpu_spike", "asset_streaming", "memory_paging", "background_cpu", "cpu_throttle")
 GPU_SIDE = ("gpu_throttle", "vram_overflow")
@@ -474,6 +484,37 @@ def fans_while(cap: Capture, keep: Callable[[Any], bool]) -> list[tuple[str, flo
         if near:
             out.append((words, st.median(near), max(p[1] for p in pairs)))
     return out
+
+
+@dataclass(frozen=True)
+class FanVerdict:
+    """What the CPU and GPU fans' speeds say while heat held the GPU down: "full" (likely at full speed),
+    "held" (a quiet mode or a fan curve likely held them back) or "unknown"."""
+    kind: str
+    fans: tuple[str, ...]              # the fans judged, in words, in FANS order
+    slow: tuple[str, ...] = ()         # held: those under FAN_SLOW_RPM
+    slowed: tuple[str, ...] = ()       # held: the others under FAN_SLOWED_SHARE of their high
+
+
+def fan_verdict(cap: Capture, keep: Callable[[Any], bool], heat_only: bool) -> FanVerdict | None:
+    """Judge the CPU and GPU fans by each one's median over the NVIDIA readings `keep` accepts (fans_while) against
+    its high in the capture or part (FAN_HIGH_PCT of its readings) and the range where ASUS laptop fans top out.
+    "held" when one ran under FAN_SLOW_RPM or under FAN_SLOWED_SHARE of its high; "full" when each held at least
+    FAN_STEADY_SHARE of its high and FAN_TOP_MIN_RPM, and only where heat alone held the GPU (`heat_only`: the
+    power brake is no cooling limit); else "unknown". None without a judged fan read near those readings."""
+    readings = fan_readings(cap)
+    cols = {words: col for col, words in FANS}
+    judged = [(words, med, st.percentile([x for _, x in readings[cols[words]]], FAN_HIGH_PCT))
+              for words, med, _ in fans_while(cap, keep) if cols[words] in FANS_JUDGED]
+    if not judged:
+        return None
+    names = tuple(words for words, _, _ in judged)
+    slow = tuple(words for words, med, _ in judged if med < FAN_SLOW_RPM)
+    slowed = tuple(words for words, med, high in judged if words not in slow and med < FAN_SLOWED_SHARE * high)
+    if slow or slowed:
+        return FanVerdict("held", names, slow, slowed)
+    full = heat_only and all(med >= FAN_TOP_MIN_RPM and med >= FAN_STEADY_SHARE * high for _, med, high in judged)
+    return FanVerdict("full" if full else "unknown", names)
 
 
 FAN_STATS = {"fan_cpu_rpm": C.CPU_FAN_RPM, "fan_gpu_rpm": C.GPU_FAN_RPM}
