@@ -34,8 +34,9 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   app's half, which the owner tries before it merges.
 - [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
-  below) and the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
-  names). `watch --wait-folder`, screen 6 and the art are not built yet.
+  below), the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
+  names) and `watch --wait-folder` with the re-arm (M6e). Screen 6, Play's order on the control channel and the art
+  are not built yet.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -637,22 +638,19 @@ analysed and labelled when the key measured nothing, and chimes in a terminal wi
   holds above one round of the wait, the re-arm's hold and the recorder's check, and below 120 s; then `START_WAIT_S`
   for `start`. It reads no folder (an 8.3 short name is refused with the reason) and ends when the recorder is gone.
   The live test on GitHub's runner records a stand-in started from the base interpreter's folder and refuses PING.EXE.
-- For `watch --wait-folder` (M6e), from the folder wait's review (2026-11-09) and M6d's:
-  - The re-arm: hold `aim` until the chosen process has run `target.REARM_HOLD_S` (20 s, a feel number) and still
-    owns its window, and wait again (with it in `exclude`) when it exits, loses its window or stops drawing before
-    then; a refused game (`client.GameRefused`) re-arms too, excluding it only when `retry` is False. `exclude` helps
-    only while the tried process still runs, and a launcher that hides in the tray but keeps drawing nothing never
-    exits.
-  - One deadline for all of it: the first wait's `deadline_s` is the `--wait-s` the relay was approved with, and every
-    re-armed wait gets what is left of it, `pick` included; `aim` refuses past `RelayLink.aim_by`.
-  - The wait runs with `since=link.create_time` (the relay's, which it refuses before), passes over lag-doctor's
-    own processes as the relay does (`own=`: the recorder's tree and the relay's), and judges a program's path as
-    the relay does, never writing an 8.3 short name out long (`program_reason(resolve=False)`), so it never picks a
-    game the relay refuses; a test pins the two agreeing.
-  - `aim` takes `protocol.MAX_GAMES` games for one recording and raises `RelayFailed` past it or past `aim_by`:
-    the re-arm stops there. `GameRefused` never goes through `cli._relay_failure`, which reads `RelayFailed.code`.
-  - `cli._relay_failure` names a refused game in Play's words: its exit 3 text assumes the game exited while the
-    prompt was up, which cannot happen when the prompt came first.
+- [x] `watch --wait-folder` (M6e, DECISIONS 2026-11-19): Play's order from the console, the folder's forms and a
+  pre-flight (a program already running from the folder with a window refuses, naming `--pid`), the relay's prompt,
+  then the wait with the re-arm (`target.wait_for_game`). It judges as the relay does (`own=`, the recorder's and the
+  relay's trees through `RelayLink.own`; `resolve=False`; `since` the relay's start; a test runs both on one made-up
+  machine), holds what it chose for `target.REARM_HOLD_S` (`hold_target`: exited, lost its window or stopped drawing
+  on two samples re-arms, never leaving it out), names it with `aim` (a refusal re-arms, leaving it out only when
+  `retry` is False), and runs inside one deadline that ends where the relay's own does less its slack. From the
+  design review: a program from the folder that started while the prompt was up is said at once (the relay could
+  never take it); a path in 8.3 short names is told and counted, since it may be the game; once the relay takes no
+  more games the wait ends as one that found none, with every refusal's reason; `--wait-s` takes the relay's own
+  grammar; an administrator window never writes a short name out long. `_relay_failure(play=True)` words a broken
+  link for Play. Open: a launcher that keeps drawing behind the game passes the hold (Backlog); one that passes the
+  hold and exits before the recording starts is recorded gone.
 - Screen 6, and the folder wait for games without Play. The CLI gets it too: `watch --wait-folder`.
 
 What a check against FINAL FANTASY VII REBIRTH found on 2026-11-09 (research note, section 14), as parts of the items
@@ -663,7 +661,7 @@ above:
 - The relay learns the game after the prompt. The prompt approves the folder; the game's pid and create time then come
   over the pipe, and the folder rule checks them on the relay's own snapshot, the seam Stage 4 needs too. Built in
   M6d with a `game` message of its own before `start` (DECISIONS 2026-11-17), and the relay's wait for it follows the
-  recorder's own (`--wait-s`), which an update download can still outrun: M6e's wait says so.
+  recorder's own (`--wait-s`), which an update download can still outrun: M6e's waiting line says so.
 - The control channel gets Play's order (elevate, launch, waiting, target, recording) with a test that pins it: today's
   tests pin only that `waiting` comes before `target`.
 - The folder rule needs the process's image path and the relay's own start time (`accept_target`'s `image=` and

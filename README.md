@@ -82,6 +82,7 @@ uv run lagdoctor watch --game eldenring.exe             # or --pid PID; with nei
 uv run lagdoctor watch --note "shadows to low"          # what you changed, kept with the recording
 uv run lagdoctor watch --window 300 --no-sound          # measure 5 minutes from Ctrl+Alt+S, without chimes
 uv run lagdoctor watch --start-key none                 # analyse the whole recording, as before the start key
+uv run lagdoctor watch --wait-folder "D:\Games\MyGame"  # wait for it to start from its folder, then record it
 uv run lagdoctor fix --list                             # the automatic fixes the last report suggested
 uv run lagdoctor fix power_plan                         # shows before -> after and asks
 uv run lagdoctor undo                                   # what lag-doctor changed; undo an ID, or --all
@@ -92,6 +93,10 @@ uv run lagdoctor sweep --game mygame.exe --settings "<its GameUserSettings.ini>"
 uv run lagdoctor sweep --resume                         # go on with a sweep you stopped; a finished one's results
 ```
 
+- **`--wait-folder`** records a game that starts from its install folder after watch begins: frame timing's UAC
+  prompt comes first, then you start the game from its store. A launcher in the folder that draws and then leaves is
+  passed over, since lag-doctor watches the program it picks for 20 s before recording it. A store that first
+  downloads an update may need longer than the default 5 minutes (`--wait-s`).
 - **A settings sweep** tries settings kept in an ini file (an Unreal game's `GameUserSettings.ini`, say), one `--try`
   each (`--try sg.ShadowQuality=1`, or several values at once with commas between), against the file as it is. Close
   the game first, plug the laptop in, and pick a save and a spot you can reach the same way each time. For each run

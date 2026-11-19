@@ -2,6 +2,11 @@
 
 ## Backlog: alternatives worth trying later
 
+- **Fail a hold when another program from the folder draws more**, so a launcher that keeps drawing behind the game
+  it started (an animated background that stays visible) is not what gets recorded: on the hold's last round, run
+  `choose_auto` over the folder's other windowed programs not left out, and re-arm when one wins (2026-11-19, M6e).
+  Worth it if a Play recording ever names a launcher. Revisit hook: `target.hold_target`'s last round, which would
+  need the wait's own reading of each program's path (`wait_for_target`'s `images`).
 - **Let the fan line count in the GPU heat finding**, once a yardstick for "slow" exists: the fastest this laptop's
   fans reached across its recordings, or ASUS's performance mode read through the same device (a read, DSTS). Today
   the line is context only (2026-11-17, the fan readings). Revisit hook: `rules._fans_text` and
@@ -213,6 +218,49 @@
   relay/server.py (DECISIONS 2026-11-17, M6d).
 
 ---
+
+## 2026-11-19: watch --wait-folder holds the game it found before naming it, and a failed hold leaves nothing out (M6e)
+
+The folder wait takes the first program from the folder that draws on two samples in a row, and a launcher in the
+folder can be that program. The plan's re-arm watches what the wait chose before the relay is told: a chosen program
+that exits, loses its window or stops drawing within `target.REARM_HOLD_S` (20 s, a feel number the owner has not
+judged) is not the game, and the wait goes on. A design review (2026-11-19, one read-only agent) agreed with the
+three forks below and found seven gaps, all fixed before the code review: a game started while the prompt was up, a
+path in 8.3 short names waited out in silence, `--wait-s` digits the relay's parser refuses, "no more games" said
+as the relay failing, the slack test's sum, a short name written out long with administrator rights, and the
+waiting line's words.
+- **A failed hold waits again without leaving the process out (chosen)**: leaving out lasts as long as the process
+  runs, and a real game that blocks its drawing for two seconds while it loads, or makes its window again, would then
+  never be found, and the whole wait would end with nothing recorded. Not leaving it out costs at most one more wait
+  and hold for a launcher that draws on and off, inside the same deadline, and names nothing to the relay (the 8 games
+  it takes are spent only by `aim`). A game the relay refused with `retry` False is still left out: it would be
+  refused again.
+  - **Leave out a process whose hold failed** (the plan's first wording): rejected, for the game it can lose for good.
+- **The hold counts from the choice (chosen)**, not from the program's start: a game that loaded for 20 s, or a
+  launcher the player sat in, would otherwise pass with no hold at all.
+  - **From the program's create time**: rejected for that reason.
+- **A program already running from the folder with a window refuses before the prompt (chosen)**: a store starts
+  nothing for a game that runs, and the wait sees only programs started after it, so it would wait out its whole
+  time. The words name `watch --pid`. One without a window (a crash reporter or an old stub left running) is left to
+  the wait, which passes over it anyway.
+  - **Warn and wait anyway**: rejected, five minutes spent on a wait that cannot end well.
+  - **Refuse anything that runs from the folder**: rejected, a leftover helper would block Play for that game.
+- **The recorder's wait ends where the relay's does less its slack (chosen)**: `RelayLink.aim_by` less
+  `GAME_SLACK_S - AIM_S`, so the slack covers exactly one round of the wait, the hold and its last round, the
+  recorder's own check and the relay's answer (a test holds the sum below it). Counting from the wait's own start
+  left the time between the relay's hello and the wait out of every sum.
+- **Once the relay takes no more games, the wait ends as one that found none (chosen)**: exit 2 ("no_game" on the
+  control channel) with every refusal's reason, since the relay is fine and simply was not given a game it could take.
+  Only a link that ended goes to `_relay_failure`, in Play's words (`play=True`): its exit 3 text assumes a game that
+  exited while the prompt was up, which cannot happen when the prompt came first.
+- **A short-name path is counted and said, not written out long, with administrator rights (chosen)**: with the
+  relay the wait compares paths as the relay does (`resolve=False`) and so never picks a game the relay refuses; a
+  program from such a path is told once with its pid (record it with `--pid`) and counted in the deadline's reason. An
+  administrator window without a relay compares as written too, since writing a short name out long reads folders
+  with those rights. Revisit hook: the Backlog's "Play's relay writes an 8.3 short name out long" (M6d).
+- **A launcher that passes its hold and exits before the recording starts is recorded gone (open)**: the relay would
+  take another game until `start`, but the recorder has named it by then. Rare (it held 20 s and owned a window);
+  revisit with the Backlog's "A relay that follows a re-targeted game after `start`".
 
 ## 2026-11-17: An ASUS laptop's fans are read, only read, by a collector of their own (PR #57)
 
