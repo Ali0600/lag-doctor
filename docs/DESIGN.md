@@ -165,9 +165,10 @@ capture service. `client.py` is the recorder's side, `server.py` the relay proce
   same arguments first (`RelayLink.aim`, which raises `client.GameRefused`), so a game the relay would refuse is never
   sent. The reasons are cleaned to one line of printable text before they go.
 - **How long it waits**: `START_WAIT_S` (300 s) from its hello for `start`, which the PC's details come before. With
-  `--folder` it waits for a game it accepts until `--wait-s` plus `GAME_SLACK_S` (60 s: one round of the wait past
-  its deadline, the re-arm's hold `target.REARM_HOLD_S` and the recorder's own check; a test holds it there and below
-  120 s), then `START_WAIT_S` for `start`. In every wait it looks for the recorder on its snapshot once a second and
+  `--folder` it waits for a game it accepts until `--wait-s` plus `GAME_SLACK_S` (60 s; the recorder's wait ends that
+  much before, `RelayLink.aim_by` less the slack, so the slack holds one round of the wait, the re-arm's hold and its
+  last round, the recorder's own check with its tries and the relay's answer; a test holds it above their sum and
+  below 120 s), then `START_WAIT_S` for `start`. `--wait-s` takes at most three decimals, as `relay_argv` writes it. In every wait it looks for the recorder on its snapshot once a second and
   ends when it is gone, even while its pipe lives on in another process. Stage 4's service will set its own, short,
   deadline for a client's first request.
 - **Its pipe** (`winapi/pipe.py`): first instance only, remote clients refused, a DACL for the recorder's SID
@@ -971,10 +972,16 @@ def running_from(folders, procs=None) -> dict    # this session's processes from
                                                  # pre-flight): {running: [{pid, create_time, name, exe}],
                                                  # unreadable: [{pid, create_time, name}]}
 def wait_for_target(folder, *, folders=None, since=None, deadline_s=300.0, cancel=None, on_status=None, exclude=(),
-                    pick=None, clock=time.monotonic, sleep=None) -> dict
+                    pick=None, own=(), resolve=True, clock=time.monotonic, sleep=None) -> dict
 # find_target's dict with how "folder", plus folder, folders (the forms matched) and judged_by ("3d" | "window");
 # raises TargetNotFound (how far it got by the deadline, and what could not be measured), WaitCancelled (cancel set,
 # or pick chose nothing), ValueError (an argument), OSError (processes or windows unreadable 3 rounds in a row)
+def hold_target(found, *, hold_s=20.0, cancel=None, clock=time.monotonic, sleep=None) -> str | None
+# Play's re-arm: None when the chosen process still runs and owns its window at the hold's end, never having stopped
+# drawing; else why not (it exited, closed its window, stopped drawing). Raises as the wait does
+def wait_for_game(folder, *, folders=None, since=None, deadline_s=300.0, own=(), resolve=True, hold_s=20.0,
+                  aim=None, cancel=None, on_status=None, pick=None, clock=time.monotonic, sleep=None) -> dict
+# the wait, the hold and aim, again until one holds and aim takes it, inside one deadline (watch --wait-folder)
 def filetime_now() -> int                        # the system time in create-time units (100 ns since 1601)
 ```
 - **The folder** comes from library files any local account can write, and the rule takes in every program under it,
@@ -1001,7 +1008,26 @@ def filetime_now() -> int                        # the system time in create-tim
   so. Several at once go to `pick` (default: the busiest, ties to the foreground). The other stages are heard once
   each: `waiting`, `started` and `window`, with the first process's pid and name. The deadline's reason names only
   the programs that reached its stage, and counts what could not be measured: unreadable paths, paths with no drive
-  letter, samples with no reading.
+  letter, paths in 8.3 short names compared as written, samples with no reading. With the relay (watch
+  --wait-folder) it judges as the relay will (a test runs both on one made-up machine and pins that they agree):
+  `own` passes over every process in lag-doctor's own trees (the recorder's and the relay's, `RelayLink.own`), never
+  reading their paths, and `resolve=False` compares a path as Windows gave it. With `expand_short` (only in a
+  window without administrator rights) a path in 8.3 short names is still written out long, for this alone: a
+  program of this session that is then from the folder is told once (`short-name`, pid and name) and counted,
+  since it may be the game the relay would refuse. `running_from(resolve=)` follows the same rule.
+- **The re-arm** (`wait_for_game`, the recorder's): a launcher in the folder that draws can win the wait, so the
+  process chosen is held for `target.REARM_HOLD_S` (20 s from its choice, a feel number) by `hold_target`, which
+  samples the GPU as the wait does: it fails when the process exits (or its number now names another process), owns
+  no window that counts, or draws under 2 % on two samples in a row (a sample with no reading changes no count, and
+  once the wait judged by windows alone, so does the hold). A failed hold waits again without leaving the process out,
+  so a game that blocks its drawing while it loads, or makes its window again, stays findable; a launcher that draws
+  on and off is only chosen again. Then `aim(found)` (watch: `RelayLink.aim`) returns None to take it or (why, retry)
+  to refuse it, which waits again and leaves it out only when `retry` is False; aim raises TargetNotFound when no more
+  games may be named, said after why the last one before was not taken. One deadline covers it all: each wait gets what
+  is left of `deadline_s` (a `pick`'s time included) and none starts once it is spent; a hold begun before it still
+  runs out. `since` is taken once, before the first wait, and the forms are worked out once, so a game that starts
+  while a launcher is held is found by the next wait. `on_status` also hears `holding` {pid, name, seconds}, `rearm`
+  {pid, name, why} and `refused` {pid, name, why, retry} each time, and each wait's `waiting` again.
 - **`accept_target`'s folder mode**: `accept_target(procs, pid, create_time, session=, folders=, since=, image=,
   own=, resolve=)` takes a process that runs as that exact process in `session`, is in none of the trees of `own`
   (lag-doctor's own processes, as (pid, create_time)), started after `since` (the relay's own create time) and runs a
@@ -1706,8 +1732,8 @@ settings (`reg_sandbox` for the registry, fakes for power/display/process).
 ## CLI
 
 ```
-lagdoctor watch [--game NAME | --pid PID | --auto] [--duration S] [--server IP] [--no-network]
-                [--elevate | --no-elevate] [--out DIR] [--hotkey KEY | --hotkey none] [--note TEXT]
+lagdoctor watch [--game NAME | --pid PID | --auto | --wait-folder FOLDER [--wait-s S]] [--duration S] [--server IP]
+                [--no-network] [--elevate | --no-elevate] [--out DIR] [--hotkey KEY | --hotkey none] [--note TEXT]
                 [--start-key KEY | --start-key none] [--window S] [--start-by S] [--no-sound]
 lagdoctor analyze CAPTURE [--from TIME] [--to TIME]   re-run the analysis on a saved capture, or on part of it
 lagdoctor check                      settings check-up without a game running
@@ -1747,6 +1773,25 @@ lagdoctor sweep --resume [FOLDER]    go on with an unfinished sweep; a finished 
   and one that cannot play is said once after the recording. `cmd_watch(sound=None)` is silent: the app plays its own
   from the channel, and a sweep from its own events; `cmd_watch(start_advice=False)` (a sweep run) leaves out watch's
   own words about the start key, the "Recording." line's included.
+- **`--wait-folder FOLDER`** (Play's folder wait from the console, M6e; `--wait-s S`, default 300, at most 3600 with
+  three decimals, the relay's own grammar, refused without it): Play's order. First the folder's forms
+  (`target.folder_forms`, refused in one line before any prompt when it leads off the local disks) and a pre-flight
+  (`running_from`): a program already running from the folder with a window refuses, naming `--pid`, since a store
+  starts nothing for a running game and the wait sees only programs started after it. Then frame timing's choice and
+  the relay's prompt for the forms (`client.launch(None, folders=, wait_s=)`), then `waiting` and the wait
+  (`target.wait_for_game`), then `Watching ...` and `target`. With the relay the wait ends where the relay's does less
+  its slack, looks from the relay's start, passes over `RelayLink.own`, compares paths as written and names each game
+  that holds through `aim`; a program from the folder that started between the pre-flight and the relay (while the
+  prompt was up), which the relay would never take, ends it at once naming `--pid` when it owns a window, and is
+  said and waited past when it does not (a stub, whose game may start after the relay). A refusal waits again and never
+  reads as the relay failing; once the relay takes no more games (8, or past `aim_by`) the wait ends as one that
+  found none (exit 2, with the last refusal's reason); a relay that ends while it waits ends the wait (its end
+  is looked at every round, beside the cancel), and a link that ended is `_relay_failure(play=True)`, whose exit 3 text
+  (a game that exited while the prompt was up) never applies to Play. Without the relay (a Performance Log Users
+  member, an administrator window, `--no-elevate`, a declined prompt) it looks from the pre-flight and names no game,
+  and writes a short name out long only in a window known to run without administrator rights. A wait that finds
+  nothing exits 2 with its reason, a cancel 130, an unreadable process list 1; the relay is let go on every path. The
+  lines it says (`cli._PlayStatus`): each program's start and window once, every hold, re-arm and refusal.
 - `analyze` writes into a fresh session folder (with `analyzed-capture.txt` naming its source), never beside
   the capture, and never changes what `fix` uses. A damaged, foreign or newer-format file gets one plain line. The
   capture's note comes with it into the new report and summary.

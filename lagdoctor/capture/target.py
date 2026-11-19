@@ -574,12 +574,13 @@ def program_reason(image: str | None, folders: tuple[str, ...], *, resolve: bool
     return first
 
 
-def running_from(folders: tuple[str, ...], procs: dict[int, ProcInfo] | None = None) -> dict[str, list[dict]]:
+def running_from(folders: tuple[str, ...], procs: dict[int, ProcInfo] | None = None, *,
+                 resolve: bool = True) -> dict[str, list[dict]]:
     """The processes in lag-doctor's Windows session whose program is under one of `folders`, read now, opening no
     process: {"running": [{pid, create_time, name, exe}], "unreadable": [{pid, create_time, name}]}, the second the
     processes whose path Windows did not give, which may be the game too. Play's pre-flight asks it before the link
     is opened, since a store starts nothing for a game that already runs, and the wait sees only processes started
-    after it began."""
+    after it began. `resolve` as in program_reason: False in a window with administrator rights."""
     folders = check_forms(folders)
     procs = _snapshot() if procs is None else procs
     me = procs.get(_own_pid())
@@ -596,7 +597,7 @@ def running_from(folders: tuple[str, ...], procs: dict[int, ProcInfo] | None = N
         except OSError:
             out["unreadable"].append(who)
             continue
-        if program_reason(image, folders) is None:
+        if program_reason(image, folders, resolve=resolve) is None:
             out["running"].append({**who, "exe": image})
     return out
 
@@ -658,6 +659,10 @@ def _own_roots(own: object, folders: tuple[str, ...] | None, resolve: object) ->
         raise ValueError(f"not a list of lag-doctor's own processes: {_shown(own)}")
     if folders is None and (own or not resolve):
         raise ValueError("own= and resolve= go with folders=")
+    return _roots(own)
+
+
+def _roots(own: tuple | list) -> tuple[tuple[int, int], ...]:
     for root in own:
         if not isinstance(root, (tuple, list)) or len(root) != 2:
             raise ValueError(f"not a process as (pid, create time): {_shown(root)}")
@@ -917,9 +922,12 @@ def filetime_now() -> int:
 
 
 def _duration_words(seconds: float) -> str:
-    if seconds >= 120:
-        return f"{seconds / 60:g} minutes"
-    return f"{seconds:g} second" + ("" if seconds == 1 else "s")
+    """A length of time in a message, to the whole second (Play's deadlines are what is left of one)."""
+    whole = int(round(seconds))
+    if whole >= 120:
+        minutes, rest = divmod(whole, 60)
+        return f"{minutes} minutes" + (f" {_plural(rest, 'second')}" if rest else "")
+    return _plural(whole, "second")
 
 
 def _named(names: list[str]) -> str:
@@ -931,7 +939,7 @@ def _plural(n: int, word: str) -> str:
 
 
 def _deadline_reason(folder: str, seconds: float, furthest: int, names: list[list[str]], unreadable: int,
-                     driveless: int, samples: int, failed: int) -> str:
+                     driveless: int, samples: int, failed: int, short: int = 0) -> str:
     """Why the wait ended without a game: how far the folder's programs got, then what could not be measured."""
     took = _duration_words(seconds)
     if furthest == 0:
@@ -952,6 +960,9 @@ def _deadline_reason(folder: str, seconds: float, furthest: int, names: list[lis
     if driveless:
         out += (f". Windows gave {_plural(driveless, 'program')} that started a path with no drive letter, which no "
                 "folder can be matched to")
+    if short:
+        out += (f". Windows gave {_plural(short, 'program')} from the game's folder a path in 8.3 short names, which "
+                "a recording with administrator rights compares as written, so it could not take them")
     if failed:
         out += f". The GPU counters gave no reading on {failed} of {_plural(samples, 'sample')}"
     return out
@@ -968,6 +979,7 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
                     on_status: Callable[[str, dict], None] | None = None,
                     exclude: Iterable[tuple[int, int]] = (),
                     pick: Callable[[list[Candidate]], Candidate | None] | None = None,
+                    own: Iterable[tuple[int, int]] = (), resolve: bool = True, expand_short: bool = False,
                     clock: Callable[[], float] = time.monotonic,
                     sleep: Callable[[float], object] | None = None) -> dict:
     """Wait, opening no process, for the game a store starts from its install folder. Returns find_target's dict
@@ -983,7 +995,11 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
     A process counts once it started after `since` (a create time; by default SINCE_MARGIN before the call, so take
     it before the store's link is opened), runs in this Windows session from a program under one of the forms (its
     image path, read once per process, without a handle; a failed read is tried again, up to IMAGE_TRIES times), and
-    is neither lag-doctor's own nor in `exclude` (processes the caller already tried). It is the game once it owns a
+    is neither lag-doctor's own nor in `exclude` (processes the caller already tried). lag-doctor's own are this
+    process and the ones that started it, and with `own` ((pid, create_time) roots: Play passes the recorder and the
+    relay, RelayLink.own) every process in those trees too, which the relay's folder rule refuses (accept_target's
+    own=). `resolve` False compares a program's path as Windows gave it, never writing an 8.3 short name out long, as
+    the relay does (program_reason), so the wait never picks a game the relay refuses for it. It is the game once it owns a
     window that counts for auto mode, both before and after each sample, and draws at least AUTO_MIN_3D_PCT of a 3D
     engine on DRAW_SAMPLES samples in a row; the GPU is sampled only while such a window exists. Stubs, anti-cheat
     bootstrappers and store relaunches never draw, or exit, so they are passed over for as long as they run (Unreal's
@@ -992,7 +1008,11 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
     cancels); by default the busiest does.
 
     `on_status(state, info)` hears each stage once: "waiting"; "started" and "window", with the pid and name of the
-    first process to get there; and "windows-only", with why, when the GPU counters give no reading on
+    first process to get there; "short-name", with the pid and name of the first in this session whose path Windows
+    gave in 8.3 short names, which with `resolve` False matches no form although written out long it is under one
+    (the game, perhaps, which the relay would refuse too): only with `expand_short`, which writes such a path out
+    long for that alone, so only where this process runs without administrator rights; and "windows-only", with why,
+    when the GPU counters give no reading on
     GPU_FAILS_TO_WINDOWS samples in a row (each still takes a sample's time). From then on a window from the folder
     that stays for DRAW_SAMPLES rounds is enough.
     """
@@ -1009,6 +1029,9 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
     for pid, create_time in exclude:
         _check_identity(pid, create_time)
         skip.add((pid, create_time))
+    if not isinstance(resolve, bool):
+        raise ValueError(f"resolve= is not true or false: {_shown(resolve)}")
+    roots = _roots(tuple(own))                  # text given as `own` fails there too: its letters are no processes
     pause = sleep if sleep is not None else (cancel.wait if cancel is not None else time.sleep)
 
     told: set[str] = set()
@@ -1034,7 +1057,7 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
     streak: dict[tuple[int, int], int] = {}                       # samples in a row that a process drew
     names: list[list[str]] = [[], [], []]   # the folder's programs that started, had a window, and drew
     furthest = 0                            # 0 nothing from the folder, 1 it started, 2 it had a window, 3 it drew
-    unreadable = driveless = 0
+    unreadable = driveless = short = 0
     samples = failed = gpu_fails = round_fails = 0
     by_windows = False
     listed: list[dict] = []
@@ -1043,7 +1066,7 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
             raise WaitCancelled("the wait for the game was cancelled")
         if clock() >= end:
             raise TargetNotFound(_deadline_reason(folder, deadline_s, furthest, names, unreadable, driveless,
-                                                  samples, failed), listed)
+                                                  samples, failed, short), listed)
         try:
             procs = _snapshot()
             wins = windows_by_pid(windows.top_windows())
@@ -1059,6 +1082,8 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
         if me is None:
             raise OSError("lag-doctor's own process is not in Windows' process list")
         mine = self_and_ancestors(procs)
+        for root in roots:
+            mine |= descendants(procs, *root)
         reads = 0
         for p in procs.values():
             key = (p.pid, p.create_time)
@@ -1075,9 +1100,13 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
                     images[key] = (None, False)
                     unreadable += 1
                 continue
-            images[key] = (image, program_reason(image, forms) is None)
+            images[key] = (image, program_reason(image, forms, resolve=resolve) is None)
             if image and image[:8].lower() == "\\device\\":
                 driveless += 1              # a volume no drive letter or folder names (ntquery could not map it)
+            elif (expand_short and not resolve and not images[key][1] and image and _SHORT_NAME.search(image)
+                  and p.session_id == me.session_id and program_reason(image, forms) is None):
+                short += 1                  # from the folder, written out long: compared as written, it is not
+                tell("short-name", pid=p.pid, name=p.name)
         for table in (images, tries):
             for key in [k for k in table if k[0] not in procs or procs[k[0]].create_time != k[1]]:
                 del table[key]              # gone: Windows may give its number to another program
@@ -1167,3 +1196,160 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
             "folders": forms,
             "judged_by": "window" if by_windows else "3d",
         }
+
+
+def _check_seconds(value: object, what: str, zero_ok: bool = False) -> float:
+    """A length of time a caller gives: finite, more than 0 (or 0 itself with `zero_ok`), at most MAX_WAIT_S."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) \
+            or value < 0 or (value == 0 and not zero_ok) or value > MAX_WAIT_S:
+        lowest = "0 or more" if zero_ok else "more than 0"
+        raise ValueError(f"{what} must be {lowest} and at most {MAX_WAIT_S:.0f} seconds")
+    return float(value)
+
+
+def _pause_of(sleep: Callable[[float], object] | None, cancel: threading.Event | None) -> Callable[[float], object]:
+    """How a wait pauses: `sleep` when given, else on `cancel`, so a cancel wakes it at once, else time.sleep."""
+    return sleep if sleep is not None else (cancel.wait if cancel is not None else time.sleep)
+
+
+def _stop_if_cancelled(cancel: threading.Event | None) -> None:
+    if cancel is not None and cancel.is_set():
+        raise WaitCancelled("the wait for the game was cancelled")
+
+
+def hold_target(found: dict, *, hold_s: float = REARM_HOLD_S, cancel: threading.Event | None = None,
+                clock: Callable[[], float] = time.monotonic,
+                sleep: Callable[[float], object] | None = None) -> str | None:
+    """Play's re-arm: watch the process the folder wait chose (its dict) for `hold_s` from now, opening no process.
+    None when, on the first look at or past `hold_s`, it still runs as that process and owns a window that counts for
+    auto mode, never having stopped drawing on the way; else why it is not the game, in plain words: it exited, it no
+    longer owns such a window, or it drew less than AUTO_MIN_3D_PCT of a 3D engine on DRAW_SAMPLES samples in a row
+    (a launcher that drew, then left or went quiet while the player clicked its Play button). A sample with no reading
+    changes no count, as in the wait; once the wait judged by windows alone (`judged_by` "window"), so does the hold.
+    Raises WaitCancelled, ValueError for an argument, and OSError when Windows' process list or windows cannot be read
+    ROUND_FAILS rounds in a row."""
+    pid, create_time = found["pid"], found["create_time"]
+    _check_identity(pid, create_time)
+    hold_s = _check_seconds(hold_s, "hold_s", zero_ok=True)
+    name = found.get("name") or "a program from the game's folder"
+    windows_only = found.get("judged_by") == "window"
+    pause = _pause_of(sleep, cancel)
+    began = clock()
+    end = began + hold_s
+    quiet = fails = 0
+
+    def after() -> str:
+        return _duration_words(float(max(1, round(clock() - began)))) + " after it was chosen"
+
+    while True:
+        _stop_if_cancelled(cancel)
+        try:
+            procs = _snapshot()
+            shown = windows_by_pid(windows.top_windows())
+        except OSError as exc:
+            fails += 1
+            if fails >= ROUND_FAILS:
+                raise OSError(f"Windows' process list or windows could not be read {fails} times in a row "
+                              f"({exc})") from exc
+            pause(WAIT_POLL_S)
+            continue
+        fails = 0
+        if not is_alive(pid, create_time, procs):
+            return f"{name} (process {pid}) exited {after()}"
+        if pid not in shown:
+            return f"{name} (process {pid}) closed its window {after()}"
+        if quiet >= DRAW_SAMPLES:
+            return f"{name} (process {pid}) stopped drawing {after()}"
+        if clock() >= end:
+            return None
+        if windows_only:
+            pause(DRAW_SAMPLE_S)
+            continue
+        started = clock()
+        try:
+            gpu = _gpu_by_pid(sample_3d(DRAW_SAMPLE_S))
+        except OSError:
+            rest = DRAW_SAMPLE_S - (clock() - started)
+            if rest > 0:
+                pause(rest)                 # a sample that fails at once still takes a sample's time
+            continue
+        quiet = 0 if gpu.get(pid, (0.0, None))[0] >= AUTO_MIN_3D_PCT else quiet + 1
+
+
+def wait_for_game(folder: str, *, folders: tuple[str, ...] | None = None, since: int | None = None,
+                  deadline_s: float = WAIT_DEADLINE_S, own: Iterable[tuple[int, int]] = (), resolve: bool = True,
+                  expand_short: bool = False, hold_s: float = REARM_HOLD_S, aim: Callable[[dict], tuple[str, bool] | None] | None = None,
+                  cancel: threading.Event | None = None, on_status: Callable[[str, dict], None] | None = None,
+                  pick: Callable[[list[Candidate]], Candidate | None] | None = None,
+                  clock: Callable[[], float] = time.monotonic,
+                  sleep: Callable[[float], object] | None = None) -> dict:
+    """The folder wait with Play's re-arm (watch --wait-folder): wait_for_target, then hold_target on what it chose,
+    then `aim` it; wait again whenever the hold fails or `aim` refuses. Returns wait_for_target's dict for the process
+    that held, and that `aim` accepted. Raises what those two raise, and whatever `aim` raises.
+
+    One deadline for all of it: each wait gets what is left of `deadline_s` (a `pick` that takes a while included),
+    and none starts once it is spent: TargetNotFound then says why the last choice was not taken. A hold that begins
+    just before the deadline still runs out (at most `hold_s` and one sample past it: the relay's own wait,
+    server.GAME_SLACK_S, leaves room for that). `since` is taken once, before the first wait (by default
+    SINCE_MARGIN before the call), so a game that starts while a launcher is held is found by the next wait, and the
+    folder's forms are worked out once (or `folders` as given) and used by every wait.
+
+    `aim(found)`: None when the game is accepted, or (why, retry) when it is refused; the process is then left out of
+    later waits only when `retry` is False (asking again about it cannot change that). It raises TargetNotFound when
+    no more games may be named, which then also says why the last one before was not taken. A failed hold never leaves a
+    process out: a game that blocks its drawing for a moment while it loads, or makes its window again, must stay
+    findable, and a launcher that keeps drawing on and off is only chosen again, inside the same deadline.
+
+    `on_status(state, info)` hears each wait's states (wait_for_target's, "short-name" among them; each wait says
+    "waiting" again), and every
+    time it happens: "holding" {pid, name, seconds}, "rearm" {pid, name, why} and "refused" {pid, name, why, retry}.
+    `own`, `resolve`, `expand_short`, `cancel`, `pick`, `clock` and `sleep` as in wait_for_target; `cancel` may be
+    anything with is_set() and wait(seconds), as threading.Event has."""
+    deadline_s = _check_seconds(deadline_s, "deadline_s")
+    _check_seconds(hold_s, "hold_s", zero_ok=True)
+    since = filetime_now() - SINCE_MARGIN if since is None else since    # once, for every wait
+    own = tuple(own)
+    end = clock() + deadline_s
+    exclude: list[tuple[int, int]] = []
+    last: str | None = None
+
+    def tell(state: str, **info) -> None:
+        if on_status is not None:
+            on_status(state, info)
+
+    while True:
+        left = end - clock()
+        if left <= 0:
+            raise TargetNotFound(f"{last or 'no game was found'}, and the {_duration_words(deadline_s)} the wait had "
+                                 "are up")
+        try:
+            found = wait_for_target(folder, folders=folders, since=since, deadline_s=left, cancel=cancel,
+                                    on_status=on_status, exclude=exclude, pick=pick, own=own, resolve=resolve,
+                                    expand_short=expand_short, clock=clock, sleep=sleep)
+        except TargetNotFound as exc:
+            if last is None:
+                raise
+            raise TargetNotFound(f"{last}; after that, {exc.reason}", exc.candidates) from None
+        folders = found["folders"]
+        pid, name = found["pid"], found["name"]
+        tell("holding", pid=pid, name=name, seconds=hold_s)
+        why = hold_target(found, hold_s=hold_s, cancel=cancel, clock=clock, sleep=sleep)
+        if why is not None:
+            last = f"{why}, so it was taken for a launcher"
+            tell("rearm", pid=pid, name=name, why=why)
+            continue
+        if aim is None:
+            return found
+        try:
+            refused = aim(found)
+        except TargetNotFound as exc:           # no more games may be named: why the ones before were not taken
+            if last is None:
+                raise
+            raise TargetNotFound(f"{last}; after that, {exc.reason}", exc.candidates) from None
+        if refused is None:
+            return found
+        why, retry = refused
+        last = f"the relay refused {name} (process {pid}): {why}"
+        tell("refused", pid=pid, name=name, why=why, retry=retry)
+        if not retry:
+            exclude.append((pid, found["create_time"]))

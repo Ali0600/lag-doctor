@@ -86,14 +86,14 @@ class World:
 
     def start(self, at: float, pid: int, image: str | None, *, name: str | None = None, session: int = 1,
               before: bool = False, window: int | None = None, draw: float | None = None, cls: str = "GameWindow",
-              create: int | None = None) -> int:
+              create: int | None = None, ppid: int = 4) -> int:
         """A process started at `at` (or before the wait's `since`), optionally with a window and 3D use from then."""
         if pid == ME:
             raise ValueError(f"a made-up process took lag-doctor's own made-up number ({ME})")
         if create is None:
             create = SINCE - SECOND if before else SINCE + int(at * SECOND) + 1
         nm = name or (image.rsplit("\\", 1)[-1] if image else "unknown.exe")
-        self._at(at, "start", pid, (proc(pid, create, nm, session), image))
+        self._at(at, "start", pid, (proc(pid, create, nm, session, ppid), image))
         if window is not None:
             self.window(at, pid, window, cls)
         if draw is not None:
@@ -191,6 +191,19 @@ class World:
         kw.setdefault("on_status", lambda state, info: self.statuses.append((state, info)))
         self.limit = self.t + 10 * kw["deadline_s"]
         return tgt.wait_for_target(folder, clock=self.clock, sleep=self.sleep, **kw)
+
+    def hold(self, found: dict, **kw) -> str | None:
+        """target.hold_target on this machine (20 s unless the test says otherwise)."""
+        self.limit = self.t + 600.0
+        return tgt.hold_target(found, clock=self.clock, sleep=self.sleep, **kw)
+
+    def wait_for_game(self, folder: str = GAME_DIR, **kw) -> dict:
+        """target.wait_for_game on this machine: the re-arm, as watch --wait-folder runs it."""
+        kw.setdefault("since", SINCE)
+        kw.setdefault("deadline_s", 60.0)
+        kw.setdefault("on_status", lambda state, info: self.statuses.append((state, info)))
+        self.limit = self.t + 10 * (kw["deadline_s"] + kw.get("hold_s", tgt.REARM_HOLD_S))
+        return tgt.wait_for_game(folder, clock=self.clock, sleep=self.sleep, **kw)
 
     def accepted(self, found: dict, since: int = SINCE) -> str | None:
         """What the relay's folder rule says of the game the wait found, given what the wait matched against."""
@@ -571,6 +584,17 @@ def test_running_from_lists_this_sessions_processes_from_the_folder_whenever_the
     assert found["unreadable"] == [{"pid": 42, "create_time": SINCE - SECOND, "name": "lantern_.exe"}]
 
 
+
+def test_running_from_compares_a_short_name_as_written_when_asked_to(world, monkeypatch):
+    asked = []
+    short = "C:\\Games\\LANTER~1\\lantern_.exe"
+    monkeypatch.setattr(tgt.winfolders, "long_path", lambda path: asked.append(path) or GAME)
+    world.start(0.0, 42, short)
+    world._apply()
+    assert [p["pid"] for p in tgt.running_from(FORMS)["running"]] == [42] and asked == [short]
+    asked.clear()
+    assert tgt.running_from(FORMS, resolve=False)["running"] == [] and asked == []     # an administrator window
+
 # ---------------------------------------------------------------- the wait ---
 
 def test_the_game_is_the_new_process_from_the_folder_that_draws_on_two_samples_in_a_row(world):
@@ -781,6 +805,8 @@ def test_the_deadline_names_only_the_programs_that_reached_its_stage(world):
     assert "a window from the game's folder (lantern_.exe) never drew" in info.value.reason
     assert info.value.candidates == [{"pid": 42, "name": "lantern_.exe", "gpu_pct": 0.5, "has_window": True}]
     assert tgt._duration_words(300) == "5 minutes" and tgt._duration_words(1) == "1 second"
+    assert tgt._duration_words(1000.4) == "16 minutes 40 seconds" and tgt._duration_words(299.9) == "5 minutes"
+    assert tgt._duration_words(29.6) == "30 seconds"                 # what is left of a deadline, to the second
 
 
 def test_cancel_ends_the_wait(world):
@@ -947,6 +973,301 @@ def test_the_wait_checks_its_arguments(world):
         with pytest.raises(ValueError):
             world.wait(folder)
     assert world.reads == Counter() and world.statuses == []
+
+
+
+# ---------------------------------------------------------------- Play's re-arm (watch --wait-folder) ---
+
+RELAY = 30                                  # the relay in a made-up world: lag-doctor's own, started before the wait
+RELAY_CT = SINCE - 5 * SECOND
+PLAY_OWN = ((ME, SINCE - 100 * SECOND), (RELAY, RELAY_CT))   # the recorder (this made-up process) and the relay
+LAUNCHER = GAME_DIR + "\\launcher.exe"
+SHORT = "C:\\Games\\LANTER~1\\Lantern\\Binaries\\Win64\\lantern_.exe"     # GAME, as an 8.3 short name
+
+
+def _with_relay(world: World) -> None:
+    world.procs[RELAY] = proc(RELAY, RELAY_CT, "pythonw.exe")
+    world.images[RELAY] = "C:\\Python\\pythonw.exe"
+
+
+def test_a_program_from_the_folder_in_one_of_lag_doctors_own_trees_is_never_read_nor_the_game(world):
+    _with_relay(world)
+    world.start(0.5, 31, GAME, ppid=RELAY, window=FULL_HD, draw=80.0)       # the relay's child, run from the folder
+    world.start(0.5, 32, GAME, ppid=ME, window=FULL_HD, draw=80.0)          # the recorder's, likewise
+    game_ct = world.start(3.0, 42, GAME, window=FULL_HD, draw=40.0)
+    found = world.wait(own=PLAY_OWN)
+    assert (found["pid"], found["create_time"]) == (42, game_ct)
+    assert world.reads[31] == world.reads[32] == 0
+    assert world.wait()["pid"] in (31, 32)        # without own=, one of lag-doctor's own children would win
+
+
+def test_with_resolve_off_a_short_name_is_compared_as_written_and_said_only_when_it_is_the_folders(world, monkeypatch):
+    asked = []
+    monkeypatch.setattr(tgt.winfolders, "long_path", lambda path: asked.append(path) or (GAME if path == SHORT else
+                                                                                         path))
+    other = "D:\\OTHERS~1\\tool.exe"
+    world.start(0.5, 42, SHORT, window=FULL_HD, draw=60.0)
+    world.start(0.5, 43, other, window=FULL_HD)                       # a short name from elsewhere
+    world.start(0.5, 44, SHORT, session=2, window=FULL_HD)            # the folder's, in another session
+    with pytest.raises(TargetNotFound) as info:
+        world.wait(deadline_s=10.0, resolve=False)                    # as written, and nothing written out long
+    assert asked == [] and not [s for s, _ in world.statuses if s == "short-name"] and "8.3" not in info.value.reason
+    world.statuses.clear()
+    with pytest.raises(TargetNotFound) as info:
+        world.wait(deadline_s=10.0, resolve=False, expand_short=True)  # still as written; written out long to tell
+    assert [i for s, i in world.statuses if s == "short-name"] == [{"pid": 42, "name": "lantern_.exe"}]
+    assert asked == [SHORT, other]                                    # never another session's
+    assert info.value.reason.startswith("no program from the game's folder")
+    assert info.value.reason.endswith(". Windows gave 1 program from the game's folder a path in 8.3 short names, "
+                                      "which a recording with administrator rights compares as written, so it "
+                                      "could not take them")
+    asked.clear()
+    world.statuses.clear()
+    assert world.wait()["pid"] == 42 and SHORT in asked                # by default it is written out long first
+    assert not [s for s, _ in world.statuses if s == "short-name"]
+
+
+@pytest.mark.parametrize("case", ["game", "short name", "relay's child", "recorder's child", "another session",
+                                  "before the relay", "elsewhere"])
+def test_the_wait_picks_a_game_exactly_when_the_relays_check_takes_it(world, monkeypatch, case):
+    # The recorder's wait, as watch --wait-folder runs it with the relay, against the relay's own judgement of the
+    # same process on the same machine (target.check_proposed): what one takes the other takes, and what the relay
+    # refuses for good the wait never picks, so no game the player waits for is one the relay turns away.
+    monkeypatch.setattr(tgt.winfolders, "long_path", lambda path: GAME)   # a short name would match, written out
+    _with_relay(world)
+    image, kw = {"game": (GAME, {}), "short name": (SHORT, {}), "relay's child": (GAME, {"ppid": RELAY}),
+                 "recorder's child": (GAME, {"ppid": ME}), "another session": (GAME, {"session": 2}),
+                 "before the relay": (GAME, {"before": True}), "elsewhere": ("D:\\Other\\lantern_.exe", {})}[case]
+    create = world.start(0.5, 42, image, window=FULL_HD, draw=60.0, **kw)
+    try:
+        picked = world.wait(deadline_s=10.0, own=PLAY_OWN, resolve=False)["pid"] == 42
+    except TargetNotFound:
+        picked = False
+    why, retry = tgt.check_proposed(world.snapshot, world.image_path, 42, create, session=1, folders=FORMS,
+                                    since=SINCE, own=PLAY_OWN)
+    assert picked is (why is None) is (case == "game"), why
+    assert retry is False
+
+
+def test_a_game_that_keeps_its_window_and_draws_holds_for_the_whole_hold(world):
+    world.start(0.5, 42, GAME, window=FULL_HD, draw=60.0)
+    found = world.wait()
+    began, samples = world.t, world.samples
+    assert world.hold(found, hold_s=20.0) is None
+    assert 20.0 <= world.t - began <= 21.0 and world.samples - samples == 20      # one sample a second
+
+
+@pytest.mark.parametrize("leave, words", [
+    (lambda w, at: w.exit(at, 42), "lantern_.exe (process 42) exited 5 seconds after it was chosen"),
+    (lambda w, at: w.close_window(at, 42), "lantern_.exe (process 42) closed its window 5 seconds after it was chosen"),
+    (lambda w, at: w.draw(at, 42, 0.5), "lantern_.exe (process 42) stopped drawing 6 seconds after it was chosen"),
+])
+def test_a_launcher_that_leaves_or_goes_quiet_within_the_hold_is_not_the_game(world, leave, words):
+    world.start(0.5, 42, GAME, window=FULL_HD, draw=60.0)
+    found = world.wait()
+    began = world.t
+    leave(world, began + 4.5)
+    assert world.hold(found) == words
+    assert world.t - began < 7.0                  # said as soon as it is seen, not at the hold's end
+
+
+def test_a_number_windows_gave_to_another_program_is_not_the_chosen_one(world):
+    world.start(0.5, 42, GAME, window=FULL_HD, draw=60.0)
+    found = world.wait()
+    at = world.t + 2.5
+    world.exit(at, 42)
+    world.start(at, 42, GAME, window=FULL_HD, draw=60.0)           # the same number, a newer process
+    assert "(process 42) exited" in world.hold(found)
+
+
+def test_a_quiet_sample_now_and_then_and_samples_without_a_reading_never_end_the_hold(world):
+    world.start(0.5, 42, GAME, window=FULL_HD, draw=60.0)
+    found = world.wait()
+    began, first = world.t, world.samples
+    for at, pct in [(2.5, 0.0), (3.5, 60.0), (9.5, 0.0), (10.5, 60.0)]:    # quiet on the 3rd sample, and the 10th
+        world.draw(began + at, 42, pct)
+    world.fail_on = {first + 5, first + 6, first + 7}                       # three in a row with no reading
+    assert world.hold(found) is None
+
+
+def test_a_sample_without_a_reading_neither_ends_nor_breaks_a_quiet_run(world):
+    world.start(0.5, 42, GAME, window=FULL_HD, draw=60.0)
+    found = world.wait()
+    began, first = world.t, world.samples
+    world.draw(began + 2.5, 42, 0.0)              # quiet from the 3rd sample on
+    world.fail_on = {first + 4}                   # the 4th gives no reading: the 5th is the second quiet one
+    assert world.hold(found) == "lantern_.exe (process 42) stopped drawing 5 seconds after it was chosen"
+
+
+def test_once_the_wait_judged_by_windows_alone_so_does_the_hold(world):
+    world.gpu_fails = True
+    world.start(0.5, 42, GAME, window=FULL_HD)
+    found = world.wait()
+    assert found["judged_by"] == "window"
+    samples = world.samples
+    assert world.hold(found) is None and world.samples == samples
+    world.close_window(world.t + 2.5, 42)
+    assert "(process 42) closed its window" in world.hold(found)
+
+
+def test_a_hold_of_nothing_looks_once(world):
+    world.start(0.5, 42, GAME, window=FULL_HD, draw=60.0)
+    found = world.wait()
+    began, samples = world.t, world.samples
+    assert world.hold(found, hold_s=0) is None and world.t == began and world.samples == samples
+
+
+def test_a_cancel_ends_the_hold(world):
+    cancel = threading.Event()
+    world.start(0.5, 42, GAME, window=FULL_HD, draw=60.0)
+    found = world.wait()
+    began = world.t
+    world.call(began + 3.5, cancel.set)
+    with pytest.raises(WaitCancelled):
+        world.hold(found, cancel=cancel)
+    assert world.t - began < 5.0
+
+
+def test_reads_that_fail_in_the_hold_are_tried_again_then_given_up(world):
+    world.start(0.5, 42, GAME, window=FULL_HD, draw=60.0)
+    found = world.wait()
+    world.snapshot_fails = 2
+    world.call(world.t + 5.5, lambda: setattr(world, "snapshot_fails", 2))     # two in a row, twice, read between
+    assert world.hold(found) is None
+    world.snapshot_fails = 3
+    with pytest.raises(OSError, match="could not be read 3 times in a row"):
+        world.hold(found)
+
+
+def test_the_hold_checks_its_arguments(world):
+    found = {"pid": 42, "create_time": SINCE + 1, "name": "lantern_.exe"}
+    for kw in [{"hold_s": -1}, {"hold_s": math.nan}, {"hold_s": True}, {"hold_s": tgt.MAX_WAIT_S + 1}]:
+        with pytest.raises(ValueError):
+            world.hold(found, **kw)
+    with pytest.raises(ValueError):
+        world.hold({"pid": 0, "create_time": SINCE + 1})
+    for kw in [{"deadline_s": 0}, {"deadline_s": math.inf}, {"hold_s": -1}, {"own": "30:1"}, {"own": [(30,)]},
+               {"resolve": "no"}]:
+        with pytest.raises(ValueError):
+            world.wait_for_game(**kw)
+    with pytest.raises(ValueError):
+        world.wait(resolve=1)
+    assert world.samples == 0
+
+
+def test_a_launcher_that_leaves_within_its_hold_re_arms_the_wait_and_the_game_is_found(world, monkeypatch):
+    forms_asked = []
+    monkeypatch.setattr(tgt, "folder_forms", lambda folder: forms_asked.append(folder) or (tgt.check_folder(folder),))
+    world.start(0.5, 41, LAUNCHER, window=800_000, draw=30.0)
+    world.exit(7.0, 41)                                     # the player clicked its Play button
+    game_ct = world.start(9.0, 42, GAME, window=FULL_HD, draw=70.0)
+    found = world.wait_for_game()
+    assert (found["pid"], found["create_time"]) == (42, game_ct)
+    steps = [(s, i["pid"]) for s, i in world.statuses if s in ("holding", "rearm")]
+    assert steps == [("holding", 41), ("rearm", 41), ("holding", 42)]
+    assert [i["why"] for s, i in world.statuses if s == "rearm"] == [
+        "launcher.exe (process 41) exited 5 seconds after it was chosen"]
+    assert world.statuses.count(("waiting", {})) == 2 and forms_asked == [GAME_DIR]     # its forms, worked out once
+
+
+def test_one_deadline_covers_every_wait_and_says_why_the_last_choice_was_not_taken(world, monkeypatch):
+    given = []
+    real = tgt.wait_for_target
+    monkeypatch.setattr(tgt, "wait_for_target",
+                        lambda *a, **kw: given.append((world.t, kw["deadline_s"])) or real(*a, **kw))
+    world.start(0.5, 41, LAUNCHER, window=800_000, draw=30.0)
+    world.exit(7.0, 41)
+    with pytest.raises(TargetNotFound) as info:
+        world.wait_for_game(deadline_s=30.0)
+    assert len(given) == 2 and given[1][0] > 7.0
+    assert [round(at + left, 6) for at, left in given] == [30.0, 30.0]       # each wait gets what is left
+    assert 30.0 <= world.t <= 31.0
+    assert info.value.reason.startswith("launcher.exe (process 41) exited 5 seconds after it was chosen, so it was "
+                                        "taken for a launcher; after that, no program from the game's folder")
+
+
+def test_a_game_chosen_just_before_the_deadline_still_gets_its_whole_hold(world):
+    world.start(26.0, 42, GAME, window=FULL_HD, draw=70.0)
+    found = world.wait_for_game(deadline_s=30.0)
+    assert found["pid"] == 42 and world.t >= 47.0
+
+
+def test_a_choice_that_fails_its_hold_after_the_deadline_ends_the_wait_with_why(world):
+    world.start(26.0, 41, LAUNCHER, window=800_000, draw=30.0)
+    world.exit(35.0, 41)                                   # chosen before the deadline, gone after it
+    with pytest.raises(TargetNotFound) as info:
+        world.wait_for_game(deadline_s=30.0)
+    assert info.value.reason == ("launcher.exe (process 41) exited 7 seconds after it was chosen, so it was taken "
+                                 "for a launcher, and the 30 seconds the wait had are up")
+    assert world.t < 37.0
+
+
+def test_every_wait_looks_from_one_moment_so_a_game_started_during_a_hold_is_found(world, monkeypatch):
+    monkeypatch.setattr(tgt, "filetime_now", lambda: SINCE + int(world.t * SECOND))
+    world.start(0.5, 41, LAUNCHER, window=800_000, draw=30.0)
+    game_ct = world.start(5.0, 42, GAME)                 # starts while the launcher is held, shows its window later
+    world.exit(12.0, 41)
+    world.window(14.0, 42)
+    world.draw(14.0, 42, 70.0)
+    found = world.wait_for_game(since=None)
+    assert (found["pid"], found["create_time"]) == (42, game_ct)
+
+
+def test_a_game_that_pauses_its_drawing_while_it_loads_is_found_again(world):
+    world.start(0.5, 42, GAME, window=FULL_HD, draw=60.0)
+    world.draw(6.5, 42, 0.0)                     # a load that blocks drawing: two quiet samples inside its hold
+    world.draw(8.5, 42, 60.0)
+    found = world.wait_for_game()
+    assert found["pid"] == 42
+    assert [s for s, _ in world.statuses if s in ("holding", "rearm")] == ["holding", "rearm", "holding"]
+
+
+def test_a_game_refused_for_good_is_left_out_and_one_that_may_pass_later_is_asked_about_again(world):
+    world.start(0.5, 41, GAME_DIR + "\\tool.exe", window=FULL_HD, draw=90.0)    # keeps drawing; refused for good
+    world.start(0.5, 42, GAME, window=FULL_HD, draw=60.0)
+    asked = []
+
+    def aim(found):
+        asked.append(found["pid"])
+        if found["pid"] == 41:
+            return "not this one", False
+        return ("it could not be checked", True) if asked.count(42) == 1 else None
+
+    found = world.wait_for_game(aim=aim, hold_s=2.0)
+    assert found["pid"] == 42 and asked == [41, 42, 42]
+    assert [(i["pid"], i["retry"]) for s, i in world.statuses if s == "refused"] == [(41, False), (42, True)]
+
+
+def test_when_no_more_games_may_be_named_the_wait_ends_saying_why_the_last_was_not_taken(world):
+    world.start(0.5, 42, GAME, window=FULL_HD, draw=60.0)
+    calls = []
+
+    def aim(found):
+        calls.append(found["pid"])
+        if len(calls) == 1:
+            return "it could not be checked", True
+        raise TargetNotFound("the relay takes at most 8 games for one recording")
+
+    with pytest.raises(TargetNotFound) as info:
+        world.wait_for_game(aim=aim, hold_s=2.0)
+    assert info.value.reason == ("the relay refused lantern_.exe (process 42): it could not be checked; after that, "
+                                 "the relay takes at most 8 games for one recording")
+
+    def over(found):
+        raise TargetNotFound("the relay's wait for the game is over")
+
+    with pytest.raises(TargetNotFound, match="^the relay's wait for the game is over$"):    # nothing came before
+        world.wait_for_game(aim=over, hold_s=2.0)
+
+
+def test_whatever_else_aim_raises_ends_the_wait(world):
+    world.start(0.5, 42, GAME, window=FULL_HD, draw=60.0)
+
+    def aim(found):
+        raise RuntimeError("the relay is gone")
+
+    with pytest.raises(RuntimeError, match="the relay is gone"):
+        world.wait_for_game(aim=aim, hold_s=1.0)
 
 
 # ---------------------------------------------------------------- ntquery's folder mounts ---

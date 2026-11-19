@@ -672,8 +672,8 @@
  {
   "name": "--elevate does nothing for a group member",
   "file": "lagdoctor/cli.py",
-  "old": "            if not may_trace or (args.elevate and not _elevated()):",
-  "new": "            if not may_trace:",
+  "old": "    if not may_trace or (args.elevate and not _elevated()):",
+  "new": "    if not may_trace:",
   "tests": [
    "tests/test_cli.py::test_elevate_still_elevates_a_group_member_for_the_game_server_tracker"
   ]
@@ -681,8 +681,8 @@
  {
   "name": "an administrator window is elevated again",
   "file": "lagdoctor/cli.py",
-  "old": "            if not may_trace or (args.elevate and not _elevated()):",
-  "new": "            if not may_trace or args.elevate:",
+  "old": "    if not may_trace or (args.elevate and not _elevated()):",
+  "new": "    if not may_trace or args.elevate:",
   "tests": [
    "tests/test_cli.py::test_an_administrator_window_is_never_elevated_again"
   ]
@@ -690,8 +690,8 @@
  {
   "name": "a group member who declines loses frame timing",
   "file": "lagdoctor/cli.py",
-  "old": "                    if relay is None and not may_trace:   # declined: a group member still records frames here",
-  "new": "                    if relay is None:   # declined: a group member still records frames here",
+  "old": "        if relay is None and not may_trace:   # declined: a group member still records frames here",
+  "new": "        if relay is None:   # declined: a group member still records frames here",
   "tests": [
    "tests/test_cli.py::test_a_group_member_who_declines_still_records_frames_here"
   ]

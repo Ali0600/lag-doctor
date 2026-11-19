@@ -23,6 +23,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 from ctypes import wintypes
 from datetime import datetime
 from pathlib import Path
@@ -46,6 +47,10 @@ WINDOW_MIN_S = 11.0            # analysis.crop.MIN_SPAN_S, the shortest part (a 
 MAX_WINDOW_S = 3600.0          # "until I quit" is capped at an hour until compact frame storage exists
 DEFAULT_START_BY_S = 1200.0    # with no press by then, the recording stops: 20 minutes
 MAX_START_BY_S = 86400.0
+# watch --wait-folder (Play's folder wait, M6): capture.target's WAIT_DEADLINE_S and MAX_WAIT_S, which a test holds
+# equal (target is imported only once a watch runs).
+WAIT_DEFAULT_S = 300.0
+WAIT_MAX_S = 3600.0
 
 # Exit codes of `watch`.
 EXIT_BAD_ARGS = 2              # also: the game could not be found
@@ -88,6 +93,12 @@ def build_parser() -> argparse.ArgumentParser:
     pick.add_argument("--game", metavar="NAME", type=_exe_name, help="the game's exe name, e.g. eldenring.exe")
     pick.add_argument("--pid", type=_pid, help="the game's process id")
     pick.add_argument("--auto", action="store_true", help="pick the busiest game with a window (default)")
+    pick.add_argument("--wait-folder", metavar="FOLDER", type=_wait_folder,
+                      help="wait for the game to start from its install folder, then record it: start it from its "
+                           "store once watch says it is waiting (frame timing's UAC prompt comes first)")
+    w.add_argument("--wait-s", type=_wait_s, metavar="S",
+                   help=f"with --wait-folder: how long to wait for the game (default {WAIT_DEFAULT_S:.0f}, at most "
+                        f"{WAIT_MAX_S:.0f})")
     w.add_argument("--duration", type=_positive_float, metavar="S",
                    help="stop after S seconds, whatever the start key does (default: the start key's window or "
                         "--start-by ends it, or Ctrl+C)")
@@ -296,6 +307,27 @@ def _start_by(text: str) -> float:
     return v
 
 
+def _wait_folder(text: str) -> str:
+    """The game's install folder for --wait-folder, as target.check_folder gives it (a plain folder on a drive, never
+    the Windows folder or a drive's root), refused here in its words before anything starts."""
+    from lagdoctor.capture import target
+    try:
+        return target.check_folder(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+
+
+def _wait_s(text: str) -> float:
+    """--wait-s as the relay's own command line takes it (relay.server._seconds: up to three decimals), so the
+    relay is approved for exactly the wait watch runs."""
+    from lagdoctor.relay.server import _seconds
+    try:
+        return _seconds(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"give a number of seconds more than 0 and at most {WAIT_MAX_S:.0f}, with "
+                                         "at most three decimals") from None
+
+
 def _note(text: str) -> str | None:
     """The player's note, as the capture keeps it (model.clean_note); None for an empty one. One longer than the
     capture keeps is refused here, before anything starts, rather than cut."""
@@ -454,6 +486,9 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
     if start_key != "none" and start_key == lag_key:
         say(f"The start key and the lag key are the same key ({start_key.title()}): give --start-key another one.")
         return EXIT_BAD_ARGS
+    if getattr(args, "wait_s", None) is not None and getattr(args, "wait_folder", None) is None:
+        say("--wait-s goes with --wait-folder: it is how long watch waits for the game to start from its folder.")
+        return EXIT_BAD_ARGS
     # One recording at a time, checked before PresentMon or any ETW session can start (they share fixed
     # session names, so a second one would silently end the first one's tracing). This window holds the lock
     # for the whole recording, the relay's part included.
@@ -473,33 +508,37 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
                     "everything else without frame timing.")
                 return EXIT_NOT_READY
             _check_cancel(cancel)
-            observers.event("waiting")
-            auto = args.auto or (args.game is None and args.pid is None)
-            try:
-                target = tgt.find_target(name=args.game, pid=args.pid, auto=auto)
-            except tgt.TargetNotFound as exc:
-                say(f"Could not find the game: {exc}")
-                say("Start the game first, or name it with --game NAME.exe or --pid PID.")
-                return EXIT_BAD_ARGS
-            say(f"Watching {target.get('name')} (pid {target['pid']}, chosen by {target.get('how', '?')}).")
-            observers.event("target", name=target.get("name"), pid=target["pid"], how=target.get("how"))
-            _check_cancel(cancel)
+            folder, forms, target = getattr(args, "wait_folder", None), None, None
+            wait_s = (getattr(args, "wait_s", None) or WAIT_DEFAULT_S) if folder is not None else None
+            if folder is not None:
+                # Play's order: the folder's forms and what already runs from it, then the UAC prompt, then the wait.
+                forms, code, looked = _play_forms(folder, say=say)
+                if code is not None:
+                    return code
+            else:
+                observers.event("waiting")
+                auto = args.auto or (args.game is None and args.pid is None)
+                try:
+                    target = tgt.find_target(name=args.game, pid=args.pid, auto=auto)
+                except tgt.TargetNotFound as exc:
+                    say(f"Could not find the game: {exc}")
+                    say("Start the game first, or name it with --game NAME.exe or --pid PID.")
+                    return EXIT_BAD_ARGS
+                _watching(target, observers, say)
+                _check_cancel(cancel)
             frames = exe is not None
             if frames:
-                from lagdoctor.winapi import elevation
-                may_trace = elevation.can_trace()
-                # An explicit --elevate also elevates an account that may trace only through Performance Log
-                # Users: Windows lets that group start frame timing but not the game-server tracker (E1, 2026-11-06).
-                if not may_trace or (args.elevate and not _elevated()):
-                    choice = elevation_choice(args.elevate, args.no_elevate, _interactive(interactive), _ask, say=say)
-                    if choice == "elevate":
-                        relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher)
-                        if code is not None:
-                            return code
-                    if relay is None and not may_trace:   # declined: a group member still records frames here
-                        frames = False
-                        frames_why = ("it needs admin rights or membership of Performance Log Users (see "
-                                      "`lagdoctor setup`)")
+                relay, frames, frames_why, code = _elevation(args, target, exe, frames_why, interactive, say=say,
+                                                             launcher=launcher, folders=forms, wait_s=wait_s)
+                if code is not None:
+                    return code
+            if folder is not None:
+                _check_cancel(cancel)
+                observers.event("waiting")
+                target, code = _play_wait(folder, forms, looked, wait_s, relay, say=say, cancel=cancel)
+                if code is not None:
+                    return code
+                _watching(target, observers, say)
             _check_cancel(cancel)
             return _record(args, target, exe, frames, frames_why, relay, stop=stop, say=say,
                            interactive=interactive is not False, observers=observers,
@@ -718,15 +757,217 @@ def elevation_choice(elevate: bool, no_elevate: bool, interactive: bool, ask: Ca
     return "elevate" if ask("Record with frame timing (shows a UAC prompt)? [Y/n] ", default=True) else "skip"
 
 
-def _start_relay(args: argparse.Namespace, target: dict[str, Any], exe: Path, may_trace: bool = False, *,
-                 say: Callable[[str], None] | None = None,
-                 launcher: Callable[..., Any] | None = None) -> tuple[Any, int | None]:
+def _watching(target: dict[str, Any], observers: Any, say: Callable[[str], None]) -> None:
+    """The game is chosen: said here, and told to the observers (the app's channel)."""
+    say(f"Watching {target.get('name')} (pid {target['pid']}, chosen by {target.get('how', '?')}).")
+    observers.event("target", name=target.get("name"), pid=target["pid"], how=target.get("how"))
+
+
+def _elevation(args: argparse.Namespace, target: dict[str, Any] | None, exe: Path, frames_why: str,
+               interactive: bool | None, *, say: Callable[[str], None], launcher: Callable[..., Any] | None,
+               folders: tuple[str, ...] | None = None, wait_s: float | None = None,
+               ) -> tuple[Any, bool, str, int | None]:
+    """Frame timing's rights, once PresentMon is there: (relay link or None, whether frames are recorded, why not,
+    watch's exit code or None to go on). For the running game `target`, or for --wait-folder its folder's `folders`
+    and `wait_s` (target None: the prompt comes before the game exists)."""
+    from lagdoctor.winapi import elevation
+    relay, frames = None, True
+    may_trace = elevation.can_trace()
+    # An explicit --elevate also elevates an account that may trace only through Performance Log
+    # Users: Windows lets that group start frame timing but not the game-server tracker (E1, 2026-11-06).
+    if not may_trace or (args.elevate and not _elevated()):
+        choice = elevation_choice(args.elevate, args.no_elevate, _interactive(interactive), _ask, say=say)
+        if choice == "elevate":
+            relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher, folders=folders,
+                                       wait_s=wait_s)
+            if code is not None:
+                return None, frames, frames_why, code
+        if relay is None and not may_trace:   # declined: a group member still records frames here
+            frames = False
+            frames_why = ("it needs admin rights or membership of Performance Log Users (see "
+                          "`lagdoctor setup`)")
+    return relay, frames, frames_why, None
+
+
+def _play_forms(folder: str, *, say: Callable[[str], None]) -> tuple[tuple[str, ...] | None, int | None, int]:
+    """watch --wait-folder before any prompt: the forms of the game's folder that the prompt approves
+    (target.folder_forms), and whether the game already runs from it, owning a window: a store starts nothing for a
+    game that runs, and the wait sees only programs started after it began, so it would wait out its whole time.
+    (forms, None, a create time: a program from the folder started after it is new), or (None, watch's exit code, 0)
+    with why said."""
+    from lagdoctor.capture import target as tgt
+    from lagdoctor.winapi import windows
+    try:
+        forms = tgt.folder_forms(folder)
+    except ValueError as exc:
+        say(f"Not started: the game's folder cannot be waited on ({exc}).")
+        return None, EXIT_BAD_ARGS, 0
+    # Programs from the folder started after this count as new, as the folder wait's own default (SINCE_MARGIN).
+    looked = tgt.filetime_now() - tgt.SINCE_MARGIN
+    try:
+        running = tgt.running_from(forms, resolve=_unelevated())["running"]
+        shown = tgt.windows_by_pid(windows.top_windows())
+    except OSError as exc:
+        say(f"Not started: what already runs from the game's folder could not be read ({exc}).")
+        return None, 1, 0
+    there = [p for p in running if p["pid"] in shown]
+    if there:
+        names = ", ".join(sorted({p["name"] or "a program" for p in there}))
+        say(f"Not started: {names} already runs from the game's folder with a window, and a store starts nothing for a "
+            f"game that is running. Close it and run this again, or record it as it runs: lagdoctor watch --pid "
+            f"{there[0]['pid']}.")
+        return None, EXIT_BAD_ARGS, 0
+    return forms, None, looked
+
+
+class _PlayStatus:
+    """What watch --wait-folder says while it waits (target.wait_for_game's on_status): each step once for each
+    process, every hold, re-arm and refusal. The words name programs by what Windows calls them (say() cleans
+    them)."""
+
+    def __init__(self, say: Callable[[str], None]) -> None:
+        self.say = say
+        self.told: set[tuple] = set()
+
+    def __call__(self, state: str, info: dict[str, Any]) -> None:
+        name, pid = info.get("name"), info.get("pid")
+        if state in ("started", "window", "short-name"):
+            if (state, pid) in self.told:
+                return
+            self.told.add((state, pid))
+        if state == "started":
+            self.say(f"{name} started from the game's folder: waiting for its window.")
+        elif state == "window":
+            self.say(f"{name} has a window: waiting for it to draw.")
+        elif state == "windows-only":
+            self.say(f"The GPU counters give no reading ({info.get('why')}), so a window from the game's folder that "
+                     "stays open is taken as the game.")
+        elif state == "short-name":
+            self.say(f"({name}, pid {pid}, started from a path Windows gave in 8.3 short names, which this recording "
+                     f"compares as written, so it is not taken. If it is the game, record it as it runs: lagdoctor "
+                     f"watch --pid {pid}.)")
+        elif state == "holding":
+            self.say(f"{name} (pid {pid}) draws: watching it for {info.get('seconds'):g} s, to tell the game from a "
+                     "launcher.")
+        elif state == "rearm":
+            self.say(f"Not the game: {info.get('why')}, so it was taken for a launcher. Waiting for the game.")
+        elif state == "refused":
+            self.say(f"The relay refused {name} (pid {pid}): {info.get('why')}. Waiting for the game.")
+
+
+def _play_wait(folder: str, forms: tuple[str, ...], looked: int, wait_s: float, relay: Any, *,
+               say: Callable[[str], None], cancel: threading.Event | None) -> tuple[dict[str, Any] | None, int | None]:
+    """watch --wait-folder's wait for the game (target.wait_for_game: the re-arm, one deadline of `wait_s`).
+
+    With the relay, its wait ends where the relay's own does less its slack (RelayLink.aim_by), it looks only at
+    programs started after the relay (its `since`), passes over lag-doctor's own processes as the relay does
+    (RelayLink.own), compares a program's path as the relay does (never writing an 8.3 short name out long), and
+    names each game that holds to it (RelayLink.aim): a refusal re-arms the wait and never reads as the relay failing
+    (_relay_failure), and once the relay takes no more games the wait ends as one that found none. A program from the
+    folder that started between the pre-flight (`looked`) and the relay could never be recorded this way: one with a
+    window ends it at once, naming `--pid`, and one without (a stub, whose game may start after the relay) is said and
+    waited past. A relay that ends while it waits ends the wait as the relay failing. Without the relay it looks at
+    programs started after the pre-flight. Either way a short name is written out long only in a window without
+    administrator rights (program_reason; with the relay only to say that such a program is from the folder).
+    (target, None), or (None, watch's exit code) with why said."""
+    from lagdoctor.capture import target as tgt
+    from lagdoctor.relay import client
+    from lagdoctor.winapi import windows
+    kw: dict[str, Any] = {"since": looked, "resolve": _unelevated()}
+    stop: Any = cancel
+    if relay is not None:
+        try:
+            early = [p for p in tgt.running_from(forms, resolve=_unelevated())["running"]
+                     if looked < p["create_time"] <= relay.create_time]
+            shown = tgt.windows_by_pid(windows.top_windows()) if early else {}
+        except OSError as exc:
+            say(f"Not recorded: what runs from the game's folder could not be read ({exc}).")
+            return None, 1
+        drawn = [p for p in early if p["pid"] in shown]
+        if drawn:
+            names = ", ".join(sorted({p["name"] or "a program" for p in drawn}))
+            say(f"Not recorded: {names} started from the game's folder while the UAC prompt was up, and a recording "
+                f"started this way takes only a game that starts after it. Record it as it runs: lagdoctor watch "
+                f"--pid {drawn[0]['pid']}.")
+            return None, EXIT_BAD_ARGS
+        for p in early:         # no window yet: a stub or a launcher, whose game may still start after the relay
+            say(f"({p['name']}, pid {p['pid']}, started from the game's folder while the UAC prompt was up, so this "
+                "recording cannot take it. If it is the game itself, record it as it runs once it shows its window: "
+                f"lagdoctor watch --pid {p['pid']}.)")
+
+        def aim(found: dict[str, Any]) -> tuple[str, bool] | None:
+            try:
+                relay.aim((found["pid"], found["create_time"]))
+            except client.GameRefused as exc:
+                return exc.why, exc.retry
+            except client.RelayFailed as exc:
+                if relay.ended.is_set():
+                    raise
+                raise tgt.TargetNotFound(exc.why) from None     # the link is open: it takes no more games
+            return None
+        wait_s = min(wait_s, relay.aim_by - (client._game_slack() - client.AIM_S) - time.monotonic())
+        if wait_s <= 0:
+            say("Not recorded: the relay's wait for the game was over before this one began. Run the same "
+                "`lagdoctor watch` again.")
+            return None, 1
+        kw = {"since": relay.create_time, "own": relay.own(), "resolve": False, "expand_short": _unelevated(),
+              "aim": aim}
+        stop = _EitherSet(cancel, relay.ended)    # a relay that ends ends the wait, not five minutes later
+    say(f"Waiting up to {tgt._duration_words(wait_s)} for the game to start from {folder}: start it now, from its "
+        "store or its own program (a store that first downloads an update can take longer: give it --wait-s). "
+        "Ctrl+C cancels.")
+    try:
+        return tgt.wait_for_game(folder, folders=forms, deadline_s=wait_s, hold_s=tgt.REARM_HOLD_S, cancel=stop,
+                                 on_status=_PlayStatus(say), **kw), None
+    except tgt.TargetNotFound as exc:
+        say(f"No game was found: {exc}.")
+        say("Start the game once watch says it is waiting, or give it longer with --wait-s.")
+        return None, EXIT_BAD_ARGS
+    except tgt.WaitCancelled:
+        if relay is None or not relay.ended.is_set() or (cancel is not None and cancel.is_set()):
+            raise Cancelled() from None
+        code, text = _relay_failure(relay.failure(), play=True)
+        say(text)
+        return None, code
+    except client.RelayFailed as exc:
+        code, text = _relay_failure(exc, play=True)
+        say(text)
+        return None, code
+    except OSError as exc:
+        say(f"The wait for the game stopped: {exc}. Nothing was recorded.")
+        return None, 1
+
+
+class _EitherSet:
+    """Set once either event is (the caller's cancel, the relay link's end): what the folder wait looks at every
+    round and pauses on, as it does on a threading.Event."""
+
+    def __init__(self, *events: threading.Event | None) -> None:
+        self.events = [e for e in events if e is not None]
+
+    def is_set(self) -> bool:
+        return any(e.is_set() for e in self.events)
+
+    def wait(self, seconds: float) -> bool:
+        end = time.monotonic() + seconds
+        while not self.is_set():
+            left = end - time.monotonic()
+            if left <= 0:
+                return False
+            time.sleep(min(0.05, left))
+        return True
+
+
+def _start_relay(args: argparse.Namespace, target: dict[str, Any] | None, exe: Path, may_trace: bool = False, *,
+                 say: Callable[[str], None] | None = None, launcher: Callable[..., Any] | None = None,
+                 folders: tuple[str, ...] | None = None, wait_s: float | None = None) -> tuple[Any, int | None]:
     """Frame timing and the game-server tracker through the relay: one UAC prompt, then PresentMon and the network
     trace run with administrator rights while the recording stays in this window. (link, None) once the relay
     answers and checks out; (None, None) when the prompt was declined or could not be shown, so the recording goes on
     without them; (None, code) when the relay could not record, said here. `may_trace`: this account records frame
     timing itself (Performance Log Users), so without the relay it loses only the tracker. `launcher`: what starts
-    the relay elevated (client.launch's; default elevation.launch_elevated)."""
+    the relay elevated (client.launch's; default elevation.launch_elevated). For the running game `target`, or for
+    --wait-folder (target None) the forms of its folder (`folders`) and how long watch waits for it (`wait_s`)."""
     from lagdoctor.capture import session as sess
     from lagdoctor.capture import target as tgt
     from lagdoctor.relay import client
@@ -747,20 +988,22 @@ def _start_relay(args: argparse.Namespace, target: dict[str, Any], exe: Path, ma
     except OSError as exc:
         say(f"What the relay needs could not be read ({exc}), so {goes_on}.")
         return None, None
-    why = tgt.accept_target(procs, target["pid"], target["create_time"], session=me.session_id,
-                            approved=(target["pid"], target["create_time"]))
-    if why is not None:                       # what the relay would refuse is refused before the prompt
-        say(f"Not recorded: {why}.")
-        return None, EXIT_BAD_ARGS
+    if folders is None:                       # Play's game does not exist yet: the relay judges it when it is named
+        why = tgt.accept_target(procs, target["pid"], target["create_time"], session=me.session_id,
+                                approved=(target["pid"], target["create_time"]))
+        if why is not None:                   # what the relay would refuse is refused before the prompt
+            say(f"Not recorded: {why}.")
+            return None, EXIT_BAD_ARGS
     say("Frame timing needs administrator rights: approve the UAC prompt. The recording stays in this window.")
     try:
         link = client.launch(target, presentmon_exe=Path(exe).resolve(), frames=True, network=not args.no_network,
-                             recorder=(me.pid, me.create_time), sid=sid, launcher=launcher)
+                             recorder=(me.pid, me.create_time), sid=sid, launcher=launcher, folders=folders,
+                             wait_s=wait_s)
     except PermissionError:
         say(f"The UAC prompt was declined, so {goes_on}.")
         return None, None
     except client.RelayFailed as exc:
-        code, text = _relay_failure(exc)
+        code, text = _relay_failure(exc, play=folders is not None)
         say(text)
         return None, code
     except ValueError as exc:                 # a command it refused to launch: say so, never a traceback
@@ -772,9 +1015,14 @@ def _start_relay(args: argparse.Namespace, target: dict[str, Any], exe: Path, ma
     return link, None
 
 
-def _relay_failure(exc) -> tuple[int, str]:
-    """watch's exit code and what to say when the relay could not record (relay/client.RelayFailed)."""
+def _relay_failure(exc, play: bool = False) -> tuple[int, str]:
+    """watch's exit code and what to say when the relay could not record (relay/client.RelayFailed). `play`: for
+    --wait-folder, whose prompt came before the game existed, so no game can have exited while it was up. A game the
+    relay refused is no failure of the relay (client.GameRefused): the wait looks for another, and never comes here."""
     from lagdoctor.relay import protocol
+    if exc.code == protocol.EXIT_TARGET and play:
+        return 1, ("When the relay checked, this window was not running as it approved, or the relay could not read "
+                   "Windows' process list, so nothing was recorded. Run the same `lagdoctor watch` again.")
     if exc.code == protocol.EXIT_NOT_READY:
         return EXIT_NOT_READY, ("PresentMon failed its check in the administrator part of the recording, so nothing "
                                 "was recorded. Run `lagdoctor setup` here, then start the recording again.")
@@ -1276,6 +1524,16 @@ def _ask(prompt: str, default: bool = False) -> bool:
 
 def _width() -> int:
     return max(60, min(120, shutil.get_terminal_size((100, 24)).columns - 1))
+
+
+def _unelevated() -> bool:
+    """True only when this window is known to run without administrator rights: there the folder wait may write an
+    8.3 short name out long (it reads folder entries), which it never does with them (target.program_reason)."""
+    try:
+        from lagdoctor.winapi import elevation
+        return not elevation.is_elevated()
+    except Exception:  # noqa: BLE001 - cannot tell: as if elevated
+        return False
 
 
 def _elevated() -> bool:
