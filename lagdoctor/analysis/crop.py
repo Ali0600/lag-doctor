@@ -84,8 +84,8 @@ def check_span(cap: Capture, t0: Any, t1: Any) -> tuple[float, float]:
     """The span [t0, t1] of `cap` that crop cuts, as seconds into the recording: an end past the recording's comes
     back as its end. ValueError, as one clause that reads after "cannot be analysed: ", for anything that is not a
     span of it: ends that are not numbers, a start before 0 or after the end, an end not after the start, or a part
-    shorter than MIN_SPAN_S, and a capture that is a part already. `analyze --from/--to` checks a span through this;
-    the app's trim handles (the pull request after M5c) are to use it too, so both refuse the same ones."""
+    shorter than MIN_SPAN_S, and a capture that is a part already. `analyze --from/--to` checks a span through this
+    (the app's trim handles would have too; the owner dropped them, DECISIONS 2026-11-19)."""
     if getattr(cap, "span", None) is not None:      # its duration_s is a part's length, not the recording's end
         raise ValueError("it is a part of a recording already: cut the whole recording instead")
     recorded = recorded_s(cap)

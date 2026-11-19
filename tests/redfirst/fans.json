@@ -373,8 +373,8 @@
  {
   "name": "the fan line follows a lowered power cap too",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "        fans = _fans_text(e) if held else None",
-  "new": "        fans = _fans_text(e)",
+  "old": "        fans = _fans_text(e, verdict) if held else None",
+  "new": "        fans = _fans_text(e, verdict)",
   "tests": [
    "tests/test_fans.py::test_a_gpu_at_its_lowered_power_cap_rather_than_held_by_heat_gets_no_fan_line"
   ]
@@ -488,6 +488,327 @@
   "new": "    yield caught\n",
   "tests": [
    "tests/test_fans.py::test_the_device_guard_fails_a_test_that_reached_the_device"
+  ]
+ },
+ {
+  "name": "a fan at 4,000 RPM is slow",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "FAN_SLOW_RPM = 4_000.0 ",
+  "new": "FAN_SLOW_RPM = 4_001.0 ",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_is_held_back_under_4000_rpm_and_full_from_5500_rpm"
+  ]
+ },
+ {
+  "name": "a slow fan holds nothing back",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    slow = tuple(words for words, med, _ in fans if 0 < med < FAN_SLOW_RPM)\n",
+  "new": "    slow = ()\n",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_is_held_back_under_4000_rpm_and_full_from_5500_rpm",
+   "tests/test_fans.py::test_a_fan_held_back_leads_the_advice_with_the_makers_fan_mode_keeps_plug_in_and_scores_the_same"
+  ]
+ },
+ {
+  "name": "a fan standing still is only slow",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "if med <= 0)",
+  "new": "if med < 0)",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_standing_still_while_hot_names_a_fault_among_the_causes"
+  ]
+ },
+ {
+  "name": "a fan at 1 RPM stands still",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "if med <= 0)",
+  "new": "if med <= 1)",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_is_held_back_under_4000_rpm_and_full_from_5500_rpm"
+  ]
+ },
+ {
+  "name": "a fan at 4,000 RPM under its fastest is not held back",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "if FAN_SLOW_RPM <= med <",
+  "new": "if FAN_SLOW_RPM < med <",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_slower_while_hot_than_its_fastest_is_held_back_and_one_near_it_is_not"
+  ]
+ },
+ {
+  "name": "full speed starts past 5,500 RPM",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "FAN_TOP_MIN_RPM = 5_500.0 ",
+  "new": "FAN_TOP_MIN_RPM = 5_501.0 ",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_is_held_back_under_4000_rpm_and_full_from_5500_rpm"
+  ]
+ },
+ {
+  "name": "full speed needs no floor",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    over = topped and all(med >= FAN_TOP_MIN_RPM for words, med, _ in fans if words in topped)\n",
+  "new": "    over = topped\n",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_is_held_back_under_4000_rpm_and_full_from_5500_rpm"
+  ]
+ },
+ {
+  "name": "one fan at the floor is enough",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "all(med >= FAN_TOP_MIN_RPM for",
+  "new": "any(med >= FAN_TOP_MIN_RPM for",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_is_held_back_under_4000_rpm_and_full_from_5500_rpm"
+  ]
+ },
+ {
+  "name": "the floor holds for the middle fan too",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "FANS_TOPPED = (C.CPU_FAN_RPM, C.GPU_FAN_RPM)",
+  "new": "FANS_TOPPED = (C.CPU_FAN_RPM, C.GPU_FAN_RPM, C.MID_FAN_RPM)",
+  "tests": [
+   "tests/test_fans.py::test_the_middle_fan_is_judged_for_held_back_and_never_said_to_be_at_full_speed"
+  ]
+ },
+ {
+  "name": "a lone middle fan reads as full",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    over = topped and all(",
+  "new": "    over = all(",
+  "tests": [
+   "tests/test_fans.py::test_the_middle_fan_is_judged_for_held_back_and_never_said_to_be_at_full_speed"
+  ]
+ },
+ {
+  "name": "a fan's fastest is its fastest reading",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "FAN_STRAY_READINGS = 2 ",
+  "new": "FAN_STRAY_READINGS = 0 ",
+  "tests": [
+   "tests/test_fans.py::test_a_fans_fastest_leaves_out_two_stray_readings_but_not_three_and_never_falls_under_its_median"
+  ]
+ },
+ {
+  "name": "three stray readings pass too",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "FAN_STRAY_READINGS = 2 ",
+  "new": "FAN_STRAY_READINGS = 3 ",
+  "tests": [
+   "tests/test_fans.py::test_a_fans_fastest_leaves_out_two_stray_readings_but_not_three_and_never_falls_under_its_median"
+  ]
+ },
+ {
+  "name": "the strays left out are the slowest",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "ordered[-1 - FAN_STRAY_READINGS]",
+  "new": "ordered[FAN_STRAY_READINGS]",
+  "tests": [
+   "tests/test_fans.py::test_a_fans_fastest_leaves_out_two_stray_readings_but_not_three_and_never_falls_under_its_median"
+  ]
+ },
+ {
+  "name": "the fan line prints the fastest reading",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "max(med, fan_fastest([p[1] for p in pairs]))",
+  "new": "max(p[1] for p in pairs)",
+  "tests": [
+   "tests/test_fans.py::test_a_fans_fastest_leaves_out_two_stray_readings_but_not_three_and_never_falls_under_its_median"
+  ]
+ },
+ {
+  "name": "a fastest under the median stays",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "max(med, fan_fastest([p[1] for p in pairs])))",
+  "new": "fan_fastest([p[1] for p in pairs]))",
+  "tests": [
+   "tests/test_fans.py::test_a_fans_fastest_leaves_out_two_stray_readings_but_not_three_and_never_falls_under_its_median"
+  ]
+ },
+ {
+  "name": "near only from 95 %",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "FAN_STEADY_SHARE = 0.9 ",
+  "new": "FAN_STEADY_SHARE = 0.95",
+  "tests": [
+   "tests/test_fans.py::test_full_speed_needs_the_fans_held_near_their_fastest"
+  ]
+ },
+ {
+  "name": "full speed needs no steady fans",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    steady = all(med >= FAN_STEADY_SHARE * fast for _, med, fast in fans)\n",
+  "new": "    steady = True\n",
+  "tests": [
+   "tests/test_fans.py::test_full_speed_needs_the_fans_held_near_their_fastest"
+  ]
+ },
+ {
+  "name": "held back only under 70 %",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "FAN_SLOWED_SHARE = 0.75 ",
+  "new": "FAN_SLOWED_SHARE = 0.70 ",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_slower_while_hot_than_its_fastest_is_held_back_and_one_near_it_is_not"
+  ]
+ },
+ {
+  "name": "held back at 75 % too",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "med < FAN_SLOWED_SHARE * fast)",
+  "new": "med <= FAN_SLOWED_SHARE * fast)",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_slower_while_hot_than_its_fastest_is_held_back_and_one_near_it_is_not"
+  ]
+ },
+ {
+  "name": "the verdict ignores what held the GPU",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if held_by(cap) != \"heat\":\n        return None\n",
+  "new": "",
+  "tests": [
+   "tests/test_fans.py::test_no_fan_verdict_where_the_power_brake_or_nvidias_hw_slowdown_held_the_gpu"
+  ]
+ },
+ {
+  "name": "a GPU at a lowered power cap gets a fan verdict",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    verdict = attribute.fan_verdict(cap) if held else None\n",
+  "new": "    verdict = attribute.fan_verdict(cap)\n",
+  "tests": [
+   "tests/test_fans.py::test_a_gpu_at_its_lowered_power_cap_rather_than_held_by_heat_gets_no_fan_line"
+  ]
+ },
+ {
+  "name": "the advice ignores the fans",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "_heat_fixes(verdict))",
+  "new": "_heat_fixes(None))",
+  "tests": [
+   "tests/test_fans.py::test_fans_held_near_their_fastest_past_5500_rpm_read_as_likely_full_speed_and_the_advice_turns_to_cleaning",
+   "tests/test_fans.py::test_a_fan_held_back_leads_the_advice_with_the_makers_fan_mode_keeps_plug_in_and_scores_the_same"
+  ]
+ },
+ {
+  "name": "fans at full speed keep the old advice",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if v is not None and v.kind == \"full\":\n        fans = _fan_names(",
+  "new": "    if v is not None and v.kind == \"fully\":\n        fans = _fan_names(",
+  "tests": [
+   "tests/test_fans.py::test_fans_held_near_their_fastest_past_5500_rpm_read_as_likely_full_speed_and_the_advice_turns_to_cleaning"
+  ]
+ },
+ {
+  "name": "fans held back keep the old advice",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if v is not None and v.kind == \"held\":\n        fans = _fan_names(",
+  "new": "    if v is not None and v.kind == \"helds\":\n        fans = _fan_names(",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_held_back_leads_the_advice_with_the_makers_fan_mode_keeps_plug_in_and_scores_the_same"
+  ]
+ },
+ {
+  "name": "a fan held back drops Plug in",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                air, plug, cap]\n",
+  "new": "                air, cap]\n",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_held_back_leads_the_advice_with_the_makers_fan_mode_keeps_plug_in_and_scores_the_same"
+  ]
+ },
+ {
+  "name": "full speed drops Plug in",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "thermal paste helps too.\"), air, plug, cap]",
+  "new": "thermal paste helps too.\"), air, cap]",
+  "tests": [
+   "tests/test_fans.py::test_fans_held_near_their_fastest_past_5500_rpm_read_as_likely_full_speed_and_the_advice_turns_to_cleaning"
+  ]
+ },
+ {
+  "name": "the full advice names no fans",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "f\"{fans[0].upper()}{fans[1:]} likely ran at full speed \"",
+  "new": "\"Its fans likely ran at full speed \"",
+  "tests": [
+   "tests/test_fans.py::test_fans_held_near_their_fastest_past_5500_rpm_read_as_likely_full_speed_and_the_advice_turns_to_cleaning"
+  ]
+ },
+ {
+  "name": "the full advice names the middle fan too",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        fans = _fan_names(v.topped)\n",
+  "new": "        fans = _fan_names(v.fans)\n",
+  "tests": [
+   "tests/test_fans.py::test_the_middle_fan_is_judged_for_held_back_and_never_said_to_be_at_full_speed"
+  ]
+ },
+ {
+  "name": "a stopped fan's repair is never said",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "(\" A fan that still stands still there needs a repair.\" if v.stopped else \"\")",
+  "new": "(\"\")",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_standing_still_while_hot_names_a_fault_among_the_causes"
+  ]
+ },
+ {
+  "name": "the fan line drops its verdict",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return f\"{said} {verdict_text}\" if verdict_text else said\n",
+  "new": "    return said\n",
+  "tests": [
+   "tests/test_fans.py::test_fans_held_near_their_fastest_past_5500_rpm_read_as_likely_full_speed_and_the_advice_turns_to_cleaning",
+   "tests/test_fans.py::test_a_fan_held_back_leads_the_advice_with_the_makers_fan_mode_keeps_plug_in_and_scores_the_same",
+   "tests/test_fans.py::test_one_fan_is_named_alone_and_three_in_a_list"
+  ]
+ },
+ {
+  "name": "two fans are named as fans of fans",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return \"the \" + \", \".join(short[:-1]) + \" and \" + short[-1] + \" fans\"\n",
+  "new": "    return \"the \" + \" and \".join(words)\n",
+  "tests": [
+   "tests/test_fans.py::test_fans_held_near_their_fastest_past_5500_rpm_read_as_likely_full_speed_and_the_advice_turns_to_cleaning",
+   "tests/test_fans.py::test_one_fan_is_named_alone_and_three_in_a_list"
+  ]
+ },
+ {
+  "name": "one fan held back is called them",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        them = \"it\" if len(held) == 1 else \"them\"\n",
+  "new": "        them = \"them\"\n",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_held_back_leads_the_advice_with_the_makers_fan_mode_keeps_plug_in_and_scores_the_same",
+   "tests/test_fans.py::test_a_fan_slower_while_hot_than_its_fastest_is_held_back_and_one_near_it_is_not"
+  ]
+ },
+ {
+  "name": "a stopped fan is blamed on a mode",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        if v.stopped and not (v.slow or v.slowed):\n",
+  "new": "        if False:\n",
+  "tests": [
+   "tests/test_fans.py::test_a_fan_standing_still_while_hot_names_a_fault_among_the_causes"
+  ]
+ },
+ {
+  "name": "full speed is said of the middle fan",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "{_fan_names(v.topped)} held near",
+  "new": "{_fan_names(v.fans)} held near",
+  "tests": [
+   "tests/test_fans.py::test_the_middle_fan_is_judged_for_held_back_and_never_said_to_be_at_full_speed"
+  ]
+ },
+ {
+  "name": "the middle fan left out goes unsaid",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "rest = (\"; the middle fan, which tops out higher, is not judged\" if len(v.fans) > len(v.topped) else \"\")",
+  "new": "rest = \"\"",
+  "tests": [
+   "tests/test_fans.py::test_the_middle_fan_is_judged_for_held_back_and_never_said_to_be_at_full_speed"
   ]
  }
 ]

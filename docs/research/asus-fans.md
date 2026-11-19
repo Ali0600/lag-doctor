@@ -283,9 +283,10 @@ code, after the research.
   flat or at the highest speed this recording saw while the GPU throttled.
 - Its cost: 0.35-0.9 ms a call (section 9), two calls a second on a laptop with two fans. Whether a call shows in
   the game's frames is the open question 3: `scripts/overhead/phase_lock.py` has a `fans` source for it.
-- As built, the GPU heat finding (`rules._gpu_throttle`) adds one line of context while heat held the NVIDIA GPU
-  down: each fan's median speed over those readings and its fastest in the part analysed. It never scores: a fan's
-  top speed is per model, so "slow" has no yardstick yet.
+- As built, the GPU heat finding (`rules._gpu_throttle`) adds one line while heat held the NVIDIA GPU down: each
+  fan's median speed over those readings and its fastest in the part analysed, two stray readings left out. Since
+  2026-11-19 a second sentence judges the fans within the recording where heat alone held the GPU (section 10); it
+  never scores.
 
 ## 8. Open questions, with what section 9 answered
 
@@ -316,6 +317,45 @@ ASUS laptop with the ASUS System Control Interface v3, five rounds 0.5 s apart [
 
 The values fit the units of section 4: hundreds of RPM in the low word under the presence word, and speeds inside
 the per-model top speeds G-Helper lists (5,500-9,200 RPM, section 4).
+
+## 10. A yardstick for a fan at full speed (2026-11-19)
+
+Asked whether a recording's fans ran at full speed, so that the cooler and not a fan setting held the GPU back.
+Three read-only agents read lag-doctor's fan code, then Linux's asus-wmi driver with two decompiled ROG firmware
+tables, and G-Helper's source; a fourth re-read every cited line. Linux at `8dac6df`, G-Helper on main at `aa0037c`
+(the fan code is the same at v0.291, `f62d584`), the 2020 Zephyrus G14 table in zllovesuki's reverse_engineering
+(`32ad92b`, `G14/g14-dsdt.dsl`) and the ROG Ally table in ruineka's rog-ally-re (`3a0491d`, `acpi/dsdt.dsl`).
+
+- **No firmware call gives a fan's top speed.** Linux defines no such id, and its hwmon files have no `fanN_max`
+  [verified: `include/linux/platform_data/x86/asus-wmi.h`:98-105; asus-wmi.c:3372-3386]. Both firmware tables
+  answer DSTS in the `0x0011xxxx` range only with speeds, curves, fan floors, a fan-range byte and zeros [verified:
+  G14 table 6450-6502, 6526-6538, 6562-6570, 6605-6617; Ally table 8378-8430, 8661-8673, 8727-8735, 8771-8783].
+- **The fan mode in force cannot be read back.** DSTS on `0x00120075` returns the constant `0x00010003` on both
+  tables; the mode set stores it in the embedded controller, and no DSTS branch reads it [verified: G14 table
+  6619-6622, 6960-6981; Ally table 8785-8788, 9501-9555]. Linux and G-Helper keep their own copy of the mode
+  [verified: asus-wmi.c:4201-4208, 4324-4344; G-Helper `app/Mode/Modes.cs`:129-143].
+- **A fan curve can be read, but not usefully here.** DSTS on `0x00110024`, `0x00110025` or `0x00110032` with a
+  curve index in the second dword (0 Balanced, 1 Silent, 2 Turbo, swapped against the mode numbers) returns 16
+  bytes, 8 temperatures then 8 duty percents [verified: asus-wmi.c:3618-3634; G-Helper `app/AsusACPI.cs`:635-666;
+  G14 table 8897-8912]. It is the mode's factory curve, not the curve in force: the tables' only read command is in
+  the routine the reverse engineer named "Get Default Fan Curve", and both tools use it only as defaults [likely:
+  G14 table 8897, 8914; asus-wmi.c:3618, 3836-3845]. It is not a pure read: it posts two mailbox commands to the
+  embedded controller and can busy-wait about 90 ms [verified: Ally table 11297-11336, 11732-11795]. Linux notes
+  TUF models without curve control answer 0 [verified: asus-wmi.c:3485-3507]. It gives duty, not RPM.
+- **G-Helper's "top" is its own number.** A per-model table (two main fans 55-78, a middle fan up to 92, in hundreds
+  of RPM; 58 for a model it does not list), raised to any faster reading it shows, or set by a calibration that
+  writes Turbo and 100 % curves with DEVS [verified: `app/Fan/FanSensorControl.cs`:8, 50-80, 129, 137-187]. A stored
+  top is therefore the fastest G-Helper has seen or measured: a lower bound, not a specification.
+- **Open: a full-speed flag.** Linux's comment says ASUS's specification puts "Full On or Automatic" in bit 19 of
+  the CPU fan's DSTS reply, and that it reads 0 on one laptop [verified: asus-wmi.c:3135-3143]. None of the tables
+  sets it [verified: G14 table 6526-6538; Ally table 8661-8673]. `atkacpi.decode` reads a high word other than
+  `0x0001` as "no such fan", so a firmware that set it would read a fan at full speed as absent [unverified].
+
+So the verdict rests on the recording itself (`attribute.fan_verdict`, DESIGN.md "Headroom"): each fan's median
+while heat held the GPU against its fastest in the part, and for the CPU and GPU fans the slowest top in G-Helper's
+table (5,500 RPM; its CPU and GPU fans run 5,500 to 7,800, a middle fan 5,800 to 9,200, 58 for a model it does not
+list) [verified: `app/Fan/FanSensorControl.cs`:8, 50-80]. "Likely at full speed" stays a likelihood: a mode whose
+curve flattens above 5,500 RPM reads the same.
 
 ## Verification log (2026-11-17)
 

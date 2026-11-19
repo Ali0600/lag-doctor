@@ -544,7 +544,9 @@ def test_a_gpu_held_down_by_heat_says_how_fast_the_fans_ran_meanwhile_and_their_
     res = throttle(heated(fans))
     assert is_finding(res)
     assert res.evidence[2].text == ("While heat held it down, the CPU fan ran at a median 3,500 RPM and the GPU fan "
-                                    "at 1,200 RPM; the fastest they ran in the capture was 3,500 and 5,800 RPM.")
+                                    "at 1,200 RPM; the fastest they ran in the capture was 3,500 and 5,800 RPM. "
+                                    "The CPU and GPU fans ran under 4,000 RPM, well under the slowest top speed known for an ASUS laptop fan (5,500 RPM)"
+                                    ", so a quiet mode or a fan curve likely held them back.")
     assert res.evidence[1].text.startswith("While heat held it down, it ran at a median 780 MHz")
     assert res.score == throttle(heated(None)).score
 
@@ -559,11 +561,13 @@ def test_without_fan_readings_the_gpu_finding_says_nothing_of_fans():
 def test_one_fan_is_named_alone_and_three_in_a_list():
     one = throttle(heated(fan_table(30.0, gpu_fan_rpm=4000)))
     assert fan_line(one) == ["While heat held it down, the GPU fan ran at a median 4,000 RPM; the fastest it ran in "
-                             "the capture was 4,000 RPM."]
+                             "the capture was 4,000 RPM. Whether the GPU fan ran at full speed then cannot be told "
+                             "from its speed alone."]
     three = throttle(heated(fan_table(30.0, cpu_fan_rpm=3000, gpu_fan_rpm=4000, mid_fan_rpm=2000)))
     assert fan_line(three) == ["While heat held it down, the CPU fan ran at a median 3,000 RPM, the GPU fan at 4,000 "
                                "RPM and the middle fan at 2,000 RPM; the fastest they ran in the capture was 3,000, "
-                               "4,000 and 2,000 RPM."]
+                               "4,000 and 2,000 RPM. The CPU and middle fans ran under 4,000 RPM, well under the slowest top speed known for an ASUS laptop fan (5,500 RPM)"
+                               ", so a quiet mode or a fan curve likely held them back."]
 
 
 def test_the_fan_median_counts_only_hot_readings_near_a_fan_reading():
@@ -572,7 +576,8 @@ def test_the_fan_median_counts_only_hot_readings_near_a_fan_reading():
     fans = fan_table(30.0, gpu_fan_rpm=lambda t: 6000 if t <= 20 else 2000)
     res = throttle(heated(fans, heat(idle=20)))
     assert fan_line(res) == ["While heat held it down, the GPU fan ran at a median 2,000 RPM; the fastest it ran in "
-                             "the capture was 6,000 RPM."]
+                             "the capture was 6,000 RPM. The GPU fan ran under 4,000 RPM, well under the slowest top speed known for an ASUS laptop fan (5,500 RPM)"
+                             ", so a quiet mode or a fan curve likely held it back."]
     gpu = heat()                                                   # idle readings that also name heat: still out
     gpu["nv_reasons"] = ["gpu_idle,sw_thermal_slowdown" if t <= 20 else r for t, r in zip(gpu["t"], gpu["nv_reasons"])]
     assert fan_line(throttle(heated(fans, gpu))) == fan_line(res)
@@ -588,7 +593,153 @@ def test_the_fan_median_counts_only_hot_readings_near_a_fan_reading():
 def test_a_corrupt_fan_reading_is_left_out():
     fans = fan_table(30.0, gpu_fan_rpm=lambda t: 99_999 if t == 5 else (-100 if t == 6 else 3000))
     assert attribute.fan_readings(heated(fans))[C.GPU_FAN_RPM][4:6] == [(7.0, 3000.0), (8.0, 3000.0)]
-    assert fan_line(throttle(heated(fans)))[0].endswith("the fastest it ran in the capture was 3,000 RPM.")
+    assert "; the fastest it ran in the capture was 3,000 RPM. " in fan_line(throttle(heated(fans)))[0]
+
+
+def verdict(fans: dict, gpu=None) -> attribute.FanVerdict | None:
+    return attribute.fan_verdict(heated(fans, gpu))
+
+
+def titles(res) -> list[str]:
+    return [f.title for f in res.fixes]
+
+
+V = attribute.FanVerdict
+CG = ("CPU fan", "GPU fan")
+G1 = ("GPU fan",)
+AIR_FIRST = ["Give the laptop more air", "Plug in, and use the maker's performance mode rather than a quiet or silent one",
+             "Cap the frame rate a little lower"]
+FLOOR = "the slowest top speed known for an ASUS laptop fan"
+LIMIT = "and the cooler itself, not a fan setting, likely the limit"
+
+
+def test_fans_held_near_their_fastest_past_5500_rpm_read_as_likely_full_speed_and_the_advice_turns_to_cleaning():
+    fans = fan_table(30.0, cpu_fan_rpm=6500, gpu_fan_rpm=lambda t: 6800 if t in (2, 3, 4) else 6500)
+    res = throttle(heated(fans))
+    assert is_finding(res)
+    assert fan_line(res) == ["While heat held it down, the CPU fan ran at a median 6,500 RPM and the GPU fan at 6,500 "
+                             "RPM; the fastest they ran in the capture was 6,500 and 6,800 RPM. The CPU and GPU fans "
+                             f"held near their fastest, at or past 5,500 RPM, {FLOOR}, so they were likely at full speed, "
+                             f"{LIMIT}."]
+    assert titles(res) == ["Clean the laptop's vents and fans"] + AIR_FIRST
+    assert res.fixes[0].detail.startswith("The CPU and GPU fans likely ran at full speed already, so a fan setting is "
+                                          "unlikely to help")
+    assert res.score == throttle(heated(None)).score            # the verdict changes words and advice, never the score
+    one = throttle(heated(fan_table(30.0, gpu_fan_rpm=6500)))
+    assert fan_line(one)[0].endswith(f" The GPU fan held near its fastest, at or past 5,500 RPM, {FLOOR}, so it was "
+                                     f"likely at full speed, {LIMIT}.")
+
+
+def test_a_fan_held_back_leads_the_advice_with_the_makers_fan_mode_keeps_plug_in_and_scores_the_same():
+    res = throttle(heated(fan_table(30.0, cpu_fan_rpm=6500, gpu_fan_rpm=3000)))
+    assert is_finding(res)
+    assert fan_line(res)[0].endswith(f" The GPU fan ran under 4,000 RPM, well under {FLOOR} (5,500 RPM), so a quiet "
+                                     "mode or a fan curve likely held it back.")
+    assert titles(res) == ["Let the fans run faster"] + AIR_FIRST
+    assert res.fixes[0].detail == ("Use the laptop maker's own fan mode, not a quiet mode or a custom fan curve: the "
+                                   "GPU fan did not keep up while the GPU was hot.")
+    assert res.score == throttle(heated(None)).score
+    assert titles(throttle(heated(fan_table(30.0, gpu_fan_rpm=4500)))) == AIR_FIRST      # cannot tell: as before
+    assert titles(throttle(heated(None))) == AIR_FIRST
+
+
+def test_a_fan_standing_still_while_hot_names_a_fault_among_the_causes():
+    res = throttle(heated(fan_table(30.0, cpu_fan_rpm=6500, gpu_fan_rpm=0)))
+    assert fan_line(res)[0].endswith(" The GPU fan stood still, so a fan curve, the firmware or a faulty fan likely "
+                                     "stopped it.")
+    assert res.fixes[0].detail.endswith(": the GPU fan did not keep up while the GPU was hot. A fan that still stands "
+                                        "still there needs a repair.")
+    assert verdict(fan_table(30.0, cpu_fan_rpm=6500, gpu_fan_rpm=0)) == V("held", CG, CG, stopped=G1)
+    both = throttle(heated(fan_table(30.0, cpu_fan_rpm=3000, gpu_fan_rpm=0)))
+    assert fan_line(both)[0].endswith(f" The GPU fan stood still, and the CPU fan ran under 4,000 RPM, well under "
+                                      f"{FLOOR} (5,500 RPM), so a quiet mode, a fan curve or a faulty fan likely held "
+                                      "them back.")
+
+
+def test_a_fan_is_held_back_under_4000_rpm_and_full_from_5500_rpm():
+    assert verdict(fan_table(30.0, gpu_fan_rpm=1)) == V("held", G1, G1, slow=G1)      # slow, not standing still
+    assert verdict(fan_table(30.0, gpu_fan_rpm=3999)).kind == "held"
+    assert verdict(fan_table(30.0, gpu_fan_rpm=4000)).kind == "unknown"
+    assert verdict(fan_table(30.0, gpu_fan_rpm=5499)).kind == "unknown"
+    assert verdict(fan_table(30.0, gpu_fan_rpm=5500)) == V("full", G1, G1)
+    assert verdict(fan_table(30.0, cpu_fan_rpm=4500, gpu_fan_rpm=6500)).kind == "unknown"   # both, not either
+    assert verdict(fan_table(30.0, cpu_fan_rpm=3000, gpu_fan_rpm=6500)) == V("held", CG, CG, slow=("CPU fan",))
+
+
+def test_a_fan_slower_while_hot_than_its_fastest_is_held_back_and_one_near_it_is_not():
+    # the first 10 readings idle (not hot); the fan ran 6,000 then. 4,499 while hot is under 3/4 of it, 4,500 is not;
+    # 4,000 is not slow, but under 3/4 of it too
+    idle = heat(idle=10)
+
+    def slowed(hot: float) -> dict:
+        return fan_table(30.0, gpu_fan_rpm=lambda t: 6000 if t <= 10 else hot)
+
+    assert verdict(slowed(4499), idle) == V("held", G1, G1, slowed=G1)
+    assert verdict(slowed(4500), idle).kind == "unknown"
+    assert verdict(slowed(4000), idle) == V("held", G1, G1, slowed=G1)
+    assert verdict(slowed(3999), idle) == V("held", G1, G1, slow=G1)
+    res = throttle(heated(slowed(4499), idle))
+    assert fan_line(res)[0].endswith(" The GPU fan ran well under its fastest in the capture, so a quiet mode or a fan "
+                                     "curve likely held it back.")
+    both = fan_table(30.0, cpu_fan_rpm=lambda t: 6000 if t <= 10 else 4400, gpu_fan_rpm=2000)
+    assert fan_line(throttle(heated(both, idle)))[0].endswith(
+        f" The GPU fan ran under 4,000 RPM, well under {FLOOR} (5,500 RPM), and the CPU fan ran well under its fastest "
+        "in the capture, so a quiet mode or a fan curve likely held them back.")
+
+
+def test_full_speed_needs_the_fans_held_near_their_fastest():
+    # 6,000 while hot against 6,600 before (0.91 of it) is near; against 6,700 (0.896) it is not, and not held back
+    idle = heat(idle=10)
+    near = fan_table(30.0, gpu_fan_rpm=lambda t: 6600 if t <= 10 else 6000)
+    far = fan_table(30.0, gpu_fan_rpm=lambda t: 6700 if t <= 10 else 6000)
+    assert verdict(near, idle).kind == "full"
+    assert verdict(far, idle).kind == "unknown"
+
+
+def test_a_fans_fastest_leaves_out_two_stray_readings_but_not_three_and_never_falls_under_its_median():
+    two = fan_table(30.0, gpu_fan_rpm=lambda t: 9000 if t in (15, 16) else 6500)
+    assert verdict(two).kind == "full"
+    assert fan_line(throttle(heated(two)))[0].startswith("While heat held it down, the GPU fan ran at a median 6,500 "
+                                                         "RPM; the fastest it ran in the capture was 6,500 RPM.")
+    three = fan_table(30.0, gpu_fan_rpm=lambda t: 9000 if t in (15, 20, 25) else 6500)
+    assert verdict(three) == V("held", G1, G1, slowed=G1)
+    low = fan_table(30.0, gpu_fan_rpm=lambda t: 0 if t % 3 == 0 else 6000)      # a stray slow reading: no bearing
+    assert verdict(low).kind == "full"
+    assert attribute.fan_fastest([1.0, 2.0, 3.0, 4.0, 10.0, 10.0]) == 4.0
+    assert attribute.fan_fastest([4.0, 7.0]) == 7.0                 # no more readings than the strays: the fastest
+    # two hot readings at 9,000 among 5,000s: the fastest left after two out is 5,000, under the median it is beside
+    late = heat(idle=28)
+    hot_two = fan_table(30.0, gpu_fan_rpm=lambda t: 9000 if t >= 29 else 5000)
+    assert attribute.fans_while(heated(hot_two, late), attribute.heat_named) == [("GPU fan", 9000.0, 9000.0)]
+
+
+def test_the_middle_fan_is_judged_for_held_back_and_never_said_to_be_at_full_speed():
+    three = ("CPU fan", "GPU fan", "middle fan")
+    assert verdict(fan_table(30.0, cpu_fan_rpm=6500, gpu_fan_rpm=6500, mid_fan_rpm=2000)) == V(
+        "held", three, CG, slow=("middle fan",))
+    steady = fan_table(30.0, cpu_fan_rpm=6500, gpu_fan_rpm=6500, mid_fan_rpm=5000)
+    assert verdict(steady) == V("full", three, CG)
+    res = throttle(heated(steady))
+    assert fan_line(res)[0].endswith(f" The CPU and GPU fans held near their fastest, at or past 5,500 RPM, {FLOOR}, so "
+                                     f"they were likely at full speed, {LIMIT}; the middle fan, which tops out higher, "
+                                     "is not judged.")
+    assert res.fixes[0].detail.startswith("The CPU and GPU fans likely ran at full speed already")
+    assert verdict(fan_table(30.0, mid_fan_rpm=6000)) == V("unknown", ("middle fan",))    # no CPU or GPU fan: no floor
+
+
+def test_no_fan_verdict_where_the_power_brake_or_nvidias_hw_slowdown_held_the_gpu():
+    # the brake, or HW slowdown (which may be heat or the brake), may not lift with cooling: the line stays as it was
+    for reasons in ("hw_power_brake_slowdown", "sw_thermal_slowdown,hw_power_brake_slowdown",
+                    "sw_thermal_slowdown,hw_slowdown"):
+        gpu = heat(reasons=reasons)
+        assert attribute.held_by(heated(None, gpu)) == "heat or its power brake"
+        for rpm in (2000, 6500):
+            assert verdict(fan_table(30.0, gpu_fan_rpm=rpm), gpu) is None
+            res = throttle(heated(fan_table(30.0, gpu_fan_rpm=rpm), gpu))
+            assert is_finding(res)
+            assert fan_line(res) == [f"While heat or its power brake held it down, the GPU fan ran at a median {rpm:,} "
+                                     f"RPM; the fastest it ran in the capture was {rpm:,} RPM."]
+            assert titles(res) == AIR_FIRST
 
 
 def test_a_gpu_at_its_lowered_power_cap_rather_than_held_by_heat_gets_no_fan_line():
@@ -601,6 +752,7 @@ def test_a_gpu_at_its_lowered_power_cap_rather_than_held_by_heat_gets_no_fan_lin
     res = throttle(heated(fan_table(30.0, gpu_fan_rpm=3000), gpu))
     assert is_finding(res) and res.evidence[1].text.startswith("At its power cap")
     assert fan_line(res) == []
+    assert titles(res) == AIR_FIRST                              # nor does the advice follow the fans
 
 
 def test_the_diagnosis_keeps_each_fans_median_and_the_summary_carries_it():

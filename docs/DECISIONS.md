@@ -7,10 +7,11 @@
   `choose_auto` over the folder's other windowed programs not left out, and re-arm when one wins (2026-11-19, M6e).
   Worth it if a Play recording ever names a launcher. Revisit hook: `target.hold_target`'s last round, which would
   need the wait's own reading of each program's path (`wait_for_target`'s `images`).
-- **Let the fan line count in the GPU heat finding**, once a yardstick for "slow" exists: the fastest this laptop's
-  fans reached across its recordings, or ASUS's performance mode read through the same device (a read, DSTS). Today
-  the line is context only (2026-11-17, the fan readings). Revisit hook: `rules._fans_text` and
-  `attribute.fans_while`; a scored line would go through `c.support` before `conclude`.
+- **Judge the fans against the fastest seen on this PC**, across its recordings, so "likely at full speed" can
+  firm up (2026-11-19, the fan verdict). Worth it once several recordings with fans exist. It needs each
+  recording's fan highs in `Diagnosis.stats` and the summary, a key that tells PCs apart, and the library feeding
+  the analysis. Revisit hook: each fan's fastest in `attribute.fans_while` (`fan_fastest`), and the callers of
+  `diagnose`.
 - **Cut a part bounded by `--duration` at the end the session announced** (`until` saved in `start_key`), so the
   analysis stops at the set length rather than at the recorded end with the stop's own seconds, and a press too late
   for a part could count and be judged there: worth trying for a terminal `--duration` (2026-11-10, the start key in
@@ -224,6 +225,59 @@
   relay/server.py (DECISIONS 2026-11-17, M6d).
 
 ---
+
+## 2026-11-19: The GPU heat finding judges the fans within the recording (the fan verdict)
+
+The fan line was context only (PR #57). After a recording whose fans ran near their fastest while heat still held
+the GPU at its target, the owner asked for the verdict the Backlog held. Four read-only agents researched what
+could say "full speed" first: no read-only firmware call gives a fan's top speed or the fan mode in force
+(`docs/research/asus-fans.md`, section 10).
+
+The owner's (a question card, 2026-11-19):
+- **Within the recording (chosen: "Within the recording (Recommended)")**: each CPU and GPU fan's median while heat
+  held the GPU, against its own high in the part and the range where ASUS laptop fans top out (5,500 to 7,800 RPM).
+  Likely at full speed, held back by a quiet mode or a fan curve, or cannot tell. No stored state, and the same
+  answer on every re-analysis; it says "likely", never "certain".
+  - **Fastest seen on this PC**: not chosen; deferred, worth trying (Backlog). It needs at least 2 recordings with
+    fans, a key that tells PCs apart and the library feeding the analysis, and a PC only ever recorded in a quiet
+    mode would take that mode's ceiling for the top.
+  - **Keep it as context**: not chosen.
+
+The session's:
+- **Words and advice, never the score (chosen)**: the finding is already "high" from its direct line, and only a
+  family's strongest item counts, so a scored fan line would add nothing to its family, and a family of its own would
+  move the finding's rank. The verdict leads the advice instead, which the console shows two of.
+  - **Scored**: rejected for that reason.
+- **A fan's fastest leaves out its two fastest readings (chosen)**, in both sentences of the line, and never falls
+  under the median beside it: one stray reading inside the 12,000 RPM bound, or two, would make a steady fan read
+  as held back.
+  - **Its fastest reading**: rejected for that reason.
+  - **Its 95th percentile** (the first version): rejected in review. The line printed the maximum beside it, so
+    the two sentences disagreed; in a short part one stray still moved it, and in a long one it passed over 30 s
+    at a higher speed.
+  - **The fastest it held 3 readings in a row** (the second): rejected in review. A stray slow reading in every
+    third second dragged it to 0 RPM, under the median it was printed beside.
+- **The 5,500 RPM floor holds for the CPU and GPU fans; a middle fan is judged only for being held back
+  (chosen)**: a middle fan tops out at 5,800 to 9,200 RPM, so it is never said to be at full speed, but a slow one
+  still holds the cooling back.
+- **A verdict only where heat alone held the GPU (chosen)**, as `rules._cooler`: the power brake, and NVIDIA's HW
+  slowdown, which may be heat or the brake, may not lift with cooling. The line then stays as it was.
+  - **Judging only the readings that named heat itself** (the second version): rejected in review. Where heat
+    and the brake both held the GPU, its medians differed from the ones the line prints beside them, and two hot
+    readings among thirty could decide it.
+  - **Judging every reading that named heat or the brake** (the first): rejected in review. It blamed a cool
+    GPU's quiet fan on a fan setting when only the brake held it.
+- **Full speed stays a likelihood, and its advice keeps plugging in (chosen)**: a mode whose curve flattens above
+  5,500 RPM reads the same, so the line says the cooler is "likely" the limit and the maker's performance mode
+  stays in the advice, after cleaning and air.
+- **A fan standing still is named with a fault among its causes (chosen)**: a quiet mode slows a fan but does not
+  stop it at the GPU's heat limit, so the advice adds that a fan still standing still in the maker's own mode
+  needs a repair.
+- **The firmware's fan curve or mode**: rejected. The mode reads as a constant; the curve read returns the factory
+  curve, not the one in force, posts commands to the embedded controller and answers 0 on some models; and CLAUDE.md
+  keeps the reader to fan speeds.
+- **G-Helper's stored tops**: rejected. They are another program's private settings, exist only where it is
+  installed, and are a lower bound anyway (the fastest it has seen).
 
 ## 2026-11-19: M5 ends with three pull requests: the owner dropped the trim handles
 
