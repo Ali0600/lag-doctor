@@ -980,7 +980,7 @@ def test_the_wait_checks_its_arguments(world):
 
 RELAY = 30                                  # the relay in a made-up world: lag-doctor's own, started before the wait
 RELAY_CT = SINCE - 5 * SECOND
-OWN = ((ME, SINCE - 100 * SECOND), (RELAY, RELAY_CT))   # the recorder (this made-up process) and the relay
+PLAY_OWN = ((ME, SINCE - 100 * SECOND), (RELAY, RELAY_CT))   # the recorder (this made-up process) and the relay
 LAUNCHER = GAME_DIR + "\\launcher.exe"
 SHORT = "C:\\Games\\LANTER~1\\Lantern\\Binaries\\Win64\\lantern_.exe"     # GAME, as an 8.3 short name
 
@@ -995,7 +995,7 @@ def test_a_program_from_the_folder_in_one_of_lag_doctors_own_trees_is_never_read
     world.start(0.5, 31, GAME, ppid=RELAY, window=FULL_HD, draw=80.0)       # the relay's child, run from the folder
     world.start(0.5, 32, GAME, ppid=ME, window=FULL_HD, draw=80.0)          # the recorder's, likewise
     game_ct = world.start(3.0, 42, GAME, window=FULL_HD, draw=40.0)
-    found = world.wait(own=OWN)
+    found = world.wait(own=PLAY_OWN)
     assert (found["pid"], found["create_time"]) == (42, game_ct)
     assert world.reads[31] == world.reads[32] == 0
     assert world.wait()["pid"] in (31, 32)        # without own=, one of lag-doctor's own children would win
@@ -1040,11 +1040,11 @@ def test_the_wait_picks_a_game_exactly_when_the_relays_check_takes_it(world, mon
                  "before the relay": (GAME, {"before": True}), "elsewhere": ("D:\\Other\\lantern_.exe", {})}[case]
     create = world.start(0.5, 42, image, window=FULL_HD, draw=60.0, **kw)
     try:
-        picked = world.wait(deadline_s=10.0, own=OWN, resolve=False)["pid"] == 42
+        picked = world.wait(deadline_s=10.0, own=PLAY_OWN, resolve=False)["pid"] == 42
     except TargetNotFound:
         picked = False
     why, retry = tgt.check_proposed(world.snapshot, world.image_path, 42, create, session=1, folders=FORMS,
-                                    since=SINCE, own=OWN)
+                                    since=SINCE, own=PLAY_OWN)
     assert picked is (why is None) is (case == "game"), why
     assert retry is False
 

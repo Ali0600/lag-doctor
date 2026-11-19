@@ -54,10 +54,10 @@ class PlayLink(FakeLink):
     """What relay/client.launch returns for a folder: a relay approved for its forms that takes each game aim names,
     unless the test lined up what aim raises first (`fails`)."""
 
-    def __init__(self, folders, events, fails):
+    def __init__(self, folders, events, fails, wait_s):
         super().__init__(True, events)
         self.create_time, self.folders, self.recorder = RELAY_CT, folders, (os.getpid(), 555)
-        self.aim_by = time.monotonic() + 300 + client._game_slack() - client.AIM_S
+        self.aim_by = time.monotonic() + wait_s + client._game_slack() - client.AIM_S      # as launch works it out
         self.ended = threading.Event()
         self.fails, self.aimed = list(fails), []
 
@@ -102,7 +102,7 @@ def play(monkeypatch, fake_world, tmp_path):
             state["during_prompt"]()
         if state["raise"] is not None:
             raise state["raise"]
-        state["link"] = PlayLink(kw["folders"], state["events"], state["fails"])
+        state["link"] = PlayLink(kw["folders"], state["events"], state["fails"], kw["wait_s"])
         return state["link"]
     monkeypatch.setattr(client, "launch", launch)
 
