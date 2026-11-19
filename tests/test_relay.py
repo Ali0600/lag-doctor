@@ -1512,6 +1512,11 @@ def test_the_relays_command_line_for_a_folder_holds_its_checked_forms_and_surviv
     assert argv[argv.index("--wait-s") + 1] == "300" and "--game" not in argv
     cfg = server.parse_args(argv[6:])
     assert (cfg.game, cfg.folders, cfg.wait_s) == (None, want, 300.0)
+    for wait_s, written in [(1234.567, "1234.567"), (0.5, "0.5"), (300.0, "300"), (10.1, "10.1")]:
+        longer = client.relay_argv(protocol.pipe_name(), (40, 300), "S-1-5-21-1-2-3-1001", folders=forms,
+                                   wait_s=wait_s, presentmon_exe=None, frames=False, network=True)
+        assert longer[longer.index("--wait-s") + 1] == written           # never rounded: the relay waits as long
+        assert server.parse_args(longer[6:]).wait_s == wait_s
     # launch_elevated hands the prompt list2cmdline(argv[1:]); the relay reads it back as Windows splits it.
     assert _split_command_line(argv[0], subprocess.list2cmdline(argv[1:])) == argv
     for bad in ({}, {"game": (80, 430), "folders": forms, "wait_s": 30}, {"folders": forms},
@@ -1541,7 +1546,11 @@ def _split_command_line(program: str, params: str) -> list[str]:
 def test_the_relays_wait_for_a_game_leaves_room_for_the_recorders_own_steps():
     # Past the recorder's own wait (at most target.MAX_WAIT_S, which --wait-s may not pass): one round of the wait
     # past its deadline, the re-arm's hold and the recorder's own check of the game; and never long past them.
-    room = tgt.REARM_HOLD_S + client.AIM_S + tgt.DRAW_SAMPLE_S * (tgt.DRAW_SAMPLES + 1)
+    # The recorder's wait ends where the relay's does less GAME_SLACK_S (watch: RelayLink.aim_by), then: a round of the
+    # wait (its samples), the re-arm's hold and its last round, the recorder's own check (check_proposed's tries) and
+    # the relay's answer.
+    room = (tgt.DRAW_SAMPLE_S * (tgt.DRAW_SAMPLES + 1) + tgt.REARM_HOLD_S + tgt.DRAW_SAMPLE_S
+            + tgt.IMAGE_TRIES * tgt.TRY_PAUSE_S + client.AIM_S)
     assert room <= server.GAME_SLACK_S <= server.GAME_SLACK_MAX_S <= 120.0
     assert client.GOODBYE_WAIT_S > server.GOODBYE_S
 
@@ -1595,6 +1604,8 @@ def test_launch_for_a_folder_approves_the_forms_the_relay_will_use_and_knows_whe
         # The relay takes a game until the recorder's wait plus its slack: aim stops asking one answer's time before.
         assert 30 + server.GAME_SLACK_S - client.AIM_S - 5 < w.link.aim_by - time.monotonic() <= (
             30 + server.GAME_SLACK_S - client.AIM_S)
+        # lag-doctor's own, as aim's check and the relay's take them, and as the folder wait passes over them.
+        assert w.link.own() == ((_me().pid, w.since), (w.link.pid, w.link.create_time))
     finally:
         assert w.close() == protocol.EXIT_OK
 
@@ -1649,6 +1660,8 @@ def test_aim_is_for_a_relay_approved_for_a_folder_and_one_at_a_time(game):
     try:
         with pytest.raises(ValueError, match="running game itself"):
             link.aim((game["pid"], game["create_time"]))
+        with pytest.raises(ValueError, match="no game to look for"):
+            link.own()
     finally:
         link.close()
     w = PlayWorld([lambda s: _played(PLAY, 1, since=s)], {PLAY: PROGRAM})

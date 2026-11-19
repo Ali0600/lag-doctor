@@ -1,0 +1,595 @@
+[
+ {
+  "name": "wait: lag-doctor's own trees read",
+  "file": "lagdoctor/capture/target.py",
+  "old": "            mine |= descendants(procs, *root)",
+  "new": "            pass",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_program_from_the_folder_in_one_of_lag_doctors_own_trees_is_never_read_nor_the_game",
+   "tests/test_folder_wait.py::test_the_wait_picks_a_game_exactly_when_the_relays_check_takes_it"
+  ]
+ },
+ {
+  "name": "wait: a short name written out long though resolve is off",
+  "file": "lagdoctor/capture/target.py",
+  "old": "program_reason(image, forms, resolve=resolve) is None)",
+  "new": "program_reason(image, forms) is None)",
+  "tests": [
+   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_windows_gave_it_and_said",
+   "tests/test_folder_wait.py::test_the_wait_picks_a_game_exactly_when_the_relays_check_takes_it"
+  ]
+ },
+ {
+  "name": "wait: resolve= not checked",
+  "file": "lagdoctor/capture/target.py",
+  "old": "    if not isinstance(resolve, bool):\n        raise ValueError(f\"resolve= is not true or false: {_shown(resolve)}\")\n    roots = _roots(",
+  "new": "    roots = _roots(",
+  "tests": [
+   "tests/test_folder_wait.py::test_the_hold_checks_its_arguments"
+  ]
+ },
+ {
+  "name": "wait: short names not counted",
+  "file": "lagdoctor/capture/target.py",
+  "old": "                short += 1                  # compared as written, it matches no form, yet it may be the game",
+  "new": "                pass",
+  "tests": [
+   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_windows_gave_it_and_said"
+  ]
+ },
+ {
+  "name": "wait: short names not said",
+  "file": "lagdoctor/capture/target.py",
+  "old": "                tell(\"short-name\", pid=p.pid, name=p.name)",
+  "new": "                pass",
+  "tests": [
+   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_windows_gave_it_and_said"
+  ]
+ },
+ {
+  "name": "wait: a short name said though it was written out long",
+  "file": "lagdoctor/capture/target.py",
+  "old": "            elif not resolve and not images[key][1] and image and _SHORT_NAME.search(image):",
+  "new": "            elif not images[key][1] and image and _SHORT_NAME.search(image):",
+  "tests": [
+   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_windows_gave_it_and_said"
+  ]
+ },
+ {
+  "name": "hold: a process that exited holds",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        if not is_alive(pid, create_time, procs):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_launcher_that_leaves_or_goes_quiet_within_the_hold_is_not_the_game",
+   "tests/test_folder_wait.py::test_a_number_windows_gave_to_another_program_is_not_the_chosen_one"
+  ]
+ },
+ {
+  "name": "hold: a closed window holds",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        if pid not in shown:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_launcher_that_leaves_or_goes_quiet_within_the_hold_is_not_the_game",
+   "tests/test_folder_wait.py::test_once_the_wait_judged_by_windows_alone_so_does_the_hold"
+  ]
+ },
+ {
+  "name": "hold: going quiet never ends it",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        if quiet >= DRAW_SAMPLES:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_launcher_that_leaves_or_goes_quiet_within_the_hold_is_not_the_game",
+   "tests/test_folder_wait.py::test_a_sample_without_a_reading_neither_ends_nor_breaks_a_quiet_run"
+  ]
+ },
+ {
+  "name": "hold: one quiet sample ends it",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        if quiet >= DRAW_SAMPLES:",
+  "new": "        if quiet >= 1:",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_quiet_sample_now_and_then_and_samples_without_a_reading_never_end_the_hold"
+  ]
+ },
+ {
+  "name": "hold: twice as long",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        if clock() >= end:\n            return None",
+  "new": "        if clock() >= end + hold_s:\n            return None",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_game_that_keeps_its_window_and_draws_holds_for_the_whole_hold"
+  ]
+ },
+ {
+  "name": "hold: a hold of nothing still samples",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        if clock() >= end:\n            return None",
+  "new": "        if clock() > end:\n            return None",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_hold_of_nothing_looks_once"
+  ]
+ },
+ {
+  "name": "hold: a quiet count never starts over",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        quiet = 0 if gpu.get(pid, (0.0, None))[0] >= AUTO_MIN_3D_PCT else quiet + 1",
+  "new": "        quiet = quiet + (0 if gpu.get(pid, (0.0, None))[0] >= AUTO_MIN_3D_PCT else 1)",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_quiet_sample_now_and_then_and_samples_without_a_reading_never_end_the_hold"
+  ]
+ },
+ {
+  "name": "hold: a sample without a reading counts as quiet",
+  "file": "lagdoctor/capture/target.py",
+  "old": "            rest = DRAW_SAMPLE_S - (clock() - started)\n",
+  "new": "            quiet += 1\n            rest = DRAW_SAMPLE_S - (clock() - started)\n",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_quiet_sample_now_and_then_and_samples_without_a_reading_never_end_the_hold",
+   "tests/test_folder_wait.py::test_a_sample_without_a_reading_neither_ends_nor_breaks_a_quiet_run"
+  ]
+ },
+ {
+  "name": "hold: a sample without a reading starts the quiet count over",
+  "file": "lagdoctor/capture/target.py",
+  "old": "            rest = DRAW_SAMPLE_S - (clock() - started)\n",
+  "new": "            quiet = 0\n            rest = DRAW_SAMPLE_S - (clock() - started)\n",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_sample_without_a_reading_neither_ends_nor_breaks_a_quiet_run"
+  ]
+ },
+ {
+  "name": "hold: judged by windows it still samples",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        if windows_only:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_folder_wait.py::test_once_the_wait_judged_by_windows_alone_so_does_the_hold"
+  ]
+ },
+ {
+  "name": "hold: one failed read gives up",
+  "file": "lagdoctor/capture/target.py",
+  "old": "            if fails >= ROUND_FAILS:",
+  "new": "            if fails >= 1:",
+  "tests": [
+   "tests/test_folder_wait.py::test_reads_that_fail_in_the_hold_are_tried_again_then_given_up"
+  ]
+ },
+ {
+  "name": "hold: failed reads counted across good ones",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        fails = 0\n        if not is_alive(",
+  "new": "        if not is_alive(",
+  "tests": [
+   "tests/test_folder_wait.py::test_reads_that_fail_in_the_hold_are_tried_again_then_given_up"
+  ]
+ },
+ {
+  "name": "hold: cancel ignored",
+  "file": "lagdoctor/capture/target.py",
+  "old": "    while True:\n        _stop_if_cancelled(cancel)",
+  "new": "    while True:",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_cancel_ends_the_hold"
+  ]
+ },
+ {
+  "name": "hold: its length not checked",
+  "file": "lagdoctor/capture/target.py",
+  "old": "    hold_s = _check_seconds(hold_s, \"hold_s\", zero_ok=True)",
+  "new": "    hold_s = float(hold_s)",
+  "tests": [
+   "tests/test_folder_wait.py::test_the_hold_checks_its_arguments"
+  ]
+ },
+ {
+  "name": "re-arm: each wait gets the whole deadline",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        left = end - clock()",
+  "new": "        left = deadline_s",
+  "tests": [
+   "tests/test_folder_wait.py::test_one_deadline_covers_every_wait_and_says_why_the_last_choice_was_not_taken"
+  ]
+ },
+ {
+  "name": "re-arm: no end to the waits",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        if left <= 0:\n            raise TargetNotFound(",
+  "new": "        if False:\n            raise TargetNotFound(",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_choice_that_fails_its_hold_after_the_deadline_ends_the_wait_with_why"
+  ]
+ },
+ {
+  "name": "re-arm: each wait looks from its own start",
+  "file": "lagdoctor/capture/target.py",
+  "old": "    since = filetime_now() - SINCE_MARGIN if since is None else since    # once, for every wait",
+  "new": "    since = since",
+  "tests": [
+   "tests/test_folder_wait.py::test_every_wait_looks_from_one_moment_so_a_game_started_during_a_hold_is_found"
+  ]
+ },
+ {
+  "name": "re-arm: the forms worked out again by each wait",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        folders = found[\"folders\"]\n        pid, name = found[\"pid\"], found[\"name\"]",
+  "new": "        pid, name = found[\"pid\"], found[\"name\"]",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_launcher_that_leaves_within_its_hold_re_arms_the_wait_and_the_game_is_found"
+  ]
+ },
+ {
+  "name": "re-arm: no hold",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        why = hold_target(found, hold_s=hold_s, cancel=cancel, clock=clock, sleep=sleep)",
+  "new": "        why = None",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_launcher_that_leaves_within_its_hold_re_arms_the_wait_and_the_game_is_found"
+  ]
+ },
+ {
+  "name": "re-arm: a failed hold leaves the process out",
+  "file": "lagdoctor/capture/target.py",
+  "old": "            tell(\"rearm\", pid=pid, name=name, why=why)\n            continue",
+  "new": "            tell(\"rearm\", pid=pid, name=name, why=why)\n            exclude.append((pid, found[\"create_time\"]))\n            continue",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_game_that_pauses_its_drawing_while_it_loads_is_found_again"
+  ]
+ },
+ {
+  "name": "re-arm: a refusal that may pass later leaves it out",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        if not retry:\n            exclude.append(",
+  "new": "        if True:\n            exclude.append(",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_game_refused_for_good_is_left_out_and_one_that_may_pass_later_is_asked_about_again"
+  ]
+ },
+ {
+  "name": "re-arm: a refusal for good never leaves it out",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        if not retry:\n            exclude.append(",
+  "new": "        if False:\n            exclude.append(",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_game_refused_for_good_is_left_out_and_one_that_may_pass_later_is_asked_about_again"
+  ]
+ },
+ {
+  "name": "re-arm: aim never asked",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        if aim is None:\n            return found",
+  "new": "        if True:\n            return found",
+  "tests": [
+   "tests/test_folder_wait.py::test_a_game_refused_for_good_is_left_out_and_one_that_may_pass_later_is_asked_about_again"
+  ]
+ },
+ {
+  "name": "re-arm: no more games said without the refusals before",
+  "file": "lagdoctor/capture/target.py",
+  "old": "            raise TargetNotFound(f\"{last}; after that, {exc.reason}\", exc.candidates) from None\n        if refused is None:",
+  "new": "            raise\n        if refused is None:",
+  "tests": [
+   "tests/test_folder_wait.py::test_when_no_more_games_may_be_named_the_wait_ends_saying_why_the_last_was_not_taken"
+  ]
+ },
+ {
+  "name": "re-arm: the deadline's words lose why the last choice was not taken",
+  "file": "lagdoctor/capture/target.py",
+  "old": "            raise TargetNotFound(f\"{last}; after that, {exc.reason}\", exc.candidates) from None\n        folders = found",
+  "new": "            raise\n        folders = found",
+  "tests": [
+   "tests/test_folder_wait.py::test_one_deadline_covers_every_wait_and_says_why_the_last_choice_was_not_taken"
+  ]
+ },
+ {
+  "name": "own: the relay left out",
+  "file": "lagdoctor/relay/client.py",
+  "old": "        return (self.recorder, (self.pid, self.create_time))",
+  "new": "        return (self.recorder,)",
+  "tests": [
+   "tests/test_relay.py::test_launch_for_a_folder_approves_the_forms_the_relay_will_use_and_knows_when_it_started"
+  ]
+ },
+ {
+  "name": "own: given for a relay approved for the running game",
+  "file": "lagdoctor/relay/client.py",
+  "old": "        if self.folders is None:\n            raise ValueError(\"the relay was approved for the running game itself, so it has no game to look for\")",
+  "new": "        if False:\n            raise ValueError(\"the relay was approved for the running game itself, so it has no game to look for\")",
+  "tests": [
+   "tests/test_relay.py::test_aim_is_for_a_relay_approved_for_a_folder_and_one_at_a_time"
+  ]
+ },
+ {
+  "name": "relay argv: --wait-s rounded",
+  "file": "lagdoctor/relay/client.py",
+  "old": "f\"{wait_s:.3f}\".rstrip(\"0\").rstrip(\".\")",
+  "new": "f\"{wait_s:g}\"",
+  "tests": [
+   "tests/test_relay.py::test_the_relays_command_line_for_a_folder_holds_its_checked_forms_and_survives_the_prompts_quoting"
+  ]
+ },
+ {
+  "name": "play: the wait looks from before the relay",
+  "file": "lagdoctor/cli.py",
+  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"aim\": aim}",
+  "new": "        kw = {\"own\": relay.own(), \"resolve\": False, \"aim\": aim}",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it"
+  ]
+ },
+ {
+  "name": "play: lag-doctor's own not passed over",
+  "file": "lagdoctor/cli.py",
+  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"aim\": aim}",
+  "new": "        kw = {\"since\": relay.create_time, \"resolve\": False, \"aim\": aim}",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it",
+   "tests/test_watch_folder.py::test_through_the_real_wait_watch_names_only_the_game_the_relays_check_takes"
+  ]
+ },
+ {
+  "name": "play: short names written out long with the relay",
+  "file": "lagdoctor/cli.py",
+  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"aim\": aim}",
+  "new": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": True, \"aim\": aim}",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it"
+  ]
+ },
+ {
+  "name": "play: the game never named to the relay",
+  "file": "lagdoctor/cli.py",
+  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"aim\": aim}",
+  "new": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False}",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it"
+  ]
+ },
+ {
+  "name": "play: a refusal reads as the relay failing",
+  "file": "lagdoctor/cli.py",
+  "old": "            except client.GameRefused as exc:\n                return exc.why, exc.retry\n",
+  "new": "",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_refused_game_re_arms_the_wait_and_never_reads_as_the_relay_failing"
+  ]
+ },
+ {
+  "name": "play: no more games read as the relay failing",
+  "file": "lagdoctor/cli.py",
+  "old": "                if relay.ended.is_set():\n                    raise\n                raise tgt.TargetNotFound(exc.why) from None",
+  "new": "                raise",
+  "tests": [
+   "tests/test_watch_folder.py::test_once_the_relay_takes_no_more_games_the_wait_ends_as_one_that_found_none"
+  ]
+ },
+ {
+  "name": "play: a link that ended reads as no game found",
+  "file": "lagdoctor/cli.py",
+  "old": "                if relay.ended.is_set():\n                    raise\n                raise tgt.TargetNotFound(exc.why) from None",
+  "new": "                raise tgt.TargetNotFound(exc.why) from None",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_link_that_ended_while_a_game_was_named_is_the_relay_failing_in_plays_words"
+  ]
+ },
+ {
+  "name": "play: the wait outlives the relay's",
+  "file": "lagdoctor/cli.py",
+  "old": "        wait_s = min(wait_s, relay.aim_by - (client._game_slack() - client.AIM_S) - time.monotonic())",
+  "new": "        wait_s = wait_s",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_wait_ends_where_the_relays_own_does_less_its_slack"
+  ]
+ },
+ {
+  "name": "play: a game started during the prompt waited for",
+  "file": "lagdoctor/cli.py",
+  "old": "        if early:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_game_that_started_while_the_prompt_was_up_is_said_at_once"
+  ]
+ },
+ {
+  "name": "play: a program older than the pre-flight taken as started during the prompt",
+  "file": "lagdoctor/cli.py",
+  "old": "if looked < p[\"create_time\"] <= relay.create_time]",
+  "new": "if p[\"create_time\"] <= relay.create_time]",
+  "tests": [
+   "tests/test_watch_folder.py::test_programs_from_the_folder_older_than_the_pre_flight_or_newer_than_the_relay_are_left_to_the_wait"
+  ]
+ },
+ {
+  "name": "play: a program newer than the relay taken as started during the prompt",
+  "file": "lagdoctor/cli.py",
+  "old": "if looked < p[\"create_time\"] <= relay.create_time]",
+  "new": "if looked < p[\"create_time\"]]",
+  "tests": [
+   "tests/test_watch_folder.py::test_programs_from_the_folder_older_than_the_pre_flight_or_newer_than_the_relay_are_left_to_the_wait"
+  ]
+ },
+ {
+  "name": "play: the pre-flight refuses nothing",
+  "file": "lagdoctor/cli.py",
+  "old": "    if there:\n        names = ",
+  "new": "    if False:\n        names = ",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_game_already_running_from_the_folder_with_a_window_is_refused_before_any_prompt"
+  ]
+ },
+ {
+  "name": "play: the pre-flight refuses a windowless helper",
+  "file": "lagdoctor/cli.py",
+  "old": "    there = [p for p in running if p[\"pid\"] in shown]",
+  "new": "    there = running",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_game_already_running_from_the_folder_with_a_window_is_refused_before_any_prompt"
+  ]
+ },
+ {
+  "name": "play: a folder that cannot be waited on ends in a traceback",
+  "file": "lagdoctor/cli.py",
+  "old": "    except ValueError as exc:\n        say(f\"Not started: the game's folder cannot",
+  "new": "    except KeyError as exc:\n        say(f\"Not started: the game's folder cannot",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_folder_that_cannot_be_waited_on_is_refused_before_any_prompt"
+  ]
+ },
+ {
+  "name": "play: without the relay the wait looks from its own start",
+  "file": "lagdoctor/cli.py",
+  "old": "    kw: dict[str, Any] = {\"since\": looked, \"resolve\": _unelevated()}",
+  "new": "    kw: dict[str, Any] = {\"resolve\": _unelevated()}",
+  "tests": [
+   "tests/test_watch_folder.py::test_without_the_relay_the_wait_looks_from_the_pre_flight_and_names_no_game"
+  ]
+ },
+ {
+  "name": "play: an administrator window writes short names out long",
+  "file": "lagdoctor/cli.py",
+  "old": "    kw: dict[str, Any] = {\"since\": looked, \"resolve\": _unelevated()}",
+  "new": "    kw: dict[str, Any] = {\"since\": looked, \"resolve\": True}",
+  "tests": [
+   "tests/test_watch_folder.py::test_an_administrator_window_never_writes_a_short_name_out_long"
+  ]
+ },
+ {
+  "name": "play: rights it cannot tell taken as none",
+  "file": "lagdoctor/cli.py",
+  "old": "    except Exception:  # noqa: BLE001 - cannot tell: as if elevated\n        return False",
+  "new": "    except Exception:  # noqa: BLE001 - cannot tell: as if elevated\n        return True",
+  "tests": [
+   "tests/test_watch_folder.py::test_an_administrator_window_never_writes_a_short_name_out_long"
+  ]
+ },
+ {
+  "name": "play: --wait-s taken without --wait-folder",
+  "file": "lagdoctor/cli.py",
+  "old": "    if getattr(args, \"wait_s\", None) is not None and getattr(args, \"wait_folder\", None) is None:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_watch_folder.py::test_wait_s_and_wait_folder_are_checked_before_anything_starts"
+  ]
+ },
+ {
+  "name": "play: the relay approved for another wait than watch's",
+  "file": "lagdoctor/cli.py",
+  "old": "launcher=launcher, folders=forms, wait_s=wait_s)",
+  "new": "launcher=launcher, folders=forms, wait_s=WAIT_DEFAULT_S)",
+  "tests": [
+   "tests/test_watch_folder.py::test_wait_s_is_both_how_long_the_relay_is_approved_for_and_how_long_watch_waits"
+  ]
+ },
+ {
+  "name": "play: --wait-s left out of the wait",
+  "file": "lagdoctor/cli.py",
+  "old": "        return tgt.wait_for_game(folder, folders=forms, deadline_s=wait_s,",
+  "new": "        return tgt.wait_for_game(folder, folders=forms, deadline_s=WAIT_DEFAULT_S,",
+  "tests": [
+   "tests/test_watch_folder.py::test_wait_s_is_both_how_long_the_relay_is_approved_for_and_how_long_watch_waits"
+  ]
+ },
+ {
+  "name": "play: the forms worked out again after the prompt",
+  "file": "lagdoctor/cli.py",
+  "old": "        return tgt.wait_for_game(folder, folders=forms, deadline_s=wait_s,",
+  "new": "        return tgt.wait_for_game(folder, deadline_s=wait_s,",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it"
+  ]
+ },
+ {
+  "name": "play: --wait-s parsed past the relay's grammar",
+  "file": "lagdoctor/cli.py",
+  "old": "    from lagdoctor.relay.server import _seconds\n    try:\n        return _seconds(text)",
+  "new": "    from lagdoctor.relay.server import _seconds\n    try:\n        return float(text)",
+  "tests": [
+   "tests/test_watch_folder.py::test_wait_s_and_wait_folder_are_checked_before_anything_starts"
+  ]
+ },
+ {
+  "name": "play: the window not told it waits",
+  "file": "lagdoctor/cli.py",
+  "old": "                _check_cancel(cancel)\n                observers.event(\"waiting\")\n                target, code = _play_wait(",
+  "new": "                _check_cancel(cancel)\n                target, code = _play_wait(",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it"
+  ]
+ },
+ {
+  "name": "play: a cancel during the prompt not seen",
+  "file": "lagdoctor/cli.py",
+  "old": "                _check_cancel(cancel)\n                observers.event(\"waiting\")\n                target, code = _play_wait(",
+  "new": "                observers.event(\"waiting\")\n                target, code = _play_wait(",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_cancel_during_the_prompt_waits_for_nothing_and_lets_the_relay_go"
+  ]
+ },
+ {
+  "name": "play: the launch not told the folder",
+  "file": "lagdoctor/cli.py",
+  "old": "launcher=launcher, folders=folders,\n                             wait_s=wait_s)",
+  "new": "launcher=launcher,\n                             wait_s=wait_s)",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it"
+  ]
+ },
+ {
+  "name": "play: a relay that could not start in the running game's words",
+  "file": "lagdoctor/cli.py",
+  "old": "        code, text = _relay_failure(exc, play=folders is not None)",
+  "new": "        code, text = _relay_failure(exc)",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_relay_that_could_not_start_for_a_folder_is_said_in_plays_words"
+  ]
+ },
+ {
+  "name": "play: Play's failure in the running game's words",
+  "file": "lagdoctor/cli.py",
+  "old": "    if exc.code == protocol.EXIT_TARGET and play:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_watch_folder.py::test_plays_relay_failure_never_says_the_game_exited_while_the_prompt_was_up",
+   "tests/test_watch_folder.py::test_a_link_that_ended_while_a_game_was_named_is_the_relay_failing_in_plays_words"
+  ]
+ },
+ {
+  "name": "status: a step said again for the same program",
+  "file": "lagdoctor/cli.py",
+  "old": "            if (state, pid) in self.told:\n                return",
+  "new": "            if False:\n                return",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_wait_says_each_step_once_for_each_program_and_every_hold_re_arm_and_refusal"
+  ]
+ },
+ {
+  "name": "status: a hold said once only",
+  "file": "lagdoctor/cli.py",
+  "old": "        if state in (\"started\", \"window\", \"short-name\"):",
+  "new": "        if state in (\"started\", \"window\", \"short-name\", \"holding\"):",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_wait_says_each_step_once_for_each_program_and_every_hold_re_arm_and_refusal"
+  ]
+ },
+ {
+  "name": "status: a re-arm never said",
+  "file": "lagdoctor/cli.py",
+  "old": "        elif state == \"rearm\":",
+  "new": "        elif state == \"re-armed\":",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_wait_says_each_step_once_for_each_program_and_every_hold_re_arm_and_refusal"
+  ]
+ },
+ {
+  "name": "status: a refusal never said",
+  "file": "lagdoctor/cli.py",
+  "old": "        elif state == \"refused\":",
+  "new": "        elif state == \"refusal\":",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_wait_says_each_step_once_for_each_program_and_every_hold_re_arm_and_refusal"
+  ]
+ }
+]

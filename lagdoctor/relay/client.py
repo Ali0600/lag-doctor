@@ -84,7 +84,8 @@ def relay_argv(pipe_name: str, recorder: tuple[int, int], sid: str, game: tuple[
         for form in check_forms(folders):
             argv += ["--folder", form]
         number = isinstance(wait_s, (int, float)) and not isinstance(wait_s, bool)
-        argv += ["--wait-s", f"{wait_s:g}" if number else str(wait_s)]
+        # Three decimals, as the relay's parser takes them (server._seconds): ":g" would round 1234.567 to 1234.57.
+        argv += ["--wait-s", f"{wait_s:.3f}".rstrip("0").rstrip(".") if number else str(wait_s)]
     if frames:
         if presentmon_exe is None or not Path(presentmon_exe).is_absolute():
             raise ValueError("frame timing through the relay needs PresentMon's absolute path")
@@ -275,6 +276,14 @@ class RelayLink:
         """The relay as (pid, create_time): lag-doctor's own, with its PresentMon, never blamed for the lag."""
         return ((self.pid, self.create_time),) if self.create_time is not None else ()
 
+    def own(self) -> tuple[tuple[int, int], ...]:
+        """Play: lag-doctor's own processes as (pid, create_time), the recorder and the relay, whose trees are never
+        the game: what aim's check and the relay's pass to target.check_proposed as `own`, and what the folder wait
+        passes over (target.wait_for_game's `own`), so the three cannot drift."""
+        if self.folders is None:
+            raise ValueError("the relay was approved for the running game itself, so it has no game to look for")
+        return (self.recorder, (self.pid, self.create_time))
+
     # ---- commands ---------------------------------------------------------------------------------------
     def aim(self, game: tuple[int, int], *, snapshot: Callable[[], dict] | None = None,
             image: Callable[[int], str | None] | None = None) -> None:
@@ -305,8 +314,7 @@ class RelayLink:
         if self.aim_by is not None and time.monotonic() > self.aim_by:
             raise RelayFailed("the relay's wait for the game is over")
         why, retry = check_proposed(snapshot or _snapshot_now, image or _image_path, *proposed, session=self.session,
-                                    folders=self.folders, since=self.create_time,
-                                    own=(self.recorder, (self.pid, self.create_time)))
+                                    folders=self.folders, since=self.create_time, own=self.own())
         if why is not None:
             raise GameRefused(why, retry, sent=False)
         with self._state_lock:

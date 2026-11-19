@@ -814,8 +814,8 @@
  {
   "name": "a game the relay would refuse costs the player a prompt first",
   "file": "lagdoctor/cli.py",
-  "old": "    if why is not None:                       # what the relay would refuse is refused before the prompt",
-  "new": "    if False:",
+  "old": "        if why is not None:                   # what the relay would refuse is refused before the prompt",
+  "new": "        if False:",
   "tests": [
    "tests/test_cli.py::test_a_game_the_relay_would_refuse_is_refused_before_the_prompt"
   ]
@@ -877,8 +877,8 @@
  {
   "name": "the lock is let go for the prompt",
   "file": "lagdoctor/cli.py",
-  "old": "                        relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher)",
-  "new": "                        lock.release()\n                        relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher)",
+  "old": "                relay, frames, frames_why, code = _elevation(args, target, exe, frames_why, interactive, say=say,",
+  "new": "                lock.release()\n                relay, frames, frames_why, code = _elevation(args, target, exe, frames_why, interactive, say=say,",
   "tests": [
    "tests/test_cli.py::test_an_elevated_watch_records_here_with_frame_timing_through_the_relay"
   ]
@@ -940,8 +940,8 @@
  {
   "name": "a member who declines is told frame timing is gone",
   "file": "lagdoctor/cli.py",
-  "old": "                        relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher)",
-  "new": "                        relay, code = _start_relay(args, target, exe, say=say, launcher=launcher)",
+  "old": "            relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher, folders=folders,",
+  "new": "            relay, code = _start_relay(args, target, exe, say=say, launcher=launcher, folders=folders,",
   "tests": [
    "tests/test_cli.py::test_a_group_member_who_declines_still_records_frames_here"
   ]
