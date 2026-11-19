@@ -604,6 +604,8 @@ RECORDING_ENDS = {
     "not_ready": ("Not recorded", "Frame timing is not set up, so nothing was recorded: run `lagdoctor setup` in a "
                                   "terminal, then try again."),
     "no_game": ("No game found", "lag-doctor found no game running. Start the game, then press Record again."),
+    "game_running": ("Not recorded", "The game was already running, so its store would start nothing and lag-doctor "
+                                     "could not take it from its start. Close the game, then press Play again."),
     "refused": ("Not recorded", "lag-doctor could not record that game."),
     "game_changed": ("Not recorded", "The game closed or restarted while Windows asked for permission, so nothing "
                                      "was recorded. Start it again, then press Record."),

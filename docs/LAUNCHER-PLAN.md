@@ -36,8 +36,8 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 - [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
   below), the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
-  names) and `watch --wait-folder` with the re-arm (M6e, PR #58). Screen 6, Play's order on the control channel and the art
-  are not built yet.
+  names), `watch --wait-folder` with the re-arm (M6e, PR #58) and Play's order on the control channel (M6f). The
+  app's Play, screen 6 and the art are not built yet.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -696,8 +696,12 @@ above:
   over the pipe, and the folder rule checks them on the relay's own snapshot, the seam Stage 4 needs too. Built in
   M6d with a `game` message of its own before `start` (DECISIONS 2026-11-17), and the relay's wait for it follows the
   recorder's own (`--wait-s`), which an update download can still outrun: M6e's waiting line says so.
-- The control channel gets Play's order (elevate, launch, waiting, target, recording) with a test that pins it: today's
-  tests pin only that `waiting` comes before `target`.
+- The control channel gets Play's order (elevate, launch, waiting, target, recording) with a test that pins it. Built
+  as M6f (DESIGN.md, The control channel; `hello.v` 2): `watch --control stdio --wait-folder` sends `launch` once the
+  prompt is answered and every check that could end it has passed, right before the wait, and the app opens the store
+  link on it, building the link from its own library entry; a game from the folder already there is
+  `already_running`, with no `launch`, and ends as `game_running`. `tests/test_watch_folder.py` pins the order from
+  the observers and as the window hears it over the real channel.
 - The folder rule needs the process's image path and the relay's own start time (`accept_target`'s `image=` and
   `since=`, since PR #36). Store paths fold case and slashes before the test, and an image path left in NT form says
   why it cannot match.

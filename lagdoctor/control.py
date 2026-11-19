@@ -19,6 +19,12 @@ From the recorder (`from_recorder` checks them):
   waiting      {}                               looking for the game
   target       {name, pid, how}                 the game was chosen
   elevate      {argv: [str], cwd}               frame timing needs the relay: raise the UAC prompt for this command
+  launch       {}                               Play (watch --wait-folder): open the game's store link now. It comes
+                                                once the prompt is answered and every check that could refuse has
+                                                passed, right before `waiting` and the wait for the game itself
+  already_running {name, pid}                   Play: a program from the game's folder has a window before this
+                                                recording could take it (a store starts nothing for a game that
+                                                runs), so watch ends: done's game_running, and no `launch`
   recording    {duration_s, hotkey, frames, network}   everything has started
   start_key    {key, registered, window_s, start_by_s}  with a start key, after recording unless it is already
                                                 stopping: whether Windows gave it (watch turns the key off for a
@@ -48,7 +54,7 @@ import threading
 import traceback
 from typing import Any, Callable
 
-VERSION = 1
+VERSION = 2                      # 2: Play's launch and already_running (M6)
 MAX_LINE = 65536                 # bytes in one line, its newline included, both ways
 MAX_TEXT = 4000                  # a reason or a name
 MAX_SAY = 32000                  # a line watch says (its summary runs to a few thousand characters)
@@ -62,8 +68,8 @@ WEBVIEW2_EXE = "msedgewebview2.exe"
 WINDOW_EXES = ("python.exe", "pythonw.exe")       # what lag-doctor's window runs as
 
 # How a recording ended, for the window's own words (`done_reason`).
-REASONS = ("completed", "stopped", "game_exited", "cancelled", "busy", "not_ready", "no_game", "refused",
-           "game_changed", "relay_failed", "analysis_failed", "private_copy", "failed")
+REASONS = ("completed", "stopped", "game_exited", "cancelled", "busy", "not_ready", "no_game", "game_running",
+           "refused", "game_changed", "relay_failed", "analysis_failed", "private_copy", "failed")
 
 
 class ProtocolError(ValueError):
@@ -158,8 +164,12 @@ def from_recorder(line: bytes) -> dict[str, Any]:
         if _int(msg, "v", 0, 1 << 31) != VERSION:
             raise ProtocolError(f"a recorder that speaks version {msg['v']}, not {VERSION}")
         _int(msg, "pid", 1, MAX_PID)
-    elif t == "waiting":
+    elif t in ("waiting", "launch"):
         _fields(msg)
+    elif t == "already_running":
+        _fields(msg, "name", "pid")
+        _text(msg, "name", optional=True)
+        _int(msg, "pid", 1, MAX_PID)
     elif t == "target":
         _fields(msg, "name", "pid", "how")
         _text(msg, "name", optional=True)
@@ -234,8 +244,12 @@ def done_reason(code: int, seen: set[str] | frozenset[str], stopped_by: str, *, 
     if code == cli.EXIT_CANCELLED:
         return "cancelled"
     if code == cli.EXIT_BAD_ARGS:
+        if "already_running" in seen:              # Play: the game ran before the recording could take it
+            return "game_running"
         return "refused" if "target" in seen else "no_game"
-    if code == 1 and "target" in seen:
+    # Code 1 once the relay was asked for (Play asks before the game exists, so before "target"), or once the game
+    # was found: the relay, or the recording, stopped on an error.
+    if code == 1 and ("target" in seen or "elevate" in seen):
         return "analysis_failed" if "saved" in seen else "relay_failed"
     return {cli.EXIT_BUSY: "busy", cli.EXIT_NOT_READY: "not_ready", cli.EXIT_TARGET_CHANGED: "game_changed",
             cli.EXIT_PRIVATE_COPY: "private_copy"}.get(code, "failed")
@@ -366,6 +380,7 @@ class Channel:
                 self._replies.put(stale)
                 break
         self.send("elevate", argv=[str(a) for a in argv], cwd=str(cwd))
+        self.seen.add("elevate")                   # done_reason: what fails from here is the relay's
         while True:
             try:
                 reply = self._replies.get(timeout=0.25)

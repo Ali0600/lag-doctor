@@ -236,6 +236,15 @@ itself, by its duration, its start key's window or no press in time, is `complet
   `--duration` `LENGTH_S`, past every window a press in time starts. The app follows `start_key` and `measuring`,
   tells a window's end from no press in time by the `stopping` reason (both are `completed`), and plays its own
   sounds from the messages.
+- **Play's order** (M6, `hello.v` 2): `watch --control stdio --wait-folder FOLDER` sends `elevate` first (the
+  relay's command line names the folder, not a game), then `launch` and `waiting`, then `target` and `recording`.
+  `launch` asks the window to open the game's store link now: it goes out only once the prompt is answered (or
+  declined, or not needed) and every check that could end watch has passed (the relay's time left, a program from
+  the folder that started while the prompt was up), right before the wait begins, so the link is never opened for a
+  recording that cannot take the game it starts. The window builds the link itself from its own library entry: the
+  recorder names no link, only the folder. A program from the folder that already has a window, at the pre-flight or
+  while the prompt was up, is `already_running {name, pid}` instead, and watch ends with no `launch` (`done`'s
+  `game_running`). `tests/test_watch_folder.py` pins the order as the window hears it.
 - **Nothing else reaches the channel.** Before anything can print, `serve` keeps a private copy of stdout's file
   for the channel and points stdout itself at stderr, the window's log file.
 - **Nothing waits on the window.** One writer thread drains a bounded queue (`MAX_QUEUED` lines; past that they are
