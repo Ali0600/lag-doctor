@@ -113,7 +113,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `file` or tests the change touches, picked by path from all of `tests/redfirst/`, never from a list kept by hand
   (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). Commit before
   picking: a pick by `git diff --name-only origin/main HEAD` cannot see an uncommitted edit (PR #53's first pick left
-  out `frames.py`'s 112). A picked set runs about 3.7 s a mutation here (PR #53's 1,098 took 67 minutes). Every mutation on
+  out `frames.py`'s 112). A picked set runs about 3.7 s a mutation here (PR #53's 1,098 took 67 minutes), and one heavy in the window's own
+  tests about 8 s (each run of `tests/test_app_page.py` opens the real window: PR #62's 308 took about 40 minutes). Every mutation on
   `lagdoctor/analysis/rules.py` (456 after PR #52) takes up to an hour here (PR #50's 494 picked mutations took about
   70 minutes, PR #51's 744 about 36 and PR #52's 643 about 38 on a quiet PC): start it in the background as soon as the code is settled, and
   review meanwhile with agents that run no tests (no second pytest meanwhile, so write the next change's tests without
@@ -300,7 +301,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   (the real control channel, recording nothing) and `fake_recorder.stand_in_prompt`, a harmless process of the
   test's own, in the relay's. An `App` a test builds passes its own `recorder` and `launcher`: the defaults start
   `watch --control stdio --elevate` and raise the real UAC prompt (`tests/test_app_recording.py` also makes
-  `launch_elevated` refuse, so a slip fails instead of prompting).
+  `launch_elevated` refuse, so a slip fails instead of prompting). For Play (M6), `App(installed=)` and `covers=`
+  default to none, and only `run()` gives the stores' own (`library.installed_games`, `stores/art.covers`), so a test
+  that builds an App never lists this PC's store library or reads its Steam cache: give it `tests/app_demo.py`'s
+  made-up `INSTALLED` and `covers`, and an `open_link` and `play_recorder` of the test's own (the default opens a real
+  store link, which starts a game).
 - **The overhead benchmark** (`scripts/overhead/bench.py`, `docs/research/overhead.md`) opens a LagLab window for
   about 6.5 minutes a suite and holds lag-doctor's capture lock for the whole run, so the owner's own `watch` refuses
   meanwhile (exit 4), and the benchmark refuses to start while a recording runs: run it when the owner is not
@@ -507,7 +512,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `target.py` alike, with no other LagLab window open and the screen unlocked: LagLab's draws did not reach the GPU
   counters then. It failed again on 2026-11-19, with `test_sysmon_target.py`'s windowed-renderer test beside it, both
   on main's own `target.py` too (byte-copied in, restored by hash): this PC's state. Run that control before blaming a
-  change.
+  change. `tests/test_app_page.py::test_record_runs_a_recording_the_window_follows_with_the_game_named_as_text` read
+  BAD-BASE once in a long red-first run (PR #62, 2026-11-19: its baseline failed under the run's load) and passed its
+  baseline and was CAUGHT when that one mutation was rerun alone: rerun such a mutation alone before blaming a change.
   `tests/test_redfirst.py::test_the_job_counts_every_process_under_pytest_and_ending_it_ends_them_all` failed once on
   main's push run (2026-11-11, 5ea3f80; the PR's run of the same tree and the rerun passed): right after `job.end()`,
   with the job counting none of them, the snapshot still listed one of the tree's four processes (the parent's
