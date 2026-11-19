@@ -36,7 +36,8 @@ reads them, and `tests/test_ci_triggers.py` keeps both the list and that claim t
 `gh run list --commit <sha>` then prints nothing and exits 0, so never wait for one: GitHub filters a push on its whole
 range, so prove it with `git diff --name-only <base> <sha>`, where `<base>` is the head of the last push to main that
 has a ci.yml run (`gh run list --workflow ci.yml --branch main --event push --limit 1 --json headSha`). Main is green
-when that run concluded success and every later commit is such a push. `README.md` is not exempt: the build reads it
+when that run concluded success and every later commit is such a push. `--commit` takes the full SHA: a short one matched nothing and
+exited 0 for 10 minutes while the run existed and passed (2026-11-19), which reads like that docs-only skip. `README.md` is not exempt: the build reads it
 into the wheel's metadata. 3.13 is the Python the installer ships (`scripts/runtime_pin.py`); `requires-python`,
 `.python-version` and the matrix follow it (`tests/test_python_versions.py`), and when the pin moves to a new minor
 version, that version joins the matrix in the same change (`docs/DECISIONS.md`, 2026-11-08). Code and workflow
