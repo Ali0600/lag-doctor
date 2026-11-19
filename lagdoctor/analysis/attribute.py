@@ -131,7 +131,7 @@ FAN_STRAY_READINGS = 2       # a fan's fastest leaves out its fastest this many 
 # table, 5,800 to 9,200 for a middle fan.
 FAN_TOP_MIN_RPM = 5_500.0    # the slowest top speed known for an ASUS laptop's CPU or GPU fan
 FAN_SLOW_RPM = 4_000.0       # held back under this while hot: under 3/4 of the slowest top of any of the three
-FAN_STEADY_SHARE = 0.9       # near the fastest it kept up: a median while hot of at least this share of it
+FAN_STEADY_SHARE = 0.9       # near its fastest: a median while hot of at least this share of it
 FAN_SLOWED_SHARE = 0.75      # held back: a median while hot under this share of it
 FANS_TOPPED = (C.CPU_FAN_RPM, C.GPU_FAN_RPM)   # the fans FAN_TOP_MIN_RPM holds for: a middle fan tops out higher
 
