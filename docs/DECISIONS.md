@@ -7,10 +7,10 @@
   `choose_auto` over the folder's other windowed programs not left out, and re-arm when one wins (2026-11-19, M6e).
   Worth it if a Play recording ever names a launcher. Revisit hook: `target.hold_target`'s last round, which would
   need the wait's own reading of each program's path (`wait_for_target`'s `images`).
-- **Let the fan line count in the GPU heat finding**, once a yardstick for "slow" exists: the fastest this laptop's
-  fans reached across its recordings, or ASUS's performance mode read through the same device (a read, DSTS). Today
-  the line is context only (2026-11-17, the fan readings). Revisit hook: `rules._fans_text` and
-  `attribute.fans_while`; a scored line would go through `c.support` before `conclude`.
+- **Judge the fans against the fastest seen on this PC**, across its recordings, so "likely at full speed" can
+  firm up (2026-11-19, the fan verdict). Worth it once several recordings with fans exist. It needs each
+  recording's fan highs in `Diagnosis.stats` and the summary, a key that tells PCs apart, and the library feeding
+  the analysis. Revisit hook: `attribute.fan_verdict`'s high (`FAN_HIGH_PCT`), and the callers of `diagnose`.
 - **Cut a part bounded by `--duration` at the end the session announced** (`until` saved in `start_key`), so the
   analysis stops at the set length rather than at the recorded end with the stop's own seconds, and a press too late
   for a part could count and be judged there: worth trying for a terminal `--duration` (2026-11-10, the start key in
@@ -224,6 +224,40 @@
   relay/server.py (DECISIONS 2026-11-17, M6d).
 
 ---
+
+## 2026-11-19: The GPU heat finding judges the fans within the recording (the fan verdict)
+
+The fan line was context only (PR #57). After a recording with both fans at 6,400-6,800 RPM and the GPU still held
+at its 87 °C target, the owner asked for the verdict the Backlog held. Four read-only agents researched what could
+say "full speed" first: no read-only firmware call gives a fan's top speed or the fan mode in force
+(`docs/research/asus-fans.md`, section 10).
+
+The owner's (a question card, 2026-11-19):
+- **Within the recording (chosen: "Within the recording (Recommended)")**: each CPU and GPU fan's median while heat
+  held the GPU, against its own high in the part and the range where ASUS laptop fans top out (5,500 to 7,800 RPM).
+  Likely at full speed, held back by a quiet mode or a fan curve, or cannot tell. No stored state, and the same
+  answer on every re-analysis; it says "likely", never "certain".
+  - **Fastest seen on this PC**: not chosen; deferred, worth trying (Backlog). It needs at least 2 recordings with
+    fans, a key that tells PCs apart and the library feeding the analysis, and a PC only ever recorded in a quiet
+    mode would take that mode's ceiling for the top.
+  - **Keep it as context**: not chosen.
+
+The session's:
+- **Words and advice, never the score (chosen)**: the finding is already "high" from its direct line, and only a
+  family's strongest item counts, so a scored fan line would add nothing to its family, and a family of its own would
+  move the finding's rank. The verdict leads the advice instead, which the console shows two of.
+  - **Scored**: rejected for that reason.
+- **A fan's high is the 95th percentile of its readings (chosen)**: one stray reading still inside the 12,000 RPM
+  bound would make a steady fan read as held back.
+  - **Its fastest reading**: rejected.
+- **Only the CPU and GPU fans are judged (chosen)**: a middle fan tops out at up to 9,200 RPM, outside the range.
+- **Full speed only where heat alone held the GPU (chosen)**, as `rules._cooler`: cooling does not lift the power
+  brake. Fans held back are said either way.
+- **The firmware's fan curve or mode**: rejected. The mode reads as a constant; the curve read returns the factory
+  curve, not the one in force, posts commands to the embedded controller and answers 0 on some models; and CLAUDE.md
+  keeps the reader to fan speeds.
+- **G-Helper's stored tops**: rejected. They are another program's private settings, exist only where it is
+  installed, and are a lower bound anyway (the fastest it has seen).
 
 ## 2026-11-19: M5 ends with three pull requests: the owner dropped the trim handles
 
