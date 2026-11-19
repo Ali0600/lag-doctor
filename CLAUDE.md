@@ -121,7 +121,7 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   only survive: drop the redundant check and its mutation together. An `old` that
   still occurs once can still go dead: a change that sends its test down a new path leaves the sabotaged line
   unreached, and only the gate's SURVIVED shows it (PR #45's tick test took a stall past the residual's GPU wording an
-  older sabotage changed, 2026-11-11), so read each survivor before assuming the new tests are at fault. A shared fixture
+  older sabotage changed, 2026-11-11), so read each survivor before assuming the new tests are at fault. A `new` that names a variable an edit moved into another function raises NameError there, and the HTML report's chart wrapper turns that into a page that passes (PR #55 lifted `scale` into `html.frame_scale`, and `max(scale)` survived): re-point such a `new` with the same sabotage in the names its line can see. A shared fixture
   such as `tests/synth.py` touches every test built on it, so pick the mutations those tests guard too (PR #43 refit
   synth's hog mode and reran the 7 whose tests build it). A change that leaves every call the old tests make giving
   the same output needs no rerun once that is shown: wrap the fixture's function for one run of those tests, compare

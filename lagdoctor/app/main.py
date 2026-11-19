@@ -111,13 +111,15 @@ class App:
 
     What a test replaces (each defaulting to the real one): `recorder()`, the recorder's command line; `launcher`,
     which raises the relay's UAC prompt (elevation.launch_elevated); `play(name)`, the recording's sounds; `flash()`,
-    the taskbar button's flash at a recording's end."""
+    the taskbar button's flash at a recording's end; `start_key`, the key the recorder measures from (None: the whole
+    session, as M4 recorded), which also tells the running screen and the sounds to follow it."""
 
     def __init__(self, *, home: Path, runtime: dict, create_fn, log: Callable[[str], None],
                  tell: Callable[[str], None] = tell, activate: bool = True, on_ready: Callable[["App"], None] | None
                  = None, opener: Callable[[str], None] | None = None,
                  recorder: Callable[[], list[str]] | None = None, launcher: Callable[..., Any] | None = None,
-                 play: Callable[[str], Any] | None = None, flash: Callable[[], Any] | None = None) -> None:
+                 play: Callable[[str], Any] | None = None, flash: Callable[[], Any] | None = None,
+                 start_key: str | None = recording.START_KEY) -> None:
         self.home = Path(home)
         self.sessions = self.home / "sessions"
         self.sessions.mkdir(parents=True, exist_ok=True)
@@ -135,7 +137,8 @@ class App:
         self.window = AppWindow(runtime=runtime, create_fn=create_fn, data_folder=self.home / "webview",
                                 assets=ASSETS, icon=ICON, class_name=CLASS + instance_tag(self.home),
                                 on_message=self.on_message, on_failed=self.on_failed, log=log, activate=activate)
-        self.recorder = recorder or recording.recorder_argv
+        self.start_key = start_key
+        self.recorder = recorder or (lambda: recording.recorder_argv(start_key=self.start_key))
         self.launcher = launcher
         self.play = play or sounds.Player(self.home, log).play
         self.window.flasher = flash or self.window.flash        # when the window wants the player's attention
@@ -298,7 +301,7 @@ class App:
 
     def do_settings(self) -> dict:
         return views.settings_view(self.get_readiness(), str(self.sessions), self.runtime.get("version"),
-                                   __version__, LAG_KEY)
+                                   __version__, LAG_KEY, self.start_key)
 
     def do_open_report(self, session: str) -> "Open":
         report = self.entry(session).folder / library.REPORT_NAME
@@ -310,7 +313,7 @@ class App:
         return Open(self.sessions)
 
     def do_test_sound(self) -> dict:
-        self.play("start")                          # the sound a recording starts with
+        self.play("start")                          # the sound measuring starts with
         return {}
 
     # ---------------------------------------------------------------- recording (M4)
@@ -323,7 +326,7 @@ class App:
             rec = recording.Recorder(home=self.home, log=self.log, hwnd=lambda: self.window.hwnd,
                                      argv=self.recorder(), launcher=self.launcher,
                                      post=lambda msg: self.window.call_soon(lambda: self.on_recorder(rec, msg)))
-            self.rec, self.rec_state = rec, recording.RecordingState()
+            self.rec, self.rec_state = rec, recording.RecordingState(keyed=self.start_key is not None)
         try:
             rec.start()
         except BaseException as exc:
@@ -359,7 +362,8 @@ class App:
     def recording_view(self) -> dict:
         with self.lock:
             self.push_seq += 1
-            return dict(views.recording_view(self.rec_state, time.monotonic(), LAG_KEY, self.home / recording.LOG_NAME),
+            return dict(views.recording_view(self.rec_state, time.monotonic(), LAG_KEY,
+                                             self.home / recording.LOG_NAME, self.start_key),
                         seq=self.push_seq)
 
     def push_recording(self) -> None:

@@ -12,7 +12,12 @@ JSON file named on its command line, says what it does:
     marks        lag marks to send once it records (default 0)
     frames_lost  a reason to send as "frames_lost" once it records, or null
     session      the session folder its "saved" names (default null: nothing is saved)
+    length_s     the length its "recording" names (default 600)
+    start_key    {"registered", "window_s", "start_by_s"}: say the start key (Ctrl+Alt+S) once it records, as watch
+                 does (M5); default null: no start key
+    press_at     with start_key, the press's time in the recording's seconds: "measuring" from it, for window_s
     end          "stop" (default): record until the window's Stop; "complete": end at once, its length run;
+                 "window": the start key's window ran; "no_start": no press in time;
                  "exit": end with exit code 3 and no "done"
     report       where to write what reached it: each message from the window, and what the relay's handle named
 
@@ -31,6 +36,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from lagdoctor import control
+from lagdoctor.capture import session as sess
 
 WAIT_S = 60.0                  # for the window's Stop at most
 GAME = (4, 1)                  # the "game" the relay's command names: never this recorder
@@ -129,6 +135,14 @@ def main(argv: list[str]) -> int:
             return code
         ch.event("recording", {"duration_s": plan.get("length_s", 600), "hotkey": True, "frames": frames,
                                "network": True})
+        key = plan.get("start_key")
+        if key:
+            ch.event("start_key", {"key": "ctrl+alt+s", "registered": key["registered"],
+                                   "window_s": key.get("window_s"), "start_by_s": key.get("start_by_s")})
+            if plan.get("press_at") is not None:
+                at = plan["press_at"]
+                ch.event("measuring", {"at": at, "until": None if key.get("window_s") is None
+                                       else at + key["window_s"]})
         for i in range(plan.get("marks", 0)):
             ch.event("mark", {"t": 1.5 + i})
         if plan.get("frames_lost"):
@@ -141,7 +155,8 @@ def main(argv: list[str]) -> int:
             os._exit(3)
         if end == "stop":
             ch.stop.wait(WAIT_S)
-        ch.event("stopping", {"reason": control.STOPPED_REASON if ch.stop.is_set() else "duration"})
+        ends = {"window": sess.WINDOW_ENDED, "no_start": sess.NO_START}
+        ch.event("stopping", {"reason": control.STOPPED_REASON if ch.stop.is_set() else ends.get(end, "duration")})
         ch.event("saving", {"frames": 1234})
         session = plan.get("session")
         if session:

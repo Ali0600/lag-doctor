@@ -22,7 +22,7 @@ import traceback
 import types
 from pathlib import Path
 
-from lagdoctor.app import library
+from lagdoctor.app import library, recording
 from lagdoctor.app.main import App
 from lagdoctor.winapi import webview2 as wv
 from tests import app_demo, fake_recorder
@@ -99,6 +99,66 @@ CLICK_GAME = ("[...document.querySelectorAll('#games .game')].find((b) => "
 MADE = "document.querySelectorAll('#view img, #view b, #view script, #view iframe').length"
 
 
+# On the frame chart's (charts[0]) canvas, down the plot's top third: the least opaque column of the time a measured
+# part leaves out (before it, tests/app_demo.py: the part is 4 s to 24 s) and its colour, the same of the part,
+# and how much more of the column at the press in the startup is line than the columns beside it (dashed: about
+# half).
+SHADE_PIXELS = """(() => {
+    const u = charts[0], b = u.bbox, ctx = u.ctx, top = Math.round(b.top + 4), rows = Math.round(b.height / 3);
+    const column = (x) => ctx.getImageData(Math.round(x), top, 1, rows).data;
+    const mean = (d) => { let a = 0; for (let i = 3; i < d.length; i += 4) a += d[i]; return a / (d.length / 4); };
+    const least = (times) => times.map((t) => column(u.valToPos(t, 'x', true)))
+        .reduce((best, d) => (mean(d) < mean(best) ? d : best));
+    // The share of rows at least half opaque, the strongest of three columns: a line 2 px wide however it falls.
+    const solid = (x) => {
+        const cols = [-1, 0, 1].map((k) => column(x + k));
+        let n = 0;
+        for (let i = 3; i < cols[0].length; i += 4) if (Math.max(...cols.map((d) => d[i])) > 128) n += 1;
+        return n / (cols[0].length / 4);
+    };
+    const rgb = (d) => {
+        const c = [0, 0, 0]; let n = 0;
+        for (let i = 0; i < d.length; i += 4) if (d[i + 3] > 0) { c[0] += d[i]; c[1] += d[i + 1]; c[2] += d[i + 2]; n += 1; }
+        return n ? c.map((v) => Math.round(v / n)) : null;
+    };
+    const out = least([0.7, 2.4, 2.7, 3.1]), inside = least([6.2, 8.7, 11.3, 14.6, 17.9, 21.2]);
+    const beside = (u, solid) => Math.min(...[-0.45, -0.3, 0.3, 0.45].map((dt) =>
+        solid(u.valToPos(OUTSIDE + dt, 'x', true))));
+    const press = u.valToPos(OUTSIDE, 'x', true);
+    return {left_out: mean(out), left_out_rgb: rgb(out), part: mean(inside),
+            dash: solid(press) - beside(u, solid)};
+})()""".replace("OUTSIDE", repr(app_demo.OUTSIDE_MARK_S))
+# Zoom the frame chart so the press in the startup falls in the middle of the y axis's gutter and the shading of the
+# startup runs past the plot's left edge; then what the gutter holds: drawn inside the plot, the shading leaves rows of
+# it clear, and the press line is not there.
+SHADE_ZOOM = """(() => {
+    const u = charts[0], k = u.bbox.left / (2 * u.bbox.width), p = OUTSIDE;
+    window.__zoomedFrom = {min: u.scales.x.min, max: u.scales.x.max};
+    u.setScale('x', {min: (p + 20 * k) / (1 + k), max: 20});
+    return true;
+})()""".replace("OUTSIDE", repr(app_demo.OUTSIDE_MARK_S))
+SHADE_GUTTER = """(() => {
+    const u = charts[0], b = u.bbox, ctx = u.ctx, top = Math.round(b.top + 4), rows = Math.round(b.height / 3);
+    const column = (x) => ctx.getImageData(Math.round(x), top, 1, rows).data;
+    const fill = column(b.left * 0.75);
+    let least = 255;
+    for (let i = 3; i < fill.length; i += 4) least = Math.min(least, fill[i]);
+    const solid = (x) => {
+        const cols = [-1, 0, 1].map((k) => column(x + k));
+        let n = 0;
+        for (let i = 3; i < cols[0].length; i += 4) if (Math.max(...cols.map((d) => d[i])) > 128) n += 1;
+        return n / (cols[0].length / 4);
+    };
+    const beside = (u, solid) => Math.min(...[-0.45, -0.3, 0.3, 0.45].map((dt) =>
+        solid(u.valToPos(OUTSIDE + dt, 'x', true))));
+    const press = u.valToPos(OUTSIDE, 'x', true);
+    const out = {fill_least: least, press_x: press, left: b.left,
+                 line: solid(press) - beside(u, solid)};
+    u.setScale('x', window.__zoomedFrom);
+    return out;
+})()""".replace("OUTSIDE", repr(app_demo.OUTSIDE_MARK_S))
+
+
 def script(facts: dict, app: App):
     """The steps, as a generator: each yield is an operation, and what it sends back is the step's answer."""
     yield until("document.querySelectorAll('#games .game').length > 0")
@@ -127,7 +187,18 @@ def script(facts: dict, app: App):
         charts: document.querySelectorAll('#view canvas').length,
         events: document.querySelectorAll('tr[data-event]').length,
         commands: [...document.querySelectorAll('.fix code')].map((c) => c.textContent),
+        part: document.getElementById('part') ? document.getElementById('part').textContent : null,
+        rest: document.querySelector('[data-chart=frames]').getAttribute('data-rest'),
+        shaded: document.querySelectorAll('.chart[data-rest]').length,
+        y_top: charts.length ? charts[0].scales.y.max : null,
         made: {MADE}, pwned: window.__pwned === 1}}))()""")
+    # What the frame chart's canvas holds where the part leaves the recording out, and inside the part: the least
+    # opacity down a strip of each, over several times, so no frame line, grid line or lag band is all it reads.
+    facts["results_pixels"] = yield js(SHADE_PIXELS)
+    yield js(SHADE_ZOOM)
+    yield sleep(200)
+    facts["results_zoomed"] = yield js(SHADE_GUTTER)
+    yield sleep(200)
     yield shot("results")
     yield js("document.getElementById('view').scrollTop = document.querySelector('[data-chart=frames]').offsetTop - 70; "
              "true")
@@ -139,6 +210,7 @@ def script(facts: dict, app: App):
     facts["moment"] = yield js("""(() => ({
         title: document.querySelector('#moment h3').textContent,
         charts: document.querySelectorAll('#moment canvas').length,
+        shaded: document.querySelectorAll('#moment .chart[data-rest]').length,
         causes: document.querySelector('#moment p').textContent}))()""")
     yield sleep(300)
     yield shot("moment")
@@ -199,7 +271,9 @@ def script(facts: dict, app: App):
     yield js("document.querySelector('[data-go=library]').click(); true")
     yield until("!!document.getElementById('record')")
     yield js("document.getElementById('record').click(); true")
-    yield until("!!document.getElementById('rec-clock') && !!document.getElementById('rec-stop')")
+    # The stand-in says its start key and a press at once (M5): the running screen measures from it.
+    yield until("!!document.querySelector('#running[data-stage=measuring]') && !!document.getElementById('rec-clock')"
+                " && !!document.getElementById('rec-stop')")
     facts["rec_running"] = yield js(f"""(() => ({{
         title: document.getElementById('rec-title').textContent,
         game: document.getElementById('rec-game').textContent,
@@ -455,7 +529,10 @@ def main(argv: list[str]) -> int:
     picked = next((e for e in recordings if e.game == app_demo.MARKUP_TITLE), recordings[0])
     plan = home / "fake-recorder-plan.json"
     plan.write_text(json.dumps({"elevate": True, "game": picked.game, "marks": 2, "session": picked.id,
-                                "end": "stop", "report": str(rig.report)}), encoding="utf-8")
+                                "length_s": recording.LENGTH_S,
+                                "start_key": {"registered": True, "window_s": recording.WINDOW_S,
+                                              "start_by_s": recording.START_BY_S},
+                                "press_at": 30.0, "end": "stop", "report": str(rig.report)}), encoding="utf-8")
     app = App(home=home, runtime=runtime, create_fn=create, log=facts["log"].append, tell=facts["told"].append,
               activate=False, opener=facts["opened"].append,
               recorder=lambda: [str(fake_recorder.BASE_PY), "-B", "-E", "-s", "-m", "tests.fake_recorder", str(plan)],
