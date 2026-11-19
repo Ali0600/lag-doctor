@@ -1357,3 +1357,15 @@ wording left a failed hold's process out of later waits; a design review agreed 
 outweighs the rounds it saves.
 **Takeaway**: verify a first match by holding it before committing, re-arm on failure, and keep exclusions for
 verdicts that cannot change (a refusal for good), never for a check that a transient state can fail.
+
+### A cap on an image's bytes is not a cap on what it decodes to
+
+An image file says how big it is in its header, and a decoder allocates that much before it draws anything. A PNG of
+zeros deflates about a thousand to one, so a file well under a 4 MB cap can declare 23,000 x 23,000 pixels: about 2 GB
+to decode, and WebView2 would decode it again each time the tile is painted. The size worth capping is the declared
+one (PNG's IHDR, JPEG's first frame header, WebP's VP8X, VP8L or VP8 header), read before the bytes are kept, and a
+file whose size cannot be read is refused.
+**Why it came up**: M6h's cover art (`stores/art.py`, PR #62), read from Steam's cache, which any local account can
+write. The first version capped only the file size; a review traced the decode in Blink's image decoder.
+**Takeaway**: for untrusted media, bound the declared dimensions as well as the bytes, from the header, before
+keeping the file.
