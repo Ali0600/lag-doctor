@@ -274,6 +274,17 @@ def _shown(value: object) -> str:
     return text if len(text) <= MAX_SHOWN_CHARS else text[:MAX_SHOWN_CHARS - 3] + "..."
 
 
+def _windows_folder() -> str:
+    """The Windows folder as Windows itself gives it (winfolders.windows_folder), looked up when called (the tests
+    replace this). Never the SystemRoot variable: an environment is the caller's to set, and the elevated relay checks
+    the folder forms its UAC prompt approved by this. ValueError when Windows cannot say: then no folder is checked."""
+    try:
+        return winfolders.windows_folder()
+    except OSError as exc:
+        raise ValueError(f"the Windows folder could not be read ({exc.strerror or exc}), so no game's folder can be "
+                         "checked") from None
+
+
 def fold_path(path: str) -> str:
     """The form two Windows paths are compared in: each run of slashes one backslash, none at the end, case-folded.
 
@@ -310,7 +321,7 @@ def check_folder(folder: object) -> str:
         if part[-1] in ". " or any(c in _BAD_NAME_CHARS for c in part):
             raise ValueError(f"{folder} has a name Windows would not keep as written ({part!r})")
     clean = folder[0].upper() + ":\\" + "\\".join(parts)
-    system = fold_path(os.environ.get("SystemRoot") or "C:\\Windows")
+    system = fold_path(_windows_folder())
     if fold_path(clean) == system or fold_path(clean).startswith(system + "\\"):
         raise ValueError(f"{clean} is in the Windows folder, where no game is installed")
     return clean
@@ -343,6 +354,7 @@ def in_folder(image: str | None, folder: str) -> bool:
 
 
 MAX_FORMS = 4           # forms of one folder the rule takes: the folder itself and its resolved path, with room
+_SHORT_NAME = re.compile(r"~[0-9]")     # an 8.3 short name's tilde and number (PROGRA~2), never a long name's ~
 
 
 DRIVE_NOT_THERE = 1             # GetDriveTypeW's DRIVE_NO_ROOT_DIR: no disk at that root now (an unplugged one, say)
@@ -534,17 +546,22 @@ def check_forms(folders: object) -> tuple[str, ...]:
     """A folder's forms as the folder rule takes them (folder_forms' tuple, each checked again); ValueError if not."""
     if isinstance(folders, str) or not isinstance(folders, (tuple, list)) or not 1 <= len(folders) <= MAX_FORMS:
         raise ValueError(f"not 1 to {MAX_FORMS} forms of a folder: {folders!r}")
-    return tuple(check_folder(f) for f in folders)
+    forms = tuple(check_folder(f) for f in folders)
+    if len({fold_path(f) for f in forms}) != len(forms):
+        raise ValueError(f"the forms of a folder name one folder twice: {_shown(forms)}")
+    return forms
 
 
-def program_reason(image: str | None, folders: tuple[str, ...]) -> str | None:
+def program_reason(image: str | None, folders: tuple[str, ...], *, resolve: bool = True) -> str | None:
     """Why the program at `image` is under none of `folders` (check_forms' tuple), in plain words; None when it is
     under one. The folder rule's one test: the wait judges each process by it, and accept_target the game proposed.
 
     A path Windows gives through an 8.3 short name (C:\\PROGRA~2\\...), as when a store or a stub starts the game
-    through one, is first written out long (winapi.folders.long_path reads folder entries and opens no file).
+    through one, is first written out long (winapi.folders.long_path reads folder entries and opens no file). Not with
+    `resolve` False, as the relay asks it: it would read those folders with administrator rights, and a link someone
+    swapped in along the way could lead it onto a share, so there the path is compared as Windows gave it.
     """
-    if image and "~" in image and _LOCAL_DRIVE.match(image):
+    if resolve and image and "~" in image and _LOCAL_DRIVE.match(image):
         image = winfolders.long_path(image) or image
     first = None
     for folder in folders:
@@ -552,6 +569,8 @@ def program_reason(image: str | None, folders: tuple[str, ...]) -> str | None:
         if why is None:
             return None
         first = first or why
+    if not resolve and image and _SHORT_NAME.search(image):
+        return f"{first} (Windows gave that path with 8.3 short names, which the relay compares as written)"
     return first
 
 
@@ -584,7 +603,8 @@ def running_from(folders: tuple[str, ...], procs: dict[int, ProcInfo] | None = N
 
 def accept_target(procs: dict[int, ProcInfo], pid: int, create_time: int, *, session: int,
                   approved: tuple[int, int] | None = None, folders: tuple[str, ...] | None = None,
-                  since: int | None = None, image: str | None = None) -> str | None:
+                  since: int | None = None, image: str | None = None, own: tuple[tuple[int, int], ...] = (),
+                  resolve: bool = True) -> str | None:
     """Why the relay must not record this process, in plain words; None when it may.
 
     Called with the same arguments by both sides, so they cannot drift: the recorder before it proposes the game,
@@ -594,7 +614,9 @@ def accept_target(procs: dict[int, ProcInfo], pid: int, create_time: int, *, ses
     - `folders` and `since` (Play, M6): the prompt came before the game existed and approved its install folder's
       forms (folder_forms), so the game must have started after `since` (the relay's own create time) and run a
       program under one of them (program_reason, which the folder wait judges by too). `image` is that program's
-      path, which each side reads for itself, without a handle (ntquery.image_path).
+      path, which each side reads for itself, without a handle (ntquery.image_path). `own`: lag-doctor's own
+      processes as (pid, create_time), the recorder and the relay, whose trees are never the game. `resolve` False
+      (the relay, and the recorder asking as the relay will): the path is compared as Windows gave it (program_reason).
     """
     _check_identity(pid, create_time)
     if (approved is None) == (folders is None):
@@ -605,6 +627,7 @@ def accept_target(procs: dict[int, ProcInfo], pid: int, create_time: int, *, ses
             raise ValueError(f"not a process create time: {since!r}")
     elif since is not None or image is not None:
         raise ValueError("since= and image= go with folders=")
+    roots = _own_roots(own, folders, resolve)
     p = procs.get(pid)
     if p is None or p.create_time != create_time:
         return f"process {pid} is no longer running (its game exited, or Windows gave its number to another program)"
@@ -615,13 +638,81 @@ def accept_target(procs: dict[int, ProcInfo], pid: int, create_time: int, *, ses
         if (pid, create_time) != tuple(approved):
             return f"process {pid} ({p.name or 'unnamed'}) is not the game the UAC prompt approved"
         return None
+    if any(pid in descendants(procs, *root) for root in roots):
+        return f"process {pid} ({p.name or 'unnamed'}) is one of lag-doctor's own processes, never the game"
     if create_time <= since:
         return (f"process {pid} ({p.name or 'unnamed'}) started before the UAC prompt was approved, so it is not "
                 "the game started after it")
-    why = program_reason(image, folders)
+    why = program_reason(image, folders, resolve=resolve)
     if why is not None:
         return f"process {pid} ({p.name or 'unnamed'}) is not the game: {why}"
     return None
+
+
+def _own_roots(own: object, folders: tuple[str, ...] | None, resolve: object) -> tuple[tuple[int, int], ...]:
+    """accept_target's `own` as checked (pid, create_time) pairs. It and `resolve` go with folders= alone: a game the
+    prompt approved by its pid was never looked for, so neither has anything to judge there."""
+    if not isinstance(resolve, bool):
+        raise ValueError(f"resolve= is not true or false: {_shown(resolve)}")
+    if isinstance(own, (str, bytes)) or not isinstance(own, (tuple, list)):
+        raise ValueError(f"not a list of lag-doctor's own processes: {_shown(own)}")
+    if folders is None and (own or not resolve):
+        raise ValueError("own= and resolve= go with folders=")
+    for root in own:
+        if not isinstance(root, (tuple, list)) or len(root) != 2:
+            raise ValueError(f"not a process as (pid, create time): {_shown(root)}")
+        _check_identity(*root)
+    return tuple((root[0], root[1]) for root in own)
+
+
+def _listed(procs: dict[int, ProcInfo], who: tuple[int, int], session: int) -> bool:
+    p = procs.get(who[0])
+    return p is not None and p.create_time == who[1] and p.session_id == session
+
+
+def check_proposed(snapshot: Callable[[], dict[int, ProcInfo]], image_of: Callable[[int], str | None], pid: int,
+                   create_time: int, *, session: int, folders: tuple[str, ...], since: int,
+                   own: tuple[tuple[int, int], ...], alive: tuple[tuple[int, int], ...] = (),
+                   tries: int | None = None) -> tuple[str | None, bool]:
+    """Play's folder rule on a game proposed by its pid and create time, as the relay judges it and as the recorder
+    asks first, with the same arguments so the two cannot drift: (why it may not be recorded, whether asking again
+    about it may change that), or (None, False) when it may.
+
+    The program's path is read between two snapshots (`snapshot`, `image_of`: ntquery's, or a test's), and both must
+    list the process with that create time: a number never names two processes at once, so the path read is that
+    process's own, never that of one that held the number before or after it. `alive`: processes that must run in
+    `session` at the end of the check, so throughout it, or nothing is taken (the relay names the recorder: a proposal
+    from a pipe handle that outlived it is never taken). A failed read is tried again, TRY_PAUSE_S apart, up to
+    `tries` times; past that the game could not be checked, which a later proposal may change (`tries` defaults to
+    IMAGE_TRIES, the wait's own). The path is compared as Windows gave it (accept_target's resolve=False): the relay
+    reads no folder with administrator rights. The reason is one line of printable text (a program's name can hold
+    characters that turn the text around), the same on both sides."""
+    why, retry = _proposed(snapshot, image_of, pid, create_time, session=session, folders=folders, since=since,
+                           own=own, alive=alive, tries=tries)
+    return (None, False) if why is None else ("".join(c if c.isprintable() else "?" for c in why), retry)
+
+
+def _proposed(snapshot, image_of, pid, create_time, *, session, folders, since, own, alive, tries):
+    _check_identity(pid, create_time)
+    why = f"process {pid} could not be checked"
+    for attempt in range(max(1, IMAGE_TRIES if tries is None else tries)):
+        if attempt:
+            time.sleep(TRY_PAUSE_S)
+        try:
+            before = snapshot()
+            if not _listed(before, (pid, create_time), session):     # accept_target says which: gone, or elsewhere
+                return accept_target(before, pid, create_time, session=session, approved=(pid, create_time)), False
+            image = image_of(pid)
+            after = snapshot()
+        except OSError as exc:
+            why = f"process {pid} could not be checked ({exc.strerror or exc})"
+            continue
+        if not all(_listed(after, who, session) for who in alive):  # at the end of the check: so throughout it
+            return "the recording window is no longer running", False
+        # accept_target refuses a process `after` does not list, as the second snapshot must.
+        return accept_target(after, pid, create_time, session=session, folders=folders, since=since, image=image,
+                             own=own, resolve=False), False
+    return why, True
 
 
 # ---------------------------------------------------------------- choosing ---
@@ -808,6 +899,11 @@ ROUND_FAILS = 3                 # rounds in a row whose processes or windows cou
 MAX_READS_PER_ROUND = 512       # new processes whose image path one round reads; any more wait for the next round
 SINCE_MARGIN = 20_000_000       # 2 s in create-time units: by default a process started just before the wait counts
 MAX_NAMES = 3                   # programs from the folder that a message names
+# How long a chosen process must keep running before Play names it to the relay, so a launcher that draws and then
+# leaves re-arms the wait instead (docs/LAUNCHER-PLAN.md, M6: a feel number the owner has not judged yet). The re-arm
+# itself is the recorder's (watch --wait-folder); the relay's wait for the game leaves room for it (server.GAME_SLACK_S).
+REARM_HOLD_S = 20.0
+TRY_PAUSE_S = 0.1               # check_proposed: between two tries of a read that failed
 _FILETIME_1970 = 116_444_736_000_000_000   # 1970-01-01 as a create time (100 ns since 1601)
 
 

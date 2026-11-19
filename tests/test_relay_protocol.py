@@ -85,7 +85,13 @@ def test_events_round_trip_byte_exact():
     b'{"t":"start"}', b'{"t":"start","origin":"1"}', b'{"t":"start","origin":true}', b'{"t":"start","origin":-1}',
     b'{"t":"start","origin":NaN}', b'{"t":"start","origin":Infinity}', b'{"t":"start","origin":1,"pid":4}',
     b'{"t":"stop","now":1}', b'{"t":"hello"}', b'{"t":"rows","cols":[],"rows":[]}', b'{"t":"STOP"}',
-    b'{"t":"start","origin":1.0' + b" " * rp.MAX_MESSAGE + b"}"])
+    b'{"t":"start","origin":1.0' + b" " * rp.MAX_MESSAGE + b"}",
+    # Play's game: exactly [pid, create time], whole numbers in range, and nothing that would say how to judge it.
+    b'{"t":"game"}', b'{"t":"game","game":[5]}', b'{"t":"game","game":[5,1,2]}', b'{"t":"game","game":"5:1"}',
+    b'{"t":"game","game":[0,1]}', b'{"t":"game","game":[4294967296,1]}', b'{"t":"game","game":[true,1]}',
+    b'{"t":"game","game":[5,-1]}', b'{"t":"game","game":[5,1.5]}', b'{"t":"game","game":[5,9223372036854775808]}',
+    b'{"t":"game","game":[5,1],"image":"C:\\\\Games\\\\x.exe"}', b'{"t":"game","game":[5,1],"session":1}',
+    b'{"t":"refused","game":[5,1],"why":"","retry":false}'])
 def test_the_relay_takes_only_start_and_stop_from_the_recorder(bad):
     with pytest.raises(rp.ProtocolError):
         rp.from_recorder(bad)
@@ -94,6 +100,14 @@ def test_the_relay_takes_only_start_and_stop_from_the_recorder(bad):
 def test_start_and_stop_round_trip():
     assert rp.from_recorder(rp.start(12.5)) == {"t": "start", "origin": 12.5}
     assert rp.from_recorder(rp.stop()) == {"t": "stop"}
+    assert rp.from_recorder(rp.game((80, 430))) == {"t": "game", "game": (80, 430)}
+    assert rp.from_recorder(rp.game((rp.MAX_PID, rp.MAX_QPC))) == {"t": "game", "game": (rp.MAX_PID, rp.MAX_QPC)}
+
+
+def test_the_folders_bounds_are_the_folder_rules_own():
+    from lagdoctor.capture import target as tgt
+    assert rp.MAX_FORMS == tgt.MAX_FORMS and rp.MAX_FORM_CHARS == tgt.MAX_FOLDER_CHARS
+    assert rp.VERSION == 2 and rp.MAX_GAMES == 8
 
 
 def _rows(cols, *rows):
@@ -101,6 +115,14 @@ def _rows(cols, *rows):
 
 
 REQ = ["ProcessID", "SwapChainAddress", "TimeInQPC", "MsBetweenPresents"]
+
+
+def _hello(**over) -> bytes:
+    """A folder-mode hello as JSON, with `over` changed."""
+    msg = {"t": "hello", "v": rp.VERSION, "pid": 5, "game": None, "folders": ["C:\\Games\\X"], "frames": True,
+           "network": True}
+    msg.update(over)
+    return json.dumps(msg).encode()
 
 
 @pytest.mark.parametrize("bad", [
@@ -127,16 +149,39 @@ REQ = ["ProcessID", "SwapChainAddress", "TimeInQPC", "MsBetweenPresents"]
     json.dumps({"t": "frames", "state": "great", "detail": "", "tool": "", "final": False, "info": None}).encode(),
     json.dumps({"t": "frames", "state": "ok", "detail": "", "tool": "", "final": 1, "info": None}).encode(),
     json.dumps({"t": "frames", "state": "ok", "detail": "", "tool": "", "final": True, "info": [1]}).encode(),
-    json.dumps({"t": "hello", "v": 1, "pid": 5, "game": [5], "frames": True, "network": True}).encode(),
-    json.dumps({"t": "end", "more": 1}).encode(), json.dumps({"t": "start", "origin": 1.0}).encode()])
+    json.dumps({"t": "hello", "v": 1, "pid": 5, "game": [5], "folders": None, "frames": True,
+                "network": True}).encode(),
+    json.dumps({"t": "hello", "v": 2, "pid": 5, "game": [5, 1], "frames": True, "network": True}).encode(),
+    json.dumps({"t": "end", "more": 1}).encode(), json.dumps({"t": "start", "origin": 1.0}).encode(),
+    # A hello names what the prompt approved: the game or the folder's forms, one of the two, and forms that are
+    # 1 to 4 different printable paths of 3 to 260 characters.
+    _hello(game=None, folders=None), _hello(game=[5, 1], folders=["C:\\Games\\X"]), _hello(folders="C:\\Games\\X"),
+    _hello(folders=[]), _hello(folders=["C:\\Games\\X", "C:\\Games\\X"]), _hello(folders=["C:\\G" + str(i) for i in
+                                                                                         range(rp.MAX_FORMS + 1)]),
+    _hello(folders=["C:"]), _hello(folders=["C:\\" + "x" * rp.MAX_FORM_CHARS]), _hello(folders=["C:\\Games\\\tX"]),
+    _hello(folders=[5]),
+    # The answers about a game name it as [pid, create time]; a refusal says why, and whether to ask again.
+    json.dumps({"t": "game", "game": [5]}).encode(), json.dumps({"t": "game", "game": [True, 1]}).encode(),
+    json.dumps({"t": "game", "game": [5, 1], "why": ""}).encode(),
+    json.dumps({"t": "refused", "game": [5, 1], "why": "no"}).encode(),
+    json.dumps({"t": "refused", "game": [5, 1], "why": "no", "retry": 1}).encode(),
+    json.dumps({"t": "refused", "game": [5, 1], "why": "x" * (rp.MAX_TEXT + 1), "retry": False}).encode(),
+    json.dumps({"t": "refused", "game": [0, 1], "why": "no", "retry": False}).encode()])
 def test_the_recorder_refuses_what_the_protocol_does_not_allow(bad):
     with pytest.raises(rp.ProtocolError):
         rp.from_relay(bad)
 
 
 def test_relay_messages_round_trip():
-    assert rp.from_relay(rp.hello(77, (80, 430), True, False)) == {
-        "t": "hello", "v": rp.VERSION, "pid": 77, "game": (80, 430), "frames": True, "network": False}
+    assert rp.from_relay(rp.hello(77, (80, 430), None, True, False)) == {
+        "t": "hello", "v": rp.VERSION, "pid": 77, "game": (80, 430), "folders": None, "frames": True, "network": False}
+    forms = ("C:\\Games\\Lantern Drift", "D:\\Library\\Lantern Drift")
+    assert rp.from_relay(rp.hello(77, None, forms, False, True)) == {
+        "t": "hello", "v": rp.VERSION, "pid": 77, "game": None, "folders": forms, "frames": False, "network": True}
+    assert rp.from_relay(rp.game((80, 430))) == {"t": "game", "game": (80, 430)}
+    no = rp.from_relay(rp.refused((80, 430), "y" * (rp.MAX_TEXT + 9), True))
+    assert no["t"] == "refused" and no["game"] == (80, 430) and no["retry"] is True
+    assert len(no["why"]) == rp.MAX_TEXT and no["why"].endswith("...")
     st = rp.from_relay(rp.frames_status("partial", "x" * (rp.MAX_TEXT + 50), "PresentMon 2.6.0", True,
                                         {"exit_code": 0, "stderr_tail": ["a", "b"]}))
     assert st["state"] == "partial" and len(st["detail"]) == rp.MAX_TEXT and st["detail"].endswith("...")

@@ -155,9 +155,10 @@ HEADROOM_NOTE = ("A rough estimate for this game at these settings, from its bus
 SOURCES = {
     "frames": "frame timing (PresentMon)", "system": "the system sampler", "gpu": "NVIDIA telemetry (NVML)",
     "network": "the ping and Wi-Fi monitor", "net_flows": "the game's own network traffic (ETW)",
+    "fans": "fan speeds (ASUS)",
 }
 
-# Every column a chart can show (model.F, S, G, N), as (label, unit): the app's charts name a series only through this
+# Every column a chart can show (model.COLUMN_CLASSES), as (label, unit): the app's charts name a series only through this
 # table. The columns left out are names, ids and addresses, never drawn as a line (NOT_CHARTED). Each model column but
 # "t" is in exactly one of the two (tests/test_app_views.py).
 COLUMNS = {
@@ -219,6 +220,10 @@ COLUMNS = {
     "nv_pstate": ("NVIDIA performance state (0 = fastest)", ""),
     "nv_throttle_pct": ("NVIDIA slowed by heat or power", "%"),
     "nv_power_cap_pct": ("NVIDIA at its power cap", "%"),
+    # fans (ASUS)
+    "cpu_fan_rpm": ("CPU fan", "RPM"),
+    "gpu_fan_rpm": ("GPU fan", "RPM"),
+    "mid_fan_rpm": ("middle fan", "RPM"),
     # network
     "gw_rtt_ms": ("ping to your router", "ms"),
     "inet_rtt_ms": ("ping to the internet", "ms"),

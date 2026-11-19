@@ -149,9 +149,13 @@ but a GitHub-hosted runner. Measured (research note section 8):
 - The service hosts the relay core that `docs/LAUNCHER-PLAN.md` builds first as a relay elevated per recording (its
   M3): one protocol, one client for the CLI and the app. Stage 4 changes where the relay runs and its policy: a fixed
   pipe name its trigger starts, not a random one; the caller's own session and target, not a command line approved at
-  a prompt; the installer's PresentMon only; and the client checks the server's PID against the service's, and the
-  pipe's owner (`owner_sid()`, which a squatter cannot set to the service's), since any process could create that
-  name first, for instance in the moments after the service stops itself when idle.
+  a prompt (the target comes in a `game` message, judged on the service's own snapshot, as Play's relay takes it since
+  M6d: the service's policy goes in `relay/server.Relay._judge` and its deadlines, `_out_of_turn`'s folder-only
+  `game`, the hello's game-or-folder rule and `RelayLink.aim`, and `since` there cannot be its own start time); the
+  installer's PresentMon only; and the
+  client checks the server's PID against the service's, and the pipe's owner (`owner_sid()`, which a squatter cannot
+  set to the service's), since any process could create that name first, for instance in the moments after the
+  service stops itself when idle.
 - E8: each guard ships red-first, as every guard here does.
 - What M3's review (2026-11-08) left for the service, where any local user is a caller:
   - **One recording machine-wide.** The ETW session names (`lagdoctor`, `lag-doctor-net`) are global, and starting

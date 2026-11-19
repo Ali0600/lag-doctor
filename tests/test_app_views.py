@@ -16,7 +16,7 @@ from lagdoctor.analysis.diagnose import diagnose
 from lagdoctor.analysis.frames import main_chain
 from lagdoctor.analysis.window import window
 from lagdoctor.app import library, views
-from lagdoctor.model import F, G, N, S, Diagnosis, Evidence, Finding, FixSuggestion, LagEvent
+from lagdoctor.model import COLUMN_CLASSES, F, G, N, S, Diagnosis, Evidence, Finding, FixSuggestion, LagEvent
 from lagdoctor.report import labels, summary
 from tests import app_demo, synth
 
@@ -580,7 +580,7 @@ def test_window_changes_nothing_in_the_capture():
 # ------------------------------------------------------------------------------------------- chart labels --
 
 def test_every_model_column_but_t_is_charted_with_a_label_or_listed_as_not_charted():
-    columns = {c for cls in (F, S, G, N) for c in cls.ALL} - {"t"}
+    columns = {c for cls in COLUMN_CLASSES for c in cls.ALL} - {"t"}
     assert set(labels.COLUMNS) | labels.NOT_CHARTED == columns
     assert not set(labels.COLUMNS) & labels.NOT_CHARTED
     for col, (label, unit) in labels.COLUMNS.items():

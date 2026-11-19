@@ -42,6 +42,7 @@ NOTE_KEY = "note"                     # the player's note (model.clean_note), ad
 HEADROOM_NUMBERS = ("steady_fps", "bound_gpu_ms", "bound_frame_ms", "busiest_thread_pct", "gpu_ceiling_fps",
                     "cpu_ceiling_low_fps", "cpu_ceiling_high_fps", "speedup_low", "speedup_high", "gpu_clock_mhz",
                     "gpu_clock_max_mhz", "gpu_power_w", "gpu_power_limit_w")
+FAN_NUMBERS = ("fan_cpu_rpm", "fan_gpu_rpm")    # each fan's median speed (attribute.fan_stats), ASUS laptops only
 CHOICES = {"bound": tuple(labels.BOUND), "next_limit": ("cpu", "gpu", "display", "cpu_or_display")}
 HEADROOM_KEY = "headroom"             # the sentence (rules.headroom_text), when a finding carried it
 CHECKED, NOT_CHECKED, NOT_UNREAL = "checked", "not_checked", "not_unreal"
@@ -67,8 +68,8 @@ def _choice(key: str, v: Any) -> str | None:
 
 
 def headroom_fields(stats: dict[str, Any]) -> dict[str, Any]:
-    """The summary's bound and headroom keys from Diagnosis.stats (or a summary read back), each checked."""
-    out: dict[str, Any] = {key: number(stats.get(key)) for key in HEADROOM_NUMBERS}
+    """The summary's bound, headroom and fan keys from Diagnosis.stats (or a summary read back), each checked."""
+    out: dict[str, Any] = {key: number(stats.get(key)) for key in HEADROOM_NUMBERS + FAN_NUMBERS}
     out.update({key: _choice(key, stats.get(key)) for key in CHOICES})
     out[HEADROOM_KEY] = _text(stats.get(HEADROOM_KEY))
     return out

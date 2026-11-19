@@ -209,6 +209,14 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `Popen.terminate()` first, which leaks its ETW session until reboot. Exit code 6 is ambiguous: read stderr. Leave
   `--track_pc_latency` out: it switches on the latency-ping code inside games built with NVIDIA's Reflex markers
   (DECISIONS 2026-11-09; `test_pc_latency_tracking_stays_off` guards it).
+- **The fan reader only reads** (`lagdoctor/winapi/atkacpi.py`, `docs/research/asus-fans.md`). ASUS's device takes
+  reads (DSTS) and sets (DEVS) through one control code, and DEVS on the very fan ids it reads can pin a fan at full
+  speed, so the handle's rights cannot keep it read-only: `_call` refuses any buffer that is not a DSTS read of a fan
+  id before DeviceIoControl, and `tests/test_fans.py` fails if any other module names the device or its control code,
+  or anything names the set method. Never add a set, a curve, a mode or another id there; a fan setting stays the
+  owner's, in ASUS's own tool. Every recording runs the fans collector, so `tests/conftest.py`'s
+  `_no_real_asus_device` fails a test that reaches the real device, except those marked `needs("asus_acpi")`
+  (`tests/test_fans_live.py`, which reads this laptop's fans). An agent may run those: they only read.
 - **Fixes go through `lagdoctor/fixes/base.py`** (journal first, readback, undo). Never offered: disabling
   security features, killing or suspending processes, HKLM or policy tweaks, anything on the game process.
 - **ETW needs rights.** PresentMon (session `lagdoctor`) and the network tracker (session `lag-doctor-net`)
@@ -324,14 +332,17 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   copy leaves alone. The relay is also the protocol of Stage 4's capture service (`docs/INSTALLER-PLAN.md`), so Stage
   4 work starts from that plan too.
 - **The relay** (`lagdoctor/relay/`, DESIGN.md "The relay") runs PresentMon and the Kernel-Network session with
-  administrator rights for a recording in the user's own window. Everything it does comes from its command line
+  administrator rights for a recording in the user's own window. What it may record comes from its command line
   (`client.relay_argv`, parsed by `server.parse_args` on both sides of the prompt; the player's note is never on it,
-  which `test_the_note_stays_with_the_recorder_and_never_goes_to_the_relay` holds); from the pipe it takes only `start`
-  and `stop`, and it passes back only what `protocol.py` lists: the game's frame rows and events, the recorder's own
-  events, and per-program byte totals for the recorder's Windows session (DECISIONS 2026-11-08). A new message or field
-  goes through `protocol.from_relay` or `from_recorder` with its checks. `tests/test_relay_live.py` starts the real
-  relay elevated and runs only on GitHub's runner (`scripts/stage2/guard.py`); the other relay tests run its code on a
-  thread here, unelevated. An agent never starts `python -m lagdoctor.relay` itself: only `watch` does.
+  which `test_the_note_stays_with_the_recorder_and_never_goes_to_the_relay` holds): the running game, or for Play the
+  forms of its install folder and how long to wait for it. From the pipe it takes only `start`, `stop` and, for Play,
+  `game` naming the process the recorder found, which it records only once `target.check_proposed` accepts it on the
+  relay's own snapshots (DECISIONS 2026-11-17); the relay resolves no path and reads no folder. It passes back only
+  what `protocol.py` lists: the game's frame rows and events, the recorder's own events, per-program byte totals for
+  the recorder's Windows session (DECISIONS 2026-11-08) and its answer about each game. A new message or field goes
+  through `protocol.from_relay` or `from_recorder` with its checks, and changes `protocol.VERSION`.
+  `tests/test_relay_live.py` starts the real relay elevated and runs only on GitHub's runner
+  (`scripts/stage2/guard.py`); the other relay tests run its code on a thread here, unelevated. An agent never starts `python -m lagdoctor.relay` itself: only `watch` does.
 - **The relay and the capture service talk only through `lagdoctor/winapi/pipe.py`.** Name a pipe through
   `pipe.path` (Windows folds `..` in a `\\.\` path, so a name holding one opened an ordinary file), build its
   descriptor with `pipe.client_dacl` (a SID string can carry entries of its own), and check who answered: a server
@@ -362,18 +373,20 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
   for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
   to land recounts on main: a total its PR did not touch goes stale without a merge conflict (after #4 and #5, and
-  again after #7). The PresentMon figure (43 since `--track_pc_latency` was dropped) is the tests that run on CI with a
-  download, not CI's "tests that use a download" count (44, one of which skips there): read a counter at the commit
+  again after #7). The PresentMon figure (44 since M6d's live relay test for a folder) is the tests that run on CI with a
+  download, not CI's "tests that use a download" count (45, one of which skips there): read a counter at the commit
   that set a figure before
   correcting the figure against it.
-- **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors or ping replies. (Its High
+- **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors, ping replies or ASUS fan device
+  (`asus_acpi`, declared before a CI run showed it: a GitHub VM has no ASUS firmware). (Its High
   performance plan has no power-mode slider; `slider_mode()` reads the plan's personality, so the power tests hold
   there undeclared.) The workflow declares that in `LAGDOCTOR_ABSENT`, and a test that needs one of those carries
   `@pytest.mark.needs(name)` (names in `tests/capabilities.py`), so it skips there with the reason; undeclared, a
   missing capability fails. Never make a test skip on a detected absence that a regression could also cause (the NVIDIA
   fixtures used to), and mark a test only when a CI run shows it failing for that lack: a test that passes on the
   runner keeps running there, even on another branch (elevated, the ETW tests check the real-time session). A PC
-  without an NVIDIA GPU sets `LAGDOCTOR_ABSENT=nvidia`. The runner has the WebView2 Runtime and a desktop (M0's
+  without an NVIDIA GPU sets `LAGDOCTOR_ABSENT=nvidia`, and one that is not an ASUS laptop adds `asus_acpi`. The
+  runner has the WebView2 Runtime and a desktop (M0's
   probe), so the app's window tests carry `needs("webview2")` and CI declares nothing for them. The runner's account
   is an administrator with UAC off, so `tests/test_cli.py` models an unelevated owner unless a test says otherwise,
   and the app's own `run()`, which refuses an elevated start, is never what a test opens: `tests/app_harness.py`
@@ -466,7 +479,7 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   alike, with `test_live_sampler_on_a_spinning_child_and_its_spinning_grandchild` failing beside it under that
   script's CPU load. Before rerunning, list the `python.exe` command lines that hold `laglab` (`Get-CimInstance
   Win32_Process`): one the test did not start means another session is measuring, so wait for it to end. Rerun them
-  alone, with the display awake, and run that control before blaming a change. The self-test cases of
+  alone, with the display awake, and run that control before blaming a change. `tests/test_sysmon_windows.py::test_the_foreground_pid_owns_a_listed_window` fails whenever the screen is locked: LockApp then holds the foreground and owns no listed window (2026-11-17, 3 of 3 alone, on a branch that touched nothing it reads). The self-test cases of
   `tests/test_etw_flows.py` and `tests/test_etw_tracker.py` failed on CI with "no free port for both UDP and TCP"
   until 2026-11-08 (4 at once on 2026-11-07, 2 on 2026-11-08):
   their loopback DNS stand-ins took TCP's next port-0 number and tried UDP on it, 10 times. Windows hands port-0
@@ -487,6 +500,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   M6c's branch, which touches nothing the sweep imports: exit 2, so the settings were not all put back), then passed
   3 of 3 alone and twice in its file. Its fake world's journal waits 0.3 s for its lock, which a loaded PC may
   outrun (not measured); rerun it alone before blaming a change.
+  `tests/test_folder_wait.py::test_a_real_laglab_window_is_found_by_its_folder` (needs a GPU, so not on CI) failed on
+  2026-11-17 with "a window from the game's folder (python.exe) never drew within 20 seconds", alone and on main's own
+  `target.py` alike, with no other LagLab window open and the screen unlocked: LagLab's draws did not reach the GPU
+  counters then. Run that control before blaming a change.
   `tests/test_redfirst.py::test_the_job_counts_every_process_under_pytest_and_ending_it_ends_them_all` failed once on
   main's push run (2026-11-11, 5ea3f80; the PR's run of the same tree and the rerun passed): right after `job.end()`,
   with the job counting none of them, the snapshot still listed one of the tree's four processes (the parent's
@@ -508,7 +525,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `tests/test_downloads.py::test_fetch_gold_takes_the_pinned_commits_gold_folder_byte_for_byte` failed twice that way
   (WinError 5 renaming a folder under its `tmp_path`), then passed 3 of 3 alone. Another worktree's session counts
   too: before a run, list the `python.exe` command lines (`Get-CimInstance Win32_Process`) and wait while one holds
-  `pytest`, `redfirst.py` or `laglab` (2026-11-09: a rerun met the M2 session's red-first). The Window spike workflow's
+  `pytest`, `redfirst.py` or `laglab` (2026-11-09: a rerun met the M2 session's red-first), as a check that exits
+  non-zero while one does and that the run's `&&` chain stops on: one that only printed "BUSY" let a run overlap
+  another session's full suite (2026-11-17). The Window spike workflow's
   socket check (`sockets-1` or `sockets-2`) failed 3 of 20 attempts on 2026-11-08 (main 1 of 13, the M1 branch 2 of
   5), each on one UDP4 socket "bound" on an ephemeral port in a WebView2 process: the runtime's own lookups (in 20
   runs watched every 20 ms, all 70 of its UDP sockets were a utility process's, on 0.0.0.0, on a port Windows chose).

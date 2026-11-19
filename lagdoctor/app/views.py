@@ -20,7 +20,7 @@ from lagdoctor.analysis import crop
 from lagdoctor.analysis.window import window as cut_window
 from lagdoctor.app.library import Entry, read_diagnosis
 from lagdoctor.capture import session as sess
-from lagdoctor.model import Capture, Diagnosis, G, N, S, clean_note
+from lagdoctor.model import C, Capture, Diagnosis, G, N, S, clean_note
 from lagdoctor.report import html, labels
 from lagdoctor.report.charts import fmt_elapsed, number
 from lagdoctor.report.summary import CHECKED, NOT_UNREAL, headroom_fields
@@ -42,6 +42,7 @@ CHARTS = (
     ("nv_clock", "NVIDIA GPU clock", "MHz", (G.CLOCK_MHZ, G.CLOCK_MAX_MHZ), "gpu"),
     ("nv_temp", "NVIDIA GPU temperature", "°C", (G.TEMP_C,), "gpu"),
     ("nv_slow", "NVIDIA GPU held back", "%", (G.THROTTLE_PCT, G.POWER_CAP_PCT), "gpu"),
+    ("fans", "Fan speeds", "RPM", (C.CPU_FAN_RPM, C.GPU_FAN_RPM, C.MID_FAN_RPM), "fans"),
     ("ping", "Ping", "ms", (N.GW_RTT_MS, N.INET_RTT_MS, N.SERVER_RTT_MS), "network"),
 )
 # Around a lag moment: what moved, by source.
@@ -472,6 +473,11 @@ def compare_view(a: Entry, b: Entry) -> dict[str, Any]:
             return None
         return pattern.format(x) + (f" of {pattern.format(y)}" if y is not None else "") + unit
 
+    def fans(n):                     # the median CPU and GPU fan speeds, the fans source's own words
+        cpu, gpu = number(n.get("fan_cpu_rpm")), number(n.get("fan_gpu_rpm"))
+        said_ = [f"{w} {x:,.0f} RPM" for w, x in (("CPU", cpu), ("GPU", gpu)) if x is not None]
+        return ", ".join(said_) or None
+
     def power(n):
         mode = n.get("power_mode")
         plan = n.get("power_plan")
@@ -507,6 +513,7 @@ def compare_view(a: Entry, b: Entry) -> dict[str, Any]:
                     row("Busiest game thread", "busiest_thread_pct", suffix="% of a CPU"),
                     said("NVIDIA GPU clock", of(na, "gpu_clock_mhz", "gpu_clock_max_mhz", "{:,.0f}", " MHz"),
                          of(nb, "gpu_clock_mhz", "gpu_clock_max_mhz", "{:,.0f}", " MHz")),
+                    said("Fans (median)", fans(na), fans(nb)),
                     said("Headroom", na.get("headroom"), nb.get("headroom"))],
         # The player's own words come first: what they say they changed, beside what lag-doctor saw change.
         "conditions": [text_row("Your note", sa.get("note"), sb.get("note")),

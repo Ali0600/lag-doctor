@@ -7,7 +7,7 @@ diagnose() then runs on it. Times stay the recording's own, seconds from its t =
 and moments land on the whole recording's charts as they are, and a time the report shows is the time the player saw
 on the status line. What the cut does:
 
-- the four tables (frames, system, gpu, network), the other programs' samples and the lag-key presses keep their rows
+- the five tables (frames, system, gpu, network, fans), the other programs' samples and the lag-key presses keep their rows
   with t0 <= t <= t1, every column kept even where its cut is empty (analysis.window);
 - a frame whose own interval began before t0 is left out, since it measured time outside the span (a start set at the
   end of a loading screen would make the whole wait a frame of the part): frames_inside, which the report's frame
@@ -41,7 +41,7 @@ from lagdoctor.report.charts import fmt_elapsed
 # 10 s never got a verdict: its steady frames summed to 9.96-9.99 s, measured 2026-11-10 on LagLab-like captures).
 MIN_SPAN_S = fa.BOUND_MIN_S + 1.0
 HOWS = ("key", "set")            # from the start key's press; set by the player (analyze --from/--to, the app)
-TABLES = ("frames", "system", "gpu", "network")
+TABLES = ("frames", "system", "gpu", "network", "fans")
 OK_STATES = ("ok", "partial")
 EMPTY_IN_SPAN = "it recorded nothing in the measured part"
 LENGTH_UNKNOWN = "the recording's length is not known"     # key_part's why when no part can be picked at all
@@ -172,7 +172,7 @@ def crop(cap: Capture, t0: Any, t1: Any, how: str = "set") -> Capture:
     others = [row for row in _list(cap.others)
               if isinstance(row, (list, tuple)) and len(row) == 2 and (v := _time(row[0])) is not None
               and lo <= v <= hi]
-    cut = {"frames": frames, "system": w["system"], "gpu": w["gpu"], "network": w["network"]}
+    cut = {"frames": frames, "system": w["system"], "gpu": w["gpu"], "network": w["network"], "fans": w["fans"]}
     out = replace(cap, duration_s=hi - lo, others=others, marks=marks,
                   net_flows=_net_flows(cap.net_flows, lo, hi, w["network"]), sources=_sources(cap, cut),
                   target=copy.deepcopy(cap.target), inventory=copy.deepcopy(cap.inventory), notes=list(cap.notes),

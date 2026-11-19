@@ -473,6 +473,7 @@ def collect(target: dict | None = None, process_names: Iterable[str] | None = No
         inv["oem"] = {"tools": oem_tools(process_names) if process_names is not None else None}
         inv["network"] = None
         inv["nvidia"] = None
+        inv["fans"] = None               # the session fills it from the fans collector: {"fans": [names]}
         inv["errors"] = errors
         return inv
     finally:

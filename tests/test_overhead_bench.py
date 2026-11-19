@@ -222,7 +222,7 @@ def test_the_recorder_runs_lag_doctors_own_collectors():
     target = own_target()
     opts, cols = recorder.build_collectors(target, {"adapters": []}, frames=False, presentmon_exe=None,
                                            network=False, only="")
-    assert [c.name for c in cols] == ["system"]
+    assert [c.name for c in cols] == ["system", "fans"]          # the fans: read on any PC, unavailable off ASUS
     assert (opts.hotkey, opts.duration_s, opts.frames) == (None, None, False)
     _, cols = recorder.build_collectors(target, {"adapters": []}, frames=True, presentmon_exe=None, network=False,
                                         only="frames")

@@ -464,12 +464,15 @@ def names_of(target, inventory, **opts):
 def test_default_collectors_follow_the_options_and_the_games_adapter():
     import os
     game = {"pid": os.getpid(), "create_time": 1, "name": "python.exe"}
-    assert names_of(dict(game, adapter_luid=NVIDIA), HYBRID) == ["system", "frames", "gpu", "network", "net_flows"]
-    assert names_of(dict(game, adapter_luid=None), HYBRID) == ["system", "frames", "gpu", "network", "net_flows"]
+    assert names_of(dict(game, adapter_luid=NVIDIA), HYBRID) == ["system", "frames", "gpu", "fans", "network",
+                                                                 "net_flows"]
+    assert names_of(dict(game, adapter_luid=None), HYBRID) == ["system", "frames", "gpu", "fans", "network",
+                                                               "net_flows"]
     # A game on the Intel GPU: never poll (and maybe wake) the NVIDIA one.
-    assert names_of(dict(game, adapter_luid=INTEL), HYBRID) == ["system", "frames", "network", "net_flows"]
-    assert names_of(dict(game, adapter_luid=None), {"adapters": []}) == ["system", "frames", "network", "net_flows"]
-    assert names_of(dict(game, adapter_luid=NVIDIA), HYBRID, network=False, frames=False) == ["system", "gpu"]
+    assert names_of(dict(game, adapter_luid=INTEL), HYBRID) == ["system", "frames", "fans", "network", "net_flows"]
+    assert names_of(dict(game, adapter_luid=None), {"adapters": []}) == ["system", "frames", "fans", "network",
+                                                                       "net_flows"]
+    assert names_of(dict(game, adapter_luid=NVIDIA), HYBRID, network=False, frames=False) == ["system", "gpu", "fans"]
 
 
 class RelayStub:

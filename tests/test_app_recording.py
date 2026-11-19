@@ -88,6 +88,9 @@ def _with(argv: list[str], i: int, value: str) -> list[str]:
     (relay_cmd(recorder=(ME[0] + 1, ME[1])), None, "another process as the recorder"),
     (relay_cmd(recorder=(ME[0], ME[1] + 1)), None, "another process as the recorder"),
     (relay_cmd(sid=SID[:-4] + "1002"), None, "another account"),
+    # A relay for Play's folder: until the window's Play chooses the game (M6), nothing it may record was chosen.
+    (client.relay_argv(protocol.pipe_name(), ME, SID, folders=("C:\\Games\\Lantern Drift",), wait_s=300,
+                       presentmon_exe=None, frames=False, network=True), None, "the window chose no game to play"),
 ])
 def test_anything_but_that_command_is_refused_before_any_prompt(argv, cwd, why):
     said = problem(argv, cwd)

@@ -227,7 +227,7 @@
  {
   "name": "the recorder may name itself as the game",
   "file": "lagdoctor/relay/server.py",
-  "old": "    if a.recorder[0] == a.game[0]:",
+  "old": "    if a.game is not None and a.recorder[0] == a.game[0]:",
   "new": "    if False:",
   "tests": [
    "tests/test_relay.py::test_the_relay_refuses_frames_without_an_absolute_presentmon_and_a_lone_recorder_as_game"
@@ -407,8 +407,8 @@
  {
   "name": "the relay queues a second start",
   "file": "lagdoctor/relay/server.py",
-  "old": "            if msg[\"t\"] in self._took:",
-  "new": "            if False:",
+  "old": "        if t in self._took:",
+  "new": "        if False:",
   "tests": [
    "tests/test_relay.py::test_the_relay_takes_start_then_stop_and_nothing_after_whatever_the_recorder_sends",
    "tests/test_relay.py::test_a_second_start_breaks_the_protocol"

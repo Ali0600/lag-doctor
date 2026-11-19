@@ -1320,3 +1320,26 @@ milliseconds. A reviewer swept every press time from 0 to 1200 s: past about 424
 The tests had pressed only at 70 s and 30 s, whose floats are exact.
 **Takeaway**: round a difference (or a sum) back to the precision its inputs were rounded to before you floor,
 compare or format it, and test with values that are not exact in binary.
+
+### Tie a process's path to the process by reading it between two snapshots
+Windows reuses process ids, and a path read by pid (`NtQuerySystemInformation` class 88, which opens no handle) names
+whichever process holds that number at the moment of the read. A process is the pair (pid, create time), and a number
+never names two live processes at once, so a path read between two snapshots that both list the same (pid, create time)
+is that process's own: it held the number from before the read to after it. One snapshot is not enough either way: read
+after it, the path can be a newer holder's; read before it, an older one's.
+**Why it came up**: M6d's relay (`target.check_proposed`), which runs with administrator rights and judges the process
+the recorder names by its program's path. The first design read the path and then took one snapshot; a design review
+showed the older holder's path could pass for the newer process.
+**Takeaway**: when a check reads something about a process by its id, bracket the read with two snapshots that both
+show the same identity, and refuse when either does not.
+
+### A device whose reads and writes share one control code cannot be made read-only by its handle
+Windows checks a handle's rights per control code: a code declared FILE_ANY_ACCESS is passed to the driver for any
+handle at all, even one opened with no rights. ASUS's ATKACPI device takes every firmware call through one such code,
+and the first four bytes of the buffer pick the method: DSTS reads a device's status, DEVS sets it, and DEVS on the same
+fan ids pins a fan at full speed. Opening the device "read only" therefore protects nothing.
+**Why it came up**: recording an ASUS laptop's fan speeds (`lagdoctor/winapi/atkacpi.py`, PR #57). The research
+found the shared code; the measured open with no rights read both fans, which shows the rights were never checked.
+**Takeaway**: when one control code carries both reads and writes, build read-only into the code (one function that
+can only build the read, checked again right before the call), and hold it with a source scan that refuses any other
+way to the device.
