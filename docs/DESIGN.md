@@ -1016,7 +1016,7 @@ def filetime_now() -> int                        # the system time in create-tim
   program of this session that is then from the folder is told once (`short-name`, pid and name) and counted,
   since it may be the game the relay would refuse. `running_from(resolve=)` follows the same rule.
 - **The re-arm** (`wait_for_game`, the recorder's): a launcher in the folder that draws can win the wait, so the
-  process chosen is held for `target.REARM_HOLD_S` (20 s from its choice, a feel number) by `hold_target`, which
+  process chosen is held for `target.REARM_HOLD_S` (30 s from its choice, the owner's feel number) by `hold_target`, which
   samples the GPU as the wait does: it fails when the process exits (or its number now names another process), owns
   no window that counts, or draws under 2 % on two samples in a row (a sample with no reading changes no count, and
   once the wait judged by windows alone, so does the hold). A failed hold waits again without leaving the process out,

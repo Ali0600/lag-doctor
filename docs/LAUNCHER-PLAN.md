@@ -250,7 +250,7 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
   - The same process must draw, with at least 2 % 3D use, on two samples in a row.
   - Stubs, anti-cheat bootstrappers and Steam relaunches never draw, or they exit, so they are skipped.
   - A launcher in the folder that draws can still win. The recorder therefore re-arms when the chosen process exits
-    within about 20 s, and shows a picker when two qualify.
+    within the hold (30 s, the owner's choice on 2026-11-19), and shows a picker when two qualify.
   - A deadline of a few minutes ("Steam may be updating it") and Cancel.
 - **The handle check grows.** `tests/test_no_handles.py` learns to refuse Popen, CreateProcess*, ShellExecuteEx (with
   or without NOCLOSEPROCESS) and `os.startfile` outside an allow-list, red-first: Play starts nothing itself.
@@ -663,7 +663,7 @@ labelled, as in the terminal.
   counts through a GPU sample with no reading, and judges by windows alone, saying so, when the counters fail three
   samples in a row. `running_from` lists what already runs from the folder, for the pre-flight. `ntquery` now names
   a volume mounted on a folder (no drive letter) by that folder, and an 8.3 short name is written out long first.
-  The re-arm itself (a chosen process that exits within about 20 s) is the recorder's, with `watch --wait-folder`.
+  The re-arm itself (a chosen process that exits within the hold) is the recorder's, with `watch --wait-folder`.
 - [x] The relay's folder mode (M6d, DECISIONS 2026-11-17, the owner's option A), so the prompt comes at Play, before
   the game starts: `--folder` forms and `--wait-s` on its command line, and the recorder names the game it found in a
   `game` message (`RelayLink.aim`), which the relay judges on its own snapshots by its own read of the program's path
@@ -733,8 +733,9 @@ above:
   more to judge: its falling chime at the window's end, and its 31-minute limit, which ends a recording when Windows
   did not give the key. Ctrl+Alt+S is AltGr+S on keyboard layouts with AltGr (the Polish layout types
   "ś" with it), so a player on one loses that letter while recording, as Ctrl+Alt+L already takes "ł". Play
-  adds the folder wait's 5-minute deadline (`target.WAIT_DEADLINE_S`, which the relay's approval follows) and the 20 s
-  within which a chosen process that exits re-arms the wait (`target.REARM_HOLD_S`).
+  adds the folder wait's 5-minute deadline (`target.WAIT_DEADLINE_S`, which the relay's approval follows). The hold
+  within which a chosen process that exits re-arms the wait (`target.REARM_HOLD_S`) is judged: the owner's own run of
+  `watch --wait-folder` on FINAL FANTASY VII REBIRTH picked the game, and the owner set the hold to 30 s (2026-11-19).
 - **Fixes from a trimmed span.** Should a trimmed span feed `lagdoctor fix`? Today `analyze` never does. A watch
   measured from its start key does: its diagnosis covers the part, and it is the one `fix` acts on.
 - **A fork the planning session settled** (DECISIONS 2026-11-08), open to the owner: measuring from a start key,
