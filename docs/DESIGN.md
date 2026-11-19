@@ -1471,11 +1471,13 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
 `driver_dpc`, `gpu_spike`, `game_stall` (from the lift test), and the network rules `wifi_weak`, `wifi_roaming`,
 `wifi_scan_spikes`, `bufferbloat`, `isp_latency`, `server_lag`, `packet_loss`, `vpn_route`, `bandwidth_hog`.
 - `wrong_gpu`: the game rendered (by its 3D engine's LUID) on an integrated adapter while a discrete one
-  exists; likely when GPU-bound, possible otherwise. At the display's rate (90 % of the refresh or more) under a
-  `gpu` or `mixed` verdict, where `gpu_limit` clears itself (`rules._gpu_reaches_display`, the one predicate both
-  read), it is possible and says the integrated GPU costs no frames seen yet, the discrete one only headroom.
-- `hybrid_copy`: the game rendered on the discrete adapter but its window is on a display driven by the
-  integrated one (`HybridPresent = 1` is strong evidence, 0 is not evidence).
+  exists; likely, unless frame timing names another limit (a cap, VSync, the CPU, waiting) or the game reaches the
+  display's rate, where it is possible. That rate is 90 % of the refresh or more under a `gpu` or `mixed` verdict,
+  where `gpu_limit` clears itself (`rules._gpu_reaches_display`, one predicate for both rules, `hybrid_copy` and
+  the headline); there it says the integrated GPU costs no frames seen yet, the discrete one only headroom.
+- `hybrid_copy`: the game rendered on one adapter while its window is on a display driven by the other
+  (`HybridPresent = 1` is strong evidence, 0 is not evidence). At the display's rate its summary says the copy costs
+  no frames seen, only delay; its rank stays.
 - `gpu_contention`: other programs keep the game's GPU ≥ 10 % busy (median of steady 1 s windows); stronger when
   the game looks starved; names the top other GPU user on the game's adapter.
 - `gpu_throttle`: `nv_throttle_pct` (heat and power brake only); the power cap is context, the power-limit
@@ -1640,8 +1642,9 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   `gpu` the GPU's limit, throttling, wrong GPU, copy between GPUs or another program on it; for `cpu_main` and
   `cpu_all` the CPU's limit or throttling). With both, the other is a side note ("; likely: ..."), so a mixed lag
   names the cause of each part, and the claimer the headline used to name is never dropped from it. Without either,
-  one of the
-  lag's category, else the top finding as a side note. A GPU-bound recording at 58 FPS on a 144 Hz screen once led
+  one of the lag's category, else the top finding as a side note. At the display's rate the two GPU findings that
+  then say they cost no frames (`rules.PACED_BY_DISPLAY`: wrong GPU, copy between GPUs) neither hold the steady rate
+  nor stand for the lag's category: the next one does, or they stay a side note. A GPU-bound recording at 58 FPS on a 144 Hz screen once led
   with the background programs that claimed 4 of its 6 FPS drops. Whenever the lag type is not stutter and there were
   severe hitches or freezes it adds "; also N severe hitches, worst X ms"; an open gap reads "the game server
   stopped answering at 13m 22s"; with zero hitches it says "no hitches ≥ 50 ms in N frames (at most 3/N at 95 %)";

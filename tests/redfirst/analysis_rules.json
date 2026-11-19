@@ -3518,5 +3518,68 @@
   "tests": [
    "tests/test_analysis_rules.py::test_wrong_gpu_at_the_displays_rate_agrees_with_gpu_limit_that_the_gpu_costs_no_frames"
   ]
+ },
+ {
+  "name": "the GPU's display rate under any verdict",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return e.frames_measured and e.verdict in (\"gpu\", \"mixed\") and _fps_reaches_display(e)",
+  "new": "    return e.frames_measured and _fps_reaches_display(e)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_wrong_gpu_at_the_displays_rate_agrees_with_gpu_limit_that_the_gpu_costs_no_frames"
+  ]
+ },
+ {
+  "name": "hybrid_copy blind to the display's rate",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "            \"frames now, but it adds delay.\" if _gpu_reaches_display(e) else",
+  "new": "            \"frames now, but it adds delay.\" if False else",
+  "tests": [
+   "tests/test_analysis_rules.py::test_hybrid_copy_at_the_displays_rate_says_the_copy_costs_delay_not_frames"
+  ]
+ },
+ {
+  "name": "the headline's paced findings left out",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "PACED_BY_DISPLAY = (\"wrong_gpu\", \"hybrid_copy\")",
+  "new": "PACED_BY_DISPLAY = (\"wrong_gpu\",)",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_a_gpu_finding_that_says_it_costs_no_frames"
+  ]
+ },
+ {
+  "name": "the headline lets a GPU finding that costs no frames explain a low frame rate",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "    paced = rules.PACED_BY_DISPLAY if rules._gpu_reaches_display(env) else ()",
+  "new": "    paced = ()",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_a_gpu_finding_that_says_it_costs_no_frames"
+  ]
+ },
+ {
+  "name": "the category's lead ignores the paced findings",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "        if LAG_OF_CATEGORY.get(f.category) in kinds and f.cause not in paced:",
+  "new": "        if LAG_OF_CATEGORY.get(f.category) in kinds:",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_a_gpu_finding_that_says_it_costs_no_frames"
+  ]
+ },
+ {
+  "name": "a paced finding ends the category's search",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "        if LAG_OF_CATEGORY.get(f.category) in kinds and f.cause not in paced:\n            return f, True, None",
+  "new": "        if LAG_OF_CATEGORY.get(f.category) in kinds and f.cause in paced:\n            break\n        if LAG_OF_CATEGORY.get(f.category) in kinds:\n            return f, True, None",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_a_gpu_finding_that_says_it_costs_no_frames"
+  ]
+ },
+ {
+  "name": "the steady holder ignores the paced findings",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "                    and f.cause not in paced), None) if steady_s > 0 else None)",
+  "new": "                    ), None) if steady_s > 0 else None)",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_a_gpu_finding_that_says_it_costs_no_frames"
+  ]
  }
 ]

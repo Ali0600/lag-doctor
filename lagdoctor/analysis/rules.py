@@ -792,9 +792,11 @@ def _hybrid_copy(cap: Capture, ctx: dict) -> Any:
                      "Use the laptop's MUX / dGPU-only mode" + (" (Armoury Crate GPU mode \"Ultimate\")" if armoury
                                                                 else "") + "; switching usually needs a reboot."),
              _advice("Or play on a monitor wired to the discrete GPU", "Its frames then need no copy.")]
+    cost = (f"At {e.avg_fps:.0f} FPS the game already reaches the {e.refresh:.0f} Hz display, so the copy costs it no "
+            "frames now, but it adds delay." if _gpu_reaches_display(e) else "That costs frame rate and adds delay.")
     return c.conclude(f"Frames are copied from {_name(game)} to {_name(shown_on)}, which drives the screen",
                       "The game renders on one GPU while the screen hangs off the other, so every frame is copied "
-                      "across before it is shown. That costs frame rate and adds delay.", fixes)
+                      f"across before it is shown. {cost}", fixes)
 
 
 def _fps_reaches_display(e: _Env) -> bool:
@@ -805,8 +807,12 @@ def _fps_reaches_display(e: _Env) -> bool:
 def _gpu_reaches_display(e: _Env) -> bool:
     """Frame timing names the GPU the limit or a share of it ("gpu", "mixed", the 3D engine's fallback too), yet the
     game already reaches the display (LIMIT_FPS_FRAC): the display sets the pace, so the GPU costs no frames the
-    player sees. One predicate for gpu_limit's firm clear there and wrong_gpu's, so the two never disagree."""
+    player sees. One predicate for gpu_limit's firm clear there, what wrong_gpu and hybrid_copy say then
+    (PACED_BY_DISPLAY) and the headline, which never lets those two explain a low frame rate there."""
     return e.frames_measured and e.verdict in ("gpu", "mixed") and _fps_reaches_display(e)
+
+
+PACED_BY_DISPLAY = ("wrong_gpu", "hybrid_copy")     # where _gpu_reaches_display holds, they say they cost no frames
 
 
 def _gpu_by_engine(e: _Env) -> bool:
