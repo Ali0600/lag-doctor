@@ -574,12 +574,13 @@ def program_reason(image: str | None, folders: tuple[str, ...], *, resolve: bool
     return first
 
 
-def running_from(folders: tuple[str, ...], procs: dict[int, ProcInfo] | None = None) -> dict[str, list[dict]]:
+def running_from(folders: tuple[str, ...], procs: dict[int, ProcInfo] | None = None, *,
+                 resolve: bool = True) -> dict[str, list[dict]]:
     """The processes in lag-doctor's Windows session whose program is under one of `folders`, read now, opening no
     process: {"running": [{pid, create_time, name, exe}], "unreadable": [{pid, create_time, name}]}, the second the
     processes whose path Windows did not give, which may be the game too. Play's pre-flight asks it before the link
     is opened, since a store starts nothing for a game that already runs, and the wait sees only processes started
-    after it began."""
+    after it began. `resolve` as in program_reason: False in a window with administrator rights."""
     folders = check_forms(folders)
     procs = _snapshot() if procs is None else procs
     me = procs.get(_own_pid())
@@ -596,7 +597,7 @@ def running_from(folders: tuple[str, ...], procs: dict[int, ProcInfo] | None = N
         except OSError:
             out["unreadable"].append(who)
             continue
-        if program_reason(image, folders) is None:
+        if program_reason(image, folders, resolve=resolve) is None:
             out["running"].append({**who, "exe": image})
     return out
 
@@ -921,9 +922,12 @@ def filetime_now() -> int:
 
 
 def _duration_words(seconds: float) -> str:
-    if seconds >= 120:
-        return f"{seconds / 60:g} minutes"
-    return f"{seconds:g} second" + ("" if seconds == 1 else "s")
+    """A length of time in a message, to the whole second (Play's deadlines are what is left of one)."""
+    whole = int(round(seconds))
+    if whole >= 120:
+        minutes, rest = divmod(whole, 60)
+        return f"{minutes} minutes" + (f" {_plural(rest, 'second')}" if rest else "")
+    return _plural(whole, "second")
 
 
 def _named(names: list[str]) -> str:
@@ -957,8 +961,8 @@ def _deadline_reason(folder: str, seconds: float, furthest: int, names: list[lis
         out += (f". Windows gave {_plural(driveless, 'program')} that started a path with no drive letter, which no "
                 "folder can be matched to")
     if short:
-        out += (f". Windows gave {_plural(short, 'program')} that started a path in 8.3 short names, which a "
-                "recording with administrator rights compares as written, so no folder matched them")
+        out += (f". Windows gave {_plural(short, 'program')} from the game's folder a path in 8.3 short names, which "
+                "a recording with administrator rights compares as written, so it could not take them")
     if failed:
         out += f". The GPU counters gave no reading on {failed} of {_plural(samples, 'sample')}"
     return out
@@ -975,7 +979,7 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
                     on_status: Callable[[str, dict], None] | None = None,
                     exclude: Iterable[tuple[int, int]] = (),
                     pick: Callable[[list[Candidate]], Candidate | None] | None = None,
-                    own: Iterable[tuple[int, int]] = (), resolve: bool = True,
+                    own: Iterable[tuple[int, int]] = (), resolve: bool = True, expand_short: bool = False,
                     clock: Callable[[], float] = time.monotonic,
                     sleep: Callable[[float], object] | None = None) -> dict:
     """Wait, opening no process, for the game a store starts from its install folder. Returns find_target's dict
@@ -1004,9 +1008,11 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
     cancels); by default the busiest does.
 
     `on_status(state, info)` hears each stage once: "waiting"; "started" and "window", with the pid and name of the
-    first process to get there; "short-name", with the pid and name of the first whose path Windows gave in 8.3
-    short names, which with `resolve` False matches no form (it may be the game, which the relay would refuse
-    too); and "windows-only", with why, when the GPU counters give no reading on
+    first process to get there; "short-name", with the pid and name of the first in this session whose path Windows
+    gave in 8.3 short names, which with `resolve` False matches no form although written out long it is under one
+    (the game, perhaps, which the relay would refuse too): only with `expand_short`, which writes such a path out
+    long for that alone, so only where this process runs without administrator rights; and "windows-only", with why,
+    when the GPU counters give no reading on
     GPU_FAILS_TO_WINDOWS samples in a row (each still takes a sample's time). From then on a window from the folder
     that stays for DRAW_SAMPLES rounds is enough.
     """
@@ -1097,8 +1103,9 @@ def wait_for_target(folder: str, *, folders: tuple[str, ...] | None = None, sinc
             images[key] = (image, program_reason(image, forms, resolve=resolve) is None)
             if image and image[:8].lower() == "\\device\\":
                 driveless += 1              # a volume no drive letter or folder names (ntquery could not map it)
-            elif not resolve and not images[key][1] and image and _SHORT_NAME.search(image):
-                short += 1                  # compared as written, it matches no form, yet it may be the game
+            elif (expand_short and not resolve and not images[key][1] and image and _SHORT_NAME.search(image)
+                  and p.session_id == me.session_id and program_reason(image, forms) is None):
+                short += 1                  # from the folder, written out long: compared as written, it is not
                 tell("short-name", pid=p.pid, name=p.name)
         for table in (images, tries):
             for key in [k for k in table if k[0] not in procs or procs[k[0]].create_time != k[1]]:
@@ -1271,7 +1278,7 @@ def hold_target(found: dict, *, hold_s: float = REARM_HOLD_S, cancel: threading.
 
 def wait_for_game(folder: str, *, folders: tuple[str, ...] | None = None, since: int | None = None,
                   deadline_s: float = WAIT_DEADLINE_S, own: Iterable[tuple[int, int]] = (), resolve: bool = True,
-                  hold_s: float = REARM_HOLD_S, aim: Callable[[dict], tuple[str, bool] | None] | None = None,
+                  expand_short: bool = False, hold_s: float = REARM_HOLD_S, aim: Callable[[dict], tuple[str, bool] | None] | None = None,
                   cancel: threading.Event | None = None, on_status: Callable[[str, dict], None] | None = None,
                   pick: Callable[[list[Candidate]], Candidate | None] | None = None,
                   clock: Callable[[], float] = time.monotonic,
@@ -1289,14 +1296,15 @@ def wait_for_game(folder: str, *, folders: tuple[str, ...] | None = None, since:
 
     `aim(found)`: None when the game is accepted, or (why, retry) when it is refused; the process is then left out of
     later waits only when `retry` is False (asking again about it cannot change that). It raises TargetNotFound when
-    no more games may be named, which then says why the ones before were not taken too. A failed hold never leaves a
+    no more games may be named, which then also says why the last one before was not taken. A failed hold never leaves a
     process out: a game that blocks its drawing for a moment while it loads, or makes its window again, must stay
     findable, and a launcher that keeps drawing on and off is only chosen again, inside the same deadline.
 
     `on_status(state, info)` hears each wait's states (wait_for_target's, "short-name" among them; each wait says
     "waiting" again), and every
     time it happens: "holding" {pid, name, seconds}, "rearm" {pid, name, why} and "refused" {pid, name, why, retry}.
-    `own`, `resolve`, `cancel`, `pick`, `clock` and `sleep` as in wait_for_target."""
+    `own`, `resolve`, `expand_short`, `cancel`, `pick`, `clock` and `sleep` as in wait_for_target; `cancel` may be
+    anything with is_set() and wait(seconds), as threading.Event has."""
     deadline_s = _check_seconds(deadline_s, "deadline_s")
     _check_seconds(hold_s, "hold_s", zero_ok=True)
     since = filetime_now() - SINCE_MARGIN if since is None else since    # once, for every wait
@@ -1317,7 +1325,7 @@ def wait_for_game(folder: str, *, folders: tuple[str, ...] | None = None, since:
         try:
             found = wait_for_target(folder, folders=folders, since=since, deadline_s=left, cancel=cancel,
                                     on_status=on_status, exclude=exclude, pick=pick, own=own, resolve=resolve,
-                                    clock=clock, sleep=sleep)
+                                    expand_short=expand_short, clock=clock, sleep=sleep)
         except TargetNotFound as exc:
             if last is None:
                 raise

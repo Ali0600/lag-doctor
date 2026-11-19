@@ -805,7 +805,7 @@ def _play_forms(folder: str, *, say: Callable[[str], None]) -> tuple[tuple[str, 
     # Programs from the folder started after this count as new, as the folder wait's own default (SINCE_MARGIN).
     looked = tgt.filetime_now() - tgt.SINCE_MARGIN
     try:
-        running = tgt.running_from(forms)["running"]
+        running = tgt.running_from(forms, resolve=_unelevated())["running"]
         shown = tgt.windows_by_pid(windows.top_windows())
     except OSError as exc:
         say(f"Not started: what already runs from the game's folder could not be read ({exc}).")
@@ -864,25 +864,36 @@ def _play_wait(folder: str, forms: tuple[str, ...], looked: int, wait_s: float, 
     (RelayLink.own), compares a program's path as the relay does (never writing an 8.3 short name out long), and
     names each game that holds to it (RelayLink.aim): a refusal re-arms the wait and never reads as the relay failing
     (_relay_failure), and once the relay takes no more games the wait ends as one that found none. A program from the
-    folder that started between the pre-flight (`looked`) and the relay could never be recorded this way, so it is said
-    at once. Without the relay it looks at programs started after the pre-flight, and writes a short name out long
-    only in a window without administrator rights (program_reason). (target, None), or (None, watch's exit code) with
-    why said."""
+    folder that started between the pre-flight (`looked`) and the relay could never be recorded this way: one with a
+    window ends it at once, naming `--pid`, and one without (a stub, whose game may start after the relay) is said and
+    waited past. A relay that ends while it waits ends the wait as the relay failing. Without the relay it looks at
+    programs started after the pre-flight. Either way a short name is written out long only in a window without
+    administrator rights (program_reason; with the relay only to say that such a program is from the folder).
+    (target, None), or (None, watch's exit code) with why said."""
     from lagdoctor.capture import target as tgt
     from lagdoctor.relay import client
+    from lagdoctor.winapi import windows
     kw: dict[str, Any] = {"since": looked, "resolve": _unelevated()}
+    stop: Any = cancel
     if relay is not None:
         try:
-            early = [p for p in tgt.running_from(forms)["running"] if looked < p["create_time"] <= relay.create_time]
+            early = [p for p in tgt.running_from(forms, resolve=_unelevated())["running"]
+                     if looked < p["create_time"] <= relay.create_time]
+            shown = tgt.windows_by_pid(windows.top_windows()) if early else {}
         except OSError as exc:
             say(f"Not recorded: what runs from the game's folder could not be read ({exc}).")
             return None, 1
-        if early:
-            names = ", ".join(sorted({p["name"] or "a program" for p in early}))
+        drawn = [p for p in early if p["pid"] in shown]
+        if drawn:
+            names = ", ".join(sorted({p["name"] or "a program" for p in drawn}))
             say(f"Not recorded: {names} started from the game's folder while the UAC prompt was up, and a recording "
                 f"started this way takes only a game that starts after it. Record it as it runs: lagdoctor watch "
-                f"--pid {early[0]['pid']}.")
+                f"--pid {drawn[0]['pid']}.")
             return None, EXIT_BAD_ARGS
+        for p in early:         # no window yet: a stub or a launcher, whose game may still start after the relay
+            say(f"({p['name']}, pid {p['pid']}, started from the game's folder while the UAC prompt was up, so this "
+                "recording cannot take it. If it is the game itself, record it as it runs once it shows its window: "
+                f"lagdoctor watch --pid {p['pid']}.)")
 
         def aim(found: dict[str, Any]) -> tuple[str, bool] | None:
             try:
@@ -895,21 +906,29 @@ def _play_wait(folder: str, forms: tuple[str, ...], looked: int, wait_s: float, 
                 raise tgt.TargetNotFound(exc.why) from None     # the link is open: it takes no more games
             return None
         wait_s = min(wait_s, relay.aim_by - (client._game_slack() - client.AIM_S) - time.monotonic())
-        kw = {"since": relay.create_time, "own": relay.own(), "resolve": False, "aim": aim}
-    say(f"Waiting up to {tgt._duration_words(float(round(wait_s)))} for the game to start from {folder}: start it now, "
-        "from its store or its own program (a store that first downloads an update can take longer: give it "
-        "--wait-s). Ctrl+C cancels.")
-    try:
         if wait_s <= 0:
-            raise tgt.TargetNotFound("the relay's wait for the game was over before it began")
-        return tgt.wait_for_game(folder, folders=forms, deadline_s=wait_s, hold_s=tgt.REARM_HOLD_S, cancel=cancel,
+            say("Not recorded: the relay's wait for the game was over before this one began. Run the same "
+                "`lagdoctor watch` again.")
+            return None, 1
+        kw = {"since": relay.create_time, "own": relay.own(), "resolve": False, "expand_short": _unelevated(),
+              "aim": aim}
+        stop = _EitherSet(cancel, relay.ended)    # a relay that ends ends the wait, not five minutes later
+    say(f"Waiting up to {tgt._duration_words(wait_s)} for the game to start from {folder}: start it now, from its "
+        "store or its own program (a store that first downloads an update can take longer: give it --wait-s). "
+        "Ctrl+C cancels.")
+    try:
+        return tgt.wait_for_game(folder, folders=forms, deadline_s=wait_s, hold_s=tgt.REARM_HOLD_S, cancel=stop,
                                  on_status=_PlayStatus(say), **kw), None
     except tgt.TargetNotFound as exc:
         say(f"No game was found: {exc}.")
         say("Start the game once watch says it is waiting, or give it longer with --wait-s.")
         return None, EXIT_BAD_ARGS
     except tgt.WaitCancelled:
-        raise Cancelled() from None
+        if relay is None or not relay.ended.is_set() or (cancel is not None and cancel.is_set()):
+            raise Cancelled() from None
+        code, text = _relay_failure(relay.failure(), play=True)
+        say(text)
+        return None, code
     except client.RelayFailed as exc:
         code, text = _relay_failure(exc, play=True)
         say(text)
@@ -917,6 +936,26 @@ def _play_wait(folder: str, forms: tuple[str, ...], looked: int, wait_s: float, 
     except OSError as exc:
         say(f"The wait for the game stopped: {exc}. Nothing was recorded.")
         return None, 1
+
+
+class _EitherSet:
+    """Set once either event is (the caller's cancel, the relay link's end): what the folder wait looks at every
+    round and pauses on, as it does on a threading.Event."""
+
+    def __init__(self, *events: threading.Event | None) -> None:
+        self.events = [e for e in events if e is not None]
+
+    def is_set(self) -> bool:
+        return any(e.is_set() for e in self.events)
+
+    def wait(self, seconds: float) -> bool:
+        end = time.monotonic() + seconds
+        while not self.is_set():
+            left = end - time.monotonic()
+            if left <= 0:
+                return False
+            time.sleep(min(0.05, left))
+        return True
 
 
 def _start_relay(args: argparse.Namespace, target: dict[str, Any] | None, exe: Path, may_trace: bool = False, *,

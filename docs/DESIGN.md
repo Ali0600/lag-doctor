@@ -1008,8 +1008,10 @@ def filetime_now() -> int                        # the system time in create-tim
   letter, paths in 8.3 short names compared as written, samples with no reading. With the relay (watch
   --wait-folder) it judges as the relay will (a test runs both on one made-up machine and pins that they agree):
   `own` passes over every process in lag-doctor's own trees (the recorder's and the relay's, `RelayLink.own`), never
-  reading their paths, and `resolve=False` compares a path as Windows gave it; a program from such a path is told
-  once (`short-name`, pid and name), since it may be the game the relay would refuse.
+  reading their paths, and `resolve=False` compares a path as Windows gave it. With `expand_short` (only in a
+  window without administrator rights) a path in 8.3 short names is still written out long, for this alone: a
+  program of this session that is then from the folder is told once (`short-name`, pid and name) and counted,
+  since it may be the game the relay would refuse. `running_from(resolve=)` follows the same rule.
 - **The re-arm** (`wait_for_game`, the recorder's): a launcher in the folder that draws can win the wait, so the
   process chosen is held for `target.REARM_HOLD_S` (20 s from its choice, a feel number) by `hold_target`, which
   samples the GPU as the wait does: it fails when the process exits (or its number now names another process), owns
@@ -1018,7 +1020,7 @@ def filetime_now() -> int                        # the system time in create-tim
   so a game that blocks its drawing while it loads, or makes its window again, stays findable; a launcher that draws
   on and off is only chosen again. Then `aim(found)` (watch: `RelayLink.aim`) returns None to take it or (why, retry)
   to refuse it, which waits again and leaves it out only when `retry` is False; aim raises TargetNotFound when no more
-  games may be named, said after why the ones before were not taken. One deadline covers it all: each wait gets what
+  games may be named, said after why the last one before was not taken. One deadline covers it all: each wait gets what
   is left of `deadline_s` (a `pick`'s time included) and none starts once it is spent; a hold begun before it still
   runs out. `since` is taken once, before the first wait, and the forms are worked out once, so a game that starts
   while a launcher is held is found by the next wait. `on_status` also hears `holding` {pid, name, seconds}, `rearm`
@@ -1776,9 +1778,11 @@ lagdoctor sweep --resume [FOLDER]    go on with an unfinished sweep; a finished 
   (`target.wait_for_game`), then `Watching ...` and `target`. With the relay the wait ends where the relay's does less
   its slack, looks from the relay's start, passes over `RelayLink.own`, compares paths as written and names each game
   that holds through `aim`; a program from the folder that started between the pre-flight and the relay (while the
-  prompt was up) is said at once, naming `--pid`, as the relay would never take it. A refusal waits again and never
+  prompt was up), which the relay would never take, ends it at once naming `--pid` when it owns a window, and is
+  said and waited past when it does not (a stub, whose game may start after the relay). A refusal waits again and never
   reads as the relay failing; once the relay takes no more games (8, or past `aim_by`) the wait ends as one that
-  found none (exit 2, with every refusal's reason); a link that ended is `_relay_failure(play=True)`, whose exit 3 text
+  found none (exit 2, with the last refusal's reason); a relay that ends while it waits ends the wait (its end
+  is looked at every round, beside the cancel), and a link that ended is `_relay_failure(play=True)`, whose exit 3 text
   (a game that exited while the prompt was up) never applies to Play. Without the relay (a Performance Log Users
   member, an administrator window, `--no-elevate`, a declined prompt) it looks from the pre-flight and names no game,
   and writes a short name out long only in a window known to run without administrator rights. A wait that finds

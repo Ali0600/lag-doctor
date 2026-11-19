@@ -64,6 +64,9 @@ class PlayLink(FakeLink):
     def own(self):
         return (self.recorder, (self.pid, self.create_time))
 
+    def failure(self):
+        return client.RelayFailed("the relay ended: it stopped on an error it did not expect", protocol.EXIT_CRASH)
+
     def aim(self, game):
         self.aimed.append(game)
         self.events.append("aim")
@@ -78,15 +81,18 @@ def play(monkeypatch, fake_world, tmp_path):
     game to the relay (`aim`) `state["aims"]` times, keeping each answer, then returns FOUND (or raises
     state["wait_raises"])."""
     state = {"events": [], "launches": [], "waits": [], "aims": 1, "answers": [], "link": None, "raise": None,
-             "fails": [], "running": [], "windows": [], "wait_raises": None, "said": []}
+             "fails": [], "running": [], "windows": [], "wait_raises": None, "said": [], "resolves": [],
+             "in_wait": None}
     session = _session_now()
     monkeypatch.setattr(cli, "_presentmon_exe", lambda: (tmp_path / "PresentMon-2.6.0-x64.exe", ""))
     monkeypatch.setattr(elevation, "can_trace", lambda: False)
     monkeypatch.setattr(sess, "_snapshot", lambda threads_for=(): {os.getpid(): P(os.getpid(), 4, 555, session)})
     monkeypatch.setattr(tgt, "folder_forms", lambda folder: (tgt.check_folder(folder),))
     monkeypatch.setattr(tgt, "filetime_now", lambda: NOW)
-    monkeypatch.setattr(tgt, "running_from", lambda forms: {"running": state["running"].pop(0) if state["running"]
-                                                            else [], "unreadable": []})
+    def running_from(forms, resolve=True):
+        state["resolves"].append(resolve)
+        return {"running": state["running"].pop(0) if state["running"] else [], "unreadable": []}
+    monkeypatch.setattr(tgt, "running_from", running_from)
     monkeypatch.setattr(windows, "top_windows", lambda: list(state["windows"]))
 
     def launch(target, **kw):
@@ -103,6 +109,8 @@ def play(monkeypatch, fake_world, tmp_path):
     def wait_for_game(folder, **kw):
         state["events"].append("wait")
         state["waits"].append(dict(kw, folder=folder))
+        if state["in_wait"] is not None:
+            state["in_wait"]()
         if state["wait_raises"] is not None:
             raise state["wait_raises"]
         for _ in range(state["aims"] if kw.get("aim") else 0):
@@ -140,6 +148,8 @@ def test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names
     (kw,) = play["waits"]
     assert kw["folder"] == GAME_DIR and kw["folders"] == FORMS
     assert kw["since"] == RELAY_CT and kw["own"] == link.own() and kw["resolve"] is False
+    assert kw["expand_short"] is True and play["resolves"] == [True, True]     # the pre-flight and the second look
+    assert not kw["cancel"].is_set()                                            # the relay's end, or a cancel
     assert 299.0 < kw["deadline_s"] <= 300.0 and kw["hold_s"] == tgt.REARM_HOLD_S
     assert link.aimed == [(FOUND["pid"], FOUND["create_time"])] and play["answers"] == [None]
     (session,) = fake_world["sessions"]
@@ -160,10 +170,24 @@ def test_the_wait_ends_where_the_relays_own_does_less_its_slack(play, monkeypatc
     assert 99.0 < play["waits"][0]["deadline_s"] <= 100.0
 
 
+def test_a_relay_whose_wait_is_over_before_this_one_begins_waits_for_nothing(play, monkeypatch, tmp_path):
+    real = PlayLink.__init__
+
+    def over(self, *a):
+        real(self, *a)
+        self.aim_by = time.monotonic() + client._game_slack() - client.AIM_S - 1
+    monkeypatch.setattr(PlayLink, "__init__", over)
+    assert _watch(play, tmp_path, "--elevate") == 1
+    assert play["waits"] == [] and not any(line.startswith("Waiting up to") for line in play["said"])
+    assert play["said"][-1] == ("Not recorded: the relay's wait for the game was over before this one began. Run the "
+                                "same `lagdoctor watch` again.")
+
+
 def test_wait_s_is_both_how_long_the_relay_is_approved_for_and_how_long_watch_waits(play, tmp_path):
     assert _watch(play, tmp_path, "--elevate", "--wait-s", "1234.567") == 0
     assert play["launches"][0]["wait_s"] == 1234.567
     assert 1234.0 < play["waits"][0]["deadline_s"] <= 1234.567
+    assert "Waiting up to 20 minutes 35 seconds for the game" in _said(play)
 
 
 def test_wait_s_and_wait_folder_are_checked_before_anything_starts(play, tmp_path):
@@ -233,14 +257,31 @@ def test_plays_relay_failure_never_says_the_game_exited_while_the_prompt_was_up(
     assert cli._relay_failure(client.RelayFailed("x", protocol.EXIT_NOT_READY), play=True)[0] == cli.EXIT_NOT_READY
 
 
-def test_a_game_that_started_while_the_prompt_was_up_is_said_at_once(play, tmp_path):
-    early = {"pid": 4300, "create_time": NOW + 10 * SECOND, "name": "lantern_.exe", "exe": FOUND["exe"]}
-    play["running"] = [[], [early]]                    # nothing at the pre-flight; then one from before the relay
+def _early(pid, name):
+    return {"pid": pid, "create_time": NOW + 10 * SECOND, "name": name, "exe": GAME_DIR + "\\" + name}
+
+
+def _window_of(pid):
+    return {"hwnd": pid, "pid": pid, "title": "Lantern Drift", "area": 2_073_600, "minimized": False,
+            "monitor_device": None, "cls": "GameWindow"}
+
+
+def test_a_game_that_started_with_a_window_while_the_prompt_was_up_is_said_at_once(play, tmp_path):
+    play["running"] = [[], [_early(4299, "lantern.exe"), _early(4300, "lantern_.exe")]]   # after the pre-flight
+    play["windows"] = [_window_of(4300)]
     assert _watch(play, tmp_path, "--elevate") == cli.EXIT_BAD_ARGS
     assert play["waits"] == [] and play["link"].closed >= 1
     assert ("Not recorded: lantern_.exe started from the game's folder while the UAC prompt was up, and a recording "
             "started this way takes only a game that starts after it. Record it as it runs: lagdoctor watch --pid "
             "4300.") in play["said"]
+
+
+def test_a_stub_that_started_without_a_window_while_the_prompt_was_up_is_said_and_the_wait_goes_on(play, tmp_path):
+    play["running"] = [[], [_early(4299, "lantern.exe")]]          # its game may still start after the relay
+    assert _watch(play, tmp_path, "--elevate") == 0 and len(play["waits"]) == 1
+    assert ("(lantern.exe, pid 4299, started from the game's folder while the UAC prompt was up, so this recording "
+            "cannot take it. If it is the game itself, record it as it runs once it shows its window: lagdoctor "
+            "watch --pid 4299.)") in play["said"]
 
 
 def test_programs_from_the_folder_older_than_the_pre_flight_or_newer_than_the_relay_are_left_to_the_wait(play,
@@ -310,6 +351,17 @@ def test_a_wait_that_ends_without_a_game_says_why_records_nothing_and_lets_the_r
     assert words in play["said"] and play["link"].closed >= 1 and "recording" not in play["events"]
 
 
+def test_a_cancel_wins_over_a_relay_that_ended_with_it(play, tmp_path):
+    cancel = threading.Event()
+
+    def both():
+        cancel.set()
+        play["link"].ended.set()
+    play["in_wait"] = both
+    play["wait_raises"] = tgt.WaitCancelled("the wait for the game was cancelled")
+    assert _watch(play, tmp_path, "--elevate", cancel=cancel) == cli.EXIT_CANCELLED
+
+
 # ---------------------------------------------------------------- without the relay ---
 
 def test_without_the_relay_the_wait_looks_from_the_pre_flight_and_names_no_game(play, monkeypatch, fake_world,
@@ -328,7 +380,14 @@ def test_an_administrator_window_never_writes_a_short_name_out_long(play, monkey
     monkeypatch.setattr(elevation, "can_trace", lambda: True)
     monkeypatch.setattr(elevation, "is_elevated", elevated)
     assert _watch(play, tmp_path) == 0
-    assert play["waits"][0]["resolve"] is False
+    assert play["waits"][0]["resolve"] is False and play["resolves"] == [False]    # the pre-flight's too
+
+
+def test_with_the_relay_in_an_administrator_window_nothing_is_written_out_long(play, monkeypatch, tmp_path):
+    monkeypatch.setattr(elevation, "is_elevated", lambda: True)          # the prompt here: frame timing needs it
+    assert _watch(play, tmp_path, "--elevate") == 0
+    (kw,) = play["waits"]
+    assert kw["resolve"] is False and kw["expand_short"] is False and play["resolves"] == [False, False]
 
 
 def test_a_declined_prompt_still_waits_and_records_without_frame_timing(play, fake_world, tmp_path):
@@ -374,23 +433,38 @@ def test_the_wait_says_each_step_once_for_each_program_and_every_hold_re_arm_and
 
 # ---------------------------------------------------------------- through the real wait ---
 
-def test_through_the_real_wait_watch_names_only_the_game_the_relays_check_takes(play, monkeypatch, fake_world,
-                                                                               tmp_path):
-    world = fw.World(monkeypatch)                     # the made-up machine the wait and the pre-flight read
-    monkeypatch.setattr(tgt, "wait_for_game", REAL_WAIT_FOR_GAME)
+def _on_world(monkeypatch, play) -> tuple:
+    """test_folder_wait's made-up machine under the real wait and pre-flight, a relay (30) on it that started before
+    the wait, and the PlayLink naming it and this made-up recorder as lag-doctor's own. Its time moves by 1 s once
+    the prompt is approved, then with each GPU sample."""
+    world = fw.World(monkeypatch)
+    before = {}
+
+    def counted(*a, **kw):
+        before["reads"] = dict(world.reads)
+        return REAL_WAIT_FOR_GAME(*a, **kw)
+    monkeypatch.setattr(tgt, "wait_for_game", counted)
     monkeypatch.setattr(tgt, "running_from", REAL_RUNNING_FROM)
     monkeypatch.setattr(tgt, "filetime_now", lambda: fw.SINCE - 10 * SECOND)
     monkeypatch.setattr(tgt, "REARM_HOLD_S", 0.0)     # the hold has its own tests; here one look
     relay = 30
     world.procs[relay] = fw.proc(relay, fw.SINCE, "pythonw.exe")
-    world.start(0.5, 31, fw.GAME, ppid=relay, window=fw.FULL_HD, draw=90.0)   # the relay's child, from the folder
-    game_ct = world.start(0.5, 42, fw.GAME, window=fw.FULL_HD, draw=60.0)
-    real_init, real_aim = PlayLink.__init__, PlayLink.aim
+    real_init = PlayLink.__init__
 
     def on_the_world(self, *a):
         real_init(self, *a)
         self.recorder, self.pid, self.create_time = (fw.ME, fw.SINCE - 100 * SECOND), relay, fw.SINCE
         world.sleep(1.0)                               # the prompt takes a while: the game starts after the relay
+    monkeypatch.setattr(PlayLink, "__init__", on_the_world)
+    return world, relay, before
+
+
+def test_through_the_real_wait_watch_names_only_the_game_the_relays_check_takes(play, monkeypatch, fake_world,
+                                                                               tmp_path):
+    world, relay, before = _on_world(monkeypatch, play)
+    world.start(0.5, 31, fw.GAME, ppid=relay, window=fw.FULL_HD, draw=90.0)   # the relay's child, from the folder
+    game_ct = world.start(0.5, 42, fw.GAME, window=fw.FULL_HD, draw=60.0)
+    real_aim = PlayLink.aim
 
     def judged(self, game):                            # the relay's own judgement, on the same machine
         why, retry = tgt.check_proposed(world.snapshot, world.image_path, *game, session=1, folders=self.folders,
@@ -398,8 +472,26 @@ def test_through_the_real_wait_watch_names_only_the_game_the_relays_check_takes(
         real_aim(self, game)
         if why is not None:
             raise client.GameRefused(why, retry, sent=True)
-    monkeypatch.setattr(PlayLink, "__init__", on_the_world)
     monkeypatch.setattr(PlayLink, "aim", judged)
     assert _watch(play, tmp_path, "--elevate", "--wait-s", "60") == 0
     assert play["link"].aimed == [(42, game_ct)]                    # never the relay's own child, though it drew more
-    assert fake_world["sessions"][0]["target"]["pid"] == 42 and world.reads[31] == 0
+    assert fake_world["sessions"][0]["target"]["pid"] == 42
+    assert world.reads[31] == before["reads"].get(31, 0)            # the wait never read its path
+
+
+def test_a_relay_that_ends_while_watch_waits_ends_the_wait_as_the_relay_failing(play, monkeypatch, tmp_path):
+    world, relay, before = _on_world(monkeypatch, play)              # nothing starts from the folder
+    play["in_wait"] = None
+    real_init = PlayLink.__init__
+
+    def ends_soon(self, *a):
+        real_init(self, *a)
+        timer = threading.Timer(0.3, self.ended.set)
+        timer.daemon = True
+        timer.start()
+    monkeypatch.setattr(PlayLink, "__init__", ends_soon)
+    began = time.monotonic()
+    assert _watch(play, tmp_path, "--elevate", "--wait-s", "5") == 1
+    assert time.monotonic() - began < 4.0
+    assert ("Frame timing could not be started: the relay ended: it stopped on an error it did not expect. Nothing "
+            "was recorded.") in play["said"]

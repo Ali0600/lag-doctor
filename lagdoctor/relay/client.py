@@ -278,8 +278,9 @@ class RelayLink:
 
     def own(self) -> tuple[tuple[int, int], ...]:
         """Play: lag-doctor's own processes as (pid, create_time), the recorder and the relay, whose trees are never
-        the game: what aim's check and the relay's pass to target.check_proposed as `own`, and what the folder wait
-        passes over (target.wait_for_game's `own`), so the three cannot drift."""
+        the game: what aim's check passes to target.check_proposed as `own`, and what the folder wait passes over
+        (target.wait_for_game's `own`), so those two cannot drift. The relay builds the same pair from its command
+        line and its own start (server.Relay._judge); a test holds the two equal."""
         if self.folders is None:
             raise ValueError("the relay was approved for the running game itself, so it has no game to look for")
         return (self.recorder, (self.pid, self.create_time))
@@ -345,6 +346,10 @@ class RelayLink:
             raise GameRefused(reply["why"], reply["retry"], sent=True)
         if not taken:
             raise RelayFailed("the recording stopped while its game was being named")
+
+    def failure(self) -> RelayFailed:
+        """The link has ended (`ended` is set): hang up and give why, with the relay's exit code, as aim raises it."""
+        return self._over()
 
     def _reason(self) -> str:
         """Why the link is over, in plain words: this window's reason, else what the relay said."""

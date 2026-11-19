@@ -228,7 +228,14 @@ judged) is not the game, and the wait goes on. A design review (2026-11-19, one 
 three forks below and found seven gaps, all fixed before the code review: a game started while the prompt was up, a
 path in 8.3 short names waited out in silence, `--wait-s` digits the relay's parser refuses, "no more games" said
 as the relay failing, the slack test's sum, a short name written out long with administrator rights, and the
-waiting line's words.
+waiting line's words. A code review (one read-only agent) then found eight more, all fixed: the front-door
+test's count of path reads, a short-name notice for any program's `~1` path (now only one of this session that is
+from the folder once written out long, and only in a window without administrator rights), the pre-flight writing
+short names out long in an administrator window, fractional times in messages (now whole seconds, "16 minutes 40
+seconds"), docs that promised every refusal's reason (the last one is kept), a windowless stub that started during
+the prompt refusing the whole recording (now said, and waited past), a relay that ends while the wait runs (now it
+ends the wait, as the relay failing), and `RelayLink.own`'s claim that the relay's own pair could not drift (now a
+test holds them equal).
 - **A failed hold waits again without leaving the process out (chosen)**: leaving out lasts as long as the process
   runs, and a real game that blocks its drawing for two seconds while it loads, or makes its window again, would then
   never be found, and the whole wait would end with nothing recorded. Not leaving it out costs at most one more wait
@@ -250,7 +257,7 @@ waiting line's words.
   recorder's own check and the relay's answer (a test holds the sum below it). Counting from the wait's own start
   left the time between the relay's hello and the wait out of every sum.
 - **Once the relay takes no more games, the wait ends as one that found none (chosen)**: exit 2 ("no_game" on the
-  control channel) with every refusal's reason, since the relay is fine and simply was not given a game it could take.
+  control channel) with the last refusal's reason, since the relay is fine and simply was not given a game it could take.
   Only a link that ended goes to `_relay_failure`, in Play's words (`play=True`): its exit 3 text assumes a game that
   exited while the prompt was up, which cannot happen when the prompt came first.
 - **A short-name path is counted and said, not written out long, with administrator rights (chosen)**: with the

@@ -1625,6 +1625,18 @@ def test_aim_names_the_game_the_relay_accepts_and_the_recording_records_it():
         assert w.close() == protocol.EXIT_OK
 
 
+def test_the_relay_and_the_recorder_pass_over_the_same_processes_of_lag_doctors_own(monkeypatch):
+    w = PlayWorld([lambda s: _played(PLAY, 1, since=s)], {PLAY: PROGRAM})
+    seen = []
+    real = tgt.check_proposed
+    monkeypatch.setattr(tgt, "check_proposed", lambda *a, **kw: seen.append(kw["own"]) or real(*a, **kw))
+    try:
+        w.aim(PLAY)
+        assert seen == [w.link.own(), w.link.own()]                  # the recorder's check, then the relay's
+    finally:
+        assert w.close() == protocol.EXIT_OK
+
+
 def test_aim_refuses_first_what_the_relay_would_refuse_and_sends_nothing(monkeypatch):
     w = PlayWorld([lambda s: _played(PLAY, 1, since=s), lambda s: _played(PLAY2, 2, since=s)],
                   {PLAY: ELSEWHERE, PLAY2: PROGRAM})

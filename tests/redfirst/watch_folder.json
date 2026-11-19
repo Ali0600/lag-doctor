@@ -15,7 +15,7 @@
   "old": "program_reason(image, forms, resolve=resolve) is None)",
   "new": "program_reason(image, forms) is None)",
   "tests": [
-   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_windows_gave_it_and_said",
+   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_written_and_said_only_when_it_is_the_folders",
    "tests/test_folder_wait.py::test_the_wait_picks_a_game_exactly_when_the_relays_check_takes_it"
   ]
  },
@@ -31,10 +31,10 @@
  {
   "name": "wait: short names not counted",
   "file": "lagdoctor/capture/target.py",
-  "old": "                short += 1                  # compared as written, it matches no form, yet it may be the game",
+  "old": "                short += 1                  # from the folder, written out long: compared as written, it is not",
   "new": "                pass",
   "tests": [
-   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_windows_gave_it_and_said"
+   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_written_and_said_only_when_it_is_the_folders"
   ]
  },
  {
@@ -43,16 +43,52 @@
   "old": "                tell(\"short-name\", pid=p.pid, name=p.name)",
   "new": "                pass",
   "tests": [
-   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_windows_gave_it_and_said"
+   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_written_and_said_only_when_it_is_the_folders"
   ]
  },
  {
-  "name": "wait: a short name said though it was written out long",
+  "name": "wait: a short name written out long without being asked",
   "file": "lagdoctor/capture/target.py",
-  "old": "            elif not resolve and not images[key][1] and image and _SHORT_NAME.search(image):",
-  "new": "            elif not images[key][1] and image and _SHORT_NAME.search(image):",
+  "old": "            elif (expand_short and not resolve and not images[key][1]",
+  "new": "            elif (not resolve and not images[key][1]",
   "tests": [
-   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_windows_gave_it_and_said"
+   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_written_and_said_only_when_it_is_the_folders"
+  ]
+ },
+ {
+  "name": "wait: another session's short name written out long",
+  "file": "lagdoctor/capture/target.py",
+  "old": "                  and p.session_id == me.session_id and program_reason(image, forms) is None):",
+  "new": "                  and program_reason(image, forms) is None):",
+  "tests": [
+   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_written_and_said_only_when_it_is_the_folders"
+  ]
+ },
+ {
+  "name": "wait: a short name from elsewhere counted",
+  "file": "lagdoctor/capture/target.py",
+  "old": "                  and p.session_id == me.session_id and program_reason(image, forms) is None):",
+  "new": "                  and p.session_id == me.session_id):",
+  "tests": [
+   "tests/test_folder_wait.py::test_with_resolve_off_a_short_name_is_compared_as_written_and_said_only_when_it_is_the_folders"
+  ]
+ },
+ {
+  "name": "running_from: a short name written out long though resolve is off",
+  "file": "lagdoctor/capture/target.py",
+  "old": "        if program_reason(image, folders, resolve=resolve) is None:",
+  "new": "        if program_reason(image, folders) is None:",
+  "tests": [
+   "tests/test_folder_wait.py::test_running_from_compares_a_short_name_as_written_when_asked_to"
+  ]
+ },
+ {
+  "name": "duration words: not to the whole second",
+  "file": "lagdoctor/capture/target.py",
+  "old": "    whole = int(round(seconds))",
+  "new": "    whole = seconds",
+  "tests": [
+   "tests/test_folder_wait.py::test_the_deadline_names_only_the_programs_that_reached_its_stage"
   ]
  },
  {
@@ -290,7 +326,8 @@
   "old": "        return (self.recorder, (self.pid, self.create_time))",
   "new": "        return (self.recorder,)",
   "tests": [
-   "tests/test_relay.py::test_launch_for_a_folder_approves_the_forms_the_relay_will_use_and_knows_when_it_started"
+   "tests/test_relay.py::test_launch_for_a_folder_approves_the_forms_the_relay_will_use_and_knows_when_it_started",
+   "tests/test_relay.py::test_the_relay_and_the_recorder_pass_over_the_same_processes_of_lag_doctors_own"
   ]
  },
  {
@@ -314,8 +351,8 @@
  {
   "name": "play: the wait looks from before the relay",
   "file": "lagdoctor/cli.py",
-  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"aim\": aim}",
-  "new": "        kw = {\"own\": relay.own(), \"resolve\": False, \"aim\": aim}",
+  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
+  "new": "        kw = {\"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
   "tests": [
    "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it"
   ]
@@ -323,8 +360,8 @@
  {
   "name": "play: lag-doctor's own not passed over",
   "file": "lagdoctor/cli.py",
-  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"aim\": aim}",
-  "new": "        kw = {\"since\": relay.create_time, \"resolve\": False, \"aim\": aim}",
+  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
+  "new": "        kw = {\"since\": relay.create_time, \"resolve\": False, \"expand_short\": _unelevated(),",
   "tests": [
    "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it",
    "tests/test_watch_folder.py::test_through_the_real_wait_watch_names_only_the_game_the_relays_check_takes"
@@ -333,19 +370,100 @@
  {
   "name": "play: short names written out long with the relay",
   "file": "lagdoctor/cli.py",
-  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"aim\": aim}",
-  "new": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": True, \"aim\": aim}",
+  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
+  "new": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": True, \"expand_short\": _unelevated(),",
   "tests": [
    "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it"
   ]
  },
  {
+  "name": "play: short names written out long in an administrator window, to tell",
+  "file": "lagdoctor/cli.py",
+  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
+  "new": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"expand_short\": True,",
+  "tests": [
+   "tests/test_watch_folder.py::test_with_the_relay_in_an_administrator_window_nothing_is_written_out_long"
+  ]
+ },
+ {
   "name": "play: the game never named to the relay",
   "file": "lagdoctor/cli.py",
-  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"aim\": aim}",
-  "new": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False}",
+  "old": "              \"aim\": aim}",
+  "new": "              }",
   "tests": [
    "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it"
+  ]
+ },
+ {
+  "name": "play: the second look writes short names out long in an administrator window",
+  "file": "lagdoctor/cli.py",
+  "old": "            early = [p for p in tgt.running_from(forms, resolve=_unelevated())[\"running\"]",
+  "new": "            early = [p for p in tgt.running_from(forms)[\"running\"]",
+  "tests": [
+   "tests/test_watch_folder.py::test_with_the_relay_in_an_administrator_window_nothing_is_written_out_long"
+  ]
+ },
+ {
+  "name": "play: the pre-flight writes short names out long in an administrator window",
+  "file": "lagdoctor/cli.py",
+  "old": "        running = tgt.running_from(forms, resolve=_unelevated())[\"running\"]",
+  "new": "        running = tgt.running_from(forms)[\"running\"]",
+  "tests": [
+   "tests/test_watch_folder.py::test_an_administrator_window_never_writes_a_short_name_out_long"
+  ]
+ },
+ {
+  "name": "play: a stub started during the prompt refused",
+  "file": "lagdoctor/cli.py",
+  "old": "        drawn = [p for p in early if p[\"pid\"] in shown]",
+  "new": "        drawn = early",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_stub_that_started_without_a_window_while_the_prompt_was_up_is_said_and_the_wait_goes_on"
+  ]
+ },
+ {
+  "name": "play: a stub started during the prompt not said",
+  "file": "lagdoctor/cli.py",
+  "old": "        for p in early:         # no window yet",
+  "new": "        for p in []:         # no window yet",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_stub_that_started_without_a_window_while_the_prompt_was_up_is_said_and_the_wait_goes_on"
+  ]
+ },
+ {
+  "name": "play: a relay that ends unseen by the wait",
+  "file": "lagdoctor/cli.py",
+  "old": "        stop = _EitherSet(cancel, relay.ended)    # a relay that ends ends the wait, not five minutes later",
+  "new": "        stop = cancel",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_relay_that_ends_while_watch_waits_ends_the_wait_as_the_relay_failing"
+  ]
+ },
+ {
+  "name": "play: a relay that ended read as a cancel",
+  "file": "lagdoctor/cli.py",
+  "old": "        if relay is None or not relay.ended.is_set() or (cancel is not None and cancel.is_set()):",
+  "new": "        if True:",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_relay_that_ends_while_watch_waits_ends_the_wait_as_the_relay_failing"
+  ]
+ },
+ {
+  "name": "play: a relay that ended wins over the player's cancel",
+  "file": "lagdoctor/cli.py",
+  "old": "        if relay is None or not relay.ended.is_set() or (cancel is not None and cancel.is_set()):",
+  "new": "        if relay is None or not relay.ended.is_set():",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_cancel_wins_over_a_relay_that_ended_with_it"
+  ]
+ },
+ {
+  "name": "play: a wait over before it began still waits",
+  "file": "lagdoctor/cli.py",
+  "old": "        if wait_s <= 0:\n            say(\"Not recorded: the relay's wait",
+  "new": "        if False:\n            say(\"Not recorded: the relay's wait",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_relay_whose_wait_is_over_before_this_one_begins_waits_for_nothing"
   ]
  },
  {
@@ -387,10 +505,10 @@
  {
   "name": "play: a game started during the prompt waited for",
   "file": "lagdoctor/cli.py",
-  "old": "        if early:",
+  "old": "        if drawn:",
   "new": "        if False:",
   "tests": [
-   "tests/test_watch_folder.py::test_a_game_that_started_while_the_prompt_was_up_is_said_at_once"
+   "tests/test_watch_folder.py::test_a_game_that_started_with_a_window_while_the_prompt_was_up_is_said_at_once"
   ]
  },
  {

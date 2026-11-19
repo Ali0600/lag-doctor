@@ -584,6 +584,17 @@ def test_running_from_lists_this_sessions_processes_from_the_folder_whenever_the
     assert found["unreadable"] == [{"pid": 42, "create_time": SINCE - SECOND, "name": "lantern_.exe"}]
 
 
+
+def test_running_from_compares_a_short_name_as_written_when_asked_to(world, monkeypatch):
+    asked = []
+    short = "C:\\Games\\LANTER~1\\lantern_.exe"
+    monkeypatch.setattr(tgt.winfolders, "long_path", lambda path: asked.append(path) or GAME)
+    world.start(0.0, 42, short)
+    world._apply()
+    assert [p["pid"] for p in tgt.running_from(FORMS)["running"]] == [42] and asked == [short]
+    asked.clear()
+    assert tgt.running_from(FORMS, resolve=False)["running"] == [] and asked == []     # an administrator window
+
 # ---------------------------------------------------------------- the wait ---
 
 def test_the_game_is_the_new_process_from_the_folder_that_draws_on_two_samples_in_a_row(world):
@@ -794,6 +805,8 @@ def test_the_deadline_names_only_the_programs_that_reached_its_stage(world):
     assert "a window from the game's folder (lantern_.exe) never drew" in info.value.reason
     assert info.value.candidates == [{"pid": 42, "name": "lantern_.exe", "gpu_pct": 0.5, "has_window": True}]
     assert tgt._duration_words(300) == "5 minutes" and tgt._duration_words(1) == "1 second"
+    assert tgt._duration_words(1000.4) == "16 minutes 40 seconds" and tgt._duration_words(299.9) == "5 minutes"
+    assert tgt._duration_words(29.6) == "30 seconds"                 # what is left of a deadline, to the second
 
 
 def test_cancel_ends_the_wait(world):
@@ -988,22 +1001,30 @@ def test_a_program_from_the_folder_in_one_of_lag_doctors_own_trees_is_never_read
     assert world.wait()["pid"] in (31, 32)        # without own=, one of lag-doctor's own children would win
 
 
-def test_with_resolve_off_a_short_name_is_compared_as_windows_gave_it_and_said(world, monkeypatch):
+def test_with_resolve_off_a_short_name_is_compared_as_written_and_said_only_when_it_is_the_folders(world, monkeypatch):
     asked = []
     monkeypatch.setattr(tgt.winfolders, "long_path", lambda path: asked.append(path) or (GAME if path == SHORT else
                                                                                          path))
+    other = "D:\\OTHERS~1\\tool.exe"
     world.start(0.5, 42, SHORT, window=FULL_HD, draw=60.0)
+    world.start(0.5, 43, other, window=FULL_HD)                       # a short name from elsewhere
+    world.start(0.5, 44, SHORT, session=2, window=FULL_HD)            # the folder's, in another session
     with pytest.raises(TargetNotFound) as info:
-        world.wait(deadline_s=10.0, resolve=False)
-    assert asked == [] and ("short-name", {"pid": 42, "name": "lantern_.exe"}) in world.statuses
-    assert info.value.reason.startswith("no program from the game's folder")
-    assert info.value.reason.endswith(". Windows gave 1 program that started a path in 8.3 short names, which a "
-                                      "recording with administrator rights compares as written, so no folder "
-                                      "matched them")
+        world.wait(deadline_s=10.0, resolve=False)                    # as written, and nothing written out long
+    assert asked == [] and not [s for s, _ in world.statuses if s == "short-name"] and "8.3" not in info.value.reason
     world.statuses.clear()
-    world.start(world.t + 0.5, 43, "D:\\OTHERS~1\\tool.exe", window=FULL_HD)   # a short name from elsewhere
-    assert world.wait()["pid"] == 42 and asked == [SHORT, "D:\\OTHERS~1\\tool.exe"]   # written out long first
-    assert not [s for s, _ in world.statuses if s == "short-name"]      # so it says nothing of either
+    with pytest.raises(TargetNotFound) as info:
+        world.wait(deadline_s=10.0, resolve=False, expand_short=True)  # still as written; written out long to tell
+    assert [i for s, i in world.statuses if s == "short-name"] == [{"pid": 42, "name": "lantern_.exe"}]
+    assert asked == [SHORT, other]                                    # never another session's
+    assert info.value.reason.startswith("no program from the game's folder")
+    assert info.value.reason.endswith(". Windows gave 1 program from the game's folder a path in 8.3 short names, "
+                                      "which a recording with administrator rights compares as written, so it "
+                                      "could not take them")
+    asked.clear()
+    world.statuses.clear()
+    assert world.wait()["pid"] == 42 and SHORT in asked                # by default it is written out long first
+    assert not [s for s, _ in world.statuses if s == "short-name"]
 
 
 @pytest.mark.parametrize("case", ["game", "short name", "relay's child", "recorder's child", "another session",

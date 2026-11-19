@@ -647,7 +647,7 @@ analysed and labelled when the key measured nothing, and chimes in a terminal wi
   `retry` is False), and runs inside one deadline that ends where the relay's own does less its slack. From the
   design review: a program from the folder that started while the prompt was up is said at once (the relay could
   never take it); a path in 8.3 short names is told and counted, since it may be the game; once the relay takes no
-  more games the wait ends as one that found none, with every refusal's reason; `--wait-s` takes the relay's own
+  more games the wait ends as one that found none, with the last refusal's reason; `--wait-s` takes the relay's own
   grammar; an administrator window never writes a short name out long. `_relay_failure(play=True)` words a broken
   link for Play. Open: a launcher that keeps drawing behind the game passes the hold (Backlog); one that passes the
   hold and exits before the recording starts is recorded gone.
