@@ -1003,7 +1003,7 @@ def _held_clock(e: _Env) -> str:
 
 def _fans_text(e: _Env, verdict: attribute.FanVerdict | None) -> str | None:
     """How fast the laptop's fans ran while heat held the NVIDIA GPU down (attribute.fans_while), and the fastest
-    each ran in the part, then what that says of them (`verdict`, _fan_verdict_text); None without fan readings
+    each kept up in the part, then what that says of them (`verdict`, _fan_verdict_text); None without fan readings
     near those NVIDIA readings."""
     fans = attribute.fans_while(e.cap, attribute.heat_named)
     if not fans:
@@ -1014,43 +1014,58 @@ def _fans_text(e: _Env, verdict: attribute.FanVerdict | None) -> str | None:
     tops = [top for _, _, top in fans]
     fastest = ", ".join(f"{x:,.0f}" for x in tops[:-1]) + (" and " if len(tops) > 1 else "") + f"{tops[-1]:,.0f}"
     said = _sentence(f"while {attribute.held_by(e.cap)} held it down, {ran}; the fastest "
-                     f"{'it' if len(fans) == 1 else 'they'} ran in {e.part} was {fastest} RPM")
+                     f"{'it' if len(fans) == 1 else 'they'} kept up in {e.part} was {fastest} RPM")
     verdict_text = _fan_verdict_text(e, verdict)
     return f"{said} {verdict_text}" if verdict_text else said
 
 
 def _fan_names(words: tuple[str, ...]) -> str:
-    """("GPU fan",) as "the GPU fan"; ("CPU fan", "GPU fan") as "the CPU and GPU fans"."""
+    """("GPU fan",) as "the GPU fan"; ("CPU fan", "GPU fan") as "the CPU and GPU fans"; three as "the CPU, GPU and
+    middle fans"."""
     if len(words) == 1:
         return f"the {words[0]}"
-    return "the " + " and ".join(w.removesuffix(" fan") for w in words) + " fans"
+    short = [w.removesuffix(" fan") for w in words]
+    return "the " + ", ".join(short[:-1]) + " and " + short[-1] + " fans"
 
 
 def _fan_verdict_text(e: _Env, v: attribute.FanVerdict | None) -> str:
-    """The fan line's second sentence: the fans likely at full speed (so the cooler is the limit), held back (by a
-    quiet mode or a fan curve, naming each fan and why), or that the speeds alone cannot tell; "" without a
-    verdict."""
+    """The fan line's second sentence: the fans likely at full speed (so the cooler is the limit), one held back
+    (each named, with why), held at full speed under the power brake too, or that their speeds alone cannot tell;
+    "" without a verdict."""
     if v is None:
         return ""
     one = len(v.fans) == 1
     if v.kind == "held":
         parts = []
+        if v.stopped:
+            parts.append(f"{_fan_names(v.stopped)} stood still")
         if v.slow:
-            parts.append(f"{_fan_names(v.slow)} ran under {attribute.FAN_SLOW_RPM:,.0f} RPM, well under the top "
-                         f"speed of any ASUS laptop fan ({attribute.FAN_TOP_MIN_RPM:,.0f} RPM or more)")
+            parts.append(f"{_fan_names(v.slow)} ran under {attribute.FAN_SLOW_RPM:,.0f} RPM, well under the slowest "
+                         f"top speed known for an ASUS laptop fan ({attribute.FAN_TOP_MIN_RPM:,.0f} RPM)")
         if v.slowed:
-            parts.append(f"{_fan_names(v.slowed)} ran well under {'its' if len(v.slowed) == 1 else 'their'} own "
-                         f"fastest in {e.part}")
-        them = "it" if len(v.slow) + len(v.slowed) == 1 else "them"
-        return _sentence(", and ".join(parts) + f", so a quiet mode or a fan curve likely held {them} back")
+            parts.append(f"{_fan_names(v.slowed)} ran well under the fastest {'it' if len(v.slowed) == 1 else 'they'} "
+                         f"kept up in {e.part}")
+        held = v.stopped + v.slow + v.slowed
+        them = "it" if len(held) == 1 else "them"
+        if v.stopped and not (v.slow or v.slowed):
+            why = f"a fan curve, the firmware or a faulty fan likely stopped {them}"
+        elif v.stopped:
+            why = f"a quiet mode, a fan curve or a faulty fan likely held {them} back"
+        else:
+            why = f"a quiet mode or a fan curve likely held {them} back"
+        return _sentence(", and ".join(parts) + f", so {why}")
+    names = _fan_names(v.fans)
     if v.kind == "full":
-        return _sentence(f"{_fan_names(v.fans)} held near {'its' if one else 'their'} fastest, at "
-                         f"{'a speed' if one else 'speeds'} where ASUS laptop fans top out "
-                         f"({attribute.FAN_TOP_MIN_RPM:,.0f} to {attribute.FAN_TOP_MAX_RPM:,.0f} RPM), so "
-                         f"{'it was' if one else 'they were'} likely at full speed: the cooler itself is the "
-                         "limit, not a fan setting")
-    return _sentence(f"whether that was {'its' if one else 'their'} full speed cannot be told from the "
-                     f"{'speed' if one else 'speeds'} alone")
+        floor = (f"at or past {attribute.FAN_TOP_MIN_RPM:,.0f} RPM" if v.topped == v.fans else
+                 f"{_fan_names(v.topped)} at or past {attribute.FAN_TOP_MIN_RPM:,.0f} RPM")
+        return _sentence(f"{names} held near the fastest {'it' if one else 'they'} kept up, {floor}, the slowest top "
+                         f"speed known for an ASUS laptop fan, so {'it was' if one else 'they were'} likely at full "
+                         "speed: the cooler itself is the limit, not a fan setting")
+    if v.kind == "braked":
+        return _sentence(f"the power brake held it down too, which no cooling lifts, so whether {names} ran at full "
+                         "speed is not judged")
+    return _sentence(f"whether {names} ran at full speed then cannot be told from {'its speed' if one else 'their speeds'}"
+                     " alone")
 
 
 def _nv_depth_text(e: _Env, power: bool = False) -> str | None:
@@ -1390,7 +1405,7 @@ def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
     _quiet_power_hint(c, gpu=True)
     held = heat is not None and heat[1] >= NV_THROTTLE_PCT
     # what the fans say of it changes the advice and the fan line, never the score
-    verdict = attribute.fan_verdict(cap, attribute.heat_named, attribute.held_by(cap) == "heat") if held else None
+    verdict = attribute.fan_verdict(cap, attribute.held_by(cap) == "heat") if held else None
     res = c.conclude("The GPU slows down from heat or power limits",
                      f"The NVIDIA driver held the GPU's clock down for much of {c.env.part}, which lowers the frame "
                      "rate while the GPU is the limit.", _heat_fixes(verdict))
@@ -1405,19 +1420,23 @@ def _gpu_throttle(cap: Capture, ctx: dict) -> Any:
 
 
 def _heat_fixes(v: attribute.FanVerdict | None) -> list[FixSuggestion]:
-    """The GPU heat finding's advice, led by what the fans say: cleaning when they likely ran at full speed, the
-    maker's own fan mode when something held them back, else air first."""
+    """The GPU heat finding's advice, led by what the fans say (attribute.fan_verdict): cleaning when they likely ran
+    at full speed, the maker's own fan mode when one was held back, else air first."""
     air = _advice("Give the laptop more air", "Raise its back, keep the vents clear and clean.")
+    plug = _advice("Plug in, and use the maker's performance mode rather than a quiet or silent one")
     cap = _advice("Cap the frame rate a little lower", "A capped GPU runs cooler and holds its clock.")
     if v is not None and v.kind == "full":
-        return [_advice("Clean the laptop's vents and fans", "Its fans likely ran at full speed already, so only "
-                        "better cooling helps: blow the dust out, and on an older laptop fresh thermal paste helps "
-                        "too."), air, cap]
+        fans = _fan_names(v.fans)
+        return [_advice("Clean the laptop's vents and fans", f"{fans[0].upper()}{fans[1:]} likely ran at full speed "
+                        "already, so a fan setting will not help: blow the dust out, and on an older laptop fresh "
+                        "thermal paste helps too."), air, cap]
     if v is not None and v.kind == "held":
-        return [_advice("Let the fans run faster", "Use the laptop maker's performance mode with its own fan "
-                        "curve, not a quiet mode or a custom curve: the fans ran slow while the GPU was hot."), air,
-                cap]
-    return [air, _advice("Plug in, and use the maker's performance mode rather than a quiet or silent one"), cap]
+        fans = _fan_names(v.stopped + v.slow + v.slowed)
+        return [_advice("Let the fans run faster", "Use the laptop maker's own fan mode, not a quiet mode or a custom "
+                        f"fan curve: {fans} did not keep up while the GPU was hot."
+                        + (" A fan that still stands still there needs a repair." if v.stopped else "")),
+                air, plug, cap]
+    return [air, plug, cap]
 
 
 def _power_cap_item(c: _Case) -> bool:
