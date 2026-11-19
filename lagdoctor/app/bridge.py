@@ -47,6 +47,7 @@ REQUESTS = {
     "open_folder": {},
     "test_sound": {},
     "record": {},                  # start recording the game that is running (M4)
+    "play": {"game": _game},       # start an installed store game and record it from its start (M6)
     "stop_recording": {},
     "cancel_recording": {},
     "recording": {},               # where that recording has got to

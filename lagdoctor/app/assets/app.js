@@ -247,7 +247,8 @@ function gameCard(g) {
   return el('button', {class: 'game', type: 'button', 'data-game': g.id, on: {click: () => go('game', {game: g.id})}},
     tileCover(g.tile),
     el('div', {class: 'info'}, el('div', {class: 'name', title: g.name}, g.name),
-      el('div', {class: 'sub'}, `${g.recordings} recording${g.recordings === 1 ? '' : 's'} · ${g.last}`),
+      el('div', {class: 'sub'}, g.recordings ? `${g.recordings} recording${g.recordings === 1 ? '' : 's'} · ${g.last}`
+        : `${g.store} · not recorded yet`),
       el('span', {class: 'badge ' + g.lag_key}, g.lag_type)));
 }
 
@@ -259,8 +260,9 @@ const SCREENS = {
     const strip = el('div', {class: 'strip' + (r.ok ? '' : ' no'), title: r.detail || ''}, ...prose(r.text));
     if (!data.games.length) {
       show(strip, el('h1', null, 'Your games'), el('div', {class: 'empty'},
-        el('p', null, 'No recordings yet.'),
-        el('p', {class: 'muted'}, 'Start a game, then press Record the game that\'s running. When the recording is ' +
+        el('p', null, 'No games yet.'),
+        el('p', {class: 'muted'}, 'lag-doctor lists the games Steam and the Epic Games launcher have installed. ' +
+          'You can also start a game yourself, then press Record the game that\'s running: when the recording is ' +
           'analysed, the game appears here with its results.'), recordButton()));
       return;
     }
@@ -268,13 +270,15 @@ const SCREENS = {
     const grid = el('div', {class: 'grid', id: 'games'});
     const draw = () => {
       const q = query.trim().toLowerCase();
-      grid.replaceChildren(...data.games.filter((g) => !q || g.name.toLowerCase().includes(q) ||
-        (g.exe_name || '').toLowerCase().includes(q)).map(gameCard));
+      grid.replaceChildren(...data.games.filter((g) => (filter === 'all' || (filter === 'installed' ? g.installed
+        : g.recordings > 0)) && (!q || g.name.toLowerCase().includes(q) ||
+        (g.exe_name || '').toLowerCase().includes(q))).map(gameCard));
       if (!grid.children.length) grid.append(el('p', {class: 'muted'}, 'No game matches.'));
     };
-    const chips = ['all', 'recorded'].map((f) => el('button', {class: 'chip' + (f === filter ? ' on' : ''), type: 'button',
+    const chips = ['all', 'installed', 'recorded'].map((f) => el('button', {class: 'chip' + (f === filter ? ' on' : ''),
+      type: 'button', 'data-filter': f,
       on: {click: (e) => { filter = f; for (const c of chips) c.classList.toggle('on', c === e.target); draw(); }}},
-      f === 'all' ? 'All' : 'Recorded'));
+      {all: 'All', installed: 'Installed', recorded: 'Recorded'}[f]));
     const search = el('input', {type: 'search', placeholder: 'Search your games', id: 'search',
       on: {input: (e) => { query = e.target.value; draw(); }}});
     const recent = data.games.filter((g) => data.recent.includes(g.id));
@@ -284,7 +288,7 @@ const SCREENS = {
         el('span', {class: 'muted'}, `${data.games.length} game${data.games.length === 1 ? '' : 's'}, ` +
           `${data.recordings} recording${data.recordings === 1 ? '' : 's'}`), recordButton()),
       // The Recent row only when the library holds more than it: with a few games it would repeat them all.
-      data.games.length > recent.length ? el('section', {class: 'recent'}, el('h2', null, 'Recent'),
+      recent.length && data.games.length > recent.length ? el('section', {class: 'recent'}, el('h2', null, 'Recent'),
         el('div', {class: 'grid'}, ...recent.map(gameCard))) : null,
       el('h2', null, 'All games'), grid);
   },
@@ -311,11 +315,24 @@ const SCREENS = {
       return tr;
     });
     const last = g.last;
+    const play = g.play ? el('div', {class: 'card play', id: 'play-card'},
+      el('button', {class: 'btn primary big', type: 'button', id: 'play', on: {click: (e) => startPlay(e.target, g.id)}},
+        'Play with lag-doctor'),
+      el('p', {class: 'muted'}, ...prose(`${g.play.text} lag-doctor has ${g.play.store} start the game, and waits for ` +
+        'it without touching it.')))
+      : el('div', {class: 'card'}, el('p', {class: 'muted'}, ...prose(g.play_note)));
+    if (!last) {
+      show(el('div', {class: 'hero'}, tileCover(g.tile, true),
+        el('div', null, el('h1', {id: 'game-name'}, g.name),
+          el('p', {class: 'muted'}, [g.exe_name, g.store].filter(Boolean).join(' · ')), play)),
+        el('p', {class: 'muted', id: 'no-recordings'}, 'No recordings of this game yet. Press Play with lag-doctor: ' +
+          'once the recording is analysed, it appears here.'));
+      return;
+    }
     show(
       el('div', {class: 'hero'}, tileCover(g.tile, true),
         el('div', null, el('h1', {id: 'game-name'}, g.name),
-          el('p', {class: 'muted'}, [g.exe_name, g.store].filter(Boolean).join(' · ')),
-          el('div', {class: 'card'}, el('p', {class: 'muted'}, ...prose(g.play_note))))),
+          el('p', {class: 'muted'}, [g.exe_name, g.store].filter(Boolean).join(' · ')), play)),
       el('h2', null, 'Last recording'),
       el('div', {class: 'card'},
         el('div', {class: 'row'}, el('span', {class: 'badge ' + last.lag_key}, last.lag_type),
@@ -509,6 +526,23 @@ function startRecording(button) {
   });
 }
 
+function startPlay(button, game) {
+  if (button) button.disabled = true;
+  ask('play', {game}).then((r) => {
+    recordingPushed(r);
+    stack.length = 0;
+    go('recording', {}, false);
+  }).catch((err) => {
+    if (button) button.disabled = false;
+    recError(err);
+  });
+}
+
+function playButton(game, label) {
+  return el('button', {class: 'btn primary', type: 'button', id: 'play-again', on: {click: (e) => startPlay(e.target, game)}},
+    label);
+}
+
 function recordButton(label) {
   return el('button', {class: 'btn primary', type: 'button', id: 'record', on: {click: (e) => startRecording(e.target)}},
     label || 'Record the game that\'s running');
@@ -549,7 +583,8 @@ function drawRecording() {
       buttons.push(el('button', {class: 'btn primary', type: 'button', id: 'rec-results',
         on: {click: () => go('results', {session: r.session})}}, 'Open its results'));
     }
-    buttons.push(recordButton(r.ok ? 'Record again' : 'Try again'));
+    buttons.push(r.play ? playButton(r.play.game, r.ok ? 'Play again' : 'Try again')
+      : recordButton(r.ok ? 'Record again' : 'Try again'));
     buttons.push(el('button', {class: 'btn', type: 'button', on: {click: () => { stack.length = 0; go('library', {}, false); }}},
       'Back to the library'));
   }

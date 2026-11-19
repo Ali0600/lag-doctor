@@ -1969,7 +1969,7 @@ def epic.read(manifests=None, installations=None) -> Library   # by default unde
 ## The app (lagdoctor/app)
 
 `lagdoctor app` opens lag-doctor's own window (`docs/LAUNCHER-PLAN.md`): the recorded games and their results (M1),
-and a recording of the game that is running (M4). The window code is ported from M0's spike, which passed the
+a recording of the game that is running (M4), and Play, which starts an installed store game and records it (M6). The window code is ported from M0's spike, which passed the
 owner's run.
 
 - **Start order** (`main.run`): the AppUserModel ID (`app.APP_ID`, also on the MSI's shortcut); per-monitor DPI
@@ -1993,7 +1993,8 @@ owner's run.
 - **The bridge** (`bridge.py`): `origin_ok`, `navigation_allowed` and `parse` are pure. A request is
   `{type: "request", id, kind, ...}` with exactly its fields: `library`; `game` (a game id); `results` and
   `open_report` (a session id); `moment` (a session id and an event id); `compare` (`a`, `b`); `settings`,
-  `open_folder`, `test_sound`; `record`, `stop_recording`, `cancel_recording` and `recording` (M4, below). Notices:
+  `open_folder`, `test_sound`; `record`, `stop_recording`, `cancel_recording` and `recording` (M4, below); `play` (a
+  game id, M6, below). Notices:
   `ready`, `frames_done` (`token`). The answer is `{type: "reply", id, ok, data | error}`; a failure the app did not
   expect is logged with its traceback and answered with one sentence naming the log. The one message the app sends
   unasked is `{type: "push", kind: "recording", data}`: the running screen's newest view.
@@ -2011,8 +2012,8 @@ owner's run.
   `elevate` a recording gets a prompt; a second is answered `elevate_refused` at once. On it, a thread of its own checks
   the command with `recording.relay_problem` (argv[0] is `python()`, then `RELAY_HEAD`, the folder is `ROOT`,
   `relay.server.parse_args` takes the rest, its recorder is the child's pid and create time from a snapshot, its SID
-  the app's, and it names a running game: a command for Play's `--folder` is refused until Play's half of the app
-  chooses the folder) and answers `elevate_refused` when it fails. A Stop or Cancel sent before the prompt (or a
+  the app's, and it names a running game, or for Play the folder the window chose, below) and answers
+  `elevate_refused` when it fails. A Stop or Cancel sent before the prompt (or a
   recorder that
   has ended) means no prompt; one sent while Windows asks lets the relay go (its handle closed, `elevate_failed`).
   Otherwise it raises the prompt (`launch_elevated` with the window's HWND, STA COM on that thread) and answers
@@ -2046,6 +2047,34 @@ owner's run.
   `SHQueryUserNotificationState` answers QUNS_ACCEPTS_NOTIFICATIONS: the heartbeat asks again, stops the flash
   (FLASHW_STOP) on any other answer and starts it on that one, until the window comes to the front. An answered
   prompt drops its wish (`drop_attention`). The window is never brought forward.
+- **Play** (M6, `App.do_play`): the Library also lists the games Steam and the Epic launchers have installed
+  (`library.installed_games`, the readers of "Play's library readers"), each a `library.Installed` with its folder's
+  forms (`target.folder_forms`, else the folder as its store wrote it). They come only through `App(installed=)`,
+  which only `run()` passes, so no test lists the PC's own library: the window tests give it `tests/app_demo.py`'s
+  made-up `INSTALLED`. Each recording whose `summary.json` `exe` is under one of an installed game's forms
+  (`target.in_folder`) shows under that installed game's id (`g-` and the hash of `store:<store>:<id>`) and title
+  (`library.joined`). An installed game whose folder holds another listed game's folder, or is a Program Files folder
+  (`library.shared_roots`), takes no recording, since any local account can write the store files that name it; so
+  two that hold one share its folder, and the first by key is taken. A recording with no summary (no exe) follows the
+  newest recording of its game (its exe's stem) that joined one; the rest stay with their recorded game. The Library's
+  filters are All, Installed and Recorded, and its Recent row holds recorded games only, when there are any. An
+  installed game's page offers Play with lag-doctor and what it measures (`views.play_words`); any other game's says
+  why it has none (`views.PLAY_NOTE`). `play {game}` resolves the id against the listing (`views.installed_of`) and
+  starts the recorder with `recording.recorder_argv(folder=)`, which adds `--wait-folder` and `--wait-s` `WAIT_S`
+  (300, `cli.WAIT_DEFAULT_S`, which a test holds it equal to). `Recorder(folder=)` works the folder's forms out again
+  with the player's own rights when the relay is asked for, and `relay_problem(folders=)` takes only the relay for
+  those forms (folded, in order) waiting no longer than `WAIT_S`: without Play it refuses a relay for a folder, and
+  for Play one for a running game. The store link stays with App (`rec_link`): the page names the game only by its
+  id. On the recorder's `launch` (Play's order, The control channel), App has the link opened once a recording
+  (`App._launch`, on a thread of its own, through `stores/launch.play`, which hands it to Explorer), never for a
+  recording that was stopped or that is not a Play. Right before ShellExecute, after the calls into Explorer that can
+  be slow, `open_through_explorer` asks App's `should_go()` again, so a Stop or Cancel meanwhile opens nothing
+  (`launch.Withdrawn`). App answers itself with `launched {ok, why}`, and the first answer is the one kept: opened,
+  the window minimizes (`AppWindow.minimize`, only for a recording not stopped since) to make way for the store and
+  the game; not opened, or not within `LAUNCH_SLOW_S` (15 s), the running screen asks the player to start the game
+  themselves while the recorder waits on, a note it keeps only while the game is awaited. The running screen says Play's steps in words of
+  its own (`views.PLAY_TITLES`, `PLAY_DETAILS` and `PLAY_ENDS`: the `launching` phase, "Waiting for the game", and "The
+  game did not start" for `no_game`), offers Cancel until the recording begins, and its Try again plays the same game.
 - **The library** (`library.py`): one Entry per session folder named as `session_dir` names them, from its
   `summary.json`, else from the folder's name (stamp and game stem). A recording is a `watch` folder holding its
   capture; check-ups and `analyze` folders are left out. A game's key is `paths.folder_stem` of its exe name, case

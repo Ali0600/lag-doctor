@@ -208,6 +208,19 @@ def test_a_call_that_fails_in_the_chain_is_an_error_and_every_interface_is_relea
     assert len(chain.released) == 9 and all(chain.released)            # the nine the chain got, each once
 
 
+def test_a_caller_that_withdraws_at_the_last_moment_gets_nothing_opened_and_everything_released(monkeypatch, tmp_path):
+    # Play asks again right before ShellExecute, after the calls into Explorer that can be slow (App._launch).
+    chain = Chain(monkeypatch, {})
+    asked = []
+    with pytest.raises(shell.Withdrawn):
+        shell.open_through_explorer(str(tmp_path / "nothing.txt"), should_go=lambda: asked.append(1) or False)
+    assert asked == [1] and chain.calls[SHELL_EXECUTE] == 0 and len(chain.released) == 9 and all(chain.released)
+    chain = Chain(monkeypatch, {SHELL_EXECUTE: E_FAIL})                 # and one that goes on reaches it
+    with pytest.raises(shell.ComError, match="ShellExecute failed"):
+        shell.open_through_explorer(str(tmp_path / "nothing.txt"), should_go=lambda: True)
+    assert chain.calls[SHELL_EXECUTE] == 1
+
+
 def test_a_window_that_closes_while_it_is_reached_is_an_error_before_anything_is_opened(monkeypatch, tmp_path):
     chain = Chain(monkeypatch, {})
     monkeypatch.setattr(shell, "window_pid", lambda hwnd: None)
@@ -304,10 +317,14 @@ def test_play_hands_a_built_link_to_explorer_and_nothing_else(monkeypatch):
     monkeypatch.setattr(elevation, "is_elevated", lambda: False)
     got = store_launch.play(store_launch.steam_link("220"))
     assert got == {"explorer_pid": 9, "foreground_allowed": True, "store": "steam"}
-    assert calls == [("steam://rungameid/220", (), {})]       # no arguments, no other way of opening it
+    # no arguments, no other way of opening it; only the caller's last-moment check goes with it
+    assert calls == [("steam://rungameid/220", (), {"should_go": None})]
+    go = lambda: True                                           # noqa: E731
+    store_launch.play(store_launch.steam_link("220"), go)
+    assert calls[-1] == ("steam://rungameid/220", (), {"should_go": go})
     with pytest.raises(ValueError, match="not a store link"):
         store_launch.play("https://example.com/")
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_play_refuses_when_lag_doctor_runs_elevated(monkeypatch):

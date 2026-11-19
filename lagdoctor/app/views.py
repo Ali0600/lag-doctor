@@ -13,12 +13,13 @@ import math
 import re
 import sys
 from collections import defaultdict
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
 from lagdoctor.analysis import crop
 from lagdoctor.analysis.window import window as cut_window
-from lagdoctor.app.library import Entry, read_diagnosis
+from lagdoctor.app.library import STORE_NAMES, Entry, Installed, joined, read_diagnosis
 from lagdoctor.capture import session as sess
 from lagdoctor.model import C, Capture, Diagnosis, G, N, S, clean_note
 from lagdoctor.report import html, labels
@@ -125,48 +126,102 @@ def _session_row(entry: Entry, last_id: str | None) -> dict[str, Any]:
 
 # ------------------------------------------------------------------------------------------------ library --
 
-def library_view(entries: list[Entry], readiness: dict[str, Any]) -> dict[str, Any]:
-    """Screen 1: a tile per recorded game, newest recording first, and the readiness strip."""
-    games: dict[str, list[Entry]] = defaultdict(list)
-    for e in entries:
-        if e.is_recording:
-            games[e.game_key].append(e)
+@dataclass
+class _Game:
+    """One tile of the Library: an installed store game (`installed`, with the recordings of it) or a recorded game
+    no store lists. Its recordings come newest first."""
+    id: str
+    name: str
+    installed: Installed | None = None
+    recs: list[Entry] = field(default_factory=list)
+
+
+def _games(entries: list[Entry], games: list[Installed] | tuple = ()) -> list[_Game]:
+    """Every game the Library shows: those with recordings first, by their newest recording, then the installed ones
+    not recorded yet, by name. A recording that ran from an installed game's folder shows under that game
+    (library.joined); the others under their recorded game (their exe's stem)."""
+    joins = joined(entries, list(games))
+    out: dict[str, _Game] = {}
+    for e in entries:                                         # entries come newest first, and so do each game's
+        if not e.is_recording:
+            continue
+        g = joins.get(e.id)
+        if g is not None:
+            tile = out.setdefault(g.game_id, _Game(id=g.game_id, name=g.game.title, installed=g))
+        else:
+            tile = out.setdefault(e.game_id, _Game(id=e.game_id, name=e.game))
+        tile.recs.append(e)
+    rest = sorted((g for g in games if g.game_id not in out), key=lambda g: (g.game.title.casefold(), g.key))
+    return list(out.values()) + [_Game(id=g.game_id, name=g.game.title, installed=g) for g in rest]
+
+
+def library_view(entries: list[Entry], readiness: dict[str, Any], games: list[Installed] | tuple = ()) -> dict[str, Any]:
+    """Screen 1: a tile per game (each installed store game, and each recorded game no store lists), those with
+    recordings first, newest recording first, and the readiness strip."""
     out = []
-    for key, recs in games.items():
-        latest = recs[0]                                     # entries come newest first
-        n = numbers(latest)
-        out.append({"id": latest.game_id, "name": latest.game, "exe_name": latest.exe_name,
-                    "recordings": len(recs), "last": when_text(latest.started),
-                    "lag_type": lag_text(n["lag_type"]), "lag_key": n["lag_type"] or "unknown",
-                    "avg_fps": fmt(n["avg_fps"]), "tile": tile(latest.game)})
-    return {"games": out, "recent": [g["id"] for g in out[:RECENT]],
-            "recordings": sum(len(v) for v in games.values()), "readiness": readiness}
+    for g in _games(entries, games):
+        latest = g.recs[0] if g.recs else None
+        n = numbers(latest) if latest is not None else {"lag_type": None, "avg_fps": None}
+        out.append({"id": g.id, "name": g.name, "exe_name": latest.exe_name if latest is not None else None,
+                    "store": g.installed.store_name if g.installed is not None else "",
+                    "installed": g.installed is not None, "recordings": len(g.recs),
+                    "last": when_text(latest.started) if latest is not None else "",
+                    "lag_type": lag_text(n["lag_type"]) if latest is not None else "Not recorded yet",
+                    "lag_key": n["lag_type"] or "unknown", "avg_fps": fmt(n["avg_fps"]), "tile": tile(g.name)})
+    return {"games": out, "recent": [g["id"] for g in out if g["recordings"]][:RECENT],
+            "recordings": sum(g["recordings"] for g in out), "installed": sum(g["installed"] for g in out),
+            "readiness": readiness}
 
 
-def game_entries(entries: list[Entry], game_id: str) -> list[Entry]:
-    return [e for e in entries if e.is_recording and e.game_id == game_id]
+def game_entries(entries: list[Entry], game_id: str, games: list[Installed] | tuple = ()) -> list[Entry]:
+    """The recordings of the game the page names by `game_id`, newest first."""
+    found = next((g for g in _games(entries, games) if g.id == game_id), None)
+    return found.recs if found is not None else []
 
 
-def game_view(entries: list[Entry], game_id: str, last_id: str | None) -> dict[str, Any] | None:
-    """Screen 2: the game, its last recording's summary on top, and every recording of it. None for an id the
-    listing does not have."""
-    recs = game_entries(entries, game_id)
-    if not recs:
+def installed_of(entries: list[Entry], game_id: str, games: list[Installed] | tuple = ()) -> Installed | None:
+    """The installed store game the page names by `game_id`, or None (a recorded game no store lists, or no game)."""
+    found = next((g for g in _games(entries, games) if g.id == game_id), None)
+    return found.installed if found is not None else None
+
+
+PLAY_NOTE = ("lag-doctor could not match this game to one Steam or the Epic Games launcher lists as installed, so it "
+             "cannot start it from here. To record it again, start the game, then press Record the game that's "
+             "running in the Library; the recording appears here once it is analysed.")
+
+
+def play_words(start_key: str | None, window_s: float, lag_key: str) -> str:
+    """What Play measures, under its button: from the start key's press for its window, and the lag key."""
+    lag = f" Press {lag_key.title()} the moment it lags."
+    if start_key is None:
+        return f"lag-doctor records {_length_words(window_s)} from the moment the game draws." + lag
+    return (f"Once you are in the game, press {start_key.title()}: lag-doctor measures the {_length_words(window_s)} "
+            f"after it, so the startup, menus and loading are not counted." + lag)
+
+
+def game_view(entries: list[Entry], game_id: str, last_id: str | None, games: list[Installed] | tuple = (),
+              play: str = "") -> dict[str, Any] | None:
+    """Screen 2: the game, its last recording's summary on top, every recording of it, and for an installed store game
+    its Play button with what it measures (`play`, play_words'). None for an id the listing does not have."""
+    found = next((g for g in _games(entries, games) if g.id == game_id), None)
+    if found is None:
         return None
-    latest = recs[0]
-    n = numbers(latest)
-    return {"id": game_id, "name": latest.game, "exe_name": latest.exe_name,
-            "store": {"steam": "Steam", "epic": "Epic Games"}.get((latest.summary or {}).get("launcher") or "", ""),
-            "tile": tile(latest.game),
-            "last": {"session": latest.id, "when": when_text(latest.started), "lag_type": lag_text(n["lag_type"]),
-                     "lag_key": n["lag_type"] or "unknown", "headline": n["headline"] or "",
-                     "tiles": [["Average FPS", fmt(n["avg_fps"])], ["1% low FPS", fmt(n["low1_fps"])],
-                               ["Stutters / min", fmt(n["stutters_per_min"], "{:.1f}")],
-                               ["Top cause", labels.cause_text(n["top_cause"]) if n["top_cause"] else "-"]]},
-            "sessions": [_session_row(e, last_id) for e in recs],
-            "play_note": "To record it again, start the game, then press Record the game that's running in the "
-                         "Library; the recording appears here once it is analysed. Starting games from here comes "
-                         "later."}
+    latest = found.recs[0] if found.recs else None
+    last = None
+    if latest is not None:
+        n = numbers(latest)
+        last = {"session": latest.id, "when": when_text(latest.started), "lag_type": lag_text(n["lag_type"]),
+                "lag_key": n["lag_type"] or "unknown", "headline": n["headline"] or "",
+                "tiles": [["Average FPS", fmt(n["avg_fps"])], ["1% low FPS", fmt(n["low1_fps"])],
+                          ["Stutters / min", fmt(n["stutters_per_min"], "{:.1f}")],
+                          ["Top cause", labels.cause_text(n["top_cause"]) if n["top_cause"] else "-"]]}
+    store = found.installed.store_name if found.installed is not None else \
+        STORE_NAMES.get((latest.summary or {}).get("launcher") or "", "")
+    return {"id": game_id, "name": found.name, "exe_name": latest.exe_name if latest is not None else None,
+            "store": store, "tile": tile(found.name), "last": last,
+            "sessions": [_session_row(e, last_id) for e in found.recs],
+            "play": {"store": found.installed.store_name, "text": play} if found.installed is not None else None,
+            "play_note": "" if found.installed is not None else PLAY_NOTE}
 
 
 # ------------------------------------------------------------------------------------------------ results --
@@ -566,6 +621,7 @@ RECORDING_TITLES = {
     "waiting": "Looking for the game",
     "asking": "Windows asks for permission",
     "preparing": "Getting ready to record",
+    "launching": "Starting the game",
     "recording": "Recording",
     "stopping": "Stopping the recording",
     "saving": "Saving the recording",
@@ -578,6 +634,7 @@ RECORDING_DETAILS = {
                "Windows' prompt, and if it only blinks on the taskbar, click it there. Only the small part of "
                "lag-doctor that reads them runs with those rights."),
     "preparing": "Windows answered: lag-doctor is starting frame timing and its other measurements.",
+    "launching": "lag-doctor asked Windows to open the game's store, which starts the game.",
     "recording": ("Play normally. This window stays still while you play, so it does not change what is measured. "
                   "The recording stops by itself{length}, or when the game closes."),
     "stopping": "The recording is stopping.",
@@ -594,6 +651,23 @@ PREPARING_DETAILS = {
                "permission off."),
     "withdrawn": "The recording is being cancelled.",
 }
+# Play (M6) in its own words, by phase: {store} is the store's name.
+PLAY_TITLES = {"waiting": "Waiting for the game"}
+PLAY_DETAILS = {
+    "launching": "lag-doctor asked Windows to open {store}, which starts the game. If {store} is closed, it starts "
+                 "first.",
+    "waiting": ("lag-doctor is waiting for the game to start from its folder and draw, for up to {wait}. If {store} "
+                "has to start first, it does so now, and if it shows something in its own window (a failed cloud "
+                "sync, a notice), answer it there."),
+}
+PLAY_ENDS = {
+    "no_game": ("The game did not start", "No program from the game's folder started and drew within {wait}, so "
+                                          "nothing was recorded. If {store} was downloading an update or asking "
+                                          "something, let it finish, then press Play again."),
+}
+PLAY_WAIT_S = 300.0                   # recording.WAIT_S, which a test holds equal (views never imports recording)
+LAUNCH_FAILED = ("Windows could not open {store} ({why}). Start the game yourself, from {store} or its own program: "
+                 "lag-doctor is waiting for it.")
 # How a recording ended (control.REASONS): a title and a sentence.
 RECORDING_ENDS = {
     "completed": ("Recorded", "The recording ran its full length and is analysed."),
@@ -700,9 +774,14 @@ def recording_view(state: Any, now: float, lag_key: str, log: Any = None,
         elapsed, length = max(0.0, now - state.measuring_since), _measured_s(state)
     elif stage in ("setup", "startup"):
         length = None                               # no end to count to: the press starts the measured window
+    play = getattr(state, "play", None)
+    store = (play or {}).get("store") or "the game's store"
+    play_words_of = {"store": store, "wait": _length_words(PLAY_WAIT_S)}
     notes = []
     if state.fault:
         notes.append(f"lag-doctor stopped this recording: {state.fault}.")
+    if play is not None and getattr(state, "launch_failed", None) and state.phase in ("launching", "waiting"):
+        notes.append(LAUNCH_FAILED.format(store=store, why=state.launch_failed))
     if state.frames is False:
         notes.append(f"Frame timing is off for this recording: {PROMPT_TEXTS.get(state.prompt or '', 'it could not start')}.")
     if state.prompt in PROMPT_TEXTS:
@@ -724,6 +803,9 @@ def recording_view(state: Any, now: float, lag_key: str, log: Any = None,
     keyed_end = getattr(state, "keyed", False) and state.stop_reason in KEY_ENDS
     if state.phase == "done":
         title, detail = RECORDING_ENDS.get(state.reason or "failed", RECORDING_ENDS["failed"])
+        if play is not None and state.reason in PLAY_ENDS:
+            title, detail = PLAY_ENDS[state.reason]
+            detail = detail.format(**play_words_of)
         if keyed_end and state.reason == "completed":
             title, detail = KEY_ENDS[state.stop_reason]
             detail = _key_words(detail, state, key)
@@ -735,6 +817,9 @@ def recording_view(state: Any, now: float, lag_key: str, log: Any = None,
             detail += f" The details are in {log}."
     else:
         title, detail = RECORDING_TITLES[state.phase], RECORDING_DETAILS[state.phase]
+        if play is not None and state.phase in PLAY_DETAILS:
+            title = PLAY_TITLES.get(state.phase, title)
+            detail = PLAY_DETAILS[state.phase].format(**play_words_of)
         if state.phase == "preparing":
             detail = PREPARING_DETAILS.get(state.prompt or "", detail)
         if state.phase == "stopping" and keyed_end:
@@ -760,8 +845,10 @@ def recording_view(state: Any, now: float, lag_key: str, log: Any = None,
             if state.hotkey:
                 detail += f" Press {lag_key.title()} the moment it lags."
     return {"active": state.active, "phase": state.phase, "stage": stage, "title": title, "detail": detail,
-            "game": state.game, "elapsed_s": elapsed, "length_s": length, "notes": notes,
-            "action": ("cancel" if state.phase in ("starting", "waiting", "asking", "preparing") else
+            "game": state.game or (play or {}).get("title"), "elapsed_s": elapsed, "length_s": length, "notes": notes,
+            # Play's game, by the page's id of it, so "Try again" plays it again (no link reaches the page)
+            "play": {"game": play["game"]} if play is not None else None,
+            "action": ("cancel" if state.phase in ("starting", "waiting", "asking", "preparing", "launching") else
                        "stop" if state.phase == "recording" else None),
             "ok": state.phase == "done" and state.ok,
             "session": state.session if state.phase == "done" else None,

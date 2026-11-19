@@ -709,6 +709,12 @@ class AppWindow:
         """This window is the one in the foreground (Windows' own answer, not the last WM_ACTIVATE)."""
         return bool(self.hwnd) and wv.GetForegroundWindow() == self.hwnd
 
+    def minimize(self) -> None:
+        """Out of the way of the game Play starts (its step 3): Windows then activates the next window, the store's
+        or the game's. On the window's own thread."""
+        if self.hwnd and not self.closing:
+            wv.ShowWindow(self.hwnd, wv.SW_MINIMIZE)
+
     def want_attention(self) -> None:
         """Flash the taskbar button while Windows says it is a moment for that (no full-screen game or presentation
         in front: SHQueryUserNotificationState answers QUNS_ACCEPTS_NOTIFICATIONS), and stop it while it says not:

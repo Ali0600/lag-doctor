@@ -56,9 +56,40 @@ def _ok(run: dict) -> None:
 def test_the_window_opens_on_the_library_and_lists_each_recorded_game_once(run):
     _ok(run)
     lib = run["library"]
-    assert lib["names"] == [app_demo.MARKUP_TITLE, "Demo Racer", "starplanner"]     # the check-up is left out
-    assert lib["recent"] == 0 and lib["strip"]                       # 3 games: no Recent row repeating them
+    # The recorded games, newest recording first (the check-up is left out), then the installed ones never recorded.
+    assert lib["names"] == [app_demo.MARKUP_TITLE, "Demo Racer", "starplanner", *app_demo.NOT_RECORDED]
+    assert lib["recent"] == 3 and lib["strip"]                       # the Recent row: the recorded ones
     assert run["told"] == [] and run["fatal"] == []
+
+
+@pytest.mark.needs("webview2")
+def test_the_library_lists_installed_games_with_their_recordings_and_filters_them(run):
+    # Demo Racer's recordings ran from its install folder: they show under the installed game, as one tile.
+    _ok(run)
+    f = run["library_filters"]
+    assert f["installed"] == ["Demo Racer", *app_demo.NOT_RECORDED]
+    assert f["recorded"] == [app_demo.MARKUP_TITLE, "Demo Racer", "starplanner"]
+    assert f["all"] == run["library"]["names"]
+
+
+@pytest.mark.needs("webview2")
+def test_play_starts_an_installed_game_through_its_store_link_and_waits_for_it(run):
+    _ok(run)
+    g = run["play_game"]
+    assert g["name"] == "Lantern Drift" and g["none"] is True and g["rows"] == 0
+    assert "Ctrl+Alt+S" in g["text"] and "Epic Games start the game" in g["text"]
+    # The prompt came first, for the game's folder and the app's wait (the relay's command, checked by the window).
+    [argv] = run["play_prompts"]
+    assert argv[argv.index("--folder") + 1] == "C:\\Games\\Lantern Drift" and "--wait-s" in argv
+    # Then "launch": the store link opened once, the window out of the way, and the running screen waits for it.
+    lantern = next(g for g in app_demo.INSTALLED if g.title == "Lantern Drift")
+    assert run["play_links"] == [lantern.link]
+    w = run["play_waiting"]
+    assert w["title"] == "Waiting for the game" and w["game"] == "Lantern Drift" and "Epic Games" in w["detail"]
+    # The player cancelled the wait: nothing recorded, and Try again plays it again.
+    assert run["play_done"] == {"title": "Cancelled", "again": True}
+    rep = run["play_report"]
+    assert rep["prompt"] == "approved" and [m["t"] for m in rep["got"]] == ["elevated", "cancel"]
 
 
 @pytest.mark.needs("webview2")

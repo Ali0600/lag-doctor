@@ -36,8 +36,8 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 - [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
   below), the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
-  names), `watch --wait-folder` with the re-arm (M6e, PR #58) and Play's order on the control channel (M6f). The
-  app's Play, screen 6 and the art are not built yet.
+  names), `watch --wait-folder` with the re-arm (M6e, PR #58), Play's order on the control channel (M6f) and the
+  app's Play (M6g). Screen 6 and the art are not built yet.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -685,6 +685,16 @@ labelled, as in the terminal.
   grammar; an administrator window never writes a short name out long. `_relay_failure(play=True)` words a broken
   link for Play. Open: a launcher that keeps drawing behind the game passes the hold (Backlog); one that passes the
   hold and exits before the recording starts is recorded gone.
+- [x] The app's Play (M6g; DESIGN.md, The app, Play): the Library lists the games Steam and the Epic launchers have
+  installed beside the recorded ones (All, Installed and Recorded), a recorded game shows under the installed one
+  whose folder its recordings ran from, and an installed game's page has **Play with lag-doctor**. The app starts the
+  recorder with `--wait-folder` for the game's folder, takes the relay's prompt only for that folder, and on the
+  recorder's `launch` has Explorer open the store link (`stores/launch.play`, on a thread of its own) and minimizes
+  itself; a link Windows cannot open is said, and the wait goes on for a game the player starts themselves. The
+  running screen says Play's steps (starting the game, waiting for it, "The game did not start") and plays the same
+  game again. Not yet: the "ready" chime when the game is found (the start key's ready chime plays once the recording
+  starts), the picker when two programs qualify, and a hint that a closed Steam starts first beyond the waiting
+  words.
 - Screen 6, and the folder wait for games without Play. The CLI gets it too: `watch --wait-folder`.
 
 What a check against FINAL FANTASY VII REBIRTH found on 2026-11-09 (research note, section 14), as parts of the items
