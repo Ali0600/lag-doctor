@@ -29,9 +29,10 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   stdio`, `lagdoctor/control.py`, PR #31) and the app's "Record the game that's running"
   (`lagdoctor/app/recording.py`, PR #33). The owner recorded a game from the app in their own terminal before the
   second merged ("It works, merge it").
-- [ ] M5: measuring the right part, in four pull requests: the analysis of a part (`crop`, `analyze --from/--to`,
-  merged 2026-11-09, PR #37), the start key in `watch` (merged 2026-11-17, PR #53, on by default in a terminal), the
-  app's half (M5c, merged 2026-11-19, PR #55, on the owner's go), then the trim handles in Results.
+- [x] M5: measuring the right part, in three pull requests: the analysis of a part (`crop`, `analyze --from/--to`,
+  merged 2026-11-09, PR #37), the start key in `watch` (merged 2026-11-17, PR #53, on by default in a terminal) and
+  the app's half (M5c, merged 2026-11-19, PR #55, on the owner's go). The trim handles in Results were dropped: the
+  owner judged them not worth building (2026-11-19).
 - [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
   below), the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
@@ -266,12 +267,13 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
   - "Until I quit" is a choice that shows its memory cost. It is capped at 1 hour until compact frame storage exists
     (DECISIONS backlog).
   - The startup shows as a shaded band and is never counted.
-  - Results have trim handles for a late or missed press. A guessed start is only ever proposed, labelled as a guess.
+  - Results have trim handles for a late or missed press (dropped on 2026-11-19, the owner: not worth building). A
+    guessed start is only ever proposed, labelled as a guess.
   - No press at all, from a missed key or from a game that turns off other programs' hotkeys while it has focus
     (`RIDEV_NOHOTKEYS`, research note section 7): the time before a press is capped (20 minutes in the first version,
     a feel number), and the whole recording is analysed, startup included, and Results say why (the owner's choice
-    for the terminal and the app, DECISIONS 2026-11-09 and 2026-11-17); the trim handles then let the player set a
-    part.
+    for the terminal and the app, DECISIONS 2026-11-09 and 2026-11-17); `analyze --from/--to` then sets a part in a
+    terminal (the trim handles that were to do it in the app were dropped, 2026-11-19).
 - **One pure seam**: `crop(cap, t0, t1)` returns a Capture cut to the span, and then the unchanged `diagnose()` runs.
   - shader_compile counts its first third from the span's start.
   - Per-program network totals become None, because they cover the whole recording.
@@ -557,10 +559,11 @@ The app's half was built on 2026-11-09 (DESIGN.md, The app), with these choices 
   `lagdoctor sweep` (DECISIONS 2026-11-09) registers its own Ctrl+Alt+S for each of its runs until this exists, and
   records them with `--hotkey none`; this key makes it watch's, and the sweep then uses it (one listener for the key;
   `runner._record` is the seam, `tests/test_sweep_runner.py` the tests that must keep passing).
-- Trim handles in Results.
+- Trim handles in Results (dropped on 2026-11-19: the owner judged them not worth building).
 
 It came in three pull requests: the analysis of a part, the start key in `watch`, and the app's half, which the
-owner tries before it merges, as with M1 and M4; the owner then gave the trim handles a fourth (2026-11-17).
+owner tries before it merges, as with M1 and M4; the owner then gave the trim handles a fourth (2026-11-17), and
+dropped it (2026-11-19).
 
 The analysis half was built on 2026-11-09 (DESIGN.md, The measured part; DECISIONS 2026-11-09):
 - `crop` keeps the recording's own times and sets the length to the part's, so a part's events and moments land on the
@@ -599,8 +602,9 @@ analysed and labelled when the key measured nothing, and chimes in a terminal wi
   shaded on Results' charts, and its own start key.
 
 The app's half (M5c) was built on 2026-11-17 and merged on 2026-11-19, PR #55 (DESIGN.md, The app; DECISIONS
-2026-11-17). The owner chose two of its forks on a question card: the trim handles come in a pull request of their
-own, next, and a recording whose start key measured nothing is analysed whole and labelled, as in the terminal.
+2026-11-17). The owner chose two of its forks on a question card: the trim handles were to come in a pull request
+of their own (dropped on 2026-11-19), and a recording whose start key measured nothing is analysed whole and
+labelled, as in the terminal.
 - The recorder runs `watch --control stdio --elevate --start-key ctrl+alt+s --window 600 --start-by 1200 --duration
   1860`: the terminal's numbers, held equal to `cli`'s by a test, and a limit past every window a press in time
   starts, which ends a recording only when Windows did not give the key (then all of it is analysed, and the screen

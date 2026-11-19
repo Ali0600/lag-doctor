@@ -1117,8 +1117,8 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
   `bandwidth_hog` then says so (or that counting stopped with the ETW consumer); a key this version does not know
   becomes None. None stays None (not recorded) and a
   list whose cut is empty stays a list (recorded, nothing in the span).
-- **Refused** (`check_span`; `analyze --from/--to` checks through it, and the app's trim handles, the pull request
-  after M5c, are to use it too): ends that are not numbers (an integer too large for a float included), a start before 0 or at or
+- **Refused** (`check_span`; `analyze --from/--to` checks through it, as the app's trim handles would have, had
+  the owner not dropped them): ends that are not numbers (an integer too large for a float included), a start before 0 or at or
   after the recording's end, an end not after the start, a part shorter than `MIN_SPAN_S` (11 s, to the millisecond:
   a second past frames.BOUND_MIN_S, since a part's steady frames sum to a little under its length and a part of
   exactly 10 s never got a verdict on what limits the game; a refused length is rounded down), and a

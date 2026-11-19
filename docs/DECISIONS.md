@@ -225,6 +225,18 @@
 
 ---
 
+## 2026-11-19: M5 ends with three pull requests: the owner dropped the trim handles
+
+The plan gave Results trim handles, to set the measured part by hand after a late, early or missed start-key press,
+and the owner gave them a pull request of their own on 2026-11-17 (M5c's entry). Offered that pull request next, the
+owner answered: "for M5d, that doesn't seem worth it to me".
+
+- **Trim handles in Results**: rejected by the owner, not worth building. Without them, a start key that measured
+  nothing still has the whole recording analysed and labelled (M5c), and `analyze --from/--to` sets any part in a
+  terminal. Revisit hook: `crop.check_span`, which `analyze --from/--to` checks a part through, and
+  `labels.rest_spans`, which shades a part on every chart in the report and the app.
+- M5 is done with the analysis of a part (PR #37), the start key in `watch` (PR #53) and the app's half (PR #55).
+
 ## 2026-11-19: watch --wait-folder holds the game it found before naming it, and a failed hold leaves nothing out (M6e)
 
 The folder wait takes the first program from the folder that draws on two samples in a row, and a launcher in the
