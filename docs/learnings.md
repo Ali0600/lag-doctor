@@ -1343,3 +1343,17 @@ found the shared code; the measured open with no rights read both fans, which sh
 **Takeaway**: when one control code carries both reads and writes, build read-only into the code (one function that
 can only build the read, checked again right before the call), and hold it with a source scan that refuses any other
 way to the device.
+
+### Hold a choice for a while before acting on it, and re-arm without a blacklist
+A detector that takes the first candidate passing a short test (here: a program from the game's folder that draws on two
+GPU samples in a row) can take a stand-in: a launcher that draws, then leaves when the player clicks its Play button.
+Watching the choice for a fixed hold (20 s) before acting on it, and looking again when it fails, catches that. A
+failed hold must not blacklist the candidate, though: a blacklist lasts as long as the candidate lives, and the real
+target fails the same test for a moment too (a game blocks its drawing while it loads, or makes its window again), so
+one hiccup would lose it for good. Without the blacklist a stand-in is only chosen again, which costs one more round
+inside the same deadline.
+**Why it came up**: M6e's `watch --wait-folder` (`target.wait_for_game` and `hold_target`, PR #58). The plan's first
+wording left a failed hold's process out of later waits; a design review agreed that the cost of losing the game
+outweighs the rounds it saves.
+**Takeaway**: verify a first match by holding it before committing, re-arm on failure, and keep exclusions for
+verdicts that cannot change (a refusal for good), never for a check that a transient state can fail.

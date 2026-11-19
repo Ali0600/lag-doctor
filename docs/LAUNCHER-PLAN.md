@@ -35,7 +35,7 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 - [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
   below), the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
-  names) and `watch --wait-folder` with the re-arm (M6e). Screen 6, Play's order on the control channel and the art
+  names) and `watch --wait-folder` with the re-arm (M6e, PR #58). Screen 6, Play's order on the control channel and the art
   are not built yet.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
@@ -668,7 +668,7 @@ own, next, and a recording whose start key measured nothing is analysed whole an
   holds above one round of the wait, the re-arm's hold and the recorder's check, and below 120 s; then `START_WAIT_S`
   for `start`. It reads no folder (an 8.3 short name is refused with the reason) and ends when the recorder is gone.
   The live test on GitHub's runner records a stand-in started from the base interpreter's folder and refuses PING.EXE.
-- [x] `watch --wait-folder` (M6e, DECISIONS 2026-11-19): Play's order from the console, the folder's forms and a
+- [x] `watch --wait-folder` (M6e, merged 2026-11-19 as PR #58; DECISIONS 2026-11-19): Play's order from the console, the folder's forms and a
   pre-flight (a program already running from the folder with a window refuses, naming `--pid`), the relay's prompt,
   then the wait with the re-arm (`target.wait_for_game`). It judges as the relay does (`own=`, the recorder's and the
   relay's trees through `RelayLink.own`; `resolve=False`; `since` the relay's start; a test runs both on one made-up
