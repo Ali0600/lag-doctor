@@ -2,6 +2,10 @@
 
 ## Backlog: alternatives worth trying later
 
+- **Let the fan line count in the GPU heat finding**, once a yardstick for "slow" exists: the fastest this laptop's
+  fans reached across its recordings, or ASUS's performance mode read through the same device (a read, DSTS). Today
+  the line is context only (2026-11-17, the fan readings). Revisit hook: `rules._fans_text` and
+  `attribute.fans_while`; a scored line would go through `c.support` before `conclude`.
 - **Cut a part bounded by `--duration` at the end the session announced** (`until` saved in `start_key`), so the
   analysis stops at the set length rather than at the recorded end with the stop's own seconds, and a press too late
   for a part could count and be judged there: worth trying when the app's half shows `until` (2026-11-10, the start
@@ -209,6 +213,43 @@
   relay/server.py (DECISIONS 2026-11-17, M6d).
 
 ---
+
+## 2026-11-17: An ASUS laptop's fans are read, only read, by a collector of their own (PR #57)
+
+The owner asked to measure the fan speeds after a recording showed the GPU held at 210-345 MHz by heat and nothing
+could say whether the fans were part of it. The forks were the session's; the owner's request was the feature.
+
+- **Where the readings come from.**
+  - Chosen: ASUS's System Control Interface device (`\\.\ATKACPI`) with DSTS, the call G-Helper and Linux's asus-wmi
+    use. It opened with no rights and answered in about 0.5 ms (`docs/research/asus-fans.md`, section 9).
+  - `AsusAtkWmi_WMNB` through WMI (`root\wmi`): deferred, worth trying only if a laptop has the WMI class without the
+    device. COM from ctypes costs far more code, and its rights and cost were not measured. Revisit hook:
+    `winapi/atkacpi.py` keeps one reader, so a second one would sit beside it with the same DSTS-only rule.
+  - D3DKMT's fan field: rejected, it read 0 on this laptop's NVIDIA GPU (`docs/research/other-hardware.md`, 5.1).
+- **Read only, and how that is held.** The device takes reads and sets through one FILE_ANY_ACCESS control code, so
+  the handle cannot make it read-only (docs/learnings.md).
+  - Chosen: one builder that can only build a DSTS read of a fan id, checked again in `_call` before
+    DeviceIoControl, and a source scan in `tests/test_fans.py` that refuses any other way to the device.
+  - Opening the device read-only instead: rejected, Windows checks no right for that code.
+- **Where the rows live.**
+  - Chosen: a collector and table of their own (`fans`, `Capture.fans`), at 1 Hz on its own thread. A stuck firmware
+    call then costs only the fan rows, and the fans have a status of their own for "not measured".
+  - Columns in the system table: rejected. Its 4 Hz thread would wait on every firmware call, and 3 of 4 rows would
+    hold a None meaning "not read this tick", unlike its other Nones.
+  - Columns in the NVIDIA table: rejected. That table exists only when the game renders on the NVIDIA GPU, so a game
+    on the Intel GPU would record no CPU fan.
+- **What the analysis does with them.**
+  - Chosen: one line of context in `gpu_throttle` while heat held the GPU down (each fan's median and its fastest),
+    never scored.
+  - A finding of its own, or a scored line: deferred (Backlog). A fan's top speed is per model, so "slow" has no
+    yardstick yet.
+- **A speed past 12,000 RPM** is a corrupt reading counted as a failed one, at the source (G-Helper's own bound).
+  Storing it and leaving it out in the analysis was rejected: the chart scaled to it.
+- **A fan that errors before it ever answers** is tried ten times, then named as never answering. Counting it as a
+  failure every second was rejected: the source would read `partial` for a fan the laptop may not have.
+- **CI declares `asus_acpi` absent before a run showed it**, against CLAUDE.md's rule to mark only after a CI failure.
+  A GitHub VM has no ASUS firmware, so the run could only fail. The rule exists to keep a test that passes on the
+  runner running there, which a live read of ASUS fans cannot do.
 
 ## 2026-11-17: The relay for Play judges the game the recorder names, against the install folder the prompt approved (M6d)
 
