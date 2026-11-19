@@ -1357,3 +1357,15 @@ wording left a failed hold's process out of later waits; a design review agreed 
 outweighs the rounds it saves.
 **Takeaway**: verify a first match by holding it before committing, re-arm on failure, and keep exclusions for
 verdicts that cannot change (a refusal for good), never for a check that a transient state can fail.
+
+### A verdict printed beside figures must be judged from those same figures
+When a line prints numbers and then a judgement of them, any second computation of "the same" numbers can disagree
+with the printed ones, and the reader sees a sentence contradict the one before it. The judgement must take the very
+values the first sentence prints, from the same readings, by the same definition.
+**Why it came up**: the GPU heat finding's fan verdict (PR #60). Its first version judged each fan against its 95th
+percentile while the line printed its maximum, so "held near its fastest" followed "the fastest it ran was 9,000 RPM"
+beside a median of 6,500. Its second version judged only the readings that named heat itself while the line printed
+medians over heat or the power brake, so "ran under 4,000 RPM" followed "ran at a median 6,500 RPM". Each review
+caught one; the fix made `fans_while` the only source of both sentences.
+**Takeaway**: compute the figures once and pass them to both the text and the verdict; where the verdict must not
+speak (a confounder such as the power brake), withhold it, rather than judge a different subset than the one shown.
