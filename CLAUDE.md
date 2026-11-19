@@ -427,7 +427,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   halved, so `\\localhost` landed as `\localhost` in a PR body and a doc, and `"..\\x"` broke a script (four times on
   2026-11-08). Write text that holds Windows paths with the Write tool, or build it from `chr(92)`, and read it back.
   A Bash heredoc whose body holds a Python `'''` string failed outright (bash: "unexpected EOF while looking for
-  matching" quote, three times on 2026-11-11): write such a script with the Write tool and run the file.
+  matching" quote, three times on 2026-11-11), and so did one holding only f-strings with quotes in them (2026-11-19):
+  write any multi-line edit script with the Write tool and run the file.
 - To read one CI job's log while the rest of its run goes on (a fast job's verdict, such as the wheel job on a
   sabotage commit), use `gh api repos/Ali0600/lag-doctor/actions/jobs/<job id>/logs --allow-escape-sequences`:
   `gh run view <run> --log --job <job id>` refuses until the whole run has finished, and without the flag `gh api`
@@ -503,7 +504,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `tests/test_folder_wait.py::test_a_real_laglab_window_is_found_by_its_folder` (needs a GPU, so not on CI) failed on
   2026-11-17 with "a window from the game's folder (python.exe) never drew within 20 seconds", alone and on main's own
   `target.py` alike, with no other LagLab window open and the screen unlocked: LagLab's draws did not reach the GPU
-  counters then. Run that control before blaming a change.
+  counters then. It failed again on 2026-11-19, with `test_sysmon_target.py`'s windowed-renderer test beside it, both
+  on main's own `target.py` too (byte-copied in, restored by hash): this PC's state. Run that control before blaming a
+  change.
   `tests/test_redfirst.py::test_the_job_counts_every_process_under_pytest_and_ending_it_ends_them_all` failed once on
   main's push run (2026-11-11, 5ea3f80; the PR's run of the same tree and the rerun passed): right after `job.end()`,
   with the job counting none of them, the snapshot still listed one of the tree's four processes (the parent's
