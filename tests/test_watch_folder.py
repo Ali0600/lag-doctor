@@ -11,18 +11,21 @@ or opens a store link. Games and folders are made up.
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 import threading
 import time
 import uuid
 
 import pytest
 
-from lagdoctor import cli
+from lagdoctor import cli, control
 from lagdoctor.capture import session as sess
 from lagdoctor.capture import target as tgt
 from lagdoctor.relay import client, protocol
 from lagdoctor.winapi import elevation, windows
 from tests.test_cli import FakeLink, P, _session_now, fake_world  # noqa: F401 - fake_world is a fixture
+from tests import test_control as tc
 from tests import test_folder_wait as fw
 
 GAME_DIR = "C:\\Games\\Lantern Drift"
@@ -82,7 +85,7 @@ def play(monkeypatch, fake_world, tmp_path):
     state["wait_raises"])."""
     state = {"events": [], "launches": [], "waits": [], "aims": 1, "answers": [], "link": None, "raise": None,
              "fails": [], "running": [], "windows": [], "wait_raises": None, "said": [], "resolves": [],
-             "in_wait": None}
+             "in_wait": None, "windows_seq": []}
     session = _session_now()
     monkeypatch.setattr(cli, "_presentmon_exe", lambda: (tmp_path / "PresentMon-2.6.0-x64.exe", ""))
     monkeypatch.setattr(elevation, "can_trace", lambda: False)
@@ -93,7 +96,8 @@ def play(monkeypatch, fake_world, tmp_path):
         state["resolves"].append(resolve)
         return {"running": state["running"].pop(0) if state["running"] else [], "unreadable": []}
     monkeypatch.setattr(tgt, "running_from", running_from)
-    monkeypatch.setattr(windows, "top_windows", lambda: list(state["windows"]))
+    monkeypatch.setattr(windows, "top_windows",
+                        lambda: list(state["windows_seq"].pop(0) if state["windows_seq"] else state["windows"]))
 
     def launch(target, **kw):
         state["events"].append("prompt")
@@ -135,13 +139,20 @@ def _said(play) -> str:
     return "\n".join(play["said"])
 
 
+PLAY_STEPS = ("prompt", "already_running", "launch", "waiting", "wait", "aim", "target", "recording")
+
+
+def _steps(play) -> list[str]:
+    """Play's order as it happened: the stand-ins' prompt, wait and aim among the events the observers were told."""
+    return [e for e in play["events"] if e in PLAY_STEPS]
+
+
 # ---------------------------------------------------------------- with the relay ---
 
 def test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it(play, fake_world,
                                                                                                    tmp_path):
     assert _watch(play, tmp_path, "--elevate") == 0
-    steps = [e for e in play["events"] if e in ("prompt", "waiting", "wait", "aim", "target", "recording")]
-    assert steps == ["prompt", "waiting", "wait", "aim", "target", "recording"]
+    assert _steps(play) == ["prompt", "launch", "waiting", "wait", "aim", "target", "recording"]
     (launch,) = play["launches"]
     assert launch["target"] is None and launch["folders"] == FORMS and launch["wait_s"] == 300.0
     link = play["link"]
@@ -179,6 +190,7 @@ def test_a_relay_whose_wait_is_over_before_this_one_begins_waits_for_nothing(pla
     monkeypatch.setattr(PlayLink, "__init__", over)
     assert _watch(play, tmp_path, "--elevate") == 1
     assert play["waits"] == [] and not any(line.startswith("Waiting up to") for line in play["said"])
+    assert _steps(play) == ["prompt"]                   # no store link opened for a wait that cannot take the game
     assert play["said"][-1] == ("Not recorded: the relay's wait for the game was over before this one began. Run the "
                                 "same `lagdoctor watch` again.")
 
@@ -271,6 +283,7 @@ def test_a_game_that_started_with_a_window_while_the_prompt_was_up_is_said_at_on
     play["windows"] = [_window_of(4300)]
     assert _watch(play, tmp_path, "--elevate") == cli.EXIT_BAD_ARGS
     assert play["waits"] == [] and play["link"].closed >= 1
+    assert _steps(play) == ["prompt", "already_running"]          # told, and no store link opened
     assert ("Not recorded: lantern_.exe started from the game's folder while the UAC prompt was up, and a recording "
             "started this way takes only a game that starts after it. Record it as it runs: lagdoctor watch --pid "
             "4300.") in play["said"]
@@ -279,19 +292,118 @@ def test_a_game_that_started_with_a_window_while_the_prompt_was_up_is_said_at_on
 def test_a_stub_that_started_without_a_window_while_the_prompt_was_up_is_said_and_the_wait_goes_on(play, tmp_path):
     play["running"] = [[], [_early(4299, "lantern.exe")]]          # its game may still start after the relay
     assert _watch(play, tmp_path, "--elevate") == 0 and len(play["waits"]) == 1
+    assert _steps(play)[:3] == ["prompt", "launch", "waiting"]
     assert ("(lantern.exe, pid 4299, started from the game's folder while the UAC prompt was up, so this recording "
             "cannot take it. If it is the game itself, record it as it runs once it shows its window: lagdoctor "
             "watch --pid 4299.)") in play["said"]
 
 
-def test_programs_from_the_folder_older_than_the_pre_flight_or_newer_than_the_relay_are_left_to_the_wait(play,
-                                                                                                            tmp_path):
+def test_a_program_from_the_folder_newer_than_the_relay_is_left_to_the_wait(play, tmp_path):
     older = {"pid": 4300, "create_time": NOW - tgt.SINCE_MARGIN, "name": "helper.exe", "exe": GAME_DIR + "\\h.exe"}
     newer = {"pid": 4301, "create_time": RELAY_CT + 1, "name": "lantern.exe", "exe": GAME_DIR + "\\lantern.exe"}
     play["running"] = [[], [older, newer]]
-    play["windows"] = [_window_of(4300), _window_of(4301)]          # each would end it, were it one of them
+    play["windows"] = [_window_of(4301)]          # it would end it, were it older than the relay
     assert _watch(play, tmp_path, "--elevate") == 0 and len(play["waits"]) == 1
+    # A windowless program from before the pre-flight (a helper left running) is neither the game nor said.
     assert not [line for line in play["said"] if "while the UAC prompt was up" in line]
+    assert _steps(play)[:3] == ["prompt", "launch", "waiting"]
+
+
+@pytest.mark.parametrize("relayed", [True, False])
+def test_a_game_from_before_the_pre_flight_that_has_a_window_now_is_already_running(play, monkeypatch, tmp_path,
+                                                                                      relayed):
+    # Started by hand, still loading at the pre-flight (no window yet), it showed its window while the prompt was up:
+    # a store starts nothing for it, and the wait, which looks only at what starts after it, could never take it.
+    if not relayed:
+        monkeypatch.setattr(elevation, "can_trace", lambda: True)      # no prompt: the wait looks from the pre-flight
+    loading = {"pid": 4300, "create_time": NOW - 60 * SECOND, "name": "lantern_.exe", "exe": FOUND["exe"]}
+    play["running"] = [[dict(loading)], [dict(loading)]]
+    play["windows_seq"] = [[]]                          # none at the pre-flight
+    play["windows"] = [_window_of(4300)]                # and its window afterwards
+    assert _watch(play, tmp_path, *(["--elevate"] if relayed else [])) == cli.EXIT_BAD_ARGS
+    assert play["waits"] == [] and _steps(play) == (["prompt", "already_running"] if relayed else ["already_running"])
+    assert ("Not recorded: lantern_.exe already runs from the game's folder with a window, and a store starts "
+            "nothing for a game that is running. Record it as it runs: lagdoctor watch --pid 4300.") in play["said"]
+
+
+# ---------------------------------------------------------------- as lag-doctor's window hears it ---
+
+def _serve(play, window, tmp_path, *extra):
+    """watch --control stdio --wait-folder, as the app runs it, over test_control's stand-in window."""
+    code = control.serve(_args(tmp_path, "--control", "stdio", *extra), window.recorder_in, window.recorder_out)
+    window.finish()
+    assert window.errors == []
+    return code
+
+
+@pytest.fixture
+def prompted(play, monkeypatch):
+    """client.launch has the window raise the prompt first, as the real one does (Channel.relay_launcher), and the
+    window answers it with a harmless process of the test's own in the relay's place; then the play fixture's link."""
+    stand_in = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])
+    play_launch = client.launch
+
+    def through_the_window(target, **kw):
+        relay = kw["launcher"]([r"C:\Python313\pythonw.exe", "-B", "-m", "lagdoctor.relay"], cwd="C:\\")
+        relay.close()
+        return play_launch(target, **kw)
+    monkeypatch.setattr(client, "launch", through_the_window)
+
+    def answer(window, msg):
+        if msg["t"] == "elevate":
+            window.send("elevated", handle=tc._dup_here(stand_in._handle), pid=stand_in.pid)
+    try:
+        yield answer
+    finally:
+        stand_in.kill()
+        stand_in.wait(10)
+
+
+def test_a_relay_that_fails_for_plays_folder_reaches_the_window_as_the_relay_failing(play, prompted, tmp_path):
+    # The relay is asked for before the game exists (no "target" yet): its failure is still the relay's, not a
+    # failure lag-doctor cannot explain.
+    play["raise"] = client.RelayFailed("the relay ended before it answered (exit code 3)", protocol.EXIT_TARGET)
+    window = tc.Window(prompted)
+    assert _serve(play, window, tmp_path, "--elevate") == 1
+    assert window.kinds() == ["hello", "elevate", "done"] and window.messages[-1]["reason"] == "relay_failed"
+
+
+def test_the_window_hears_plays_order_elevate_then_launch_and_waiting_then_target_and_recording(play, prompted,
+                                                                                                 tmp_path):
+    window = tc.Window(prompted)
+    seen_at_wait = []
+    deadline = time.monotonic() + tc.WITHIN_S
+
+    def in_wait():                                      # the wait cannot go on until the window has heard both
+        while "waiting" not in window.kinds() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        seen_at_wait.extend(window.kinds())
+    play["in_wait"] = in_wait
+    assert _serve(play, window, tmp_path, "--elevate") == 0
+    assert seen_at_wait == ["hello", "elevate", "launch", "waiting"]
+    order = [k for k in window.kinds() if k in ("hello", "elevate", "already_running", "launch", "waiting", "target",
+                                                "recording", "done")]
+    assert order == ["hello", "elevate", "launch", "waiting", "target", "recording", "done"]
+    assert {"t": "launch"} in window.messages and window.messages[-1]["reason"] == "completed"
+
+
+def test_a_game_already_running_reaches_the_window_as_such_with_no_launch(play, tmp_path):
+    play["running"] = [[{"pid": 4242, "create_time": NOW - 60 * SECOND, "name": "lantern_.exe", "exe": FOUND["exe"]}]]
+    play["windows"] = [_window_of(4242)]
+    window = tc.Window()
+    assert _serve(play, window, tmp_path, "--elevate") == cli.EXIT_BAD_ARGS
+    assert window.kinds() == ["hello", "already_running", "done"]
+    heard = [m for m in window.messages if m["t"] != "say"]
+    assert heard[-2:] == [{"t": "already_running", "name": "lantern_.exe", "pid": 4242},
+                          {"t": "done", "reason": "game_running", "code": cli.EXIT_BAD_ARGS, "session": None}]
+    assert "Not started: lantern_.exe already runs from the game's folder with a window" in window.said()
+
+
+def test_a_wait_that_finds_no_game_reaches_the_window_after_its_launch_as_no_game(play, tmp_path):
+    play["wait_raises"] = tgt.TargetNotFound("no program from the game's folder started within 5 minutes")
+    window = tc.Window()
+    assert _serve(play, window, tmp_path, "--no-elevate") == cli.EXIT_BAD_ARGS
+    assert window.kinds() == ["hello", "launch", "waiting", "done"] and window.messages[-1]["reason"] == "no_game"
 
 
 # ---------------------------------------------------------------- before the prompt ---
@@ -304,7 +416,7 @@ def test_a_game_already_running_from_the_folder_with_a_window_is_refused_before_
                             "monitor_device": None, "cls": "GameWindow"}]
     code = _watch(play, tmp_path, "--elevate")
     if windowed:
-        assert code == cli.EXIT_BAD_ARGS and play["launches"] == []
+        assert code == cli.EXIT_BAD_ARGS and play["launches"] == [] and _steps(play) == ["already_running"]
         assert ("Not started: lantern_.exe already runs from the game's folder with a window, and a store starts "
                 "nothing for a game that is running. Close it and run this again, or record it as it runs: lagdoctor "
                 "watch --pid 4242.") in play["said"]
@@ -317,7 +429,7 @@ def test_a_folder_that_cannot_be_waited_on_is_refused_before_any_prompt(play, mo
         raise ValueError("C:\\Games\\Lantern Drift leads onto a network share")
     monkeypatch.setattr(tgt, "folder_forms", forms)
     assert _watch(play, tmp_path, "--elevate") == cli.EXIT_BAD_ARGS
-    assert play["launches"] == [] and play["waits"] == []
+    assert play["launches"] == [] and play["waits"] == [] and _steps(play) == []
     assert play["said"][-1] == ("Not started: the game's folder cannot be waited on (C:\\Games\\Lantern Drift leads "
                                 "onto a network share).")
 
@@ -334,6 +446,7 @@ def test_a_cancel_during_the_prompt_waits_for_nothing_and_lets_the_relay_go(play
     play["during_prompt"] = cancel.set
     assert _watch(play, tmp_path, "--elevate", cancel=cancel) == cli.EXIT_CANCELLED
     assert len(play["launches"]) == 1 and play["waits"] == [] and play["link"].closed >= 1
+    assert _steps(play) == ["prompt"]
 
 
 # ---------------------------------------------------------------- how the wait ends ---
@@ -370,7 +483,7 @@ def test_without_the_relay_the_wait_looks_from_the_pre_flight_and_names_no_game(
                                                                                  tmp_path):
     monkeypatch.setattr(elevation, "can_trace", lambda: True)          # frame timing in this window: no prompt
     assert _watch(play, tmp_path) == 0
-    assert play["launches"] == []
+    assert play["launches"] == [] and _steps(play) == ["launch", "waiting", "wait", "target", "recording"]
     (kw,) = play["waits"]
     assert kw["since"] == NOW - tgt.SINCE_MARGIN and kw["resolve"] is True and "aim" not in kw and "own" not in kw
     assert 299.0 < kw["deadline_s"] <= 300.0
@@ -382,7 +495,8 @@ def test_an_administrator_window_never_writes_a_short_name_out_long(play, monkey
     monkeypatch.setattr(elevation, "can_trace", lambda: True)
     monkeypatch.setattr(elevation, "is_elevated", elevated)
     assert _watch(play, tmp_path) == 0
-    assert play["waits"][0]["resolve"] is False and play["resolves"] == [False]    # the pre-flight's too
+    # the pre-flight's too, and the look before the wait
+    assert play["waits"][0]["resolve"] is False and play["resolves"] == [False, False]
 
 
 def test_with_the_relay_in_an_administrator_window_nothing_is_written_out_long(play, monkeypatch, tmp_path):
@@ -395,6 +509,7 @@ def test_with_the_relay_in_an_administrator_window_nothing_is_written_out_long(p
 def test_a_declined_prompt_still_waits_and_records_without_frame_timing(play, fake_world, tmp_path):
     play["raise"] = PermissionError("declined")
     assert _watch(play, tmp_path, "--elevate") == 0
+    assert _steps(play) == ["prompt", "launch", "waiting", "wait", "target", "recording"]
     (kw,) = play["waits"]
     assert kw["resolve"] is True and "aim" not in kw
     assert fake_world["sessions"][0]["opts"].frames is False

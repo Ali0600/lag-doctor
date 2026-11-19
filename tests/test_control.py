@@ -72,10 +72,15 @@ def test_what_the_recorder_sends_is_checked_too():
             dict(t="frames_lost", why="PresentMon stopped"), dict(t="stopping", reason="duration"),
             dict(t="saving", frames=12_000), dict(t="saved", session="20261109-140000-Game"),
             dict(t="say", text="Recording. Play normally"),
-            dict(t="done", reason="completed", code=0, session="20261109-140000-Game")]
+            dict(t="done", reason="completed", code=0, session="20261109-140000-Game"),
+            dict(t="launch"), dict(t="already_running", name="lantern_.exe", pid=4242),
+            dict(t="already_running", name=None, pid=4242),
+            dict(t="done", reason="game_running", code=cli.EXIT_BAD_ARGS, session=None)]
     for msg in good:
         assert control.from_recorder(control.encode(**msg)) == msg
-    for msg in (dict(t="hello", v=control.VERSION + 1, pid=4), dict(t="done", reason="exploded", code=0, session=None),
+    for msg in (dict(t="hello", v=control.VERSION + 1, pid=4),
+                dict(t="hello", v=1, pid=4),                       # the protocol before Play: it never says launch
+                dict(t="done", reason="exploded", code=0, session=None),
                 dict(t="elevate", argv="pythonw.exe", cwd="C:\\"), dict(t="elevate", argv=[], cwd="C:\\"),
                 dict(t="elevate", argv=[5], cwd="C:\\"),
                 dict(t="recording", duration_s=-1.0, hotkey=True, frames=True, network=True),
@@ -93,7 +98,13 @@ def test_what_the_recorder_sends_is_checked_too():
                 dict(t="start_key", key="ctrl+alt+s", registered=True, window_s=600.0, start_by_s="soon"),
                 dict(t="start_key", key="ctrl+alt+s", registered=True, window_s=600.0, start_by_s=True),
                 dict(t="measuring", t_at=10.0, at=10.0, until=None),
-                dict(t="saving", frames=-1), dict(t="say", text="x" * (control.MAX_SAY + 1))):
+                dict(t="saving", frames=-1), dict(t="say", text="x" * (control.MAX_SAY + 1)),
+                dict(t="launch", link="steam://rungameid/1"),         # the recorder never names a link
+                dict(t="already_running", name="lantern_.exe", pid=4242, link="steam://rungameid/1"),
+                dict(t="already_running", name="lantern_.exe"), dict(t="already_running", name=5, pid=4242),
+                dict(t="already_running", name="lantern_.exe", pid=0),
+                dict(t="already_running", name="lantern_.exe", pid=True),
+                dict(t="already_running", name="x" * (control.MAX_TEXT + 1), pid=4242)):
         with pytest.raises(control.ProtocolError):
             control.from_recorder(control.encode(**msg))
 
@@ -115,7 +126,11 @@ def test_a_line_longer_than_the_protocol_allows_is_never_made():
     (cli.EXIT_CANCELLED, {"target"}, "", False, "cancelled"),
     (cli.EXIT_BAD_ARGS, set(), "", False, "no_game"),
     (cli.EXIT_BAD_ARGS, {"target"}, "", False, "refused"),
+    (cli.EXIT_BAD_ARGS, {"already_running"}, "", False, "game_running"),      # Play: the game was there first
+    (cli.EXIT_BAD_ARGS, {"launch", "waiting"}, "", False, "no_game"),         # Play's wait found none
     (1, {"target"}, "", False, "relay_failed"),
+    (1, {"elevate"}, "", False, "relay_failed"),                             # Play: the relay failed before the game
+    (1, {"elevate", "launch", "waiting"}, "", False, "relay_failed"),        # and while it waited for it
     (1, {"target", "recording", "saved"}, "duration", False, "analysis_failed"),
     (1, set(), "", False, "failed"),
     (cli.EXIT_BUSY, set(), "", False, "busy"),

@@ -397,8 +397,8 @@
  {
   "name": "play: the second look writes short names out long in an administrator window",
   "file": "lagdoctor/cli.py",
-  "old": "            early = [p for p in tgt.running_from(forms, resolve=_unelevated())[\"running\"]",
-  "new": "            early = [p for p in tgt.running_from(forms)[\"running\"]",
+  "old": "    before = [p for p in tgt.running_from(forms, resolve=_unelevated())[\"running\"]",
+  "new": "    before = [p for p in tgt.running_from(forms)[\"running\"]",
   "tests": [
    "tests/test_watch_folder.py::test_with_the_relay_in_an_administrator_window_nothing_is_written_out_long"
   ]
@@ -415,8 +415,8 @@
  {
   "name": "play: a stub started during the prompt refused",
   "file": "lagdoctor/cli.py",
-  "old": "        drawn = [p for p in early if p[\"pid\"] in shown]",
-  "new": "        drawn = early",
+  "old": "    drawn = [p for p in before if p[\"pid\"] in shown]",
+  "new": "    drawn = before",
   "tests": [
    "tests/test_watch_folder.py::test_a_stub_that_started_without_a_window_while_the_prompt_was_up_is_said_and_the_wait_goes_on"
   ]
@@ -424,8 +424,8 @@
  {
   "name": "play: a stub started during the prompt not said",
   "file": "lagdoctor/cli.py",
-  "old": "        for p in early:         # no window yet",
-  "new": "        for p in []:         # no window yet",
+  "old": "        for p in before:        # no window yet",
+  "new": "        for p in []:        # no window yet",
   "tests": [
    "tests/test_watch_folder.py::test_a_stub_that_started_without_a_window_while_the_prompt_was_up_is_said_and_the_wait_goes_on"
   ]
@@ -505,35 +505,35 @@
  {
   "name": "play: a game started during the prompt waited for",
   "file": "lagdoctor/cli.py",
-  "old": "        if drawn:",
-  "new": "        if False:",
+  "old": "    if drawn:\n        during",
+  "new": "    if False:\n        during",
   "tests": [
    "tests/test_watch_folder.py::test_a_game_that_started_with_a_window_while_the_prompt_was_up_is_said_at_once"
   ]
  },
  {
-  "name": "play: a program older than the pre-flight taken as started during the prompt",
+  "name": "play: a game from before the pre-flight said as started during the prompt",
   "file": "lagdoctor/cli.py",
-  "old": "if looked < p[\"create_time\"] <= relay.create_time]",
-  "new": "if p[\"create_time\"] <= relay.create_time]",
+  "old": "        during = [p for p in drawn if p[\"create_time\"] > looked]",
+  "new": "        during = list(drawn)",
   "tests": [
-   "tests/test_watch_folder.py::test_programs_from_the_folder_older_than_the_pre_flight_or_newer_than_the_relay_are_left_to_the_wait"
+   "tests/test_watch_folder.py::test_a_game_from_before_the_pre_flight_that_has_a_window_now_is_already_running"
   ]
  },
  {
   "name": "play: a program newer than the relay taken as started during the prompt",
   "file": "lagdoctor/cli.py",
-  "old": "if looked < p[\"create_time\"] <= relay.create_time]",
-  "new": "if looked < p[\"create_time\"]]",
+  "old": "    before = [p for p in tgt.running_from(forms, resolve=_unelevated())[\"running\"] if p[\"create_time\"] <= since]",
+  "new": "    before = [p for p in tgt.running_from(forms, resolve=_unelevated())[\"running\"]]",
   "tests": [
-   "tests/test_watch_folder.py::test_programs_from_the_folder_older_than_the_pre_flight_or_newer_than_the_relay_are_left_to_the_wait"
+   "tests/test_watch_folder.py::test_a_program_from_the_folder_newer_than_the_relay_is_left_to_the_wait"
   ]
  },
  {
   "name": "play: the pre-flight refuses nothing",
   "file": "lagdoctor/cli.py",
-  "old": "    if there:\n        names = ",
-  "new": "    if False:\n        names = ",
+  "old": "    if there:\n        observers.event(\"already_running\"",
+  "new": "    if False:\n        observers.event(\"already_running\"",
   "tests": [
    "tests/test_watch_folder.py::test_a_game_already_running_from_the_folder_with_a_window_is_refused_before_any_prompt"
   ]
@@ -631,8 +631,8 @@
  {
   "name": "play: the window not told it waits",
   "file": "lagdoctor/cli.py",
-  "old": "                _check_cancel(cancel)\n                observers.event(\"waiting\")\n                target, code = _play_wait(",
-  "new": "                _check_cancel(cancel)\n                target, code = _play_wait(",
+  "old": "    observers.event(\"launch\")                     # the app opens the store link now (Play's step 3)\n    observers.event(\"waiting\")\n",
+  "new": "    observers.event(\"launch\")                     # the app opens the store link now (Play's step 3)\n",
   "tests": [
    "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it"
   ]
@@ -640,8 +640,8 @@
  {
   "name": "play: a cancel during the prompt not seen",
   "file": "lagdoctor/cli.py",
-  "old": "                _check_cancel(cancel)\n                observers.event(\"waiting\")\n                target, code = _play_wait(",
-  "new": "                observers.event(\"waiting\")\n                target, code = _play_wait(",
+  "old": "                _check_cancel(cancel)\n                target, code = _play_wait(",
+  "new": "                target, code = _play_wait(",
   "tests": [
    "tests/test_watch_folder.py::test_a_cancel_during_the_prompt_waits_for_nothing_and_lets_the_relay_go"
   ]
@@ -708,6 +708,74 @@
   "new": "        elif state == \"refusal\":",
   "tests": [
    "tests/test_watch_folder.py::test_the_wait_says_each_step_once_for_each_program_and_every_hold_re_arm_and_refusal"
+  ]
+ },
+ {
+  "name": "play: the window is never told to open the store link",
+  "file": "lagdoctor/cli.py",
+  "old": "    observers.event(\"launch\")                     # the app opens the store link now (Play's step 3)\n",
+  "new": "",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it",
+   "tests/test_watch_folder.py::test_the_window_hears_plays_order_elevate_then_launch_and_waiting_then_target_and_recording"
+  ]
+ },
+ {
+  "name": "play: the window is told waiting before launch",
+  "file": "lagdoctor/cli.py",
+  "old": "    observers.event(\"launch\")                     # the app opens the store link now (Play's step 3)\n    observers.event(\"waiting\")\n",
+  "new": "    observers.event(\"waiting\")\n    observers.event(\"launch\")                     # the app opens the store link now (Play's step 3)\n",
+  "tests": [
+   "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it",
+   "tests/test_watch_folder.py::test_the_window_hears_plays_order_elevate_then_launch_and_waiting_then_target_and_recording"
+  ]
+ },
+ {
+  "name": "play: the store link is opened before the checks that can end the wait",
+  "file": "lagdoctor/cli.py",
+  "old": "    kw: dict[str, Any] = {\"since\": looked, \"resolve\": _unelevated()}\n",
+  "new": "    kw: dict[str, Any] = {\"since\": looked, \"resolve\": _unelevated()}\n    observers.event(\"launch\")\n",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_relay_whose_wait_is_over_before_this_one_begins_waits_for_nothing",
+   "tests/test_watch_folder.py::test_a_game_that_started_with_a_window_while_the_prompt_was_up_is_said_at_once"
+  ]
+ },
+ {
+  "name": "play: a game already running at the pre-flight is not told",
+  "file": "lagdoctor/cli.py",
+  "old": "        observers.event(\"already_running\", name=there[0][\"name\"], pid=there[0][\"pid\"])\n",
+  "new": "",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_game_already_running_from_the_folder_with_a_window_is_refused_before_any_prompt",
+   "tests/test_watch_folder.py::test_a_game_already_running_reaches_the_window_as_such_with_no_launch"
+  ]
+ },
+ {
+  "name": "play: a game that started during the prompt is not told",
+  "file": "lagdoctor/cli.py",
+  "old": "        observers.event(\"already_running\", name=named[0][\"name\"], pid=named[0][\"pid\"])\n",
+  "new": "",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_game_from_before_the_pre_flight_that_has_a_window_now_is_already_running",
+   "tests/test_watch_folder.py::test_a_game_that_started_with_a_window_while_the_prompt_was_up_is_said_at_once"
+  ]
+ },
+ {
+  "name": "play: without the relay, a game from before the pre-flight is waited for",
+  "file": "lagdoctor/cli.py",
+  "old": "    since = relay.create_time if relay is not None else looked",
+  "new": "    since = relay.create_time if relay is not None else 0",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_game_from_before_the_pre_flight_that_has_a_window_now_is_already_running"
+  ]
+ },
+ {
+  "name": "play: a helper from before the pre-flight said as started during the prompt",
+  "file": "lagdoctor/cli.py",
+  "old": "            if p[\"create_time\"] > looked:\n",
+  "new": "            if True:\n",
+  "tests": [
+   "tests/test_watch_folder.py::test_a_program_from_the_folder_newer_than_the_relay_is_left_to_the_wait"
   ]
  }
 ]
