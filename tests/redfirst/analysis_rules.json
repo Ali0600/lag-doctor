@@ -3478,7 +3478,7 @@
   "name": "wrong_gpu's display line after the engine's fallback",
   "file": "lagdoctor/analysis/rules.py",
   "old": "    elif paced:                        # before the engine's fallback",
-  "new": "    elif paced and not _engine_fallback(e):",
+  "new": "    elif paced and not _engine_fallback(e):  # before the engine's fallback",
   "tests": [
    "tests/test_analysis_rules.py::test_wrong_gpu_at_the_displays_rate_agrees_with_gpu_limit_that_the_gpu_costs_no_frames"
   ]
