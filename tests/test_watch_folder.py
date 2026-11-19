@@ -289,7 +289,9 @@ def test_programs_from_the_folder_older_than_the_pre_flight_or_newer_than_the_re
     older = {"pid": 4300, "create_time": NOW - tgt.SINCE_MARGIN, "name": "helper.exe", "exe": GAME_DIR + "\\h.exe"}
     newer = {"pid": 4301, "create_time": RELAY_CT + 1, "name": "lantern.exe", "exe": GAME_DIR + "\\lantern.exe"}
     play["running"] = [[], [older, newer]]
+    play["windows"] = [_window_of(4300), _window_of(4301)]          # each would end it, were it one of them
     assert _watch(play, tmp_path, "--elevate") == 0 and len(play["waits"]) == 1
+    assert not [line for line in play["said"] if "while the UAC prompt was up" in line]
 
 
 # ---------------------------------------------------------------- before the prompt ---

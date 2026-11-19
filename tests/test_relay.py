@@ -1670,7 +1670,7 @@ def test_aim_is_for_a_relay_approved_for_a_folder_and_one_at_a_time(game):
     relay = InProcessRelay(parts())
     link = launch(game, relay)
     try:
-        with pytest.raises(ValueError, match="running game itself"):
+        with pytest.raises(ValueError, match="running game itself, so it takes no other"):     # aim's own words
             link.aim((game["pid"], game["create_time"]))
         with pytest.raises(ValueError, match="no game to look for"):
             link.own()
