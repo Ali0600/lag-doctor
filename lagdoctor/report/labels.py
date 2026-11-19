@@ -314,6 +314,19 @@ def outside_marks(marks: Any, part: dict[str, Any] | None) -> list[float]:
             and not lo <= t <= late]
 
 
+def rest_spans(part: dict[str, Any] | None, end: float) -> list[tuple[float, float]]:
+    """What a measured part leaves out of a recording drawn to `end`: before its start and after its end, as the
+    charts shade it (the HTML report and the app alike); none for the whole recording."""
+    if part is None:
+        return []
+    out = []
+    if part["from_s"] > 0:
+        out.append((0.0, part["from_s"]))
+    if part["to_s"] < end - PART_SLACK_S:
+        out.append((part["to_s"], end))
+    return out
+
+
 def part_length(part: dict[str, Any]) -> str:
     """A measured part's length as the reports show it: the difference of its two ends as they are shown (each
     rounded to the second), so "from 13s to 47s" never reads as 35 s long."""
@@ -333,8 +346,9 @@ def part_note(part: dict[str, Any], outside_marks: int = 0) -> str:
 
 def unmeasured_note(why: str, *, pickable: bool) -> str | None:
     """What the reports say when a recording had a start key but the whole of it was analysed (analysis/crop.key_part's
-    `why`, e.g. 'the start key Ctrl+Alt+S was not pressed in time'); None without a why. It says how to pick a part
-    only when one can be picked (`pickable`, crop.part_pickable), since analyze --from would refuse every other."""
+    `why`, e.g. 'the start key Ctrl+Alt+S was not pressed in time'); None without a why. It names the terminal's command
+    that picks a part only when one can be picked (`pickable`, crop.part_pickable), since analyze --from would refuse
+    every other; the app, which has no command to give, passes False."""
     if not why:
         return None
     text = f"{why[0].upper()}{why[1:]}, so the whole recording was analysed, startup included."

@@ -1310,6 +1310,17 @@ analysis records the chain it used (`main_chain` in its stats), and both now fol
 **Takeaway**: when a result was computed over a subset, read every "main", "top" or "busiest" pick from what that
 computation recorded, never recompute it over the whole.
 
+### The difference of two rounded numbers is not rounded
+Two times each rounded to the millisecond are exact decimals on paper, but a float holds neither exactly, and their
+difference picks up the error: 1024.033 - 424.033 is 599.9999999999999 in Python, not 600.0. Code that floors it, or
+asks whether it is a whole number of minutes, then reads one second or one minute short.
+**Why it came up**: M5c's running screen counts the measured window as `until - at`, both in the recorder's
+milliseconds. A reviewer swept every press time from 0 to 1200 s: past about 424 s, a quarter of presses gave
+599.999..., which the page's clock would floor to "of 09:59" and the words would call "10m" instead of "10 minutes".
+The tests had pressed only at 70 s and 30 s, whose floats are exact.
+**Takeaway**: round a difference (or a sum) back to the precision its inputs were rounded to before you floor,
+compare or format it, and test with values that are not exact in binary.
+
 ### Tie a process's path to the process by reading it between two snapshots
 Windows reuses process ids, and a path read by pid (`NtQuerySystemInformation` class 88, which opens no handle) names
 whichever process holds that number at the moment of the read. A process is the pair (pid, create time), and a number
