@@ -389,6 +389,65 @@ def test_a_store_listing_that_fails_still_lists_the_recorded_games(demo, monkeyp
     assert [g["name"] for g in app.do_library()["games"]] == [app_demo.MARKUP_TITLE, "Demo Racer", "starplanner"]
 
 
+def test_a_tile_names_its_cover_only_when_the_app_holds_one(demo):
+    home, _ = demo
+    entries, games = entries_of(home), _installed()
+    racer, lantern = _store_id(app_demo.INSTALLED[0]), _store_id(app_demo.INSTALLED[1])
+    v = views.library_view(entries, READY, games, art=frozenset({racer}))
+    arts = {g["name"]: g["tile"]["art"] for g in v["games"]}
+    assert arts.pop("Demo Racer") == f"https://art.lagdoctor.example/{racer}"
+    assert set(arts.values()) == {None}
+    assert views.game_view(entries, racer, None, games, art=frozenset({racer}))["tile"]["art"].endswith(racer)
+    assert views.game_view(entries, lantern, None, games, art=frozenset({racer}))["tile"]["art"] is None
+    assert views.tile("Demo Racer")["art"] is None
+
+
+def _art_app(tmp_path, covers):
+    from lagdoctor.app import main as app_main
+    return app_main.App(home=tmp_path, runtime={"version": "1.0.0.0", "build": 4000}, create_fn=None,
+                        log=lambda s: None, play=lambda n: None, flash=lambda on: None,
+                        installed=lambda: list(app_demo.INSTALLED), forms_of=lambda folder: (folder,), covers=covers)
+
+
+def test_the_app_reads_each_games_cover_once_and_its_art_host_only_looks_it_up(tmp_path):
+    asked = []
+
+    def covers(games):
+        asked.append([g.title for g in games])
+        return app_demo.covers(games)
+    app = _art_app(tmp_path, covers)
+    racer, lantern = _store_id(app_demo.INSTALLED[0]), _store_id(app_demo.INSTALLED[1])
+    app.scan_games()
+    app.scan_games()                                     # a second listing reads nothing again
+    assert app.art_for(racer) == app_demo.COVER and app.art_for(lantern) is None and app.art_ids() == {racer}
+    assert app.art_for("g-0000000000000000") is None
+    app.get_readiness = lambda: READY
+    assert app.do_library()["games"][1]["tile"]["art"].endswith(racer)
+    assert asked == [["Demo Racer", "Lantern Drift", "Copper Coast"]]           # and the Library's own, none again
+
+
+def test_an_app_given_no_covers_reads_no_store_cache(tmp_path, monkeypatch):
+    from lagdoctor.stores import art, steam
+    monkeypatch.setattr(art, "covers", lambda *a, **k: pytest.fail("a store's cover cache was read"))
+    monkeypatch.setattr(steam, "find_steam_folder", lambda: pytest.fail("this PC's Steam was looked for"))
+    app = _art_app(tmp_path, None)
+    assert len(app.scan_games()) == 3 and app.art_ids() == frozenset()
+
+
+def test_covers_past_the_apps_total_are_left_out_and_a_failing_read_keeps_the_tiles(tmp_path, monkeypatch):
+    from lagdoctor.stores import art
+    monkeypatch.setattr(art, "MAX_TOTAL_BYTES", len(app_demo.COVER[1]) * 2 - 1)
+    big = app_demo.COVER
+    app = _art_app(tmp_path, lambda games: {(g.store, g.id): big for g in games})
+    app.scan_games()
+    assert len(app.art_ids()) == 1                        # the first fits, the next would pass the total
+
+    def broken(games):
+        raise OSError("the cache could not be read")
+    app = _art_app(tmp_path / "b", broken)
+    assert len(app.scan_games()) == 3 and app.art_ids() == frozenset()
+
+
 def test_a_folder_whose_forms_cannot_be_worked_out_is_taken_as_its_store_wrote_it():
     def refuse(folder):
         raise ValueError("it leads onto a network share")

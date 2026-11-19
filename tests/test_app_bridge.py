@@ -46,6 +46,31 @@ def test_only_the_first_navigation_and_only_to_the_entry_page_is_allowed():
         assert not bridge.navigation_allowed(uri, first=True), uri
 
 
+def test_a_cover_is_asked_for_by_its_games_id_on_the_art_host_alone():
+    gid = "g-0123456789abcdef"
+    assert bridge.art_url(gid) == "https://art.lagdoctor.example/g-0123456789abcdef"
+    assert bridge.art_id(bridge.art_url(gid)) == gid
+    with pytest.raises(ValueError):
+        bridge.art_url("../sessions")
+    assert bridge.ART_FILTER == bridge.ART_ORIGIN + "/*" and bridge.ART_HOST != bridge.APP_HOST
+
+
+@pytest.mark.parametrize("uri", [
+    "https://art.lagdoctor.example/g-0123456789ABCDEF",          # an id is lower-case hex
+    "https://art.lagdoctor.example/g-0123456789abcde",
+    "https://art.lagdoctor.example/g-0123456789abcdef/",
+    "https://art.lagdoctor.example/g-0123456789abcdef?x=1", "https://art.lagdoctor.example/g-0123456789abcdef#top",
+    "https://art.lagdoctor.example:443/g-0123456789abcdef", "https://user@art.lagdoctor.example/g-0123456789abcdef",
+    "http://art.lagdoctor.example/g-0123456789abcdef", "https://ART.lagdoctor.example/g-0123456789abcdef",
+    "https://app.lagdoctor.example/g-0123456789abcdef", "https://art.lagdoctor.example.evil/g-0123456789abcdef",
+    "https://art.lagdoctor.example/sessions/g-0123456789abcdef", "https://art.lagdoctor.example/",
+    "https://art.lagdoctor.example/..%2Fg-0123456789abcdef", "https://art.lagdoctor.example:bad/x",
+    "https://art.lagdoctor.example/g-0123456789abcdef" + "0" * 200, None, 5, "",
+])
+def test_anything_else_names_no_cover(uri):
+    assert bridge.art_id(uri) is None
+
+
 def msg(**fields) -> str:
     return json.dumps(fields)
 

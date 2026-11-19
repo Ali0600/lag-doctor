@@ -116,6 +116,28 @@ INSTALLED = (
 )
 NOT_RECORDED = ("Copper Coast", "Lantern Drift")       # by name, as the Library lists them after the recorded ones
 
+
+def png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
+    """A small PNG of one colour, made here: the demo's made-up cover art (stores/art.py reads a real store's)."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    signature = bytes([137, 80, 78, 71, 13, 10, 26, 10])
+    rows = (bytes([0]) + bytes(rgb) * width) * height        # filter 0, then the row's pixels
+    return (signature + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+# Demo Racer's made-up cover, as a store's cache would give it (App's `covers`); the other installed games have none.
+COVER = ("image/png", png(60, 90, (38, 110, 190)))
+
+
+def covers(games: list) -> dict:
+    """App's `covers` for the demo: Demo Racer's made-up cover, and none for the rest."""
+    return {(g.store, g.id): COVER for g in games if g.title == "Demo Racer"}
+
 KEY_WINDOW_S = 20.0      # a demo's measured window: its startup before the press and its end after are left out
 LOADING_MS = 500.0       # and the loading screen before the press, which draws twice a second
 LOADING_UNTIL_S = 3.5

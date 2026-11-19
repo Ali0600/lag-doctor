@@ -37,7 +37,7 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
   below), the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
   names), `watch --wait-folder` with the re-arm (M6e, PR #58), Play's order on the control channel (M6f) and the
-  app's Play (M6g). Screen 6 and the art are not built yet.
+  app's Play (M6g) and the art (M6h). Screen 6 is not built yet.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -646,7 +646,11 @@ labelled, as in the terminal.
   - Open: the Preview treats two more catalog namespaces than "ue" as Unreal Engine's (an unofficial reading of
     launcher 0.95.1, section 15). Which products they are is not known, so a Preview record in either is still
     listed; pass them over once a source names them.
-- The art: the library's cover tiles for installed games, with the app's half of Play.
+- [x] The art (M6h; DESIGN.md, The app, Cover art): a Steam game's portrait cover from Steam's own cache
+  (`stores/art.py`, through `stores`' file access, the type told from the bytes), answered by the window itself on a
+  second host (`art.lagdoctor.example`, WebResourceRequested) by game id only, and drawn over the generated tile once
+  it has loaded. Not yet: GOG Galaxy's cache, and the exe's own icon (for Epic games and games recorded before), so
+  those keep the generated tile.
 - [x] The store launch: a policy module that builds each URI from its fixed template and refuses when elevated, over
   a thin `winapi/launch.py` that only hands the link to Explorer's `IShellDispatch2::ShellExecute` (DESIGN.md keeps
   policy out of `winapi/`). The `test_no_handles` extension ships with it. Built: `lagdoctor/stores/launch.py`

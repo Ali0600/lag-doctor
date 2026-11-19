@@ -116,8 +116,9 @@ class App:
     key the recorder measures from (None: the whole session, as M4 recorded), which also tells the running screen and
     the sounds to follow it; `open_link(link)`, which has Explorer open a store's link (stores/launch.play).
 
-    `installed()` lists the store games Play can start (lagdoctor/stores: library.installed_games). It defaults to
-    none: only run() passes the stores' own, so a test that builds an App never lists the PC's own library."""
+    `installed()` lists the store games Play can start (lagdoctor/stores: library.installed_games), and `covers(games)`
+    reads their cover art ({(store, id): (type, bytes)}, stores/art.covers). Both default to none: only run() passes
+    the stores' own, so a test that builds an App never lists the PC's own library or reads its art."""
 
     def __init__(self, *, home: Path, runtime: dict, create_fn, log: Callable[[str], None],
                  tell: Callable[[str], None] = tell, activate: bool = True, on_ready: Callable[["App"], None] | None
@@ -127,7 +128,8 @@ class App:
                  start_key: str | None = recording.START_KEY, installed: Callable[[], list] | None = None,
                  play_recorder: Callable[[str], list[str]] | None = None,
                  open_link: Callable[[str], Any] | None = None,
-                 forms_of: Callable[[str], tuple[str, ...]] | None = None) -> None:
+                 forms_of: Callable[[str], tuple[str, ...]] | None = None,
+                 covers: Callable[[list], dict] | None = None) -> None:
         self.home = Path(home)
         self.sessions = self.home / "sessions"
         self.sessions.mkdir(parents=True, exist_ok=True)
@@ -142,9 +144,15 @@ class App:
         self.entries: list[library.Entry] = []
         self.loaded: tuple | None = None            # (session id, capture, diagnosis, main chain): the last one read
         self.readiness: dict | None = None
+        self.covers = covers
+        self.art: dict[str, tuple[str, bytes]] = {}     # a game id's cover, as covers() read it
+        self.art_tried: set[str] = set()                # the game ids whose cover was looked for (once a run)
+        self.art_bytes = 0
+        self.art_lock = threading.Lock()                # one reading of covers at a time
         self.window = AppWindow(runtime=runtime, create_fn=create_fn, data_folder=self.home / "webview",
                                 assets=ASSETS, icon=ICON, class_name=CLASS + instance_tag(self.home),
-                                on_message=self.on_message, on_failed=self.on_failed, log=log, activate=activate)
+                                on_message=self.on_message, on_failed=self.on_failed, log=log, activate=activate,
+                                art=self.art_for)
         self.start_key = start_key
         self.recorder = recorder or (lambda: recording.recorder_argv(start_key=self.start_key))
         self.play_recorder = play_recorder or (lambda folder: recording.recorder_argv(start_key=self.start_key,
@@ -241,7 +249,41 @@ class App:
             games = []
         with self.lock:
             self.games = games
+        self.read_art(games)
         return games
+
+    def read_art(self, games: list[library.Installed]) -> None:
+        """Look once a run for the cover of each store game not looked for yet (`covers`), keeping at most
+        art.MAX_TOTAL_BYTES of them: on a worker thread, so the window's art host only ever looks them up."""
+        from lagdoctor.stores import art
+        if self.covers is None:
+            return
+        with self.art_lock:
+            new = [g for g in games if g.game_id not in self.art_tried]
+            if not new:
+                return
+            try:
+                found = self.covers([g.game for g in new])
+            except Exception as exc:  # noqa: BLE001 - the games keep their generated tiles
+                self.log(f"reading the games' cover art: {''.join(traceback.format_exception(exc))}")
+                found = {}
+            for g in new:
+                self.art_tried.add(g.game_id)
+                image = found.get((g.game.store, g.game.id))
+                if image is None or self.art_bytes + len(image[1]) > art.MAX_TOTAL_BYTES:
+                    continue
+                with self.lock:
+                    self.art[g.game_id] = image
+                self.art_bytes += len(image[1])
+
+    def art_for(self, game_id: str) -> tuple[str, bytes] | None:
+        """The cover the window's art host answers with (AppWindow.on_web_resource, on the window's thread)."""
+        with self.lock:
+            return self.art.get(game_id)
+
+    def art_ids(self) -> frozenset[str]:
+        with self.lock:
+            return frozenset(self.art)
 
     def entry(self, session: str) -> library.Entry:
         """The listed session of this id, listing again once if it is not known yet. Gone when there is none."""
@@ -266,12 +308,14 @@ class App:
 
     def do_library(self) -> dict:
         entries = self.scan()
-        return views.library_view(entries, self.readiness or self.get_readiness(), self.scan_games())
+        games = self.scan_games()
+        return views.library_view(entries, self.readiness or self.get_readiness(), games, art=self.art_ids())
 
     def do_game(self, game: str) -> dict:
         entries = self.scan()
-        view = views.game_view(entries, game, library.last_session(self.home, self.sessions), self.scan_games(),
-                               play=views.play_words(self.start_key, recording.WINDOW_S, LAG_KEY))
+        games = self.scan_games()
+        view = views.game_view(entries, game, library.last_session(self.home, self.sessions), games,
+                               play=views.play_words(self.start_key, recording.WINDOW_S, LAG_KEY), art=self.art_ids())
         if view is None:
             raise Gone("That game is not in the Library as it was: open it again from the Library.")
         return view
@@ -542,8 +586,9 @@ def run() -> int:
         if hr < 0:
             tell(f"lag-doctor's window could not start COM (HRESULT 0x{hr & 0xFFFFFFFF:08X}).")
             return 1
+        from lagdoctor.stores import art
         app = App(home=home, runtime=runtime, create_fn=create_fn, log=log,
-                  installed=lambda: library.installed_games(log))
+                  installed=lambda: library.installed_games(log), covers=art.covers)
         try:
             app.run()
         finally:

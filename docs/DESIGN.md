@@ -1986,7 +1986,11 @@ owner's run.
   around the environment's creation (`HARDENED_ENV`) and put back; each refusing handler (navigation, frame
   navigation, new window, permission, download, external scheme, script dialog) refuses first and counts what it
   refused in `refused`. The page's folder `lagdoctor/app/assets` is mapped to `https://app.lagdoctor.example` with
-  access DENY; WebView2's data folder is `webview` under the home. A render process that exits gets the entry page
+  access DENY; WebView2's data folder is `webview` under the home. A second host, `https://art.lagdoctor.example`
+  (`bridge.ART_HOST`), has no folder: its image requests (`AddWebResourceRequestedFilter`, the image context only)
+  reach `on_web_resource`, which answers 404 first and then, for a request naming one game id exactly
+  (`bridge.art_id`), the cover the app holds for it (`App.art_for`, a lookup only), from a stream over its bytes
+  (`SHCreateMemStream`) with its type and `nosniff`; anything else stays the 404, counted in `refused["art"]`. A render process that exits gets the entry page
   again; a browser process that exits drops the view, and BrowserProcessExited (the data folder free) brings a new
   environment with a new options object. Two worker threads (at most 32 requests waiting) post their results through
   the window's own queue (`WM_APP + 1`), never to the thread.
@@ -2075,6 +2079,18 @@ owner's run.
   themselves while the recorder waits on, a note it keeps only while the game is awaited. The running screen says Play's steps in words of
   its own (`views.PLAY_TITLES`, `PLAY_DETAILS` and `PLAY_ENDS`: the `launching` phase, "Waiting for the game", and "The
   game did not start" for `no_game`), offers Cancel until the recording begins, and its Try again plays the same game.
+- **Cover art** (M6, `lagdoctor/stores/art.py`): a Steam game's portrait cover from Steam's own cache
+  (`appcache\librarycache\<appid>\library_600x900.jpg`, then each content-hash subfolder's, then the old flat
+  `<appid>_library_600x900.jpg`), read through `stores`' file access (`stores.read_bytes`, local_problem first), its
+  type told from its bytes (JPEG, PNG or WebP; some `.jpg` files hold PNG data), at most 4 MB each and 96 MB in all,
+  and only when its header declares at most 4,096 pixels a side and 4 million in all (`art.image_size`: a small file
+  can declare a huge image, which the page would decode whole).
+  Epic keeps no image on the PC, so an Epic game keeps its generated tile. `App(covers=)` reads them once a run, on a
+  worker thread at the listing (`App.read_art`), only when run() gives it `art.covers`, so no test reads this PC's
+  Steam cache (the window tests give it `tests/app_demo.py`'s made-up cover). A tile names its cover's URL
+  (`views.tile`'s `art`, `bridge.art_url`) only when the app holds one; the page loads it through an image outside
+  the page and only then draws it over the initials, so a cover that cannot load leaves the tile as it was, and no
+  `<img>` joins the page. The page's CSP takes images from its own host and the art host alone.
 - **The library** (`library.py`): one Entry per session folder named as `session_dir` names them, from its
   `summary.json`, else from the folder's name (stamp and game stem). A recording is a `watch` folder holding its
   capture; check-ups and `analyze` folders are left out. A game's key is `paths.folder_stem` of its exe name, case

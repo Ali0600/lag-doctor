@@ -107,7 +107,9 @@ class AppWindow:
 
     def __init__(self, *, runtime: dict, create_fn, data_folder: Path, assets: Path, icon: Path | None,
                  class_name: str, on_message: Callable[[bridge.Request], None], on_failed: Callable[[str], None],
-                 log: Callable[[str], None], activate: bool = True) -> None:
+                 log: Callable[[str], None], activate: bool = True,
+                 art: Callable[[str], tuple[str, bytes] | None] | None = None) -> None:
+        self.art = art                        # a game id's cover (type, bytes) the app holds, or None: never a read
         self.runtime = runtime
         self.create_fn = create_fn
         self.data_folder = data_folder
@@ -488,6 +490,11 @@ class AppWindow:
                            "ICoreWebView2LaunchingExternalUriSchemeEventHandler", self.on_external_scheme)
         self.webview3.do("SetVirtualHostNameToFolderMapping", (wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_int),
                          bridge.APP_HOST, str(self.assets), wv.ACCESS_DENY)
+        # The art host has no folder: the window answers each image request to it itself (on_web_resource).
+        self.add_event(wvw, "add_WebResourceRequested", "ICoreWebView2WebResourceRequestedEventHandler",
+                       self.on_web_resource)
+        wvw.do("AddWebResourceRequestedFilter", (wintypes.LPCWSTR, ctypes.c_int), bridge.ART_FILTER,
+               wv.RESOURCE_CONTEXT_IMAGE)
         ctl.do("put_Bounds", (wintypes.RECT,), self.client_rect())
         ctl.put_bool("put_IsVisible", True)
         self.view_hidden = False
@@ -559,6 +566,49 @@ class AppWindow:
         a = Com(args, "ICoreWebView2LaunchingExternalUriSchemeEventArgs", owned=False)
         a.put_bool("put_Cancel", True)
         self.refused["external scheme"] += 1
+
+    def on_web_resource(self, sender, args) -> None:
+        """A cover from the art host: refused first with a 404 (so a failure below leaves the refusal standing, and
+        nothing goes to the network), then answered with the cover the app holds for the one game id the request
+        names (bridge.art_id), as the type its bytes were recognised as."""
+        a = Com(args, "ICoreWebView2WebResourceRequestedEventArgs", owned=False)
+        self.respond(a, 404, "Not Found", None)
+        req = a.get_ptr("get_Request", "ICoreWebView2WebResourceRequest")
+        try:
+            uri = req.get_str("get_Uri")
+        finally:
+            req.release()
+        gid = bridge.art_id(uri)
+        found = self.art(gid) if gid is not None and self.art is not None else None
+        if found is None:
+            self.refused["art"] += 1
+            return
+        self.respond(a, 200, "OK", found)
+
+    def respond(self, args: Com, status: int, reason: str, image: tuple[str, bytes] | None) -> None:
+        """Put a response on a resource request: the image's bytes in a stream of their own, or none."""
+        stream = 0
+        if image is not None:
+            kind, data = image
+            stream = wv.SHCreateMemStream(data, len(data)) or 0
+            if not stream:
+                raise wv.ComError("SHCreateMemStream", wv.E_FAIL)
+            headers = f"Content-Type: {kind}\nX-Content-Type-Options: nosniff\nCache-Control: no-store"
+        else:
+            headers = "Content-Type: text/plain\nCache-Control: no-store"
+        out = ctypes.c_void_p()
+        try:
+            self.env.do("CreateWebResourceResponse", (ctypes.c_void_p, ctypes.c_int, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                                      ctypes.POINTER(ctypes.c_void_p)),
+                        stream or None, status, reason, headers, ctypes.byref(out))
+        finally:
+            if stream:
+                wv.vcall(stream, 2, (), restype=ctypes.c_ulong)      # the response holds its own reference
+        response = Com(out.value, "ICoreWebView2WebResourceResponse")
+        try:
+            args.do("put_Response", (ctypes.c_void_p,), response.ptr)
+        finally:
+            response.release()
 
     def on_script_dialog(self, sender, args) -> None:
         self.refused["script dialog"] += 1       # never Accept: with the default dialogs off it is dismissed

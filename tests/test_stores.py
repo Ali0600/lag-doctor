@@ -388,7 +388,7 @@ def test_dot_dot_parts_are_worked_out_from_the_text_before_any_link_is_met(tmp_p
     assert target.local_problem(str(lib) + BS + ".." + BS + "Real") is None and read == []
 
 
-READERS = {"epic", "keyvalues", "launch", "steam"}     # every module of lagdoctor/stores but the file access itself
+READERS = {"art", "epic", "keyvalues", "launch", "steam"}  # every module of lagdoctor/stores but its file access
 PATH_MODULES = {"os", "ntpath", "posixpath", "genericpath", "pathlib", "io", "shutil", "glob", "importlib",
                 "builtins", "winreg"}
 ALLOWED = {"os": {"path", "fspath", "PathLike", "DirEntry", "stat_result"}, "os.path": {"join", "dirname"},
@@ -400,9 +400,9 @@ FILE_IO = {"read_text", "read_bytes", "write_text", "write_bytes", "open", "exis
 
 def file_access_problems(source: str, name: str) -> list[str]:
     """Every place in a reader's source that could reach a file or folder other than through stores' file access
-    (stores.scandir, stat, is_folder, exists, read_text, which ask target.local_problem first). A listing's own
-    entry may answer is_file and stat only without following links (follow_symlinks=False): it then reads what the
-    listing holds and opens nothing."""
+    (stores.scandir, stat, is_folder, exists, read_text, read_bytes, which ask target.local_problem first). A
+    listing's own entry may answer is_file and stat only without following links (follow_symlinks=False): it then
+    reads what the listing holds and opens nothing."""
     tree = ast.parse(source)
     parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
     out = []

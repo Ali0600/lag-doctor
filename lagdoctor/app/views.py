@@ -19,6 +19,7 @@ from typing import Any
 
 from lagdoctor.analysis import crop
 from lagdoctor.analysis.window import window as cut_window
+from lagdoctor.app import bridge
 from lagdoctor.app.library import STORE_NAMES, Entry, Installed, joined, read_diagnosis
 from lagdoctor.capture import session as sess
 from lagdoctor.model import C, Capture, Diagnosis, G, N, S, clean_note
@@ -81,12 +82,15 @@ def lag_text(key: Any) -> str:
     return labels.LAG_TYPES.get(key, "Not analysed") if isinstance(key, str) else "Not analysed"
 
 
-def tile(name: str) -> dict[str, Any]:
-    """A generated cover tile: the game's initials on a colour from its name (no art is downloaded)."""
+def tile(name: str, game_id: str | None = None, art: frozenset | set = frozenset()) -> dict[str, Any]:
+    """A cover tile: the game's initials on a colour from its name, and with "art" where its cover is (the art
+    host's URL for the game, when the app holds a cover from its store's cache: `art`, the ids it holds), which
+    the page shows over the initials once it has loaded. No art is downloaded."""
     words = [w for w in "".join(ch if ch.isalnum() else " " for ch in name).split() if w]
     initials = "".join(w[0] for w in words[:2]).upper() or "?"
     hue = sum(ord(ch) * (i + 1) for i, ch in enumerate(name)) % 360
-    return {"initials": initials, "hue": hue}
+    return {"initials": initials, "hue": hue,
+            "art": bridge.art_url(game_id) if game_id is not None and game_id in art else None}
 
 
 def numbers(entry: Entry) -> dict[str, Any]:
@@ -155,9 +159,11 @@ def _games(entries: list[Entry], games: list[Installed] | tuple = ()) -> list[_G
     return list(out.values()) + [_Game(id=g.game_id, name=g.game.title, installed=g) for g in rest]
 
 
-def library_view(entries: list[Entry], readiness: dict[str, Any], games: list[Installed] | tuple = ()) -> dict[str, Any]:
+def library_view(entries: list[Entry], readiness: dict[str, Any], games: list[Installed] | tuple = (),
+                 art: frozenset | set = frozenset()) -> dict[str, Any]:
     """Screen 1: a tile per game (each installed store game, and each recorded game no store lists), those with
-    recordings first, newest recording first, and the readiness strip."""
+    recordings first, newest recording first, and the readiness strip; `art`: the game ids whose cover the app
+    holds."""
     out = []
     for g in _games(entries, games):
         latest = g.recs[0] if g.recs else None
@@ -167,7 +173,8 @@ def library_view(entries: list[Entry], readiness: dict[str, Any], games: list[In
                     "installed": g.installed is not None, "recordings": len(g.recs),
                     "last": when_text(latest.started) if latest is not None else "",
                     "lag_type": lag_text(n["lag_type"]) if latest is not None else "Not recorded yet",
-                    "lag_key": n["lag_type"] or "unknown", "avg_fps": fmt(n["avg_fps"]), "tile": tile(g.name)})
+                    "lag_key": n["lag_type"] or "unknown", "avg_fps": fmt(n["avg_fps"]),
+                    "tile": tile(g.name, g.id, art)})
     return {"games": out, "recent": [g["id"] for g in out if g["recordings"]][:RECENT],
             "recordings": sum(g["recordings"] for g in out), "installed": sum(g["installed"] for g in out),
             "readiness": readiness}
@@ -200,7 +207,7 @@ def play_words(start_key: str | None, window_s: float, lag_key: str) -> str:
 
 
 def game_view(entries: list[Entry], game_id: str, last_id: str | None, games: list[Installed] | tuple = (),
-              play: str = "") -> dict[str, Any] | None:
+              play: str = "", art: frozenset | set = frozenset()) -> dict[str, Any] | None:
     """Screen 2: the game, its last recording's summary on top, every recording of it, and for an installed store game
     its Play button with what it measures (`play`, play_words'). None for an id the listing does not have."""
     found = next((g for g in _games(entries, games) if g.id == game_id), None)
@@ -218,7 +225,7 @@ def game_view(entries: list[Entry], game_id: str, last_id: str | None, games: li
     store = found.installed.store_name if found.installed is not None else \
         STORE_NAMES.get((latest.summary or {}).get("launcher") or "", "")
     return {"id": game_id, "name": found.name, "exe_name": latest.exe_name if latest is not None else None,
-            "store": store, "tile": tile(found.name), "last": last,
+            "store": store, "tile": tile(found.name, game_id, art), "last": last,
             "sessions": [_session_row(e, last_id) for e in found.recs],
             "play": {"store": found.installed.store_name, "text": play} if found.installed is not None else None,
             "play_note": "" if found.installed is not None else PLAY_NOTE}

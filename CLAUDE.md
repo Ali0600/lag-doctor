@@ -146,7 +146,7 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   1e7 as corrupt: an 81 MB exe read as "not read" until a demo used a real size. A DLL name joins `PROXY_DLLS` only
   from a primary source, and never one on KnownDLLs (`tests/test_gamefiles.py` reads both lists).
 - **The store readers (`lagdoctor/stores/`) reach files only through `stores`' own file access** (`scandir`, `stat`,
-  `is_folder`, `exists`, `read_text`), which asks `target.local_problem` first: it reads each junction and link on the
+  `is_folder`, `exists`, `read_text`, `read_bytes`), which asks `target.local_problem` first: it reads each junction and link on the
   way instead of following it, so nothing on a network share, or kept online only, is opened. `tests/test_stores.py`
   scans every module of `lagdoctor/stores` but `__init__.py` for any other way in (aliases, `ntpath`, the raw
   seams), and proves it on planted lines. Their tests never read this PC's own Steam or Epic files: the

@@ -230,10 +230,26 @@ function seriesChart(spec, extra) {
 
 // ------------------------------------------------------------------------------------------------ screens --
 
+// The art host's URL for one game, exactly as the app builds it (bridge.art_url): nothing else is ever loaded.
+const ART_URL = /^https:\/\/art\.lagdoctor\.example\/g-[0-9a-f]{16}$/;
+
+// A cover: the game's initials on its colour, and its art from the store's cache over them once that has loaded (a
+// probe image outside the page loads it first, so a cover that cannot load leaves the initials as they were).
 function tileCover(t, big) {
   const c = el('div', {class: 'cover'}, t.initials);
   c.style.background = `linear-gradient(160deg, hsl(${t.hue}, 55%, 46%), hsl(${(t.hue + 40) % 360}, 50%, 30%))`;
   if (big) c.style.fontSize = '54px';
+  if (typeof t.art === 'string' && ART_URL.test(t.art)) {
+    c.dataset.art = 'loading';
+    const probe = new Image();
+    probe.addEventListener('load', () => {
+      c.textContent = '';
+      c.style.background = `center / cover no-repeat url("${t.art}")`;
+      c.dataset.art = 'shown';
+    });
+    probe.addEventListener('error', () => { c.dataset.art = 'none'; });
+    probe.src = t.art;
+  }
   return c;
 }
 

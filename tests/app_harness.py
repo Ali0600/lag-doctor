@@ -361,6 +361,32 @@ def script(facts: dict, app: App):
         }
         return out;
     })()""")
+    # The covers: Demo Racer's from its (made-up) store cache, answered by the window's art host, shown over its
+    # initials; the others keep their initials; and the art host answers anything else with nothing.
+    yield until("[...document.querySelectorAll('#games .cover')].every((c) => c.dataset.art !== 'loading')")
+    facts["covers"] = yield js("""(() => Object.fromEntries([...document.querySelectorAll('#games .game')].map((g) => {
+        const c = g.querySelector('.cover');
+        return [g.querySelector('.name').textContent, {state: c.dataset.art || 'initials', initials: c.textContent,
+                drawn: getComputedStyle(c).backgroundImage.includes('https://art.lagdoctor.example/g-')}];
+    })))()""")
+    yield js("""(() => {
+        window.__artProbe = 'waiting';
+        const probe = new Image();
+        probe.addEventListener('load', () => { window.__artProbe = 'loaded'; });
+        probe.addEventListener('error', () => { window.__artProbe = 'refused'; });
+        probe.src = 'https://art.lagdoctor.example/g-0000000000000000';
+        return true;
+    })()""")
+    yield until("window.__artProbe !== 'waiting'")
+    facts["cover_unknown"] = yield js("window.__artProbe")
+    facts["art_refused"] = app.window.refused["art"]
+    # The page loads a cover only from the art host's URL exactly as the app builds it: anything else stays initials.
+    facts["cover_urls_refused"] = yield js("""(() => ['http://art.lagdoctor.example/g-0123456789abcdef',
+        'https://evil.test/g-0123456789abcdef', 'https://art.lagdoctor.example/g-0123456789abcde',
+        'https://art.lagdoctor.example/g-0123456789abcdef") url("https://evil.test/a', 5].map((art) => {
+          const c = tileCover({initials: 'AB', hue: 10, art});
+          return [c.dataset.art || 'initials', c.textContent];
+        }))()""")
     yield js(CLICK_GAME.format(name=json.dumps("Lantern Drift")))
     yield until("!!document.getElementById('play')")
     facts["play_game"] = yield js("""(() => ({name: document.getElementById('game-name').textContent,
@@ -587,7 +613,7 @@ def main(argv: list[str]) -> int:
               launcher=fake_recorder.stand_in_prompt(rig.prompts, rig.relays), play=rig.played.append,
               flash=rig.flashes.append, installed=lambda: list(app_demo.INSTALLED),
               forms_of=lambda folder: (folder,), open_link=lambda link, should_go: rig.links.append(link),
-              play_recorder=play_recorder)
+              play_recorder=play_recorder, covers=app_demo.covers)
     app.harness = rig
     real_library = app.do_library
     app.do_library = lambda: (rig.library_asks.append(1), real_library())[1]     # counts the page's asks

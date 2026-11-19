@@ -16,6 +16,11 @@ from typing import Any
 APP_HOST = "app.lagdoctor.example"          # RFC 6761 name, one host for the bundled files (research note, section 3)
 APP_ORIGIN = "https://" + APP_HOST
 ENTRY = APP_ORIGIN + "/index.html"
+# The second host, for the games' cover art (M6): no folder is mapped to it. The window answers each of its image
+# requests itself (WebResourceRequested), by game id only, with bytes the app read from a store's cache.
+ART_HOST = "art.lagdoctor.example"
+ART_ORIGIN = "https://" + ART_HOST
+ART_FILTER = ART_ORIGIN + "/*"
 MAX_MESSAGE_CHARS = 16 * 1024              # a request is a few dozen characters; anything longer is refused unread
 MAX_ID = 2 ** 31 - 1
 
@@ -82,6 +87,28 @@ def navigation_allowed(uri: Any, first: bool) -> bool:
         return False
     parts = urllib.parse.urlsplit(uri)
     return parts.path == "/index.html" and not parts.query and not parts.fragment
+
+
+def art_url(game_id: str) -> str:
+    """Where the page asks for a game's cover: the art host, the game's id as the whole path."""
+    if not _game(game_id):
+        raise ValueError(f"not a game id: {game_id!r}")
+    return f"{ART_ORIGIN}/{game_id}"
+
+
+def art_id(uri: Any) -> str | None:
+    """The game id an art request names, or None for anything but art_url's form exactly: https, the art host as
+    written there (so no port, no user info, no other case), no query, no fragment, and the path one game id."""
+    if not isinstance(uri, str):
+        return None
+    try:
+        parts = urllib.parse.urlsplit(uri)
+    except ValueError:
+        return None
+    if parts.scheme != "https" or parts.netloc != ART_HOST or parts.query or parts.fragment:
+        return None
+    gid = parts.path[1:] if parts.path.startswith("/") else None
+    return gid if gid is not None and _game(gid) else None
 
 
 def parse(text: Any) -> Request | None:

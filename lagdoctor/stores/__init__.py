@@ -8,9 +8,10 @@ checks every field against a grammar, and skips what fails, naming it in Library
 is never guessed at, and one bad entry never hides the others in its file. A file that cannot be read as a whole (a
 library list Steam would not write, a journal without its header) is named, and none of its entries is taken.
 
-Every file and folder the readers look at goes through this module's scandir, stat, is_folder, exists and read_text,
-which ask target.local_problem first: nothing is opened on a network drive, or through a junction or link that leads
-to one, and nothing kept online only (tests/test_stores.py holds every reader module to that).
+Every file and folder the readers look at goes through this module's scandir, stat, is_folder, exists, read_text and
+read_bytes (the cover art's, art.py), which ask target.local_problem first: nothing is opened on a network drive, or
+through a junction or link that leads to one, and nothing kept online only (tests/test_stores.py holds every reader
+module to that).
 """
 from __future__ import annotations
 
@@ -175,9 +176,19 @@ def exists(path: str | os.PathLike) -> bool:
 
 
 def read_text(path: Path, max_bytes: int) -> str:
-    """A store's file as text. ValueError, in plain words, when its path leads off the local disks or the file is
+    """A store's file as text. ValueError, in plain words, when read_bytes refuses it, or it is not UTF-8."""
+    data = read_bytes(path, max_bytes)
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{path} is not UTF-8 text") from exc
+    return text[1:] if text.startswith(chr(0xFEFF)) else text
+
+
+def read_bytes(path: Path, max_bytes: int) -> bytes:
+    """A store's file as bytes. ValueError, in plain words, when its path leads off the local disks or the file is
     kept online only (target.local_problem, which looks at the file itself too: reading it would download it), when
-    it is larger than `max_bytes`, is not UTF-8, or cannot be read."""
+    it is larger than `max_bytes`, or cannot be read."""
     try:
         st = stat(path)
     except NotLocal as exc:
@@ -193,8 +204,4 @@ def read_text(path: Path, max_bytes: int) -> str:
         raise ValueError(f"{path} could not be read ({exc.strerror or exc})") from exc
     if len(data) > max_bytes:
         raise ValueError(f"{path} is larger than {max_bytes} bytes, so it was not read")
-    try:
-        text = data.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise ValueError(f"{path} is not UTF-8 text") from exc
-    return text[1:] if text.startswith(chr(0xFEFF)) else text
+    return data
