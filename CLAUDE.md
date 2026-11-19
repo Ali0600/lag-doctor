@@ -525,7 +525,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `tests/test_downloads.py::test_fetch_gold_takes_the_pinned_commits_gold_folder_byte_for_byte` failed twice that way
   (WinError 5 renaming a folder under its `tmp_path`), then passed 3 of 3 alone. Another worktree's session counts
   too: before a run, list the `python.exe` command lines (`Get-CimInstance Win32_Process`) and wait while one holds
-  `pytest`, `redfirst.py` or `laglab` (2026-11-09: a rerun met the M2 session's red-first). The Window spike workflow's
+  `pytest`, `redfirst.py` or `laglab` (2026-11-09: a rerun met the M2 session's red-first), as a check that exits
+  non-zero while one does and that the run's `&&` chain stops on: one that only printed "BUSY" let a run overlap
+  another session's full suite (2026-11-17). The Window spike workflow's
   socket check (`sockets-1` or `sockets-2`) failed 3 of 20 attempts on 2026-11-08 (main 1 of 13, the M1 branch 2 of
   5), each on one UDP4 socket "bound" on an ephemeral port in a WebView2 process: the runtime's own lookups (in 20
   runs watched every 20 ms, all 70 of its UDP sockets were a utility process's, on 0.0.0.0, on a port Windows chose).
