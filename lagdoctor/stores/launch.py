@@ -9,6 +9,7 @@ takes only a link these built, refuses when lag-doctor runs elevated, and hands 
 from __future__ import annotations
 
 import re
+from typing import Callable
 
 from lagdoctor.winapi import launch as shell
 
@@ -54,12 +55,12 @@ def store_of(link: object) -> str | None:
     return None
 
 
-def play(link: str) -> dict:
+def play(link: str, should_go: Callable[[], bool] | None = None) -> dict:
     """Have Explorer open a store link that steam_link or epic_link built: winapi/launch.py's dict, plus "store".
 
     Refuses (ValueError) any other link, and (PermissionError) when lag-doctor runs elevated: Play is the player's
     own, unelevated window's to start. OSError when Explorer's desktop cannot be reached; the link is then not
-    opened any other way.
+    opened any other way. `should_go` goes to open_through_explorer (Withdrawn: nothing was opened).
     """
     store = store_of(link)
     if store is None:
@@ -68,5 +69,5 @@ def play(link: str) -> dict:
     if elevation.is_elevated():
         raise PermissionError("lag-doctor is running with administrator rights, and Play starts games only from the "
                               "player's own window")
-    done = shell.open_through_explorer(link)
+    done = shell.open_through_explorer(link, should_go=should_go)
     return {**done, "store": store}

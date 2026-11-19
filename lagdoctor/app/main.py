@@ -30,6 +30,7 @@ LOG_NAME = "app.log"
 OLD_LOG_NAME = "app-previous.log"
 MIN_BUILD = 1661                          # CreateSharedBuffer, the newest call the app needs (SDK 1.0.1661.34)
 LAG_KEY = "ctrl+alt+l"                    # cli.DEFAULT_HOTKEY; the app never imports cli
+LAUNCH_SLOW_S = 15.0                      # Play: a store link Explorer has not opened by then is said as not opened
 
 
 def tell(text: str) -> None:
@@ -109,17 +110,26 @@ def open_log(home: Path):
 class App:
     """The controller: owns the window, the session listing, the last capture it loaded and the recording it started.
 
-    What a test replaces (each defaulting to the real one): `recorder()`, the recorder's command line; `launcher`,
-    which raises the relay's UAC prompt (elevation.launch_elevated); `play(name)`, the recording's sounds; `flash()`,
-    the taskbar button's flash at a recording's end; `start_key`, the key the recorder measures from (None: the whole
-    session, as M4 recorded), which also tells the running screen and the sounds to follow it."""
+    What a test replaces (each defaulting to the real one): `recorder()`, the recorder's command line, and
+    `play_recorder(folder)`, Play's; `launcher`, which raises the relay's UAC prompt (elevation.launch_elevated);
+    `play(name)`, the recording's sounds; `flash()`, the taskbar button's flash at a recording's end; `start_key`, the
+    key the recorder measures from (None: the whole session, as M4 recorded), which also tells the running screen and
+    the sounds to follow it; `open_link(link)`, which has Explorer open a store's link (stores/launch.play).
+
+    `installed()` lists the store games Play can start (lagdoctor/stores: library.installed_games), and `covers(games)`
+    reads their cover art ({(store, id): (type, bytes)}, stores/art.covers). Both default to none: only run() passes
+    the stores' own, so a test that builds an App never lists the PC's own library or reads its art."""
 
     def __init__(self, *, home: Path, runtime: dict, create_fn, log: Callable[[str], None],
                  tell: Callable[[str], None] = tell, activate: bool = True, on_ready: Callable[["App"], None] | None
                  = None, opener: Callable[[str], None] | None = None,
                  recorder: Callable[[], list[str]] | None = None, launcher: Callable[..., Any] | None = None,
                  play: Callable[[str], Any] | None = None, flash: Callable[[], Any] | None = None,
-                 start_key: str | None = recording.START_KEY) -> None:
+                 start_key: str | None = recording.START_KEY, installed: Callable[[], list] | None = None,
+                 play_recorder: Callable[[str], list[str]] | None = None,
+                 open_link: Callable[[str], Any] | None = None,
+                 forms_of: Callable[[str], tuple[str, ...]] | None = None,
+                 covers: Callable[[list], dict] | None = None) -> None:
         self.home = Path(home)
         self.sessions = self.home / "sessions"
         self.sessions.mkdir(parents=True, exist_ok=True)
@@ -134,11 +144,24 @@ class App:
         self.entries: list[library.Entry] = []
         self.loaded: tuple | None = None            # (session id, capture, diagnosis, main chain): the last one read
         self.readiness: dict | None = None
+        self.covers = covers
+        self.art: dict[str, tuple[str, bytes]] = {}     # a game id's cover, as covers() read it
+        self.art_tried: set[str] = set()                # the game ids whose cover was looked for (once a run)
+        self.art_bytes = 0
+        self.art_lock = threading.Lock()                # one reading of covers at a time
         self.window = AppWindow(runtime=runtime, create_fn=create_fn, data_folder=self.home / "webview",
                                 assets=ASSETS, icon=ICON, class_name=CLASS + instance_tag(self.home),
-                                on_message=self.on_message, on_failed=self.on_failed, log=log, activate=activate)
+                                on_message=self.on_message, on_failed=self.on_failed, log=log, activate=activate,
+                                art=self.art_for)
         self.start_key = start_key
         self.recorder = recorder or (lambda: recording.recorder_argv(start_key=self.start_key))
+        self.play_recorder = play_recorder or (lambda folder: recording.recorder_argv(start_key=self.start_key,
+                                                                                      folder=folder))
+        self.installed = installed or (lambda: [])
+        self.forms_of = forms_of                    # library.installed's (target.folder_forms when None)
+        self.games: list[library.Installed] = []    # the store games, as the last listing read them
+        self.open_link = open_link or _open_store_link
+        self.rec_link: str | None = None            # the store link of the game the running Play opens
         self.launcher = launcher
         self.play = play or sounds.Player(self.home, log).play
         self.window.flasher = flash or self.window.flash        # when the window wants the player's attention
@@ -217,6 +240,51 @@ class App:
             self.entries = entries
         return entries
 
+    def scan_games(self) -> list[library.Installed]:
+        """The store games Play can start, read again: a game installed or removed since shows at the next listing."""
+        try:
+            games = library.installed(list(self.installed()), self.forms_of)
+        except Exception as exc:  # noqa: BLE001 - the recorded games still list without the stores'
+            self.log(f"listing the installed games: {''.join(traceback.format_exception(exc))}")
+            games = []
+        with self.lock:
+            self.games = games
+        self.read_art(games)
+        return games
+
+    def read_art(self, games: list[library.Installed]) -> None:
+        """Look once a run for the cover of each store game not looked for yet (`covers`), keeping at most
+        art.MAX_TOTAL_BYTES of them: on a worker thread, so the window's art host only ever looks them up."""
+        from lagdoctor.stores import art
+        if self.covers is None:
+            return
+        with self.art_lock:
+            new = [g for g in games if g.game_id not in self.art_tried]
+            if not new:
+                return
+            try:
+                found = self.covers([g.game for g in new])
+            except Exception as exc:  # noqa: BLE001 - the games keep their generated tiles
+                self.log(f"reading the games' cover art: {''.join(traceback.format_exception(exc))}")
+                found = {}
+            for g in new:
+                self.art_tried.add(g.game_id)
+                image = found.get((g.game.store, g.game.id))
+                if image is None or self.art_bytes + len(image[1]) > art.MAX_TOTAL_BYTES:
+                    continue
+                with self.lock:
+                    self.art[g.game_id] = image
+                self.art_bytes += len(image[1])
+
+    def art_for(self, game_id: str) -> tuple[str, bytes] | None:
+        """The cover the window's art host answers with (AppWindow.on_web_resource, on the window's thread)."""
+        with self.lock:
+            return self.art.get(game_id)
+
+    def art_ids(self) -> frozenset[str]:
+        with self.lock:
+            return frozenset(self.art)
+
     def entry(self, session: str) -> library.Entry:
         """The listed session of this id, listing again once if it is not known yet. Gone when there is none."""
         with self.lock:
@@ -240,13 +308,16 @@ class App:
 
     def do_library(self) -> dict:
         entries = self.scan()
-        return views.library_view(entries, self.readiness or self.get_readiness())
+        games = self.scan_games()
+        return views.library_view(entries, self.readiness or self.get_readiness(), games, art=self.art_ids())
 
     def do_game(self, game: str) -> dict:
         entries = self.scan()
-        view = views.game_view(entries, game, library.last_session(self.home, self.sessions))
+        games = self.scan_games()
+        view = views.game_view(entries, game, library.last_session(self.home, self.sessions), games,
+                               play=views.play_words(self.start_key, recording.WINDOW_S, LAG_KEY), art=self.art_ids())
         if view is None:
-            raise Gone("That game has no recordings any more.")
+            raise Gone("That game is not in the Library as it was: open it again from the Library.")
         return view
 
     def load(self, session: str) -> tuple:
@@ -320,24 +391,41 @@ class App:
 
     def do_record(self) -> dict:
         """Start recording the game that is running: the recorder, a child of this window, does the rest."""
+        return self._start(self.recorder)
+
+    def do_play(self, game: str) -> dict:
+        """Play (M6): record the installed store game the page names, from its start. The recorder asks for the relay
+        for the game's folder, and once the prompt is answered and its checks have passed it says `launch`: only then
+        does this window have Explorer open the game's store link (on_recorder), and the recorder waits for the game
+        the store starts. lag-doctor never starts the game itself."""
+        found = views.installed_of(self.scan(), game, self.scan_games())
+        if found is None:
+            raise Gone("That game is not installed any more, so lag-doctor cannot start it.")
+        play = {"game": game, "title": found.game.title, "store": found.store_name}
+        return self._start(lambda: self.play_recorder(found.game.folder), play=play, link=found.game.link,
+                           folder=found.game.folder)
+
+    def _start(self, argv: Callable[[], list[str]], *, play: dict | None = None, link: str | None = None,
+               folder: str | None = None) -> dict:
         with self.lock:
             if self.rec_state is not None and self.rec_state.active:
                 raise Gone("A recording is already running.")
             rec = recording.Recorder(home=self.home, log=self.log, hwnd=lambda: self.window.hwnd,
-                                     argv=self.recorder(), launcher=self.launcher,
+                                     argv=argv(), launcher=self.launcher, folder=folder,
                                      post=lambda msg: self.window.call_soon(lambda: self.on_recorder(rec, msg)))
-            self.rec, self.rec_state = rec, recording.RecordingState(keyed=self.start_key is not None)
+            self.rec, self.rec_link = rec, link
+            self.rec_state = recording.RecordingState(keyed=self.start_key is not None, play=play)
         try:
             rec.start()
         except BaseException as exc:
             with self.lock:                         # nothing started: the next Record may try again
                 if self.rec is rec:
-                    self.rec, self.rec_state = None, None
+                    self.rec, self.rec_state, self.rec_link = None, None, None
             if isinstance(exc, OSError):
                 self.log(f"starting the recorder: {exc}")
                 raise Gone(f"The recording could not start ({exc.strerror or exc}).") from None
             raise
-        self.log(f"recording: the recorder started, pid {rec.proc.pid}")
+        self.log(f"recording: the recorder started, pid {rec.proc.pid}" + (" (Play)" if play else ""))
         return self.recording_view()
 
     def _running(self) -> recording.Recorder:
@@ -384,10 +472,20 @@ class App:
             state = self.rec_state
             if rec is not self.rec or state is None or not state.active:
                 return                              # an older recording's, or after the end
+            # Play's store link opens once, for a recording the window started for Play, and not once it was stopped
+            link = self.rec_link if (msg["t"] == "launch" and state.play is not None and not state.launch_asked
+                                     and not rec.withdrawn) else None
+            # the first answer about the link (opened, not, or not in time), for a recording not stopped since
+            opened = (msg["t"] == "launched" and msg["ok"] and state.launch_result is None
+                      and not getattr(rec, "withdrawn", False))
             sounds_called = state.apply(msg, time.monotonic())
             phase, ended = state.phase, not state.active
         if msg["t"] == "say":
             self.log(f"recorder: {msg['text']}")
+        if link is not None:
+            self._launch(rec, link)
+        elif opened:
+            self.window.minimize()                  # out of the way of the store and the game (Play's step 3)
         self.window.set_recording(phase == "recording")
         if msg["t"] == "elevate" and not self.window.in_front():
             sounds_called.append("ask")             # the prompt may only blink on the taskbar behind the game
@@ -400,6 +498,42 @@ class App:
             self.window.drop_attention()            # the prompt it pointed at has been answered
         if (ended or msg["t"] == "elevate") and not self.window.in_front():
             self.window.want_attention()
+
+
+    def _launch(self, rec: recording.Recorder, link: str) -> None:
+        """Play's step 3: have Explorer open the game's store link, on a thread of its own (it calls into Explorer,
+        which can be slow, and the window's thread never waits). How it went comes back as the app's own "launched":
+        when Windows could not open it, the recorder goes on waiting, and the running screen asks the player to start
+        the game themselves."""
+        def should_go() -> bool:                       # asked right before Explorer is handed the link
+            with self.lock:
+                return self.rec is rec and not rec.withdrawn
+
+        def run() -> None:
+            from lagdoctor.winapi.launch import Withdrawn
+            try:
+                self.open_link(link, should_go)
+                result = {"t": "launched", "ok": True, "why": None}
+            except Withdrawn:                         # stopped meanwhile: nothing was opened, and nothing to say
+                return
+            except (OSError, ValueError) as exc:      # PermissionError (an elevated window) is an OSError
+                self.log(f"opening the store link: {exc}")
+                result = {"t": "launched", "ok": False, "why": str(exc) or type(exc).__name__}
+            except Exception as exc:  # noqa: BLE001 - logged; the player is asked to start the game themselves
+                self.log(f"opening the store link:\n{''.join(traceback.format_exception(exc))}")
+                result = {"t": "launched", "ok": False, "why": "lag-doctor hit an error opening it"}
+            self.window.call_soon(lambda: self.on_recorder(rec, result))
+        threading.Thread(target=run, name="lagdoctor-app-launch", daemon=True).start()
+        # A hung Explorer is said after LAUNCH_SLOW_S, as a link that was not opened; the first answer is the one kept.
+        self.window.after(int(LAUNCH_SLOW_S * 1000), lambda: self.on_recorder(rec, {
+            "t": "launched", "ok": False, "why": f"Windows has not opened it within {LAUNCH_SLOW_S:.0f} seconds"}))
+
+
+def _open_store_link(link: str, should_go: Callable[[], bool] | None = None) -> Any:
+    """Explorer opens the store link (stores/launch.play: only a link its builders made, never when elevated), so the
+    store, and the game it starts, are Explorer's children, never this window's; `should_go` is asked right before."""
+    from lagdoctor.stores import launch
+    return launch.play(link, should_go)
 
 
 class Gone(Exception):
@@ -452,7 +586,9 @@ def run() -> int:
         if hr < 0:
             tell(f"lag-doctor's window could not start COM (HRESULT 0x{hr & 0xFFFFFFFF:08X}).")
             return 1
-        app = App(home=home, runtime=runtime, create_fn=create_fn, log=log)
+        from lagdoctor.stores import art
+        app = App(home=home, runtime=runtime, create_fn=create_fn, log=log,
+                  installed=lambda: library.installed_games(log), covers=art.covers)
         try:
             app.run()
         finally:

@@ -1,0 +1,445 @@
+[
+ {
+  "name": "play: a folder whose forms cannot be worked out drops its game",
+  "file": "lagdoctor/app/library.py",
+  "old": "        except (OSError, ValueError):\n            forms = (g.folder,)",
+  "new": "        except (OSError, ValueError):\n            continue",
+  "tests": [
+   "tests/test_app_views.py::test_a_folder_whose_forms_cannot_be_worked_out_is_taken_as_its_store_wrote_it"
+  ]
+ },
+ {
+  "name": "play: a store game listed twice",
+  "file": "lagdoctor/app/library.py",
+  "old": "            if (g.store, g.id) not in seen:",
+  "new": "            if True:",
+  "tests": [
+   "tests/test_app_views.py::test_the_installed_games_are_each_stores_once_and_one_store_failing_hides_none_of_the_other"
+  ]
+ },
+ {
+  "name": "play: one store's failure hides the other's games",
+  "file": "lagdoctor/app/library.py",
+  "old": "        except Exception as exc:  # noqa: BLE001 - one store's failure never hides the other's games",
+  "new": "        except ZeroDivisionError as exc:  # noqa: BLE001 - one store's failure never hides the other's games",
+  "tests": [
+   "tests/test_app_views.py::test_the_installed_games_are_each_stores_once_and_one_store_failing_hides_none_of_the_other"
+  ]
+ },
+ {
+  "name": "play: installed games not recorded come in the stores' order",
+  "file": "lagdoctor/app/views.py",
+  "old": "    rest = sorted((g for g in games if g.game_id not in out), key=lambda g: (g.game.title.casefold(), g.key))",
+  "new": "    rest = [g for g in games if g.game_id not in out]",
+  "tests": [
+   "tests/test_app_views.py::test_the_library_lists_installed_games_and_shows_recordings_under_the_one_they_ran_from"
+  ]
+ },
+ {
+  "name": "play: the Recent row holds games never recorded",
+  "file": "lagdoctor/app/views.py",
+  "old": "[g[\"id\"] for g in out if g[\"recordings\"]][:RECENT]",
+  "new": "[g[\"id\"] for g in out][:RECENT]",
+  "tests": [
+   "tests/test_app_views.py::test_the_library_lists_installed_games_and_shows_recordings_under_the_one_they_ran_from"
+  ]
+ },
+ {
+  "name": "play: a game no store lists offers Play",
+  "file": "lagdoctor/app/views.py",
+  "old": "            \"play\": {\"store\": found.installed.store_name, \"text\": play} if found.installed is not None else None,",
+  "new": "            \"play\": {\"store\": \"\", \"text\": play},",
+  "tests": [
+   "tests/test_app_views.py::test_the_game_view_of_an_installed_game_offers_play_and_of_any_other_says_why_not"
+  ]
+ },
+ {
+  "name": "play: any game is taken for an installed one",
+  "file": "lagdoctor/app/views.py",
+  "old": "    return found.installed if found is not None else None",
+  "new": "    return games[0] if games else None",
+  "tests": [
+   "tests/test_app_views.py::test_the_game_view_of_an_installed_game_offers_play_and_of_any_other_says_why_not"
+  ]
+ },
+ {
+  "name": "play: Play's recorder waits for no folder",
+  "file": "lagdoctor/app/recording.py",
+  "old": "    play = [] if folder is None else [\"--wait-folder\", str(folder), \"--wait-s\", f\"{WAIT_S:g}\"]",
+  "new": "    play = []",
+  "tests": [
+   "tests/test_app_recording.py::test_plays_recorder_waits_for_the_game_from_its_folder_as_long_as_the_relay_is_checked_for"
+  ]
+ },
+ {
+  "name": "play: a relay for the running game taken for Play",
+  "file": "lagdoctor/app/recording.py",
+  "old": "    if cfg.folders is None:\n        return \"the command would record the game that is running",
+  "new": "    if False:\n        return \"the command would record the game that is running",
+  "tests": [
+   "tests/test_app_recording.py::test_for_play_only_the_relay_for_the_chosen_folder_and_wait_is_accepted"
+  ]
+ },
+ {
+  "name": "play: a relay for another folder taken",
+  "file": "lagdoctor/app/recording.py",
+  "old": "    if [fold_path(f) for f in cfg.folders] != [fold_path(f) for f in folders]:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_app_recording.py::test_for_play_only_the_relay_for_the_chosen_folder_and_wait_is_accepted"
+  ]
+ },
+ {
+  "name": "play: the relay's folders compared as written",
+  "file": "lagdoctor/app/recording.py",
+  "old": "[fold_path(f) for f in cfg.folders] != [fold_path(f) for f in folders]",
+  "new": "list(cfg.folders) != list(folders)",
+  "tests": [
+   "tests/test_app_recording.py::test_for_play_only_the_relay_for_the_chosen_folder_and_wait_is_accepted"
+  ]
+ },
+ {
+  "name": "play: a relay that waits longer taken",
+  "file": "lagdoctor/app/recording.py",
+  "old": "    if cfg.wait_s is None or cfg.wait_s > WAIT_S:",
+  "new": "    if cfg.wait_s is None:",
+  "tests": [
+   "tests/test_app_recording.py::test_for_play_only_the_relay_for_the_chosen_folder_and_wait_is_accepted"
+  ]
+ },
+ {
+  "name": "play: the recorder checks Play's relay as if no game were chosen",
+  "file": "lagdoctor/app/recording.py",
+  "old": "python=self.interpreter or python(), root=self.cwd, folders=folders))",
+  "new": "python=self.interpreter or python(), root=self.cwd))",
+  "tests": [
+   "tests/test_app_recording.py::test_the_recorder_checks_plays_relay_against_the_folder_it_was_started_for"
+  ]
+ },
+ {
+  "name": "play: a folder that cannot be waited on lets the prompt be raised",
+  "file": "lagdoctor/app/recording.py",
+  "old": "        except ValueError as exc:\n            return None, f\"the game's folder cannot be waited on ({exc})\"",
+  "new": "        except ValueError as exc:\n            return None, None",
+  "tests": [
+   "tests/test_app_recording.py::test_a_folder_that_cannot_be_waited_on_refuses_the_prompt"
+  ]
+ },
+ {
+  "name": "play: launch is not a step of its own",
+  "file": "lagdoctor/app/recording.py",
+  "old": "            self.phase, self.launch_asked = \"launching\", True",
+  "new": "            self.launch_asked = True",
+  "tests": [
+   "tests/test_app_recording.py::test_play_moves_through_the_prompt_the_launch_and_the_wait_in_its_own_words"
+  ]
+ },
+ {
+  "name": "play: a link that could not be opened is not kept",
+  "file": "lagdoctor/app/recording.py",
+  "old": "            if not msg[\"ok\"]:\n                self.launch_failed = msg[\"why\"]",
+  "new": "            pass",
+  "tests": [
+   "tests/test_app_recording.py::test_a_store_link_windows_could_not_open_is_said_and_the_wait_goes_on"
+  ]
+ },
+ {
+  "name": "play: Play's steps said in Record's words",
+  "file": "lagdoctor/app/views.py",
+  "old": "        if play is not None and state.phase in PLAY_DETAILS:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_recording.py::test_play_moves_through_the_prompt_the_launch_and_the_wait_in_its_own_words"
+  ]
+ },
+ {
+  "name": "play: Play's ends said in Record's words",
+  "file": "lagdoctor/app/views.py",
+  "old": "        if play is not None and state.reason in PLAY_ENDS:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_recording.py::test_how_a_play_ended_is_said_in_plays_words"
+  ]
+ },
+ {
+  "name": "play: no Cancel while the store starts the game",
+  "file": "lagdoctor/app/views.py",
+  "old": "            \"action\": (\"cancel\" if state.phase in (\"starting\", \"waiting\", \"asking\", \"preparing\", \"launching\") else",
+  "new": "            \"action\": (\"cancel\" if state.phase in (\"starting\", \"waiting\", \"asking\", \"preparing\") else",
+  "tests": [
+   "tests/test_app_recording.py::test_play_moves_through_the_prompt_the_launch_and_the_wait_in_its_own_words"
+  ]
+ },
+ {
+  "name": "play: Try again plays nothing",
+  "file": "lagdoctor/app/views.py",
+  "old": "            \"play\": {\"game\": play[\"game\"]} if play is not None else None,",
+  "new": "            \"play\": None,",
+  "tests": [
+   "tests/test_app_recording.py::test_play_moves_through_the_prompt_the_launch_and_the_wait_in_its_own_words",
+   "tests/test_app_recording.py::test_how_a_play_ended_is_said_in_plays_words"
+  ]
+ },
+ {
+  "name": "play: the store's name of the game not shown while it waits",
+  "file": "lagdoctor/app/views.py",
+  "old": "\"game\": state.game or (play or {}).get(\"title\")",
+  "new": "\"game\": state.game",
+  "tests": [
+   "tests/test_app_recording.py::test_play_moves_through_the_prompt_the_launch_and_the_wait_in_its_own_words"
+  ]
+ },
+ {
+  "name": "play: the store link opened twice",
+  "file": "lagdoctor/app/main.py",
+  "old": "and state.play is not None and not state.launch_asked\n",
+  "new": "and state.play is not None\n",
+  "tests": [
+   "tests/test_app_recording.py::test_on_launch_the_window_has_its_store_link_opened_once_and_steps_aside"
+  ]
+ },
+ {
+  "name": "play: the store link opened after a cancel",
+  "file": "lagdoctor/app/main.py",
+  "old": "\n                                     and not rec.withdrawn) else None",
+  "new": ") else None",
+  "tests": [
+   "tests/test_app_recording.py::test_no_store_link_is_opened_once_stopped_or_for_a_recording_that_is_not_play"
+  ]
+ },
+ {
+  "name": "play: a recording that is not Play's opens a link",
+  "file": "lagdoctor/app/main.py",
+  "old": "msg[\"t\"] == \"launch\" and state.play is not None and",
+  "new": "msg[\"t\"] == \"launch\" and",
+  "tests": [
+   "tests/test_app_recording.py::test_no_store_link_is_opened_once_stopped_or_for_a_recording_that_is_not_play"
+  ]
+ },
+ {
+  "name": "play: the window stays in front of the game",
+  "file": "lagdoctor/app/main.py",
+  "old": "            self.window.minimize()                  # out of the way of the store and the game (Play's step 3)",
+  "new": "            pass",
+  "tests": [
+   "tests/test_app_recording.py::test_on_launch_the_window_has_its_store_link_opened_once_and_steps_aside"
+  ]
+ },
+ {
+  "name": "play: Play takes a game that is not installed",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if found is None:\n            raise Gone(\"That game is not installed any more",
+  "new": "        if False:\n            raise Gone(\"That game is not installed any more",
+  "tests": [
+   "tests/test_app_recording.py::test_play_starts_the_recorder_for_the_installed_games_folder_and_keeps_its_link_to_itself"
+  ]
+ },
+ {
+  "name": "play: Play's recorder is not told the game's folder",
+  "file": "lagdoctor/app/main.py",
+  "old": "link=found.game.link,\n                           folder=found.game.folder)",
+  "new": "link=found.game.link)",
+  "tests": [
+   "tests/test_app_recording.py::test_play_starts_the_recorder_for_the_installed_games_folder_and_keeps_its_link_to_itself"
+  ]
+ },
+ {
+  "name": "play: why the link could not be opened is lost",
+  "file": "lagdoctor/app/main.py",
+  "old": "            except (OSError, ValueError) as exc:      # PermissionError (an elevated window) is an OSError",
+  "new": "            except ZeroDivisionError as exc:      # PermissionError (an elevated window) is an OSError",
+  "tests": [
+   "tests/test_app_recording.py::test_a_link_that_cannot_be_opened_leaves_the_window_where_it_is_and_says_so"
+  ]
+ },
+ {
+  "name": "play: the Installed filter shows the recorded games",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "(filter === 'installed' ? g.installed\n        : g.recordings > 0)",
+  "new": "(filter === 'installed' ? g.recordings > 0\n        : g.installed)",
+  "tests": [
+   "tests/test_app_page.py::test_the_library_lists_installed_games_with_their_recordings_and_filters_them"
+  ]
+ },
+ {
+  "name": "play: Play records the game that is running instead",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "  ask('play', {game}).then((r) => {",
+  "new": "  ask('record').then((r) => {",
+  "tests": [
+   "tests/test_app_page.py::test_play_starts_an_installed_game_through_its_store_link_and_waits_for_it"
+  ]
+ },
+ {
+  "name": "play: Try again records the game that is running instead",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "    buttons.push(r.play ? playButton(r.play.game, r.ok ? 'Play again' : 'Try again')",
+  "new": "    buttons.push(false ? playButton(r.play.game, r.ok ? 'Play again' : 'Try again')",
+  "tests": [
+   "tests/test_app_page.py::test_play_starts_an_installed_game_through_its_store_link_and_waits_for_it"
+  ]
+ },
+ {
+  "name": "play: a recording joins any installed game, holding it or not",
+  "file": "lagdoctor/app/library.py",
+  "old": "    holders = [g for g in games if any(target.in_folder(exe, form) for form in g.forms)]",
+  "new": "    holders = list(games)",
+  "tests": [
+   "tests/test_app_views.py::test_each_recording_joins_the_installed_game_whose_folder_holds_its_exe_not_one_of_its_name"
+  ]
+ },
+ {
+  "name": "play: of two holders the last by key taken",
+  "file": "lagdoctor/app/library.py",
+  "old": "    return min(holders, key=lambda g: g.key) if holders else None",
+  "new": "    return max(holders, key=lambda g: g.key) if holders else None",
+  "tests": [
+   "tests/test_app_views.py::test_the_most_specific_folder_wins_and_a_broad_one_takes_no_recording"
+  ]
+ },
+ {
+  "name": "play: a folder holding another game's takes its recordings",
+  "file": "lagdoctor/app/library.py",
+  "old": "            if other.key != g.key and any(o.startswith(f + \"\\\\\") for f in mine for o in folded[other.key]):",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_app_views.py::test_the_most_specific_folder_wins_and_a_broad_one_takes_no_recording"
+  ]
+ },
+ {
+  "name": "play: a Program Files folder takes recordings",
+  "file": "lagdoctor/app/library.py",
+  "old": "        if any(f in shared for f in mine):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_views.py::test_the_most_specific_folder_wins_and_a_broad_one_takes_no_recording"
+  ]
+ },
+ {
+  "name": "play: an older recording follows no join",
+  "file": "lagdoctor/app/library.py",
+  "old": "            out[e.id] = newest[e.game_key]\n",
+  "new": "            pass\n",
+  "tests": [
+   "tests/test_app_views.py::test_an_older_recording_follows_the_newest_join_of_its_game_and_two_programs_of_one_folder_are_one_game"
+  ]
+ },
+ {
+  "name": "play: a recording that ran elsewhere follows its game's join",
+  "file": "lagdoctor/app/library.py",
+  "old": " and not isinstance((e.summary or {}).get(\"exe\"), str)\n",
+  "new": "\n",
+  "tests": [
+   "tests/test_app_views.py::test_an_older_recording_follows_the_newest_join_of_its_game_and_two_programs_of_one_folder_are_one_game"
+  ]
+ },
+ {
+  "name": "play: a joined recording answers to its exe's id",
+  "file": "lagdoctor/app/views.py",
+  "old": "            tile = out.setdefault(g.game_id, _Game(id=g.game_id, name=g.game.title, installed=g))",
+  "new": "            tile = out.setdefault(e.game_id, _Game(id=e.game_id, name=g.game.title, installed=g))",
+  "tests": [
+   "tests/test_app_views.py::test_the_game_view_of_an_installed_game_offers_play_and_of_any_other_says_why_not"
+  ]
+ },
+ {
+  "name": "play: a failing store listing fails the Library",
+  "file": "lagdoctor/app/main.py",
+  "old": "        except Exception as exc:  # noqa: BLE001 - the recorded games still list without the stores'",
+  "new": "        except ZeroDivisionError as exc:  # noqa: BLE001 - the recorded games still list without the stores'",
+  "tests": [
+   "tests/test_app_views.py::test_a_store_listing_that_fails_still_lists_the_recorded_games"
+  ]
+ },
+ {
+  "name": "play: a late answer about the link replaces the first",
+  "file": "lagdoctor/app/recording.py",
+  "old": "        elif t == \"launched\" and self.launch_result is None:",
+  "new": "        elif t == \"launched\":",
+  "tests": [
+   "tests/test_app_recording.py::test_the_link_is_opened_by_one_thread_once_and_a_slow_explorer_is_said_after_its_bound"
+  ]
+ },
+ {
+  "name": "play: a link not opened minimizes the window",
+  "file": "lagdoctor/app/main.py",
+  "old": "            opened = (msg[\"t\"] == \"launched\" and msg[\"ok\"] and state.launch_result is None\n",
+  "new": "            opened = (msg[\"t\"] == \"launched\" and state.launch_result is None\n",
+  "tests": [
+   "tests/test_app_recording.py::test_a_link_that_cannot_be_opened_leaves_the_window_where_it_is_and_says_so"
+  ]
+ },
+ {
+  "name": "play: a late answer minimizes the window",
+  "file": "lagdoctor/app/main.py",
+  "old": "            opened = (msg[\"t\"] == \"launched\" and msg[\"ok\"] and state.launch_result is None\n",
+  "new": "            opened = (msg[\"t\"] == \"launched\" and msg[\"ok\"]\n",
+  "tests": [
+   "tests/test_app_recording.py::test_the_link_is_opened_by_one_thread_once_and_a_slow_explorer_is_said_after_its_bound"
+  ]
+ },
+ {
+  "name": "play: an answer after a cancel minimizes the window",
+  "file": "lagdoctor/app/main.py",
+  "old": "                      and not getattr(rec, \"withdrawn\", False))",
+  "new": "                      )",
+  "tests": [
+   "tests/test_app_recording.py::test_a_cancel_while_explorer_is_slow_opens_nothing_and_leaves_the_window_where_it_is"
+  ]
+ },
+ {
+  "name": "play: Explorer handed the link after a cancel",
+  "file": "lagdoctor/app/main.py",
+  "old": "                return self.rec is rec and not rec.withdrawn",
+  "new": "                return True",
+  "tests": [
+   "tests/test_app_recording.py::test_a_cancel_while_explorer_is_slow_opens_nothing_and_leaves_the_window_where_it_is"
+  ]
+ },
+ {
+  "name": "play: a slow Explorer never said",
+  "file": "lagdoctor/app/main.py",
+  "old": "        self.window.after(int(LAUNCH_SLOW_S * 1000), lambda: self.on_recorder(rec, {",
+  "new": "        (lambda *a: None)(int(LAUNCH_SLOW_S * 1000), lambda: self.on_recorder(rec, {",
+  "tests": [
+   "tests/test_app_recording.py::test_the_link_is_opened_by_one_thread_once_and_a_slow_explorer_is_said_after_its_bound"
+  ]
+ },
+ {
+  "name": "play: the link's note kept after the game is found",
+  "file": "lagdoctor/app/views.py",
+  "old": "    if play is not None and getattr(state, \"launch_failed\", None) and state.phase in (\"launching\", \"waiting\"):",
+  "new": "    if play is not None and getattr(state, \"launch_failed\", None) and state.phase != \"done\":",
+  "tests": [
+   "tests/test_app_recording.py::test_the_note_that_the_link_was_not_opened_lasts_only_while_the_game_is_awaited"
+  ]
+ },
+ {
+  "name": "play: a link that could not be opened is not said",
+  "file": "lagdoctor/app/views.py",
+  "old": "    if play is not None and getattr(state, \"launch_failed\", None) and state.phase in (\"launching\", \"waiting\"):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_app_recording.py::test_a_store_link_windows_could_not_open_is_said_and_the_wait_goes_on",
+   "tests/test_app_recording.py::test_a_link_that_cannot_be_opened_leaves_the_window_where_it_is_and_says_so"
+  ]
+ },
+ {
+  "name": "play: the last-moment check never asked",
+  "file": "lagdoctor/winapi/launch.py",
+  "old": "        if should_go is not None and not should_go():\n            raise Withdrawn(",
+  "new": "        if False:\n            raise Withdrawn(",
+  "tests": [
+   "tests/test_launch.py::test_a_caller_that_withdraws_at_the_last_moment_gets_nothing_opened_and_everything_released"
+  ]
+ },
+ {
+  "name": "play: the last-moment check not passed on",
+  "file": "lagdoctor/stores/launch.py",
+  "old": "    done = shell.open_through_explorer(link, should_go=should_go)",
+  "new": "    done = shell.open_through_explorer(link)",
+  "tests": [
+   "tests/test_launch.py::test_play_hands_a_built_link_to_explorer_and_nothing_else"
+  ]
+ }
+]

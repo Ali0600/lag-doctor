@@ -37,7 +37,8 @@ RUNTIME_INSTALLED = 0              # webview/webview: webview2_runtime_type::ins
 
 # Only what lag-doctor calls or implements. {interface: {method: slot}}; slots 0-2 are IUnknown's.
 SLOTS = {
-    "ICoreWebView2Environment": {"CreateCoreWebView2Controller": 3, "get_BrowserVersionString": 5},
+    "ICoreWebView2Environment": {"CreateCoreWebView2Controller": 3, "CreateWebResourceResponse": 4,
+                                 "get_BrowserVersionString": 5},
     "ICoreWebView2Environment5": {"add_BrowserProcessExited": 12},
     "ICoreWebView2Environment12": {"CreateSharedBuffer": 24},
     "ICoreWebView2Controller": {"get_IsVisible": 3, "put_IsVisible": 4, "get_Bounds": 5, "put_Bounds": 6,
@@ -49,7 +50,8 @@ SLOTS = {
                       "add_FrameNavigationStarting": 17, "add_ScriptDialogOpening": 21,
                       "add_PermissionRequested": 23, "add_ProcessFailed": 25, "ExecuteScript": 29,
                       "PostWebMessageAsJson": 32, "add_WebMessageReceived": 34, "get_BrowserProcessId": 37,
-                      "add_NewWindowRequested": 44},
+                      "add_NewWindowRequested": 44, "add_WebResourceRequested": 55,
+                      "AddWebResourceRequestedFilter": 57},
     "ICoreWebView2_3": {"TrySuspend": 68, "Resume": 69, "get_IsSuspended": 70, "SetVirtualHostNameToFolderMapping": 71},
     "ICoreWebView2_4": {"add_DownloadStarting": 75},
     "ICoreWebView2_17": {"PostSharedBufferToScript": 116},
@@ -71,6 +73,8 @@ SLOTS = {
     "ICoreWebView2Settings6": {"get_IsSwipeNavigationEnabled": 31, "put_IsSwipeNavigationEnabled": 32},
     "ICoreWebView2Settings8": {"get_IsReputationCheckingRequired": 35, "put_IsReputationCheckingRequired": 36},
     "ICoreWebView2WebMessageReceivedEventArgs": {"get_Source": 3, "get_WebMessageAsJson": 4},
+    "ICoreWebView2WebResourceRequestedEventArgs": {"get_Request": 3, "put_Response": 5},
+    "ICoreWebView2WebResourceRequest": {"get_Uri": 3},
     "ICoreWebView2NavigationStartingEventArgs": {"get_Uri": 3, "put_Cancel": 8},
     "ICoreWebView2NavigationCompletedEventArgs": {"get_IsSuccess": 3, "get_WebErrorStatus": 4},
     "ICoreWebView2NewWindowRequestedEventArgs": {"get_Uri": 3, "put_Handled": 6},
@@ -113,6 +117,7 @@ IIDS = {
     "ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler": "4E8A3389-C9D8-4BD2-B6B5-124FEE6CC14D",
     "ICoreWebView2CreateCoreWebView2ControllerCompletedHandler": "6C4819F3-C9B7-4260-8127-C9F5BDE7F68C",
     "ICoreWebView2WebMessageReceivedEventHandler": "57213F19-00E6-49FA-8E07-898EA01ECBD2",
+    "ICoreWebView2WebResourceRequestedEventHandler": "AB00B74C-15F1-4646-80E8-E76341D25D71",
     "ICoreWebView2NavigationStartingEventHandler": "9ADBE429-F36D-432B-9DDC-F8881FBD76E3",
     "ICoreWebView2NavigationCompletedEventHandler": "D33A35BF-1C49-4F98-93AB-006E0533FE1C",
     "ICoreWebView2NewWindowRequestedEventHandler": "D4C185FE-C81C-4989-97AF-2D3FA7AB5651",
@@ -132,6 +137,7 @@ PERMISSION_DENY = 2                  # COREWEBVIEW2_PERMISSION_STATE_DENY
 FAILED_BROWSER_EXITED = 0            # COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED
 MOVE_FOCUS_PROGRAMMATIC = 0          # COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC
 SHARED_BUFFER_READ_ONLY = 0          # COREWEBVIEW2_SHARED_BUFFER_ACCESS_READ_ONLY
+RESOURCE_CONTEXT_IMAGE = 3           # COREWEBVIEW2_WEB_RESOURCE_CONTEXT_IMAGE
 
 S_OK = 0
 
@@ -202,6 +208,7 @@ _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
 _ole32 = ctypes.WinDLL("ole32", use_last_error=True)
 _shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+_shlwapi = ctypes.WinDLL("shlwapi", use_last_error=True)
 
 
 def _bind(dll, name, restype, *argtypes):
@@ -263,6 +270,8 @@ CoInitializeEx = _bind(_ole32, "CoInitializeEx", ctypes.c_long, P, wintypes.DWOR
 CoUninitialize = _bind(_ole32, "CoUninitialize", None)
 CoTaskMemAlloc = _bind(_ole32, "CoTaskMemAlloc", P, ctypes.c_size_t)
 CoTaskMemFree = _bind(_ole32, "CoTaskMemFree", None, P)
+# An IStream over a copy of the bytes it is given (exported by name since Windows Vista), or NULL; one reference.
+SHCreateMemStream = _bind(_shlwapi, "SHCreateMemStream", P, ctypes.c_char_p, U)
 SetCurrentProcessExplicitAppUserModelID = _bind(_shell32, "SetCurrentProcessExplicitAppUserModelID", ctypes.c_long,
                                                 wintypes.LPCWSTR)
 GetCurrentProcessExplicitAppUserModelID = _bind(_shell32, "GetCurrentProcessExplicitAppUserModelID", ctypes.c_long,
@@ -285,7 +294,7 @@ QUNS_NOT_PRESENT, QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN, QUNS_PRESENTATION_MOD
 QUNS_ACCEPTS_NOTIFICATIONS, QUNS_QUIET_TIME, QUNS_APP = 5, 6, 7
 WS_OVERLAPPEDWINDOW = 0x00CF0000
 CW_USEDEFAULT = -0x80000000
-SW_SHOWNORMAL, SW_SHOWNOACTIVATE, SW_RESTORE = 1, 4, 9
+SW_SHOWNORMAL, SW_SHOWNOACTIVATE, SW_MINIMIZE, SW_RESTORE = 1, 4, 6, 9
 SWP_NOZORDER, SWP_NOACTIVATE = 0x0004, 0x0010
 ICON_SMALL, ICON_BIG = 0, 1
 IMAGE_ICON, LR_LOADFROMFILE = 1, 0x0010

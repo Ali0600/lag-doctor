@@ -491,8 +491,8 @@
  {
   "name": "play: the app raises the prompt for a folder its window never chose",
   "file": "lagdoctor/app/recording.py",
-  "old": "    if cfg.folders is not None:                    # Play's half of the app chooses the folder (M6), not the recorder",
-  "new": "    if False:",
+  "old": "        if cfg.folders is not None:                # the window chooses the folder (Play), never the recorder",
+  "new": "        if False:",
   "tests": [
    "tests/test_app_recording.py::test_anything_but_that_command_is_refused_before_any_prompt"
   ]

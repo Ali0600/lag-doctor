@@ -113,11 +113,16 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
   named at every lag-doctor start, and `lagdoctor undo game_setting` also puts it back. Settings are listed in order of
   average FPS, each compared with the file as it was: it measures speed only, and picture quality is yours to judge.
 
-- **`lagdoctor app` opens lag-doctor's own window** (or **lag-doctor** in the Start menu, once installed): every game
-  you have recorded, each game's recordings, and Results to explore (the verdict and causes, zoomable frame-time,
+- **`lagdoctor app` opens lag-doctor's own window** (or **lag-doctor** in the Start menu, once installed): the games
+  Steam and the Epic Games launcher have installed (with their covers from Steam's own cache, never downloaded) and
+  every game you have recorded, each game's recordings, and
+  Results to explore (the verdict and causes, zoomable frame-time,
   CPU/GPU, NVIDIA, fan and ping charts, the lag moments with what the PC did around each, checked and fine, not
   measured), plus Compare for two recordings of a game, with the conditions each ran under and what changed in the
-  game itself between them. **Record the game that's running** records the busiest game with a window, with one
+  game itself between them. **Play with lag-doctor**, on an installed game's page, has the game's store start it
+  once Windows' prompt is answered (lag-doctor never starts or touches the game itself) and records it from its
+  folder, as `watch --wait-folder` does, with its window out of the way. **Record the game that's running**
+  records the busiest game with a window instead, a game you started yourself. Either asks one
   UAC prompt from the window for frame timing, and measures 10 minutes from your press of **Ctrl+Alt+S** once you
   are in the game, so its startup, menus and loading are left out (shaded on Results' charts); with no press within
   20 minutes it stops and all of it is analysed, and Stop or the game's exit ends it sooner. While you play, the
@@ -346,7 +351,7 @@ connection to Microsoft, as the runtime does on its own.
   the shipped Python runtime itself reports it can import, both enforced by syntax-tree scans of the code, as is every
   place that starts a program (a game starts only through Explorer's own ShellExecute, whose 6 COM slots are read
   back from the SDK's headers); and a
-  desktop app in its own WebView2 window over raw COM vtables, with no loader DLL and its 100 slots and 35 IIDs pinned
+  desktop app in its own WebView2 window over raw COM vtables, with no loader DLL and its 106 slots and 36 IIDs pinned
   against Microsoft's SDK IDL, whose tests drive the real window on CI through a whole recording (a stand-in recorder
   on the real control channel) and crash its page and its browser process mid-recording to prove both recover.
 - **Telemetry on one clock**: 6 collectors (per-frame timing, a 4 Hz system sampler, 1 Hz NVIDIA telemetry,
@@ -362,14 +367,14 @@ connection to Microsoft, as the runtime does on its own.
   says how far off the next limit is (the CPU, the GPU or the screen, and how
   many times faster the limiting part must get), from thread CPU time rather than PresentMon's CPU Busy, which
   read 16.55 ms of a 16.9 ms GPU-bound frame.
-- **Testing that proves itself**: 5,240 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 5,347 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 44 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 3,968 deliberate
-  sabotages in 63 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 4,054 deliberate
+  sabotages in 65 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes, and a settings sweep that edits a game's settings file
   between runs and puts it back byte for byte, all behind a write-ahead journal, readback verification, undo and
   crash healing, with a handle-free identity check before touching any process; the sweep compares settings by

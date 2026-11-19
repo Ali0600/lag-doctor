@@ -37,6 +37,9 @@ START_BY_S = 1200.0                             # with no press by then, the rec
 # the window), so a press always gets its whole window: it stops a recording only when Windows did not give the start
 # key, which would otherwise record until Stop or the game's end (DECISIONS 2026-11-09, M4's end: no "until Stop").
 LENGTH_S = START_BY_S + WINDOW_S + 60.0         # 31 minutes
+# Play (M6): how long the recorder waits for the store to start the game from its folder (cli.WAIT_DEFAULT_S, which a
+# test holds it equal to), passed as --wait-s so the relay's command line, which the app checks, names it.
+WAIT_S = 300.0
 LOG_NAME = "recorder.log"                       # the recorder's stderr, under lag-doctor's home
 OLD_LOG_NAME = "recorder-previous.log"
 RECORDER_HEAD = ["-B", "-E", "-s", "-m", "lagdoctor", "watch", "--control", "stdio", "--elevate"]
@@ -56,16 +59,18 @@ def python() -> Path:
 
 
 def recorder_argv(length_s: float | None = None, interpreter: Path | None = None,
-                  start_key: str | None = START_KEY) -> list[str]:
+                  start_key: str | None = START_KEY, folder: str | None = None) -> list[str]:
     """The recorder's command line: -B writes no bytecode (an installed copy is never written to), -E -s read no
     PYTHON* variable and no user site-packages; the rest is watch's: measured from `start_key` for WINDOW_S, stopped
-    at LENGTH_S at the latest. With `start_key` None, the whole session for WINDOW_S, as M4 recorded."""
+    at LENGTH_S at the latest. With `start_key` None, the whole session for WINDOW_S, as M4 recorded. With `folder`,
+    Play's: the game the store starts from that install folder (watch --wait-folder), waited for WAIT_S."""
     if start_key is None:
         key, length = ["--start-key", "none"], WINDOW_S
     else:
         key, length = ["--start-key", start_key, "--window", f"{WINDOW_S:g}", "--start-by", f"{START_BY_S:g}"], LENGTH_S
+    play = [] if folder is None else ["--wait-folder", str(folder), "--wait-s", f"{WAIT_S:g}"]
     return [str(interpreter or python()), *RECORDER_HEAD, *key, "--duration",
-            f"{length if length_s is None else length_s:g}"]
+            f"{length if length_s is None else length_s:g}", *play]
 
 
 def _same_path(a: Any, b: Any) -> bool:
@@ -73,10 +78,12 @@ def _same_path(a: Any, b: Any) -> bool:
 
 
 def relay_problem(argv: Any, cwd: Any, *, recorder: tuple[int, int], sid: str, python: Path,
-                  root: Path = ROOT) -> str | None:
+                  root: Path = ROOT, folders: tuple[str, ...] | None = None) -> str | None:
     """Why the app will not raise the UAC prompt for this command, in plain words, or None: only lag-doctor's relay
     (relay/client.relay_argv), run by this Python from this tree, for this recorder (pid and create time) and this
-    account, as the relay itself would accept it (relay/server.parse_args)."""
+    account, as the relay itself would accept it (relay/server.parse_args). For Play, `folders` are the forms of the
+    install folder the window chose (target.folder_forms, worked out here): the relay must be for those, and wait no
+    longer than WAIT_S; without them, it must be for the game that is running, never a folder."""
     if not isinstance(argv, list) or len(argv) <= 1 + len(RELAY_HEAD) or not all(isinstance(a, str) for a in argv):
         return "the command is not lag-doctor's relay"
     if not _same_path(argv[0], python):
@@ -94,8 +101,17 @@ def relay_problem(argv: Any, cwd: Any, *, recorder: tuple[int, int], sid: str, p
         return "the command names another process as the recorder"
     if cfg.sid != sid:
         return "the command lets another account in"
-    if cfg.folders is not None:                    # Play's half of the app chooses the folder (M6), not the recorder
-        return "the command would record a game from a folder, and the window chose no game to play"
+    if folders is None:
+        if cfg.folders is not None:                # the window chooses the folder (Play), never the recorder
+            return "the command would record a game from a folder, and the window chose no game to play"
+        return None
+    if cfg.folders is None:
+        return "the command would record the game that is running, and the window chose a game to play"
+    from lagdoctor.capture.target import fold_path
+    if [fold_path(f) for f in cfg.folders] != [fold_path(f) for f in folders]:
+        return "the command would record a game from another folder than the one the window chose to play"
+    if cfg.wait_s is None or cfg.wait_s > WAIT_S:
+        return "the command would wait longer for the game than the window asked"
     return None
 
 
@@ -105,8 +121,16 @@ def relay_problem(argv: Any, cwd: Any, *, recorder: tuple[int, int], sid: str, p
 class RecordingState:
     """Where a recording the app started has got to, from what its recorder said and what the app did. Changed on
     the window's thread only."""
-    phase: str = "starting"      # starting, waiting, asking, preparing, recording, stopping, saving, analysing, done
+    phase: str = "starting"      # starting, waiting, asking, preparing, launching (Play), recording, stopping, saving,
+                                 # analysing, done
     keyed: bool = False          # the app asked its recorder for a start key: the chimes follow the key, not the start
+    # Play (M6): {"game": the page's id of the game, "title": its name, "store": its store's name}; None for "Record
+    # the game that's running". The store link it opens stays with App, never in the state the page is shown.
+    play: dict | None = None
+    launch_asked: bool = False   # Play: "launch" came, and the app has its store link opened (once a recording)
+    launch_result: bool | None = None  # Play: whether Windows opened the store's link (None: no answer yet)
+    launch_failed: str | None = None   # Play: why Windows could not open the store's link (the wait goes on)
+    running: str | None = None   # Play: what already ran from the game's folder (already_running's name)
     game: str | None = None
     hotkey: bool = False
     frames: bool | None = None   # from "recording": whether frame timing runs
@@ -151,6 +175,14 @@ class RecordingState:
         t, sounds = msg["t"], []
         if t == "waiting":
             self.phase = "waiting"
+        elif t == "launch":                        # Play: the app opens the store link now (App.on_recorder)
+            self.phase, self.launch_asked = "launching", True
+        elif t == "launched" and self.launch_result is None:    # the app's own: how opening the link went (the first
+            self.launch_result = msg["ok"]                      # answer: a late one after "not in time" is not kept)
+            if not msg["ok"]:
+                self.launch_failed = msg["why"]
+        elif t == "already_running":
+            self.running = msg["name"] or "a program"
         elif t == "target":
             self.game = msg["name"]
         elif t == "elevate":
@@ -216,12 +248,15 @@ class Recorder:
     AppWindow.call_soon), with the app's own "prompt", "fault" and "exited" among them.
 
     `launcher` raises the UAC prompt (elevation.launch_elevated), `hwnd()` names the window it belongs to, `sid()` is
-    this account's SID and `snapshot()` every process (ntquery), for the recorder's create time."""
+    this account's SID and `snapshot()` every process (ntquery), for the recorder's create time. `folder`: Play's, the
+    install folder of the game the window chose, whose forms the relay's command must name (relay_problem)."""
 
     def __init__(self, *, home: Path, post: Callable[[dict[str, Any]], None], log: Callable[[str], None],
                  hwnd: Callable[[], int | None], argv: list[str] | None = None, cwd: Path = ROOT,
                  launcher: Callable[..., Any] | None = None, sid: Callable[[], str] | None = None,
-                 snapshot: Callable[[], dict[int, Any]] | None = None, interpreter: Path | None = None) -> None:
+                 snapshot: Callable[[], dict[int, Any]] | None = None, interpreter: Path | None = None,
+                 folder: str | None = None) -> None:
+        self.folder = folder
         self.home = Path(home)
         self.post = post
         self.log = log
@@ -353,6 +388,17 @@ class Recorder:
         p = snapshot().get(self.proc.pid)
         return (p.pid, p.create_time) if p is not None else None
 
+    def _forms(self) -> tuple[tuple[str, ...] | None, str | None]:
+        """Play's folder in the forms the relay's command must name (target.folder_forms, worked out here with the
+        player's own rights, as the recorder did), or why it cannot be; (None, None) without Play."""
+        if self.folder is None:
+            return None, None
+        from lagdoctor.capture.target import folder_forms
+        try:
+            return folder_forms(self.folder), None
+        except ValueError as exc:
+            return None, f"the game's folder cannot be waited on ({exc})"
+
     def _answer(self, how: str, t: str, **fields: Any) -> None:
         if "why" in fields:                     # every answer fits the protocol, so the recorder always hears it
             fields["why"] = str(fields["why"])[:control.MAX_TEXT]
@@ -376,9 +422,11 @@ class Recorder:
             else:
                 me = self._recorder_identity()
                 sid = (self.sid or _account_sid)()
-                why = ("the recorder is not running" if me is None else
-                       relay_problem(msg["argv"], msg["cwd"], recorder=me, sid=sid,
-                                     python=self.interpreter or python(), root=self.cwd))
+                folders, why = self._forms()
+                if why is None:
+                    why = ("the recorder is not running" if me is None else
+                           relay_problem(msg["argv"], msg["cwd"], recorder=me, sid=sid,
+                                         python=self.interpreter or python(), root=self.cwd, folders=folders))
         except OSError as exc:
             why = f"lag-doctor could not check the command ({exc})"
         if why is not None:

@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from lagdoctor.app import ASSETS, ICON
+from lagdoctor.app import ASSETS, ICON, bridge
 from lagdoctor.app import main as app_main
 from lagdoctor.app import recording
 from lagdoctor.app import window as app_window
@@ -56,9 +56,52 @@ def _ok(run: dict) -> None:
 def test_the_window_opens_on_the_library_and_lists_each_recorded_game_once(run):
     _ok(run)
     lib = run["library"]
-    assert lib["names"] == [app_demo.MARKUP_TITLE, "Demo Racer", "starplanner"]     # the check-up is left out
-    assert lib["recent"] == 0 and lib["strip"]                       # 3 games: no Recent row repeating them
+    # The recorded games, newest recording first (the check-up is left out), then the installed ones never recorded.
+    assert lib["names"] == [app_demo.MARKUP_TITLE, "Demo Racer", "starplanner", *app_demo.NOT_RECORDED]
+    assert lib["recent"] == 3 and lib["strip"]                       # the Recent row: the recorded ones
     assert run["told"] == [] and run["fatal"] == []
+
+
+@pytest.mark.needs("webview2")
+def test_the_library_lists_installed_games_with_their_recordings_and_filters_them(run):
+    # Demo Racer's recordings ran from its install folder: they show under the installed game, as one tile.
+    _ok(run)
+    f = run["library_filters"]
+    assert f["installed"] == ["Demo Racer", *app_demo.NOT_RECORDED]
+    assert f["recorded"] == [app_demo.MARKUP_TITLE, "Demo Racer", "starplanner"]
+    assert f["all"] == run["library"]["names"]
+
+
+@pytest.mark.needs("webview2")
+def test_a_cover_from_the_stores_cache_comes_from_the_windows_own_art_host(run):
+    # Demo Racer's made-up cover, answered by the window itself (WebResourceRequested): drawn over its initials. The
+    # games without one keep their initials and ask for none, and anything else the art host is asked for is refused.
+    _ok(run)
+    covers = run["covers"]
+    assert covers.pop("Demo Racer") == {"state": "shown", "initials": "", "drawn": True}
+    assert all(c["state"] == "initials" and c["initials"] and not c["drawn"] for c in covers.values()), covers
+    assert run["cover_unknown"] == "refused" and run["art_refused"] == 1
+    assert run["cover_urls_refused"] == [["initials", "AB"]] * 5
+
+
+@pytest.mark.needs("webview2")
+def test_play_starts_an_installed_game_through_its_store_link_and_waits_for_it(run):
+    _ok(run)
+    g = run["play_game"]
+    assert g["name"] == "Lantern Drift" and g["none"] is True and g["rows"] == 0
+    assert "Ctrl+Alt+S" in g["text"] and "Epic Games start the game" in g["text"]
+    # The prompt came first, for the game's folder and the app's wait (the relay's command, checked by the window).
+    [argv] = run["play_prompts"]
+    assert argv[argv.index("--folder") + 1] == "C:\\Games\\Lantern Drift" and "--wait-s" in argv
+    # Then "launch": the store link opened once, the window out of the way, and the running screen waits for it.
+    lantern = next(g for g in app_demo.INSTALLED if g.title == "Lantern Drift")
+    assert run["play_links"] == [lantern.link]
+    w = run["play_waiting"]
+    assert w["title"] == "Waiting for the game" and w["game"] == "Lantern Drift" and "Epic Games" in w["detail"]
+    # The player cancelled the wait: nothing recorded, and Try again plays it again.
+    assert run["play_done"] == {"title": "Cancelled", "again": True}
+    rep = run["play_report"]
+    assert rep["prompt"] == "approved" and [m["t"] for m in rep["got"]] == ["elevated", "cancel"]
 
 
 @pytest.mark.needs("webview2")
@@ -228,7 +271,10 @@ def test_the_page_loads_nothing_from_outside_and_runs_no_inline_script():
     rules = {part.split()[0]: part.split()[1:] for part in " ".join(csp.split()).split(";") if part.strip()}
     assert rules["default-src"] == ["'none'"] and rules["script-src"] == ["'self'"] and rules["style-src"] == ["'self'"]
     assert rules["worker-src"] == ["'none'"] and rules["connect-src"] == ["'none'"] and rules["frame-src"] == ["'none'"]
-    assert "unsafe" not in csp and "http" not in csp
+    # Images from the page's own host, and covers from the art host the window answers itself (bridge.ART_ORIGIN):
+    # that origin, named once, is the only one, and nothing else names http at all.
+    assert rules["img-src"] == ["'self'", bridge.ART_ORIGIN]
+    assert "unsafe" not in csp and csp.count(bridge.ART_ORIGIN) == 1 and "http" not in csp.replace(bridge.ART_ORIGIN, "")
     assert "<script>" not in html and not re.search(r"\son\w+=", html)
     assert re.findall(r'src="([^"]+)"', html) == ["vendor/uPlot.iife.min.js", "app.js"]
 
@@ -346,6 +392,53 @@ def test_a_message_from_another_origin_never_reaches_the_app_and_one_from_its_pa
     assert len(w.calls) == 1
     w.calls.popleft()()
     assert [(r.kind, r.id) for r in w.got] == [("library", 5)]
+
+
+def _fake_resource_args(uri: str, fail: bool = False):
+    """A stand-in ICoreWebView2WebResourceRequestedEventArgs: its get_Request gives a request whose get_Uri is `uri`
+    (or fails, with `fail`). `asked` records, in order, what the window asked of them."""
+    asked = []
+    unknown = [wv.QI_PROTO(lambda this, riid, ppv: wv.E_NOINTERFACE), wv.REF_PROTO(lambda this: 1),
+               wv.REF_PROTO(lambda this: 1)]
+
+    def get_uri(this, out):
+        asked.append("uri")
+        out[0] = wv.co_wstr(uri)
+        return wv.S_OK
+    req_fns = unknown + [wv.GET_STR(get_uri)]
+    req_vtbl = (ctypes.c_void_p * len(req_fns))(*[ctypes.cast(f, ctypes.c_void_p) for f in req_fns])
+    req_cell = ctypes.c_void_p(ctypes.addressof(req_vtbl))
+
+    def get_request(this, out):
+        asked.append("request")
+        if fail:
+            return wv.E_FAIL
+        out[0] = ctypes.addressof(req_cell)
+        return wv.S_OK
+    fns = unknown + [wv.GET_STR(get_request)]
+    vtbl = (ctypes.c_void_p * len(fns))(*[ctypes.cast(f, ctypes.c_void_p) for f in fns])
+    cell = ctypes.c_void_p(ctypes.addressof(vtbl))
+    return ctypes.addressof(cell), asked, (fns, vtbl, cell, req_fns, req_vtbl, req_cell)
+
+
+def test_the_art_host_refuses_each_request_first_and_answers_only_a_cover_it_holds(tmp_path):
+    # The 404 goes on before the request is read: so a request that fails to read, or names no cover, keeps it, and
+    # nothing goes to the network for the art host (which has no folder and no server).
+    w = _window(tmp_path)
+    held = "g-0123456789abcdef"
+    w.art = lambda gid: ("image/png", b"made-up") if gid == held else None
+    handler = w.handler("ICoreWebView2WebResourceRequestedEventHandler", wv.EVENT, w.on_web_resource)
+    kept = []
+    for uri, fail, want in [(f"https://art.lagdoctor.example/{held}", False, [404, "request", "uri", 200]),
+                            ("https://art.lagdoctor.example/g-0000000000000000", False, [404, "request", "uri"]),
+                            ("https://art.lagdoctor.example/sessions/x", False, [404, "request", "uri"]),
+                            (f"https://art.lagdoctor.example/{held}", True, [404, "request"])]:
+        args, asked, keep = _fake_resource_args(uri, fail)
+        kept.append(keep)
+        w.respond = lambda a, status, reason, image, asked=asked: asked.append(status)
+        hr = wv.vcall(handler.ptr, 3, (ctypes.c_void_p, ctypes.c_void_p), 0, args)
+        assert asked == want and (hr == wv.S_OK) is not fail, (uri, fail, asked, hr)
+    assert w.refused["art"] == 2 and w.fatal == []
 
 
 def bridge_entry() -> str:

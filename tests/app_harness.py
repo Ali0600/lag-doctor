@@ -346,6 +346,70 @@ def script(facts: dict, app: App):
     yield wait(lambda: rig.report.is_file())
     facts["rec_report"] = json.loads(rig.report.read_text(encoding="utf-8"))
 
+    # Play (M6): the Library lists the demo's made-up installed games (tests/app_demo.py's INSTALLED) beside the
+    # recorded ones, and an installed game nobody recorded has Play on its page. tests/fake_recorder.py stands in for
+    # watch --wait-folder: the prompt for the game's folder, then "launch", on which the window has the store link
+    # opened (App's open_link, only noted here) and minimizes itself, then the wait, which the player cancels.
+    yield js("document.querySelector('[data-go=library]').click(); true")
+    yield until("document.querySelectorAll('#games .game').length > 0")
+    facts["library_filters"] = yield js("""(() => {
+        const names = () => [...document.querySelectorAll('#games .game .name')].map((n) => n.textContent);
+        const out = {};
+        for (const f of ['installed', 'recorded', 'all']) {
+          document.querySelector(`[data-filter=${f}]`).click();
+          out[f] = names();
+        }
+        return out;
+    })()""")
+    # The covers: Demo Racer's from its (made-up) store cache, answered by the window's art host, shown over its
+    # initials; the others keep their initials; and the art host answers anything else with nothing.
+    yield until("[...document.querySelectorAll('#games .cover')].every((c) => c.dataset.art !== 'loading')")
+    facts["covers"] = yield js("""(() => Object.fromEntries([...document.querySelectorAll('#games .game')].map((g) => {
+        const c = g.querySelector('.cover');
+        return [g.querySelector('.name').textContent, {state: c.dataset.art || 'initials', initials: c.textContent,
+                drawn: getComputedStyle(c).backgroundImage.includes('https://art.lagdoctor.example/g-')}];
+    })))()""")
+    yield js("""(() => {
+        window.__artProbe = 'waiting';
+        const probe = new Image();
+        probe.addEventListener('load', () => { window.__artProbe = 'loaded'; });
+        probe.addEventListener('error', () => { window.__artProbe = 'refused'; });
+        probe.src = 'https://art.lagdoctor.example/g-0000000000000000';
+        return true;
+    })()""")
+    yield until("window.__artProbe !== 'waiting'")
+    facts["cover_unknown"] = yield js("window.__artProbe")
+    facts["art_refused"] = app.window.refused["art"]
+    # The page loads a cover only from the art host's URL exactly as the app builds it: anything else stays initials.
+    facts["cover_urls_refused"] = yield js("""(() => ['http://art.lagdoctor.example/g-0123456789abcdef',
+        'https://evil.test/g-0123456789abcdef', 'https://art.lagdoctor.example/g-0123456789abcde',
+        'https://art.lagdoctor.example/g-0123456789abcdef") url("https://evil.test/a', 5].map((art) => {
+          const c = tileCover({initials: 'AB', hue: 10, art});
+          return [c.dataset.art || 'initials', c.textContent];
+        }))()""")
+    yield js(CLICK_GAME.format(name=json.dumps("Lantern Drift")))
+    yield until("!!document.getElementById('play')")
+    facts["play_game"] = yield js("""(() => ({name: document.getElementById('game-name').textContent,
+        none: !!document.getElementById('no-recordings'), rows: document.querySelectorAll('tr[data-session]').length,
+        text: document.getElementById('play-card').textContent}))()""")
+    yield shot("game-play")
+    prompts_before = len(rig.prompts)
+    yield js("document.getElementById('play').click(); true")
+    yield until("!!document.querySelector('#running[data-phase=waiting]') && !!document.getElementById('rec-cancel')")
+    facts["play_waiting"] = yield js("""(() => ({title: document.getElementById('rec-title').textContent,
+        game: document.getElementById('rec-game') ? document.getElementById('rec-game').textContent : null,
+        detail: document.getElementById('rec-detail').textContent}))()""")
+    yield wait(lambda: bool(wv.IsIconic(app.window.hwnd)))       # out of the way of the store and the game
+    facts["play_links"] = list(rig.links)
+    yield ("restore",)
+    yield js("document.getElementById('rec-cancel').click(); true")
+    yield until("!!document.querySelector('#running[data-phase=done]')")
+    facts["play_done"] = yield js("""(() => ({title: document.getElementById('rec-title').textContent,
+        again: !!document.getElementById('play-again')}))()""")
+    facts["play_prompts"] = [c["argv"] for c in rig.prompts[prompts_before:]]
+    yield wait(lambda: rig.play_report.is_file())
+    facts["play_report"] = json.loads(rig.play_report.read_text(encoding="utf-8"))
+
     # Recovery. The renderer crashes: the window loads its page again.
     yield ("crash_renderer",)
     yield until_ready(facts["readies"] + 1)
@@ -406,6 +470,9 @@ class Driver:
         elif op[0] == "ready":
             self.deadline = time.monotonic() + op[2]
             self.wait_ready(op[1])
+        elif op[0] == "restore":                     # shown again, as it was, without taking the focus
+            wv.ShowWindow(w.hwnd, wv.SW_SHOWNOACTIVATE)
+            w.after(50, lambda: self.resume(None))
         elif op[0] == "activate":
             w.on_window_message(w.hwnd, wv.WM_ACTIVATE, 1 if op[1] else wv.WA_INACTIVE, 0)
             w.after(50, lambda: self.resume(None))
@@ -523,7 +590,7 @@ def main(argv: list[str]) -> int:
     # The recording's stand-ins: the recorder records nothing and saves no file, the prompt is a harmless process of
     # this harness's own, and the sounds and the taskbar flash are only noted.
     rig = types.SimpleNamespace(played=[], flashes=[], prompts=[], relays=[], report=home / "fake-recorder-report.json",
-                                library_asks=[])
+                                library_asks=[], links=[], play_report=home / "fake-recorder-play-report.json")
     recordings = [e for e in library.scan(home / "sessions") if e.is_recording]
     # The markup-named game the tests use, else (the README's pictures library) the newest recording's game.
     picked = next((e for e in recordings if e.game == app_demo.MARKUP_TITLE), recordings[0])
@@ -533,11 +600,20 @@ def main(argv: list[str]) -> int:
                                 "start_key": {"registered": True, "window_s": recording.WINDOW_S,
                                               "start_by_s": recording.START_BY_S},
                                 "press_at": 30.0, "end": "stop", "report": str(rig.report)}), encoding="utf-8")
+    play_plan = home / "fake-recorder-play-plan.json"
+
+    def play_recorder(folder: str) -> list[str]:
+        # watch --wait-folder's stand-in for the game the page chose: it waits for the game until the player cancels
+        play_plan.write_text(json.dumps({"elevate": True, "folder": folder, "game": "lanterndrift.exe", "pause_s": 60,
+                                         "report": str(rig.play_report)}), encoding="utf-8")
+        return [str(fake_recorder.BASE_PY), "-B", "-E", "-s", "-m", "tests.fake_recorder", str(play_plan)]
     app = App(home=home, runtime=runtime, create_fn=create, log=facts["log"].append, tell=facts["told"].append,
               activate=False, opener=facts["opened"].append,
               recorder=lambda: [str(fake_recorder.BASE_PY), "-B", "-E", "-s", "-m", "tests.fake_recorder", str(plan)],
               launcher=fake_recorder.stand_in_prompt(rig.prompts, rig.relays), play=rig.played.append,
-              flash=rig.flashes.append)
+              flash=rig.flashes.append, installed=lambda: list(app_demo.INSTALLED),
+              forms_of=lambda folder: (folder,), open_link=lambda link, should_go: rig.links.append(link),
+              play_recorder=play_recorder, covers=app_demo.covers)
     app.harness = rig
     real_library = app.do_library
     app.do_library = lambda: (rig.library_asks.append(1), real_library())[1]     # counts the page's asks

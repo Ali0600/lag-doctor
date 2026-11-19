@@ -88,13 +88,84 @@ def _with(argv: list[str], i: int, value: str) -> list[str]:
     (relay_cmd(recorder=(ME[0] + 1, ME[1])), None, "another process as the recorder"),
     (relay_cmd(recorder=(ME[0], ME[1] + 1)), None, "another process as the recorder"),
     (relay_cmd(sid=SID[:-4] + "1002"), None, "another account"),
-    # A relay for Play's folder: until the window's Play chooses the game (M6), nothing it may record was chosen.
+    # A relay for Play's folder when the window chose no game to play (Record the game that's running).
     (client.relay_argv(protocol.pipe_name(), ME, SID, folders=("C:\\Games\\Lantern Drift",), wait_s=300,
                        presentmon_exe=None, frames=False, network=True), None, "the window chose no game to play"),
 ])
 def test_anything_but_that_command_is_refused_before_any_prompt(argv, cwd, why):
     said = problem(argv, cwd)
     assert said is not None and why in said, said
+
+
+LANTERN = ("C:\\Games\\Lantern Drift", "D:\\Library\\Lantern Drift")    # a folder and its real path (a junction)
+
+
+def play_cmd(folders=LANTERN, wait_s=recording.WAIT_S, recorder=ME) -> list[str]:
+    """The command a recorder for Play sends with "elevate": the relay for the forms of the game's folder."""
+    return client.relay_argv(protocol.pipe_name(), recorder, SID, folders=folders, wait_s=wait_s, presentmon_exe=None,
+                             frames=False, network=True)
+
+
+@pytest.mark.parametrize("argv, why", [
+    (play_cmd(), None),
+    (play_cmd(folders=("c:/games/lantern drift", "d:\\library\\LANTERN DRIFT")), None),     # one folder, written so
+    (play_cmd(wait_s=recording.WAIT_S - 60), None),                                          # a shorter wait is fine
+    (play_cmd(folders=("C:\\Games\\Copper Coast",)), "another folder than the one the window chose"),
+    (play_cmd(folders=LANTERN[:1]), "another folder than the one the window chose"),          # a form left out
+    (play_cmd(folders=LANTERN + ("E:\\Lantern Drift",)), "another folder than the one the window chose"),
+    (play_cmd(wait_s=recording.WAIT_S + 1), "wait longer for the game than the window asked"),
+    (relay_cmd(), "the window chose a game to play"),                                       # the game that is running
+    (play_cmd(recorder=(ME[0] + 1, ME[1])), "another process as the recorder"),
+])
+def test_for_play_only_the_relay_for_the_chosen_folder_and_wait_is_accepted(argv, why):
+    said = recording.relay_problem(argv, str(client.PROJECT_ROOT), recorder=ME, sid=SID, python=client.relay_python(),
+                                   root=recording.ROOT, folders=LANTERN)
+    assert (said is None) if why is None else (said is not None and why in said), said
+
+
+def test_plays_recorder_waits_for_the_game_from_its_folder_as_long_as_the_relay_is_checked_for(tmp_path):
+    argv = recording.recorder_argv(folder="C:\\Games\\Lantern Drift")
+    args = cli.build_parser().parse_args(argv[6:])
+    assert args.wait_folder == "C:\\Games\\Lantern Drift" and args.wait_s == recording.WAIT_S and args.elevate
+    assert (args.start_key, args.window, args.duration) == (recording.START_KEY, recording.WINDOW_S,
+                                                            recording.LENGTH_S)
+    assert recording.WAIT_S == cli.WAIT_DEFAULT_S == views.PLAY_WAIT_S
+    assert "--wait-folder" not in recording.recorder_argv()                     # Record the game that's running
+    app = app_main.App(home=tmp_path, runtime={"version": "1.0.0.0", "build": 4000}, create_fn=None,
+                       log=lambda s: None, play=lambda n: None, flash=lambda on: None, launcher=lambda *a, **k: None)
+    assert app.play_recorder("C:\\Games\\Lantern Drift") == argv
+    assert app.installed() == []                     # no store is read unless run() gives the stores' own
+
+
+def test_the_recorder_checks_plays_relay_against_the_folder_it_was_started_for(monkeypatch, tmp_path):
+    from lagdoctor.capture import target
+    monkeypatch.setattr(target, "folder_forms", lambda folder: LANTERN if folder == LANTERN[0] else (folder,))
+    sent, posted = [], []
+    rec = recording.Recorder(home=tmp_path, post=posted.append, log=lambda s: None, hwnd=lambda: None, argv=["x"],
+                             cwd=recording.ROOT, sid=lambda: SID, snapshot=lambda: {ME[0]: types.SimpleNamespace(
+                                 pid=ME[0], create_time=ME[1])},
+                             launcher=lambda *a, **k: pytest.fail("a prompt for a command that was refused"),
+                             folder="C:\\Games\\Copper Coast", interpreter=client.relay_python())
+    rec.proc = types.SimpleNamespace(pid=ME[0], poll=lambda: None)
+    rec.hello = True
+    rec.send = lambda t, **f: sent.append((t, f)) or True
+    rec._ask({"t": "elevate", "argv": play_cmd(), "cwd": str(client.PROJECT_ROOT)})
+    assert sent and sent[0][0] == "elevate_refused" and "another folder" in sent[0][1]["why"]
+    assert posted == [{"t": "prompt", "how": "refused"}]
+
+
+def test_a_folder_that_cannot_be_waited_on_refuses_the_prompt(monkeypatch, tmp_path):
+    from lagdoctor.capture import target
+
+    def leads_off(folder):
+        raise ValueError("C:\\Games\\Lantern Drift leads onto a network share")
+    monkeypatch.setattr(target, "folder_forms", leads_off)
+    rec = recording.Recorder(home=tmp_path, post=lambda m: None, log=lambda s: None, hwnd=lambda: None, argv=["x"],
+                             folder=LANTERN[0])
+    assert rec._forms() == (None, "the game's folder cannot be waited on (C:\\Games\\Lantern Drift leads onto a "
+                                  "network share)")
+    assert recording.Recorder(home=tmp_path, post=lambda m: None, log=lambda s: None, hwnd=lambda: None,
+                              argv=["x"])._forms() == (None, None)
 
 
 def test_the_recorder_runs_watch_in_control_mode_with_this_trees_code():
@@ -231,7 +302,7 @@ def test_a_recording_that_failed_after_its_save_is_saved_not_analysed_and_still_
 
 def test_every_way_a_recording_can_end_has_its_own_words():
     assert set(views.RECORDING_ENDS) == set(control.REASONS)
-    phases = {"starting", "waiting", "asking", "preparing", "recording", "stopping", "saving", "analysing"}
+    phases = {"starting", "waiting", "asking", "preparing", "launching", "recording", "stopping", "saving", "analysing"}
     assert set(views.RECORDING_TITLES) == phases == set(views.RECORDING_DETAILS)
     assert set(views.PREPARING_DETAILS) == {"declined", "refused", "failed", "withdrawn"}
 
@@ -775,6 +846,12 @@ class Window:
     def call_soon(self, fn):
         self.queued.append(fn)
 
+    def minimize(self):
+        self.minimized = getattr(self, "minimized", 0) + 1
+
+    def after(self, ms, fn):
+        self.timers = getattr(self, "timers", []) + [(ms, fn)]
+
 
 def app_for(tmp_path, in_front: bool, recorder=None, start_key=None):
     """An App with no window, whose recorder would be a Python that does nothing and whose prompt refuses; with no
@@ -864,6 +941,201 @@ def test_a_recorder_that_cannot_start_leaves_record_free_for_the_next_try(tmp_pa
     assert app.rec is None and app.rec_state is None
     assert app.do_record()["phase"] == "starting"          # the next press starts one
     app.rec.proc.wait(30)
+
+
+# ------------------------------------------------------------------------------------------------ Play --
+
+PLAY = {"game": "g-0123456789abcdef", "title": "Lantern Drift", "store": "Epic Games"}
+PLAY_LINK = "com.epicgames.launcher://apps/demo%3A0a1b2c3d4e%3ALanternDrift?action=launch&silent=true"
+PLAY_RUN = [{"t": "hello", "v": control.VERSION, "pid": 7}, {"t": "elevate", "argv": ["x"], "cwd": "c"},
+            {"t": "prompt", "how": "approved"}, {"t": "launch"}, {"t": "waiting"},
+            {"t": "target", "name": "lanterndrift.exe", "pid": 9, "how": "folder"},
+            {"t": "recording", "duration_s": 600.0, "hotkey": True, "frames": True, "network": True}]
+
+
+def test_play_moves_through_the_prompt_the_launch_and_the_wait_in_its_own_words():
+    state = recording.RecordingState(play=dict(PLAY))
+    seen = []
+    for i, m in enumerate(PLAY_RUN):
+        state.apply(m, 100.0 + i)
+        seen.append((state.phase, views.recording_view(state, 100.0 + i, "ctrl+alt+l")))
+    assert [p for p, _ in seen] == ["starting", "asking", "preparing", "launching", "waiting", "waiting", "recording"]
+    launching, waiting, found = seen[3][1], seen[4][1], seen[5][1]
+    assert launching["title"] == "Starting the game" and "asked Windows to open Epic Games" in launching["detail"]
+    assert waiting["title"] == "Waiting for the game" and "for up to 5 minutes" in waiting["detail"]
+    assert "If Epic Games has to start first" in waiting["detail"]
+    assert all(v["action"] == "cancel" for _, v in seen[:6]) and seen[6][1]["action"] == "stop"
+    assert waiting["game"] == "Lantern Drift" and found["game"] == "lanterndrift.exe"   # the store's name, then Windows'
+    assert all(v["play"] == {"game": PLAY["game"]} for _, v in seen)
+    record = recording.RecordingState()
+    record.apply({"t": "waiting"}, 1.0)
+    assert views.recording_view(record, 1.0, "ctrl+alt+l")["title"] == "Looking for the game"    # Record's own
+
+
+@pytest.mark.parametrize("reason, title, words", [
+    ("no_game", "The game did not start", "within 5 minutes, so nothing was recorded. If Epic Games was downloading"),
+    ("game_running", "Not recorded", "The game was already running"),
+    ("cancelled", "Cancelled", "Nothing was recorded."),
+])
+def test_how_a_play_ended_is_said_in_plays_words(reason, title, words):
+    state = recording.RecordingState(play=dict(PLAY))
+    for i, m in enumerate(PLAY_RUN[:5] + [{"t": "done", "reason": reason, "code": 2, "session": None}]):
+        state.apply(m, 100.0 + i)
+    v = views.recording_view(state, 200.0, "ctrl+alt+l")
+    assert v["title"] == title and words in v["detail"] and v["play"] == {"game": PLAY["game"]}
+
+
+def test_a_store_link_windows_could_not_open_is_said_and_the_wait_goes_on():
+    state = recording.RecordingState(play=dict(PLAY))
+    for i, m in enumerate(PLAY_RUN[:4] + [{"t": "launched", "ok": False, "why": "Explorer's desktop was not found"},
+                                          PLAY_RUN[4]]):
+        state.apply(m, 100.0 + i)
+    v = views.recording_view(state, 200.0, "ctrl+alt+l")
+    assert state.phase == "waiting" and v["action"] == "cancel"
+    assert ("Windows could not open Epic Games (Explorer's desktop was not found). Start the game yourself, from Epic "
+            "Games or its own program: lag-doctor is waiting for it.") in v["notes"]
+
+
+def play_app(tmp_path, opened, raises=None):
+    """app_for's App, following a Play the window started: its store link and the state do_play makes, and a
+    recorder that has not been stopped."""
+    app, _ = app_for(tmp_path, False)
+
+    def open_link(link, should_go):
+        opened.append(link)
+        if not should_go():                       # what open_through_explorer asks right before ShellExecute
+            from lagdoctor.winapi.launch import Withdrawn
+            raise Withdrawn("withdrawn")
+        if raises is not None:
+            raise raises
+    app.open_link = open_link
+    app.rec = types.SimpleNamespace(withdrawn=False)
+    app.rec_state, app.rec_link = recording.RecordingState(play=dict(PLAY)), PLAY_LINK
+    return app
+
+
+def _run_queued(app):
+    """What the store link's thread sent back through the window (call_soon), run as the window's thread would."""
+    deadline = time.monotonic() + WITHIN_S
+    while not app.window.queued and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert app.window.queued, "what opening the store link did never came back"
+    app.window.queued.pop(0)()
+
+
+def test_on_launch_the_window_has_its_store_link_opened_once_and_steps_aside(tmp_path):
+    opened = []
+    app = play_app(tmp_path, opened)
+    for m in PLAY_RUN[:3]:
+        app.on_recorder(app.rec, m)
+    assert opened == [] and app.window.queued == []          # not before launch: the prompt and the checks first
+    app.on_recorder(app.rec, PLAY_RUN[3])
+    _run_queued(app)
+    assert opened == [PLAY_LINK] and app.window.minimized == 1 and app.rec_state.launch_failed is None
+    app.on_recorder(app.rec, PLAY_RUN[3])                    # said twice: opened once
+    assert opened == [PLAY_LINK] and app.window.queued == []
+
+
+def test_a_link_that_cannot_be_opened_leaves_the_window_where_it_is_and_says_so(tmp_path):
+    opened = []
+    app = play_app(tmp_path, opened, raises=OSError("Explorer's desktop was not found"))
+    app.on_recorder(app.rec, PLAY_RUN[3])
+    _run_queued(app)
+    assert opened == [PLAY_LINK] and getattr(app.window, "minimized", 0) == 0
+    assert app.rec_state.launch_failed == "Explorer's desktop was not found"
+    assert any("Windows could not open Epic Games" in n for n in app.window.posted[-1]["data"]["notes"])
+
+
+def test_the_link_is_opened_by_one_thread_once_and_a_slow_explorer_is_said_after_its_bound(tmp_path):
+    opened = []
+    app = play_app(tmp_path, opened)
+    calls, real = [], app._launch
+    app._launch = lambda rec, link: (calls.append(link), real(rec, link))
+    app.on_recorder(app.rec, PLAY_RUN[3])
+    app.on_recorder(app.rec, PLAY_RUN[3])                    # said twice: one thread, one link
+    assert calls == [PLAY_LINK]
+    [(ms, slow)] = app.window.timers
+    assert ms == int(app_main.LAUNCH_SLOW_S * 1000)
+    slow()                                                   # Explorer has not answered in time
+    assert app.rec_state.launch_failed == "Windows has not opened it within 15 seconds"
+    _run_queued(app)                                         # its late answer is not the one kept
+    assert app.rec_state.launch_result is False and getattr(app.window, "minimized", 0) == 0
+    app.on_recorder(app.rec, PLAY_RUN[4])
+    assert any("Windows has not opened it within 15 seconds" in n for n in app.recording_view()["notes"])
+
+
+def test_a_cancel_while_explorer_is_slow_opens_nothing_and_leaves_the_window_where_it_is(tmp_path):
+    import threading
+    opened, gate = [], threading.Event()
+    app = play_app(tmp_path, opened)
+    real_open = app.open_link
+
+    def slow(link, should_go):                               # Explorer takes its time before ShellExecute
+        assert gate.wait(WITHIN_S)
+        return real_open(link, should_go)
+    app.open_link = slow
+    app.on_recorder(app.rec, PLAY_RUN[3])
+    app.rec.withdrawn = True                                 # the player cancels meanwhile
+    gate.set()
+    deadline = time.monotonic() + WITHIN_S
+    while not opened and time.monotonic() < deadline:
+        time.sleep(0.01)
+    time.sleep(0.2)                                          # what the thread would have queued after asking
+    assert opened == [PLAY_LINK] and app.window.queued == []  # asked, withdrawn at the last moment: nothing to say
+    app.on_recorder(app.rec, {"t": "launched", "ok": True, "why": None})     # and an answer after the cancel
+    assert getattr(app.window, "minimized", 0) == 0
+
+
+def test_the_note_that_the_link_was_not_opened_lasts_only_while_the_game_is_awaited():
+    state = recording.RecordingState(play=dict(PLAY))
+    for i, m in enumerate(PLAY_RUN[:4] + [{"t": "launched", "ok": False, "why": "Explorer's desktop was not found"},
+                                          PLAY_RUN[4]]):
+        state.apply(m, 100.0 + i)
+    assert any("Windows could not open" in n for n in views.recording_view(state, 200.0, "ctrl+alt+l")["notes"])
+    for m in PLAY_RUN[5:]:
+        state.apply(m, 200.0)
+    assert not any("Windows could not open" in n for n in views.recording_view(state, 201.0, "ctrl+alt+l")["notes"])
+    ended = recording.RecordingState(play=dict(PLAY))
+    for m in PLAY_RUN[:4] + [{"t": "launched", "ok": False, "why": "x"},
+                             {"t": "done", "reason": "no_game", "code": 2, "session": None}]:
+        ended.apply(m, 100.0)
+    assert not any("Windows could not open" in n for n in views.recording_view(ended, 200.0, "ctrl+alt+l")["notes"])
+
+
+def test_no_store_link_is_opened_once_stopped_or_for_a_recording_that_is_not_play(tmp_path):
+    opened = []
+    app = play_app(tmp_path, opened)
+    app.rec.withdrawn = True                                 # the player cancelled before the recorder said launch
+    app.on_recorder(app.rec, PLAY_RUN[3])
+    record, _ = app_for(tmp_path / "record", False)          # Record the game that's running: never a link
+    record.open_link, record.rec_link = opened.append, PLAY_LINK
+    record.on_recorder(record.rec, PLAY_RUN[3])
+    time.sleep(0.2)
+    assert opened == [] and app.window.queued == [] and record.window.queued == []
+
+
+def test_play_starts_the_recorder_for_the_installed_games_folder_and_keeps_its_link_to_itself(tmp_path):
+    from lagdoctor.app import library
+    from tests import app_demo
+    asked = []
+    app = app_main.App(home=tmp_path, runtime={"version": "1.0.0.0", "build": 4000}, create_fn=None,
+                       log=lambda s: None, play=lambda n: None, flash=lambda on: None, launcher=lambda *a, **k: None,
+                       installed=lambda: list(app_demo.INSTALLED), forms_of=lambda folder: (folder,),
+                       play_recorder=lambda folder: asked.append(folder) or [str(fake_recorder.BASE_PY), "-I", "-c",
+                                                                              "pass"])
+    app.window = Window(True)
+    with pytest.raises(app_main.Gone, match="not installed"):
+        app.do_play(library.game_id("demoracer"))            # no store lists it (and no recording either)
+    lantern = next(g for g in app_demo.INSTALLED if g.title == "Lantern Drift")
+    gid = library.game_id(f"store:{lantern.store}:{lantern.id}")
+    view = app.do_play(gid)
+    assert asked == [lantern.folder] and app.rec.folder == lantern.folder and app.rec_link == lantern.link
+    assert app.rec_state.play == {"game": gid, "title": "Lantern Drift", "store": "Epic Games"}
+    assert view["phase"] == "starting" and view["play"] == {"game": gid} and view["game"] == "Lantern Drift"
+    assert lantern.link not in json.dumps(view)               # the page never sees a link
+    app.rec.proc.wait(30)
+    with pytest.raises(app_main.Gone, match="already running"):
+        app.do_play(gid)                                     # one recording at a time, Play's too
 
 
 # ------------------------------------------------------------------------------- hiding the view --
