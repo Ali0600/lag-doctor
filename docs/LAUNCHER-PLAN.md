@@ -36,8 +36,9 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 - [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
   below), the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
-  names), `watch --wait-folder` with the re-arm (M6e, PR #58), Play's order on the control channel (M6f) and the
-  app's Play (M6g) and the art (M6h). Screen 6 is not built yet.
+  names), `watch --wait-folder` with the re-arm (M6e, PR #58), Play's order on the control channel (M6f, PR #61),
+  and the app's Play with the art (M6g and M6h, PR #62, merged 2026-11-19 after the owner's own run of Play on a game
+  through Steam: "it seemed to work"). Screen 6 is not built yet.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -646,7 +647,7 @@ labelled, as in the terminal.
   - Open: the Preview treats two more catalog namespaces than "ue" as Unreal Engine's (an unofficial reading of
     launcher 0.95.1, section 15). Which products they are is not known, so a Preview record in either is still
     listed; pass them over once a source names them.
-- [x] The art (M6h; DESIGN.md, The app, Cover art): a Steam game's portrait cover from Steam's own cache
+- [x] The art (M6h, PR #62; DESIGN.md, The app, Cover art): a Steam game's portrait cover from Steam's own cache
   (`stores/art.py`, through `stores`' file access, the type told from the bytes), answered by the window itself on a
   second host (`art.lagdoctor.example`, WebResourceRequested) by game id only, and drawn over the generated tile once
   it has loaded. Not yet: GOG Galaxy's cache, and the exe's own icon (for Epic games and games recorded before), so
@@ -689,7 +690,8 @@ labelled, as in the terminal.
   grammar; an administrator window never writes a short name out long. `_relay_failure(play=True)` words a broken
   link for Play. Open: a launcher that keeps drawing behind the game passes the hold (Backlog); one that passes the
   hold and exits before the recording starts is recorded gone.
-- [x] The app's Play (M6g; DESIGN.md, The app, Play): the Library lists the games Steam and the Epic launchers have
+- [x] The app's Play (M6g, PR #62, merged after the owner's own run of Play on a Steam game; DESIGN.md, The app,
+  Play): the Library lists the games Steam and the Epic launchers have
   installed beside the recorded ones (All, Installed and Recorded), a recorded game shows under the installed one
   whose folder its recordings ran from, and an installed game's page has **Play with lag-doctor**. The app starts the
   recorder with `--wait-folder` for the game's folder, takes the relay's prompt only for that folder, and on the
@@ -711,10 +713,10 @@ above:
   M6d with a `game` message of its own before `start` (DECISIONS 2026-11-17), and the relay's wait for it follows the
   recorder's own (`--wait-s`), which an update download can still outrun: M6e's waiting line says so.
 - The control channel gets Play's order (elevate, launch, waiting, target, recording) with a test that pins it. Built
-  as M6f (DESIGN.md, The control channel; `hello.v` 2): `watch --control stdio --wait-folder` sends `launch` once the
-  prompt is answered and every check that could end it has passed, right before the wait, and the app opens the store
-  link on it, building the link from its own library entry; a game from the folder already there is
-  `already_running`, with no `launch`, and ends as `game_running`. `tests/test_watch_folder.py` pins the order from
+  as M6f (PR #61; DESIGN.md, The control channel; `hello.v` 2): `watch --control stdio --wait-folder` sends
+  `launch` once the prompt is answered and every check that could end it has passed, right before the wait, and the
+  app opens the store link on it, building the link from its own library entry; a game from the folder already there
+  is `already_running`, with no `launch`, and ends as `game_running`. `tests/test_watch_folder.py` pins the order from
   the observers and as the window hears it over the real channel.
 - The folder rule needs the process's image path and the relay's own start time (`accept_target`'s `image=` and
   `since=`, since PR #36). Store paths fold case and slashes before the test, and an image path left in NT form says
