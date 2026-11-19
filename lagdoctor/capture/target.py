@@ -905,9 +905,10 @@ MAX_READS_PER_ROUND = 512       # new processes whose image path one round reads
 SINCE_MARGIN = 20_000_000       # 2 s in create-time units: by default a process started just before the wait counts
 MAX_NAMES = 3                   # programs from the folder that a message names
 # How long a chosen process must keep running before Play names it to the relay, so a launcher that draws and then
-# leaves re-arms the wait instead (docs/LAUNCHER-PLAN.md, M6: a feel number the owner has not judged yet). The re-arm
-# itself is the recorder's (watch --wait-folder); the relay's wait for the game leaves room for it (server.GAME_SLACK_S).
-REARM_HOLD_S = 20.0
+# leaves re-arms the wait instead (docs/LAUNCHER-PLAN.md, M6). A feel number: 20 s at first, and 30 s since the owner's
+# own Play run on 2026-11-19 (DECISIONS 2026-11-19). The re-arm itself is the recorder's (watch --wait-folder); the
+# relay's wait for the game leaves room for it (server.GAME_SLACK_S, which a test holds above it).
+REARM_HOLD_S = 30.0
 TRY_PAUSE_S = 0.1               # check_proposed: between two tries of a read that failed
 _FILETIME_1970 = 116_444_736_000_000_000   # 1970-01-01 as a create time (100 ns since 1601)
 
@@ -1278,7 +1279,8 @@ def hold_target(found: dict, *, hold_s: float = REARM_HOLD_S, cancel: threading.
 
 def wait_for_game(folder: str, *, folders: tuple[str, ...] | None = None, since: int | None = None,
                   deadline_s: float = WAIT_DEADLINE_S, own: Iterable[tuple[int, int]] = (), resolve: bool = True,
-                  expand_short: bool = False, hold_s: float = REARM_HOLD_S, aim: Callable[[dict], tuple[str, bool] | None] | None = None,
+                  expand_short: bool = False, hold_s: float = REARM_HOLD_S,
+                  aim: Callable[[dict], tuple[str, bool] | None] | None = None,
                   cancel: threading.Event | None = None, on_status: Callable[[str, dict], None] | None = None,
                   pick: Callable[[list[Candidate]], Candidate | None] | None = None,
                   clock: Callable[[], float] = time.monotonic,

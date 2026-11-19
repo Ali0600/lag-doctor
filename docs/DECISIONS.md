@@ -229,8 +229,9 @@
 
 The folder wait takes the first program from the folder that draws on two samples in a row, and a launcher in the
 folder can be that program. The plan's re-arm watches what the wait chose before the relay is told: a chosen program
-that exits, loses its window or stops drawing within `target.REARM_HOLD_S` (20 s, a feel number the owner has not
-judged) is not the game, and the wait goes on. A design review (2026-11-19, one read-only agent) agreed with the
+that exits, loses its window or stops drawing within `target.REARM_HOLD_S` (a feel number: 20 s at first; the
+owner's own run on FINAL FANTASY VII REBIRTH passed over its stub and held the game, and the owner then set it to 30 s,
+"lets do 30 seconds", the same day) is not the game, and the wait goes on. A design review (2026-11-19, one read-only agent) agreed with the
 three forks below and found seven gaps, all fixed before the code review: a game started while the prompt was up, a
 path in 8.3 short names waited out in silence, `--wait-s` digits the relay's parser refuses, "no more games" said
 as the relay failing, the slack test's sum, a short name written out long with administrator rights, and the
@@ -272,7 +273,7 @@ test holds them equal).
   administrator window without a relay compares as written too, since writing a short name out long reads folders
   with those rights. Revisit hook: the Backlog's "Play's relay writes an 8.3 short name out long" (M6d).
 - **A launcher that passes its hold and exits before the recording starts is recorded gone (open)**: the relay would
-  take another game until `start`, but the recorder has named it by then. Rare (it held 20 s and owned a window);
+  take another game until `start`, but the recorder has named it by then. Rare (it held 30 s and owned a window);
   revisit with the Backlog's "A relay that follows a re-targeted game after `start`".
 
 ## 2026-11-17: An ASUS laptop's fans are read, only read, by a collector of their own (PR #57)

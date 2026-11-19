@@ -95,7 +95,7 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
 
 - **`--wait-folder`** records a game that starts from its install folder after watch begins: frame timing's UAC
   prompt comes first, then you start the game from its store. A launcher in the folder that draws and then leaves is
-  passed over, since lag-doctor watches the program it picks for 20 s before recording it. A store that first
+  passed over, since lag-doctor watches the program it picks for 30 s before recording it. A store that first
   downloads an update may need longer than the default 5 minutes (`--wait-s`).
 - **A settings sweep** tries settings kept in an ini file (an Unreal game's `GameUserSettings.ini`, say), one `--try`
   each (`--try sg.ShadowQuality=1`, or several values at once with commas between), against the file as it is. Close
