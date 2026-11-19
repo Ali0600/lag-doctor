@@ -284,8 +284,9 @@ code, after the research.
 - Its cost: 0.35-0.9 ms a call (section 9), two calls a second on a laptop with two fans. Whether a call shows in
   the game's frames is the open question 3: `scripts/overhead/phase_lock.py` has a `fans` source for it.
 - As built, the GPU heat finding (`rules._gpu_throttle`) adds one line while heat held the NVIDIA GPU down: each
-  fan's median speed over those readings and its fastest in the part analysed. Since 2026-11-19 a second sentence
-  judges the CPU and GPU fans within the recording (section 10); it never scores.
+  fan's median speed over those readings and its fastest in the part analysed, two stray readings left out. Since
+  2026-11-19 a second sentence judges the fans within the recording where heat alone held the GPU (section 10); it
+  never scores.
 
 ## 8. Open questions, with what section 9 answered
 
@@ -351,9 +352,10 @@ tables, and G-Helper's source; a fourth re-read every cited line. Linux at `8dac
   `0x0001` as "no such fan", so a firmware that set it would read a fan at full speed as absent [unverified].
 
 So the verdict rests on the recording itself (`attribute.fan_verdict`, DESIGN.md "Headroom"): each fan's median
-while heat held the GPU against the fastest it kept up in the part, and for the CPU and GPU fans the slowest top in
-G-Helper's table (5,500 RPM; its CPU and GPU fans run 5,500 to 7,800, a middle fan up to 9,200). "Likely at full
-speed" stays a likelihood: a mode whose curve flattens above 5,500 RPM reads the same.
+while heat held the GPU against its fastest in the part, and for the CPU and GPU fans the slowest top in G-Helper's
+table (5,500 RPM; its CPU and GPU fans run 5,500 to 7,800, a middle fan 5,800 to 9,200, 58 for a model it does not
+list) [verified: `app/Fan/FanSensorControl.cs`:8, 50-80]. "Likely at full speed" stays a likelihood: a mode whose
+curve flattens above 5,500 RPM reads the same.
 
 ## Verification log (2026-11-17)
 

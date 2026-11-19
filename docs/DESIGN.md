@@ -1292,25 +1292,26 @@ that named what held it, never the idle ones; "so heat held it back, not its pow
 and `gpu_limit`'s heat line adds the median clock. `Diagnosis.stats` keeps the same medians over every reading that
 is not idle. When heat held it down and an ASUS laptop's fans were read, a third line says what they did meanwhile
 (`rules._fans_text`, `attribute.fans_while`): each fan's median over the NVIDIA readings that named heat and were not
-idle, each matched to the fan's nearest reading within `FAN_NEAR_S` (1 s), and the fastest it kept up in the part
-(`attribute.kept_up`: its best speed held `FAN_KEPT_READINGS`, 3, readings in a row, so a stray reading or two sets
-nothing); a reading past `FAN_MAX_RPM` (12,000, G-Helper's own bound) is corrupt and left out. A second sentence
-judges them (`attribute.fan_verdict`), over the readings that named heat itself (`thermal_named`: one naming only
-the power brake says nothing of heat, and gets no verdict). No read-only firmware call gives a fan's top speed or
-the fan mode in force (`docs/research/asus-fans.md` section 10), so each fan is judged by its median there against
-the fastest it kept up, and the CPU and GPU fans also against `FAN_TOP_MIN_RPM` (5,500 RPM, the slowest top speed
-in G-Helper's per-model table; a middle fan tops out higher, so that floor skips it):
+idle, each matched to the fan's nearest reading within `FAN_NEAR_S` (1 s), and its fastest in the part
+(`attribute.fan_fastest`: its fastest reading once its `FAN_STRAY_READINGS`, 2, fastest are left out, so a stray
+reading or two sets nothing, and never under that median); a reading past `FAN_MAX_RPM` (12,000, G-Helper's own
+bound) is corrupt and left out. Where heat alone held the GPU (`attribute.held_by`), a second sentence judges them
+(`attribute.fan_verdict`, from the same medians and fastest); where the power brake was named, or NVIDIA's HW
+slowdown, which may be either, more cooling may not lift it, and the line stays as it was. No read-only firmware
+call gives a fan's top speed or the fan mode in force (`docs/research/asus-fans.md` section 10), so each fan is
+judged by its median against its fastest, and the CPU and GPU fans also against `FAN_TOP_MIN_RPM` (5,500 RPM, the
+slowest top speed in G-Helper's per-model table; a middle fan tops out at 5,800 to 9,200, so that floor skips it):
 - **held**: a fan stood still (a fan curve, the firmware or a faulty fan likely stopped it), ran under
-  `FAN_SLOW_RPM` (4,000), or ran under `FAN_SLOWED_SHARE` (3/4) of the fastest it kept up (a quiet mode or a fan
-  curve likely held it back);
-- **full**: every fan held `FAN_STEADY_SHARE` (90 %) of the fastest it kept up and the CPU and GPU fans read at
-  least 5,500 RPM, where heat alone held the GPU: likely at full speed, so the cooler itself is the limit;
-- **braked**: the same, but the power brake held the GPU too, which no cooling lifts, so it is not judged;
+  `FAN_SLOW_RPM` (4,000), or ran under `FAN_SLOWED_SHARE` (3/4) of its fastest (a quiet mode or a fan curve likely
+  held it back);
+- **full**: every fan held `FAN_STEADY_SHARE` (90 %) of its fastest and the CPU and GPU fans read at least 5,500
+  RPM: they were likely at full speed, and the cooler itself likely the limit. A middle fan is never said to be at
+  full speed: the sentence says it is not judged;
 - **unknown**: else, the speeds alone cannot tell.
 
 The verdict leads the advice (`rules._heat_fixes`): cleaning the vents and fans after full speed, the maker's own
-fan mode after a fan held back (then air, plugging in and a frame cap), air first otherwise. It never scores, so the
-finding ranks as before. A GPU at a lowered power cap gets no fan line and no verdict.
+fan mode after a fan held back, then air, plugging in and a frame cap in both; air first otherwise. It never scores,
+so the finding ranks as before. A GPU at a lowered power cap gets no fan line and no verdict.
 
 ### Lag events (LC 2.4; NE 2.2, 4.6)
 - **stutter**: `D ≥ 2.5 × M` and `D − M ≥ 8 ms`, where `M` = median of the previous

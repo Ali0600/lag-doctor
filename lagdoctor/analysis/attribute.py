@@ -124,11 +124,11 @@ NV_MAX_W = 2_000.0           # [inferred] a GPU drawing past 2 kW, or limited th
 FAN_MAX_RPM = 12_000.0
 FAN_NEAR_S = 1.0             # an NVIDIA reading's fan speed: the nearest fan reading within one fan period (1 s)
 FANS = ((C.CPU_FAN_RPM, "CPU fan"), (C.GPU_FAN_RPM, "GPU fan"), (C.MID_FAN_RPM, "middle fan"))
-FAN_KEPT_READINGS = 3        # the fastest a fan kept up: its best speed held this many readings in a row (kept_up)
+FAN_STRAY_READINGS = 2       # a fan's fastest leaves out its fastest this many readings (fan_fastest)
 # What the fans' speeds say while heat held the GPU down (fan_verdict). No read-only firmware call gives a fan's
 # top speed or the fan mode in force (docs/research/asus-fans.md, section 10), so a recording is judged by itself
 # and by where ASUS laptop fans top out: 5,500 to 7,800 RPM for the CPU and GPU fans in G-Helper's per-model
-# table, up to 9,200 for a middle fan.
+# table, 5,800 to 9,200 for a middle fan.
 FAN_TOP_MIN_RPM = 5_500.0    # the slowest top speed known for an ASUS laptop's CPU or GPU fan
 FAN_SLOW_RPM = 4_000.0       # held back under this while hot: under 3/4 of the slowest top of any of the three
 FAN_STEADY_SHARE = 0.9       # near the fastest it kept up: a median while hot of at least this share of it
@@ -460,10 +460,10 @@ def fan_readings(cap: Capture) -> dict[str, list[tuple[float, float]]]:
 
 
 def fans_while(cap: Capture, keep: Callable[[Any], bool]) -> list[tuple[str, float, float]]:
-    """[(fan in words, median rpm, fastest kept up)] for each fan with readings: its median over the NVIDIA readings
-    that do not name gpu_idle and that `keep` accepts (given the reading's nv_reasons cell), each matched to the
-    fan's nearest reading within FAN_NEAR_S; the fastest it kept up over the capture (or part), kept_up. A fan with
-    no reading near any such NVIDIA reading is left out."""
+    """[(fan in words, median rpm, fastest rpm)] for each fan with readings: its median over the NVIDIA readings that
+    do not name gpu_idle and that `keep` accepts (given the reading's nv_reasons cell), each matched to the fan's
+    nearest reading within FAN_NEAR_S; its fastest over the capture (or part), fan_fastest, and never under that
+    median. A fan with no reading near any such NVIDIA reading is left out."""
     gpu = cap.gpu if isinstance(cap.gpu, dict) else {}
     t, why = fa._col(gpu, G.T), fa._col(gpu, G.REASONS)
     when = [w for i, ti in enumerate(t) if (w := fa._bounded(ti)) is not None
@@ -482,45 +482,41 @@ def fans_while(cap: Capture, keep: Callable[[Any], bool]) -> list[tuple[str, flo
             if abs(times[best] - w) <= FAN_NEAR_S:
                 near.append(pairs[best][1])
         if near:
-            out.append((words, st.median(near), kept_up([p[1] for p in pairs])))
+            med = st.median(near)
+            out.append((words, med, max(med, fan_fastest([p[1] for p in pairs]))))
     return out
 
 
-def kept_up(speeds: list[float]) -> float:
-    """The fastest a fan kept up: the best of its speeds held FAN_KEPT_READINGS readings in a row (each run's
-    slowest), in time order; with fewer readings, its fastest. So one stray reading, or two, sets nothing."""
-    k = FAN_KEPT_READINGS
-    if len(speeds) < k:
-        return max(speeds)
-    return max(min(speeds[i:i + k]) for i in range(len(speeds) - k + 1))
-
-
-def thermal_named(reasons: Any) -> bool:
-    """Whether an nv_reasons cell names heat itself (THERMAL_ONLY): the power brake alone says nothing of heat."""
-    return bool(_reasons(reasons) & set(THERMAL_ONLY))
+def fan_fastest(speeds: list[float]) -> float:
+    """The fastest a fan ran: its fastest reading once its FAN_STRAY_READINGS fastest are left out, so a stray reading
+    or two inside the bound sets nothing; with no more readings than that, its fastest."""
+    ordered = sorted(speeds)
+    return ordered[-1 - FAN_STRAY_READINGS] if len(ordered) > FAN_STRAY_READINGS else ordered[-1]
 
 
 @dataclass(frozen=True)
 class FanVerdict:
-    """What the fans' speeds say while heat held the GPU down: "full" (likely at full speed), "held" (something held
-    one back), "braked" (they would read as full, but the power brake held the GPU too) or "unknown"."""
+    """What the fans' speeds say while heat alone held the GPU down: "full" (the CPU and GPU fans likely at full
+    speed), "held" (something held one back) or "unknown"."""
     kind: str
     fans: tuple[str, ...]              # every fan judged, in words, in FANS order
     topped: tuple[str, ...] = ()       # of those, the ones FAN_TOP_MIN_RPM holds for (FANS_TOPPED)
     stopped: tuple[str, ...] = ()      # held: a median of 0 RPM while hot
     slow: tuple[str, ...] = ()         # held: the others under FAN_SLOW_RPM
-    slowed: tuple[str, ...] = ()       # held: the others under FAN_SLOWED_SHARE of the fastest they kept up
+    slowed: tuple[str, ...] = ()       # held: the others under FAN_SLOWED_SHARE of their fastest
 
 
-def fan_verdict(cap: Capture, heat_only: bool) -> FanVerdict | None:
-    """Judge each fan by its median over the NVIDIA readings that named heat itself (fans_while, thermal_named)
-    against the fastest it kept up in the capture or part, and the CPU and GPU fans also against FAN_TOP_MIN_RPM.
-    "held" when one stood still, ran under FAN_SLOW_RPM, or ran under FAN_SLOWED_SHARE of the fastest it kept up;
-    else, when each held FAN_STEADY_SHARE of that and the CPU and GPU fans read at least FAN_TOP_MIN_RPM (one of them
-    at least), "full" where heat alone held the GPU (`heat_only`) and "braked" where the power brake did too, since
-    cooling does not lift it; else "unknown". None without a fan read near such a reading."""
+def fan_verdict(cap: Capture) -> FanVerdict | None:
+    """Judge each fan by its median while heat held the GPU down against its fastest in the capture or part (both
+    from fans_while, as the fan line prints them), and the CPU and GPU fans also against FAN_TOP_MIN_RPM. Only where
+    heat alone held the GPU (held_by): where the power brake was named, or NVIDIA's HW slowdown, which may be either,
+    more cooling may not lift it, so None, as without a fan read near those readings. "held" when one stood still,
+    ran under FAN_SLOW_RPM, or ran under FAN_SLOWED_SHARE of its fastest; "full" when each held FAN_STEADY_SHARE of
+    its fastest and the CPU and GPU fans (one of them at least) read FAN_TOP_MIN_RPM or more; else "unknown"."""
+    if held_by(cap) != "heat":
+        return None
     cols = {words: col for col, words in FANS}
-    fans = fans_while(cap, thermal_named)
+    fans = fans_while(cap, heat_named)
     if not fans:
         return None
     names = tuple(words for words, _, _ in fans)
@@ -532,9 +528,7 @@ def fan_verdict(cap: Capture, heat_only: bool) -> FanVerdict | None:
         return FanVerdict("held", names, topped, stopped, slow, slowed)
     steady = all(med >= FAN_STEADY_SHARE * fast for _, med, fast in fans)
     over = topped and all(med >= FAN_TOP_MIN_RPM for words, med, _ in fans if words in topped)
-    if steady and over:
-        return FanVerdict("full" if heat_only else "braked", names, topped)
-    return FanVerdict("unknown", names, topped)
+    return FanVerdict("full" if steady and over else "unknown", names, topped)
 
 
 FAN_STATS = {"fan_cpu_rpm": C.CPU_FAN_RPM, "fan_gpu_rpm": C.GPU_FAN_RPM}
