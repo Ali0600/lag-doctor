@@ -36,8 +36,8 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
 - [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
   below), the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
-  names), `watch --wait-folder` with the re-arm (M6e, PR #58) and Play's order on the control channel (M6f). The
-  app's Play, screen 6 and the art are not built yet.
+  names), `watch --wait-folder` with the re-arm (M6e, PR #58), Play's order on the control channel (M6f) and the
+  app's Play (M6g) and the art (M6h). Screen 6 is not built yet.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -646,7 +646,11 @@ labelled, as in the terminal.
   - Open: the Preview treats two more catalog namespaces than "ue" as Unreal Engine's (an unofficial reading of
     launcher 0.95.1, section 15). Which products they are is not known, so a Preview record in either is still
     listed; pass them over once a source names them.
-- The art: the library's cover tiles for installed games, with the app's half of Play.
+- [x] The art (M6h; DESIGN.md, The app, Cover art): a Steam game's portrait cover from Steam's own cache
+  (`stores/art.py`, through `stores`' file access, the type told from the bytes), answered by the window itself on a
+  second host (`art.lagdoctor.example`, WebResourceRequested) by game id only, and drawn over the generated tile once
+  it has loaded. Not yet: GOG Galaxy's cache, and the exe's own icon (for Epic games and games recorded before), so
+  those keep the generated tile.
 - [x] The store launch: a policy module that builds each URI from its fixed template and refuses when elevated, over
   a thin `winapi/launch.py` that only hands the link to Explorer's `IShellDispatch2::ShellExecute` (DESIGN.md keeps
   policy out of `winapi/`). The `test_no_handles` extension ships with it. Built: `lagdoctor/stores/launch.py`
@@ -685,6 +689,16 @@ labelled, as in the terminal.
   grammar; an administrator window never writes a short name out long. `_relay_failure(play=True)` words a broken
   link for Play. Open: a launcher that keeps drawing behind the game passes the hold (Backlog); one that passes the
   hold and exits before the recording starts is recorded gone.
+- [x] The app's Play (M6g; DESIGN.md, The app, Play): the Library lists the games Steam and the Epic launchers have
+  installed beside the recorded ones (All, Installed and Recorded), a recorded game shows under the installed one
+  whose folder its recordings ran from, and an installed game's page has **Play with lag-doctor**. The app starts the
+  recorder with `--wait-folder` for the game's folder, takes the relay's prompt only for that folder, and on the
+  recorder's `launch` has Explorer open the store link (`stores/launch.play`, on a thread of its own) and minimizes
+  itself; a link Windows cannot open is said, and the wait goes on for a game the player starts themselves. The
+  running screen says Play's steps (starting the game, waiting for it, "The game did not start") and plays the same
+  game again. Not yet: the "ready" chime when the game is found (the start key's ready chime plays once the recording
+  starts), the picker when two programs qualify, and a hint that a closed Steam starts first beyond the waiting
+  words.
 - Screen 6, and the folder wait for games without Play. The CLI gets it too: `watch --wait-folder`.
 
 What a check against FINAL FANTASY VII REBIRTH found on 2026-11-09 (research note, section 14), as parts of the items

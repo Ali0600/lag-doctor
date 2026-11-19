@@ -16,6 +16,10 @@ JSON file named on its command line, says what it does:
     start_key    {"registered", "window_s", "start_by_s"}: say the start key (Ctrl+Alt+S) once it records, as watch
                  does (M5); default null: no start key
     press_at     with start_key, the press's time in the recording's seconds: "measuring" from it, for window_s
+    folder       Play's (watch --wait-folder): ask for the relay for this install folder's forms first, then say
+                 "launch" and "waiting", wait pause_s for a Cancel, and only then find the game; default null: the
+                 game that is running, found first
+    already_running  with folder: say that this program already runs from it, and end (done's game_running)
     end          "stop" (default): record until the window's Stop; "complete": end at once, its length run;
                  "window": the start key's window ran; "no_start": no press in time;
                  "exit": end with exit code 3 and no "done"
@@ -73,16 +77,23 @@ class Recorded(control.Channel):
             super()._handle(msg)
 
 
-def elevate(ch: Recorded, report: dict[str, Any]) -> bool:
+def elevate(ch: Recorded, report: dict[str, Any], folder: str | None = None) -> bool:
     """Ask the window for the relay as watch does (relay/client.launch's launcher is the channel's); True when a
-    relay's handle came back and names a running process."""
-    from lagdoctor.cli import Cancelled
+    relay's handle came back and names a running process. With `folder`, for Play's: its forms, worked out as watch
+    --wait-folder does (target.folder_forms), and the app's wait."""
+    from lagdoctor.capture import target
+    from lagdoctor.cli import WAIT_DEFAULT_S, Cancelled
     from lagdoctor.relay import client, protocol
     from lagdoctor.winapi import elevation
     from lagdoctor.winapi.ntquery import Snapshotter
     me = Snapshotter().snapshot()[os.getpid()]
-    argv = client.relay_argv(protocol.pipe_name(), (me.pid, me.create_time), elevation.token_user_sid(), GAME,
-                             presentmon_exe=None, frames=False, network=True)
+    if folder is None:
+        argv = client.relay_argv(protocol.pipe_name(), (me.pid, me.create_time), elevation.token_user_sid(), GAME,
+                                 presentmon_exe=None, frames=False, network=True)
+    else:
+        argv = client.relay_argv(protocol.pipe_name(), (me.pid, me.create_time), elevation.token_user_sid(),
+                                 folders=target.folder_forms(folder), wait_s=WAIT_DEFAULT_S, presentmon_exe=None,
+                                 frames=False, network=True)
     try:
         child = ch.relay_launcher(argv, report.get("relay_cwd") or str(client.PROJECT_ROOT))
     except Cancelled:
@@ -118,17 +129,32 @@ def main(argv: list[str]) -> int:
 
     try:
         ch.send("hello", v=control.VERSION, pid=os.getpid() if plan.get("hello_pid", "mine") == "mine" else 4)
-        ch.event("waiting", {})
+        folder = plan.get("folder")
+        if folder is None:
+            ch.event("waiting", {})
         if plan.get("garbage"):
             nl = bytes([10])
             for line in (b"not json", b'{"t":"nope"}', b'{"t":"mark","at":"soon"}', b"x" * (control.MAX_LINE + 10)):
                 ch._lines.put_nowait(line + nl)
-        ch.say(f"Watching {plan.get('game', 'Demo Game')} (pid {GAME[0]}, chosen by the busiest game with a window).")
-        ch.event("target", {"name": plan.get("game", "Demo Game"), "pid": GAME[0], "how": "auto"})
-        ch.cancel.wait(plan.get("pause_s", 0))
+        if folder is None:
+            ch.say(f"Watching {plan.get('game', 'Demo Game')} (pid {GAME[0]}, chosen by the busiest game with a window).")
+            ch.event("target", {"name": plan.get("game", "Demo Game"), "pid": GAME[0], "how": "auto"})
+            ch.cancel.wait(plan.get("pause_s", 0))
         frames = False
         if plan.get("elevate") and not ch.cancel.is_set():
-            frames = elevate(ch, report)
+            frames = elevate(ch, report, folder)
+        if folder is not None and not ch.cancel.is_set() and report["prompt"] != "cancelled":
+            if plan.get("already_running"):            # as watch --wait-folder's pre-flight ends it
+                ch.event("already_running", {"name": plan["already_running"], "pid": GAME[0]})
+                ch.say(f"Not started: {plan['already_running']} already runs from the game's folder with a window.")
+                code = 2
+                return code
+            ch.event("launch", {})
+            ch.event("waiting", {})
+            ch.cancel.wait(plan.get("pause_s", 0))
+            if not ch.cancel.is_set():
+                ch.say(f"Watching {plan.get('game', 'Demo Game')} (pid {GAME[0]}, chosen by folder).")
+                ch.event("target", {"name": plan.get("game", "Demo Game"), "pid": GAME[0], "how": "folder"})
         if ch.cancel.is_set() or report["prompt"] == "cancelled":
             ch.say("Cancelled: nothing was recorded.")
             code = 130

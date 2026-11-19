@@ -227,6 +227,234 @@ def test_the_game_view_puts_the_last_recording_on_top_and_marks_the_one_fix_acts
     assert views.game_view(entries, "g-0000000000000000", None) is None
 
 
+def _installed(*games, forms_of=lambda folder: (folder,)):
+    return library.installed(list(games or app_demo.INSTALLED), forms_of)
+
+
+def _store_id(game) -> str:
+    return library.game_id(f"store:{game.store}:{game.id}")
+
+
+def test_the_library_lists_installed_games_and_shows_recordings_under_the_one_they_ran_from(demo):
+    home, _ = demo
+    v = views.library_view(entries_of(home), READY, _installed())
+    assert [g["name"] for g in v["games"]] == [app_demo.MARKUP_TITLE, "Demo Racer", "starplanner",
+                                               *app_demo.NOT_RECORDED]
+    racer = v["games"][1]                    # its recordings ran from C:\Games\Demo Racer: one tile, the store's
+    assert racer["id"] == _store_id(app_demo.INSTALLED[0]) and racer["installed"] and racer["store"] == "Steam"
+    assert racer["recordings"] == 2 and racer["last"] == "3 Nov 2026, 21:00"
+    lantern = v["games"][-1]
+    assert lantern["installed"] and lantern["recordings"] == 0 and lantern["store"] == "Epic Games"
+    assert lantern["lag_type"] == "Not recorded yet" and lantern["last"] == "" and lantern["avg_fps"] == "-"
+    assert v["recent"] == [g["id"] for g in v["games"][:3]]          # recorded games only
+    assert v["recordings"] == 4 and v["installed"] == 3
+    assert [g["installed"] for g in v["games"][:3]] == [False, True, False]
+
+
+def test_a_recording_joins_an_installed_game_only_from_under_its_folder(demo, tmp_path):
+    home, _ = demo
+    near = dataclasses.replace(app_demo.INSTALLED[0], id="3999903", folder="C:\\Games\\Demo Race")   # a name's prefix
+    v = views.library_view(entries_of(home), READY, _installed(near))
+    assert [(g["name"], g["recordings"]) for g in v["games"]] == [
+        (app_demo.MARKUP_TITLE, 1), ("Demo Racer", 2), ("starplanner", 1), ("Demo Racer", 0)]
+    assert v["games"][1]["installed"] is False and v["games"][3]["installed"] is True
+    # Through the folder's other form (its real path, behind a junction), it joins.
+    moved = dataclasses.replace(app_demo.INSTALLED[0], folder="E:\\Steam\\common\\Demo Racer")
+    v = views.library_view(entries_of(home), READY, _installed(
+        moved, forms_of=lambda folder: (folder, "C:\\Games\\Demo Racer")))
+    assert [(g["name"], g["installed"], g["recordings"]) for g in v["games"]][1] == ("Demo Racer", True, 2)
+
+
+def test_an_older_recording_with_no_summary_never_joins_an_installed_game(demo):
+    # Star Planner's recording has no summary, so no exe to tell by: under C:\Games, where its capture says it ran
+    # (and where the other demo games' recordings ran, which join), it is left a recorded game of its own.
+    home, _ = demo
+    planner = dataclasses.replace(app_demo.INSTALLED[2], title="Star Planner", folder="C:\\Games")
+    v = views.library_view(entries_of(home), READY, _installed(planner))
+    assert ("starplanner", False, 1) in [(g["name"], g["installed"], g["recordings"]) for g in v["games"]]
+
+
+def test_the_game_view_of_an_installed_game_offers_play_and_of_any_other_says_why_not(demo):
+    home, _ = demo
+    entries, games = entries_of(home), _installed()
+    play = views.play_words("ctrl+alt+s", 600.0, "ctrl+alt+l")
+    assert play == ("Once you are in the game, press Ctrl+Alt+S: lag-doctor measures the 10 minutes after it, so the "
+                    "startup, menus and loading are not counted. Press Ctrl+Alt+L the moment it lags.")
+    lantern = views.game_view(entries, _store_id(app_demo.INSTALLED[1]), None, games, play=play)
+    assert lantern["name"] == "Lantern Drift" and lantern["store"] == "Epic Games" and lantern["last"] is None
+    assert lantern["sessions"] == [] and lantern["play"] == {"store": "Epic Games", "text": play}
+    assert lantern["play_note"] == ""
+    racer = views.game_view(entries, _store_id(app_demo.INSTALLED[0]), None, games, play=play)
+    assert racer["play"]["store"] == "Steam" and [s["id"] for s in racer["sessions"]] == [
+        "20261103-210000-demoracer", "20261101-201500-demoracer"]
+    quest_id = next(g["id"] for g in views.library_view(entries, READY, games)["games"]
+                    if g["name"] == app_demo.MARKUP_TITLE)
+    quest = views.game_view(entries, quest_id, None, games, play=play)
+    assert quest["play"] is None and quest["play_note"] == views.PLAY_NOTE
+    # A recorded game that joined an installed one answers only to the installed game's id.
+    assert views.game_view(entries, library.game_id("demoracer"), None, games) is None
+    assert views.installed_of(entries, _store_id(app_demo.INSTALLED[1]), games).game.title == "Lantern Drift"
+    assert views.installed_of(entries, quest["id"], games) is None
+    assert "measures the 10 minutes" not in views.play_words(None, 600.0, "ctrl+alt+l")
+
+
+def test_the_installed_games_are_each_stores_once_and_one_store_failing_hides_none_of_the_other(monkeypatch):
+    from lagdoctor import stores
+    from lagdoctor.stores import epic, steam
+    racer, lantern = app_demo.INSTALLED[:2]
+    monkeypatch.setattr(steam, "read", lambda: stores.Library(games=[racer, racer], problems=["one bad manifest"]))
+    monkeypatch.setattr(epic, "read", lambda: stores.Library(games=[lantern]))
+    logged = []
+    assert library.installed_games(logged.append) == [racer, lantern]
+    assert logged == ["store library: one bad manifest"]
+
+    def broken():
+        raise RuntimeError("an unexpected file")
+    monkeypatch.setattr(steam, "read", broken)
+    assert library.installed_games(logged.append) == [lantern]
+    assert logged[-1] == "reading a store's library failed: RuntimeError: an unexpected file"
+
+
+def _rec(tmp_path, sid: str, exe: str | None, when: datetime) -> library.Entry:
+    """A recording as the listing reads it: its folder holding a capture, and a summary naming its exe (None: an older
+    recording, with no summary)."""
+    folder = tmp_path / "sessions" / sid
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / library.CAPTURE_NAME).write_bytes(b"")
+    stem = sid.split("-", 2)[2]
+    return library.Entry(id=sid, folder=folder, kind="watch", game=stem, game_key=stem, exe_name=f"{stem}.exe",
+                         started=when, summary=None if exe is None else {"exe": exe, "kind": "watch"})
+
+
+def _store(gid: str, title: str, folder: str):
+    return dataclasses.replace(app_demo.INSTALLED[0], id=gid, title=title, folder=folder)
+
+
+def _tiles(entries, games, roots=()):
+    """{session id: the title of the installed game it joins, or None}, with `roots` as the shared folders."""
+    joins = library.joined(entries, library.installed(list(games), lambda f: (f,)), roots=list(roots))
+    return {e.id: joins[e.id].game.title if e.id in joins else None for e in entries}
+
+
+def test_each_recording_joins_the_installed_game_whose_folder_holds_its_exe_not_one_of_its_name(tmp_path):
+    # Two games whose programs share a name: each keeps its own recording.
+    a = _rec(tmp_path, "20261110-100000-game", "C:\\Games\\Alpha\\game.exe", datetime(2026, 11, 10, 10))
+    b = _rec(tmp_path, "20261109-100000-game", "C:\\Games\\Beta\\game.exe", datetime(2026, 11, 9, 10))
+    games = [_store("3999911", "Alpha", "C:\\Games\\Alpha"), _store("3999912", "Beta", "C:\\Games\\Beta")]
+    assert _tiles([a, b], games) == {a.id: "Alpha", b.id: "Beta"}
+    v = views.library_view([a, b], READY, library.installed(games, lambda f: (f,)))
+    assert [(g["name"], g["recordings"]) for g in v["games"]] == [("Alpha", 1), ("Beta", 1)]
+
+
+def test_the_most_specific_folder_wins_and_a_broad_one_takes_no_recording(tmp_path):
+    inner = _rec(tmp_path, "20261110-100000-racer", "C:\\Games\\Racer\\bin\\racer.exe", datetime(2026, 11, 10, 10))
+    other = _rec(tmp_path, "20261109-100000-gogger", "C:\\Games\\Gogger\\gogger.exe", datetime(2026, 11, 9, 10))
+    outer = _store("3999913", "Everything", "C:\\Games")             # a store file naming a folder of many games
+    racer = _store("3999914", "Racer", "C:\\Games\\Racer")
+    assert _tiles([inner, other], [outer, racer]) == {inner.id: "Racer", other.id: None}
+    # A Program Files folder takes none either, nor a game folder holding none of the others: its forms decide.
+    pf = _store("3999915", "Files", "C:\\Program Files (x86)")
+    there = _rec(tmp_path, "20261108-100000-tool", "C:\\Program Files (x86)\\Tool\\tool.exe", datetime(2026, 11, 8))
+    assert _tiles([there], [pf], roots=["c:/program files (x86)"]) == {there.id: None}
+    assert _tiles([there], [pf]) == {there.id: "Files"}                # no root named: a folder like any other
+    deeper = dataclasses.replace(racer, id="3999916", title="Racer DLC")      # one folder, two entries: ties by key
+    assert _tiles([inner], [deeper, racer]) == {inner.id: "Racer"}
+
+
+def test_an_older_recording_follows_the_newest_join_of_its_game_and_two_programs_of_one_folder_are_one_game(tmp_path):
+    new = _rec(tmp_path, "20261110-100000-racer", "C:\\Games\\Racer\\racer.exe", datetime(2026, 11, 10, 10))
+    old = _rec(tmp_path, "20261101-100000-racer", None, datetime(2026, 11, 1, 10))          # no summary
+    moved = _rec(tmp_path, "20261105-100000-racer", "D:\\Copy\\racer.exe", datetime(2026, 11, 5, 10))
+    launcher = _rec(tmp_path, "20261108-100000-launcher", "C:\\Games\\Racer\\launcher.exe", datetime(2026, 11, 8))
+    games = [_store("3999914", "Racer", "C:\\Games\\Racer")]
+    entries = [new, launcher, moved, old]                                   # newest first, as the listing gives them
+    assert _tiles(entries, games) == {new.id: "Racer", launcher.id: "Racer", moved.id: None, old.id: "Racer"}
+    gid = library.game_id("store:steam:3999914")
+    v = views.game_view(entries, gid, None, library.installed(games, lambda f: (f,)))
+    assert [s["id"] for s in v["sessions"]] == [new.id, launcher.id, old.id]           # newest first, one game
+    assert [(g["name"], g["recordings"]) for g in views.library_view(entries, READY,
+                                                                      library.installed(games, lambda f: (f,)))["games"]] \
+        == [("Racer", 3), ("racer", 1)]
+
+
+def test_a_store_listing_that_fails_still_lists_the_recorded_games(demo, monkeypatch):
+    home, _ = demo
+    from lagdoctor.app import main as app_main
+
+    def broken():
+        raise OSError("a store's files could not be read")
+    app = app_main.App(home=home, runtime={"version": "1.0.0.0", "build": 4000}, create_fn=None, log=lambda s: None,
+                       play=lambda n: None, flash=lambda on: None, installed=broken)
+    monkeypatch.setattr(app, "get_readiness", lambda: READY)
+    assert [g["name"] for g in app.do_library()["games"]] == [app_demo.MARKUP_TITLE, "Demo Racer", "starplanner"]
+
+
+def test_a_tile_names_its_cover_only_when_the_app_holds_one(demo):
+    home, _ = demo
+    entries, games = entries_of(home), _installed()
+    racer, lantern = _store_id(app_demo.INSTALLED[0]), _store_id(app_demo.INSTALLED[1])
+    v = views.library_view(entries, READY, games, art=frozenset({racer}))
+    arts = {g["name"]: g["tile"]["art"] for g in v["games"]}
+    assert arts.pop("Demo Racer") == f"https://art.lagdoctor.example/{racer}"
+    assert set(arts.values()) == {None}
+    assert views.game_view(entries, racer, None, games, art=frozenset({racer}))["tile"]["art"].endswith(racer)
+    assert views.game_view(entries, lantern, None, games, art=frozenset({racer}))["tile"]["art"] is None
+    assert views.tile("Demo Racer")["art"] is None
+
+
+def _art_app(tmp_path, covers):
+    from lagdoctor.app import main as app_main
+    return app_main.App(home=tmp_path, runtime={"version": "1.0.0.0", "build": 4000}, create_fn=None,
+                        log=lambda s: None, play=lambda n: None, flash=lambda on: None,
+                        installed=lambda: list(app_demo.INSTALLED), forms_of=lambda folder: (folder,), covers=covers)
+
+
+def test_the_app_reads_each_games_cover_once_and_its_art_host_only_looks_it_up(tmp_path):
+    asked = []
+
+    def covers(games):
+        asked.append([g.title for g in games])
+        return app_demo.covers(games)
+    app = _art_app(tmp_path, covers)
+    racer, lantern = _store_id(app_demo.INSTALLED[0]), _store_id(app_demo.INSTALLED[1])
+    app.scan_games()
+    app.scan_games()                                     # a second listing reads nothing again
+    assert app.art_for(racer) == app_demo.COVER and app.art_for(lantern) is None and app.art_ids() == {racer}
+    assert app.art_for("g-0000000000000000") is None
+    app.get_readiness = lambda: READY
+    assert app.do_library()["games"][1]["tile"]["art"].endswith(racer)
+    assert asked == [["Demo Racer", "Lantern Drift", "Copper Coast"]]           # and the Library's own, none again
+
+
+def test_an_app_given_no_covers_reads_no_store_cache(tmp_path, monkeypatch):
+    from lagdoctor.stores import art, steam
+    monkeypatch.setattr(art, "covers", lambda *a, **k: pytest.fail("a store's cover cache was read"))
+    monkeypatch.setattr(steam, "find_steam_folder", lambda: pytest.fail("this PC's Steam was looked for"))
+    app = _art_app(tmp_path, None)
+    assert len(app.scan_games()) == 3 and app.art_ids() == frozenset()
+
+
+def test_covers_past_the_apps_total_are_left_out_and_a_failing_read_keeps_the_tiles(tmp_path, monkeypatch):
+    from lagdoctor.stores import art
+    monkeypatch.setattr(art, "MAX_TOTAL_BYTES", len(app_demo.COVER[1]) * 2 - 1)
+    big = app_demo.COVER
+    app = _art_app(tmp_path, lambda games: {(g.store, g.id): big for g in games})
+    app.scan_games()
+    assert len(app.art_ids()) == 1                        # the first fits, the next would pass the total
+
+    def broken(games):
+        raise OSError("the cache could not be read")
+    app = _art_app(tmp_path / "b", broken)
+    assert len(app.scan_games()) == 3 and app.art_ids() == frozenset()
+
+
+def test_a_folder_whose_forms_cannot_be_worked_out_is_taken_as_its_store_wrote_it():
+    def refuse(folder):
+        raise ValueError("it leads onto a network share")
+    (one,) = library.installed([app_demo.INSTALLED[0]], refuse)
+    assert one.forms == ("C:\\Games\\Demo Racer",) and one.store_name == "Steam"
+
+
 def _load(entry):
     from lagdoctor.model import Capture
     cap = Capture.load(entry.capture)

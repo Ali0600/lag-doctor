@@ -48,6 +48,7 @@ p { margin: 6px 0; }
 .btn:hover:not(:disabled) { border-color: var(--accent); }
 .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .btn:disabled { opacity: 0.5; cursor: default; }
+.btn.big { font-size: 17px; padding: 11px 26px; font-weight: 600; }
 .error { color: var(--bad); }
 .loading::after { content: ""; display: inline-block; width: 12px; height: 12px; margin-left: 8px;
   border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%;

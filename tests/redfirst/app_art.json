@@ -1,0 +1,335 @@
+[
+ {
+  "name": "art: a RIFF file that is no WebP taken for one",
+  "file": "lagdoctor/stores/art.py",
+  "old": "    if len(data) >= 12 and data[:4] == b\"RIFF\" and data[8:12] == b\"WEBP\":",
+  "new": "    if len(data) >= 12 and data[:4] == b\"RIFF\":",
+  "tests": [
+   "tests/test_stores_art.py::test_an_images_type_is_told_from_its_bytes_and_anything_else_is_none"
+  ]
+ },
+ {
+  "name": "art: a cut-short PNG signature taken for one",
+  "file": "lagdoctor/stores/art.py",
+  "old": "    if data.startswith(b\"\\x89PNG\\r\\n\\x1a\\n\"):",
+  "new": "    if data.startswith(b\"\\x89PNG\"):",
+  "tests": [
+   "tests/test_stores_art.py::test_an_images_type_is_told_from_its_bytes_and_anything_else_is_none"
+  ]
+ },
+ {
+  "name": "art: bytes that are no image taken",
+  "file": "lagdoctor/stores/art.py",
+  "old": "    size = image_size(data) if kind is not None else None",
+  "new": "    size = image_size(data) if kind is not None else (600, 900)",
+  "tests": [
+   "tests/test_stores_art.py::test_bytes_that_are_no_image_or_too_large_are_no_cover"
+  ]
+ },
+ {
+  "name": "art: an image past its cap taken",
+  "file": "lagdoctor/stores/art.py",
+  "old": "        data = stores.read_bytes(path, MAX_IMAGE_BYTES)",
+  "new": "        data = stores.read_bytes(path, 4 << 20)",
+  "tests": [
+   "tests/test_stores_art.py::test_bytes_that_are_no_image_or_too_large_are_no_cover"
+  ]
+ },
+ {
+  "name": "art: the content-hash subfolders never looked into",
+  "file": "lagdoctor/stores/art.py",
+  "old": "    for path in [os.path.join(app, PORTRAIT)] + [os.path.join(app, s, PORTRAIT) for s in _subfolders(app)]:",
+  "new": "    for path in [os.path.join(app, PORTRAIT)]:",
+  "tests": [
+   "tests/test_stores_art.py::test_the_portrait_in_a_content_hash_subfolder_and_by_the_old_flat_name"
+  ]
+ },
+ {
+  "name": "art: the old flat name never looked for",
+  "file": "lagdoctor/stores/art.py",
+  "old": "    return _image(os.path.join(cache, f\"{appid}_{PORTRAIT}\"))",
+  "new": "    return None",
+  "tests": [
+   "tests/test_stores_art.py::test_the_portrait_in_a_content_hash_subfolder_and_by_the_old_flat_name"
+  ]
+ },
+ {
+  "name": "art: any id names a folder",
+  "file": "lagdoctor/stores/art.py",
+  "old": "    if not isinstance(appid, str) or not launch.STEAM_APPID.fullmatch(appid):    # it names a folder: digits only",
+  "new": "    if not isinstance(appid, str):    # it names a folder: digits only",
+  "tests": [
+   "tests/test_stores_art.py::test_an_id_that_is_not_a_steam_app_id_names_no_folder"
+  ]
+ },
+ {
+  "name": "art: covers past the total taken",
+  "file": "lagdoctor/stores/art.py",
+  "old": "        if total + len(found[1]) > MAX_TOTAL_BYTES:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_stores_art.py::test_covers_are_steams_games_only_and_stop_at_their_total"
+  ]
+ },
+ {
+  "name": "art: Steam looked for without a Steam game",
+  "file": "lagdoctor/stores/art.py",
+  "old": "    if not any(g.store == steam.STORE for g in games):\n        return out",
+  "new": "",
+  "tests": [
+   "tests/test_stores_art.py::test_without_steam_no_game_has_art_and_without_steam_games_steam_is_not_looked_for"
+  ]
+ },
+ {
+  "name": "art: an image's own type read from its name",
+  "file": "lagdoctor/stores/art.py",
+  "old": "    kind = image_type(data)\n    size = image_size(data) if kind is not None else None",
+  "new": "    kind = JPEG if path.endswith(\".jpg\") else image_type(data)\n    size = image_size(data) if kind is not None else None",
+  "tests": [
+   "tests/test_stores_art.py::test_the_portrait_in_the_apps_own_folder_is_its_cover_whatever_its_name_says"
+  ]
+ },
+ {
+  "name": "read_bytes: the file's bytes changed on the way",
+  "file": "lagdoctor/stores/__init__.py",
+  "old": "    return data",
+  "new": "    return data.lstrip(bytes([0xEF, 0xBB, 0xBF]))",
+  "tests": [
+   "tests/test_stores_art.py::test_read_bytes_gives_the_file_as_it_is_and_refuses_what_read_text_refuses"
+  ]
+ },
+ {
+  "name": "art host: a request with a query taken",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "    if parts.scheme != \"https\" or parts.netloc != ART_HOST or parts.query or parts.fragment:",
+  "new": "    if parts.scheme != \"https\" or parts.netloc != ART_HOST or parts.fragment:",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_names_no_cover"
+  ]
+ },
+ {
+  "name": "art host: a request with a fragment taken",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "    if parts.scheme != \"https\" or parts.netloc != ART_HOST or parts.query or parts.fragment:",
+  "new": "    if parts.scheme != \"https\" or parts.netloc != ART_HOST or parts.query:",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_names_no_cover"
+  ]
+ },
+ {
+  "name": "art host: another host, a port or a user taken",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "    if parts.scheme != \"https\" or parts.netloc != ART_HOST or parts.query or parts.fragment:",
+  "new": "    if parts.scheme != \"https\" or parts.query or parts.fragment:",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_names_no_cover"
+  ]
+ },
+ {
+  "name": "art host: http taken",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "    if parts.scheme != \"https\" or parts.netloc != ART_HOST or parts.query or parts.fragment:",
+  "new": "    if parts.netloc != ART_HOST or parts.query or parts.fragment:",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_names_no_cover"
+  ]
+ },
+ {
+  "name": "art host: a path that is no game id taken",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "    return gid if gid is not None and _game(gid) else None",
+  "new": "    return gid",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_names_no_cover"
+  ]
+ },
+ {
+  "name": "art host: a URL built for what is no game id",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "    if not _game(game_id):\n        raise ValueError(f\"not a game id: {game_id!r}\")",
+  "new": "    if False:\n        raise ValueError(f\"not a game id: {game_id!r}\")",
+  "tests": [
+   "tests/test_app_bridge.py::test_a_cover_is_asked_for_by_its_games_id_on_the_art_host_alone"
+  ]
+ },
+ {
+  "name": "art: every tile names a cover",
+  "file": "lagdoctor/app/views.py",
+  "old": "            \"art\": bridge.art_url(game_id) if game_id is not None and game_id in art else None}",
+  "new": "            \"art\": bridge.art_url(game_id) if game_id is not None else None}",
+  "tests": [
+   "tests/test_app_views.py::test_a_tile_names_its_cover_only_when_the_app_holds_one"
+  ]
+ },
+ {
+  "name": "art: covers read again at every listing",
+  "file": "lagdoctor/app/main.py",
+  "old": "            new = [g for g in games if g.game_id not in self.art_tried]",
+  "new": "            new = list(games)",
+  "tests": [
+   "tests/test_app_views.py::test_the_app_reads_each_games_cover_once_and_its_art_host_only_looks_it_up"
+  ]
+ },
+ {
+  "name": "art: covers past the app's total kept",
+  "file": "lagdoctor/app/main.py",
+  "old": "                if image is None or self.art_bytes + len(image[1]) > art.MAX_TOTAL_BYTES:",
+  "new": "                if image is None:",
+  "tests": [
+   "tests/test_app_views.py::test_covers_past_the_apps_total_are_left_out_and_a_failing_read_keeps_the_tiles"
+  ]
+ },
+ {
+  "name": "art: a failing read of the covers fails the listing",
+  "file": "lagdoctor/app/main.py",
+  "old": "            except Exception as exc:  # noqa: BLE001 - the games keep their generated tiles",
+  "new": "            except ZeroDivisionError as exc:  # noqa: BLE001 - the games keep their generated tiles",
+  "tests": [
+   "tests/test_app_views.py::test_covers_past_the_apps_total_are_left_out_and_a_failing_read_keeps_the_tiles"
+  ]
+ },
+ {
+  "name": "art: the art host answers nothing it holds",
+  "file": "lagdoctor/app/window.py",
+  "old": "        if found is None:\n            self.refused[\"art\"] += 1",
+  "new": "        if True:\n            self.refused[\"art\"] += 1",
+  "tests": [
+   "tests/test_app_page.py::test_a_cover_from_the_stores_cache_comes_from_the_windows_own_art_host"
+  ]
+ },
+ {
+  "name": "art: a cover that loaded never drawn",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "      c.style.background = `center / cover no-repeat url(\"${t.art}\")`;",
+  "new": "      c.dataset.drawn = 'no';",
+  "tests": [
+   "tests/test_app_page.py::test_a_cover_from_the_stores_cache_comes_from_the_windows_own_art_host"
+  ]
+ },
+ {
+  "name": "art: the page's CSP takes images from anywhere",
+  "file": "lagdoctor/app/assets/index.html",
+  "old": " img-src 'self' https://art.lagdoctor.example; font-src 'self'; connect-src 'none'; worker-src 'none'; frame-src 'none'; object-src 'none';",
+  "new": " img-src *; font-src 'self'; connect-src 'none'; worker-src 'none'; frame-src 'none'; object-src 'none';",
+  "tests": [
+   "tests/test_app_page.py::test_the_page_loads_nothing_from_outside_and_runs_no_inline_script"
+  ]
+ },
+ {
+  "name": "art host: no refusal first",
+  "file": "lagdoctor/app/window.py",
+  "old": "        self.respond(a, 404, \"Not Found\", None)\n",
+  "new": "",
+  "tests": [
+   "tests/test_app_page.py::test_the_art_host_refuses_each_request_first_and_answers_only_a_cover_it_holds"
+  ]
+ },
+ {
+  "name": "art host: the refusal put only once the request is read",
+  "file": "lagdoctor/app/window.py",
+  "old": "        self.respond(a, 404, \"Not Found\", None)\n        req = a.get_ptr(\"get_Request\", \"ICoreWebView2WebResourceRequest\")\n        try:\n            uri = req.get_str(\"get_Uri\")\n        finally:\n            req.release()\n        gid = bridge.art_id(uri)\n        found = self.art(gid) if gid is not None and self.art is not None else None\n        if found is None:\n            self.refused[\"art\"] += 1",
+  "new": "        req = a.get_ptr(\"get_Request\", \"ICoreWebView2WebResourceRequest\")\n        try:\n            uri = req.get_str(\"get_Uri\")\n        finally:\n            req.release()\n        gid = bridge.art_id(uri)\n        found = self.art(gid) if gid is not None and self.art is not None else None\n        if found is None:\n            self.respond(a, 404, \"Not Found\", None)\n            self.refused[\"art\"] += 1",
+  "tests": [
+   "tests/test_app_page.py::test_the_art_host_refuses_each_request_first_and_answers_only_a_cover_it_holds"
+  ]
+ },
+ {
+  "name": "art: a cover past the pixel cap taken",
+  "file": "lagdoctor/stores/art.py",
+  "old": "    if size is None or not (0 < size[0] <= MAX_SIDE and 0 < size[1] <= MAX_SIDE and size[0] * size[1] <= MAX_PIXELS):",
+  "new": "    if size is None or not (0 < size[0] <= MAX_SIDE and 0 < size[1] <= MAX_SIDE):",
+  "tests": [
+   "tests/test_stores_art.py::test_a_cover_whose_header_declares_too_large_an_image_or_none_is_no_cover"
+  ]
+ },
+ {
+  "name": "art: a side past its cap taken",
+  "file": "lagdoctor/stores/art.py",
+  "old": "    if size is None or not (0 < size[0] <= MAX_SIDE and 0 < size[1] <= MAX_SIDE and size[0] * size[1] <= MAX_PIXELS):",
+  "new": "    if size is None or not (0 < size[0] and 0 < size[1] and size[0] * size[1] <= MAX_PIXELS):",
+  "tests": [
+   "tests/test_stores_art.py::test_a_cover_whose_header_declares_too_large_an_image_or_none_is_no_cover"
+  ]
+ },
+ {
+  "name": "art: an image whose size cannot be read taken",
+  "file": "lagdoctor/stores/art.py",
+  "old": "    if size is None or not (0 < size[0] <= MAX_SIDE and 0 < size[1] <= MAX_SIDE and size[0] * size[1] <= MAX_PIXELS):",
+  "new": "    if size is not None and not (0 < size[0] <= MAX_SIDE and 0 < size[1] <= MAX_SIDE and size[0] * size[1] <= MAX_PIXELS):",
+  "tests": [
+   "tests/test_stores_art.py::test_a_cover_whose_header_declares_too_large_an_image_or_none_is_no_cover"
+  ]
+ },
+ {
+  "name": "art: a PNG's size read from a chunk that is no IHDR",
+  "file": "lagdoctor/stores/art.py",
+  "old": "        if len(data) < 24 or data[12:16] != b\"IHDR\":",
+  "new": "        if len(data) < 24:",
+  "tests": [
+   "tests/test_stores_art.py::test_an_images_size_is_read_from_its_header_and_none_when_it_cannot_be"
+  ]
+ },
+ {
+  "name": "art: a JPEG read past its scan for a frame header",
+  "file": "lagdoctor/stores/art.py",
+  "old": "        if marker in (0xD9, 0xDA):               # the end, or the scan, before any frame header",
+  "new": "        if False:               # the end, or the scan, before any frame header",
+  "tests": [
+   "tests/test_stores_art.py::test_an_images_size_is_read_from_its_header_and_none_when_it_cannot_be"
+  ]
+ },
+ {
+  "name": "art: a JPEG table taken for its frame header",
+  "file": "lagdoctor/stores/art.py",
+  "old": "        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):",
+  "new": "        if 0xC0 <= marker <= 0xCF:",
+  "tests": [
+   "tests/test_stores_art.py::test_an_images_size_is_read_from_its_header_and_none_when_it_cannot_be"
+  ]
+ },
+ {
+  "name": "art: a lossless WebP read without its signature",
+  "file": "lagdoctor/stores/art.py",
+  "old": "        if chunk == b\"VP8L\" and len(data) >= 25 and data[20] == 0x2F:",
+  "new": "        if chunk == b\"VP8L\" and len(data) >= 25:",
+  "tests": [
+   "tests/test_stores_art.py::test_an_images_size_is_read_from_its_header_and_none_when_it_cannot_be"
+  ]
+ },
+ {
+  "name": "art: every subfolder looked into",
+  "file": "lagdoctor/stores/art.py",
+  "old": "        if len(out) >= MAX_SUBFOLDERS:\n            break",
+  "new": "        pass",
+  "tests": [
+   "tests/test_stores_art.py::test_only_so_many_subfolders_and_entries_of_an_apps_folder_are_looked_at"
+  ]
+ },
+ {
+  "name": "art: every entry of an app's folder read",
+  "file": "lagdoctor/stores/art.py",
+  "old": "                if i >= MAX_ENTRIES:\n                    break",
+  "new": "                pass",
+  "tests": [
+   "tests/test_stores_art.py::test_only_so_many_subfolders_and_entries_of_an_apps_folder_are_looked_at"
+  ]
+ },
+ {
+  "name": "art: the page loads a cover from any URL",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "  if (typeof t.art === 'string' && ART_URL.test(t.art)) {",
+  "new": "  if (typeof t.art === 'string') {",
+  "tests": [
+   "tests/test_app_page.py::test_a_cover_from_the_stores_cache_comes_from_the_windows_own_art_host"
+  ]
+ },
+ {
+  "name": "art: an app given no covers reads the stores' own",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if self.covers is None:\n            return",
+  "new": "        if self.covers is None:\n            self.covers = art.covers",
+  "tests": [
+   "tests/test_app_views.py::test_an_app_given_no_covers_reads_no_store_cache"
+  ]
+ }
+]

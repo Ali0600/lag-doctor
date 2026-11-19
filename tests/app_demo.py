@@ -8,6 +8,10 @@ report and summary in a session folder), with fixed start times, so the library'
 
 --pictures builds PICTURES instead, the set the README's screenshots show (no markup in its names); take them with
 tests/app_harness.py and a shots folder.
+
+INSTALLED are the made-up store games Play lists (M6), which the harness gives App in place of the stores' own files
+(App's `installed`): Demo Racer's recordings ran from its install folder, so they show under it; the other two were
+never recorded. Their folders need not exist, since the app reads nothing in them, and their app ids are made up.
 """
 from __future__ import annotations
 
@@ -22,6 +26,8 @@ from lagdoctor.analysis.diagnose import diagnose
 from lagdoctor.capture.session import session_dir
 from lagdoctor.model import F
 from lagdoctor.report import html, summary
+from lagdoctor.stores import Game
+from lagdoctor.stores import launch as store_launch
 from tests import synth
 
 # A name that would be markup if the page ever parsed it (and an inline handler the page's CSP would block anyway):
@@ -45,6 +51,7 @@ class Demo:
     files: str = ""       # what its game's folder held (GAME_FILES); "": a capture from before lag-doctor looked
     note: str = ""        # the player's note (watch --note); "": none
     key_at: float | None = None   # when its start key was pressed (M5): the part analysed is KEY_WINDOW_S from it
+    folder: str = ""      # its install folder under C:\Games ("": its exe sits in C:\Games itself)
 
 
 # A made-up Unreal game's folder before and after a fan fix: a drop-in DLL and an ASI plugin added, and the settings
@@ -79,8 +86,10 @@ GAME_FILES = {
 
 
 DEMOS = (
-    Demo("Demo Racer", "demoracer.exe", "hitch", datetime(2026, 11, 1, 20, 15, 0), files="before"),
-    Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0), files="after", note=MARKUP_NOTE),
+    Demo("Demo Racer", "demoracer.exe", "hitch", datetime(2026, 11, 1, 20, 15, 0), files="before",
+         folder="Demo Racer"),
+    Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0), files="after", note=MARKUP_NOTE,
+         folder="Demo Racer"),
     Demo("Star Planner", "starplanner.exe", "hog", datetime(2026, 11, 2, 18, 30, 0), summary=False),
     Demo(MARKUP_TITLE, MARKUP_EXE, "hitch", datetime(2026, 11, 4, 19, 45, 0), last=True, key_at=4.0),
 )
@@ -88,13 +97,46 @@ DEMOS = (
 
 # For the README's pictures: the same steps work on it (the harness opens the game whose name holds "Quest").
 PICTURES = (
-    Demo("Demo Racer", "demoracer.exe", "hitch", datetime(2026, 11, 1, 20, 15, 0), files="before"),
-    Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0), files="after", note=PLAIN_NOTE),
+    Demo("Demo Racer", "demoracer.exe", "hitch", datetime(2026, 11, 1, 20, 15, 0), files="before",
+         folder="Demo Racer"),
+    Demo("Demo Racer", "demoracer.exe", "smooth", datetime(2026, 11, 3, 21, 0, 0), files="after", note=PLAIN_NOTE,
+         folder="Demo Racer"),
     Demo("Star Planner", "starplanner.exe", "hog", datetime(2026, 11, 2, 18, 30, 0)),
     Demo("Night Harbour", "nightharbour.exe", "pace", datetime(2026, 10, 28, 22, 10, 0)),
     Demo("Ember Quest", "emberquest.exe", "hitch-io", datetime(2026, 11, 4, 19, 45, 0), last=True, key_at=4.0),
 )
 
+
+# Made-up store games Play lists (App's `installed`), by store, made-up id, name and install folder.
+INSTALLED = (
+    Game("steam", "3999901", "Demo Racer", "C:\\Games\\Demo Racer", store_launch.steam_link("3999901")),
+    Game("epic", "demo:0a1b2c3d4e:LanternDrift", "Lantern Drift", "C:\\Games\\Lantern Drift",
+         store_launch.epic_link("demo", "0a1b2c3d4e", "LanternDrift")),
+    Game("steam", "3999902", "Copper Coast", "C:\\Games\\Copper Coast", store_launch.steam_link("3999902")),
+)
+NOT_RECORDED = ("Copper Coast", "Lantern Drift")       # by name, as the Library lists them after the recorded ones
+
+
+def png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
+    """A small PNG of one colour, made here: the demo's made-up cover art (stores/art.py reads a real store's)."""
+    import struct
+    import zlib
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+    signature = bytes([137, 80, 78, 71, 13, 10, 26, 10])
+    rows = (bytes([0]) + bytes(rgb) * width) * height        # filter 0, then the row's pixels
+    return (signature + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+
+
+# Demo Racer's made-up cover, as a store's cache would give it (App's `covers`); the other installed games have none.
+COVER = ("image/png", png(60, 90, (38, 110, 190)))
+
+
+def covers(games: list) -> dict:
+    """App's `covers` for the demo: Demo Racer's made-up cover, and none for the rest."""
+    return {(g.store, g.id): COVER for g in games if g.title == "Demo Racer"}
 
 KEY_WINDOW_S = 20.0      # a demo's measured window: its startup before the press and its end after are left out
 LOADING_MS = 500.0       # and the loading screen before the press, which draws twice a second
@@ -133,7 +175,8 @@ def build(home: Path, demos: tuple[Demo, ...] = DEMOS, seconds: float = 30.0) ->
             marks = (OUTSIDE_MARK_S,) + marks
         s = synth.laglab(demo.mode, duration_s=seconds, marks=marks)
         cap = s.cap
-        cap.target = dict(cap.target, name=demo.exe, exe=f"C:\\Games\\{demo.exe}", window_title=demo.title)
+        exe = f"C:\\Games\\{demo.folder}\\{demo.exe}" if demo.folder else f"C:\\Games\\{demo.exe}"
+        cap.target = dict(cap.target, name=demo.exe, exe=exe, window_title=demo.title)
         cap.started_at = demo.when.astimezone().isoformat(timespec="seconds")
         cap.tool_version = "0.1.0"
         if demo.files:

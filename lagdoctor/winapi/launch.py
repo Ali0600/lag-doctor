@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import ctypes
 import uuid
+from typing import Callable
 from ctypes import wintypes
 
 _ole32 = ctypes.WinDLL("ole32", use_last_error=True)
@@ -220,7 +221,12 @@ def window_pid(hwnd: int) -> int | None:
     return pid.value or None
 
 
-def open_through_explorer(target: str, args: str = "", show: int = SW_SHOWNORMAL) -> dict:
+class Withdrawn(Exception):
+    """open_through_explorer's `should_go` said no at the last moment, before ShellExecute: nothing was opened."""
+
+
+def open_through_explorer(target: str, args: str = "", show: int = SW_SHOWNORMAL,
+                          should_go: Callable[[], bool] | None = None) -> dict:
     """Have Explorer's desktop open `target` with `args`, as a double-click on it would: the shell runs it inside
     Explorer, so a program that starts is Explorer's child, and this process gets no handle to it.
 
@@ -229,6 +235,8 @@ def open_through_explorer(target: str, args: str = "", show: int = SW_SHOWNORMAL
     started (a link no program handles gets Explorer's own prompt, as a double-click would). Raises OSError when
     Explorer's desktop cannot be reached (Explorer restarting, another shell) or a call fails, and ValueError for a
     target or arguments it does not take. Which targets are opened is the caller's policy: this only makes the call.
+    `should_go()`, when given, is asked right before ShellExecute, after the calls into Explorer that can be slow: on
+    False, Withdrawn is raised and nothing is opened.
     """
     for name, text in (("target", target), ("args", args)):
         if not isinstance(text, str) or "\0" in text or len(text) > MAX_TARGET_CHARS:
@@ -258,6 +266,8 @@ def open_through_explorer(target: str, args: str = "", show: int = SW_SHOWNORMAL
         bstrs.append(file)
         shown = VARIANT()
         shown.vt, shown.value.lVal = VT_I4, show
+        if should_go is not None and not should_go():
+            raise Withdrawn("the caller withdrew the target before Explorer was handed it")
         _check(vcall(shell, SLOTS["IShellDispatch2"]["ShellExecute"],
                      (ctypes.c_void_p, VARIANT, VARIANT, VARIANT, VARIANT),
                      file, _variant_text(args, bstrs), _variant_text("", bstrs), _variant_text("", bstrs), shown),
