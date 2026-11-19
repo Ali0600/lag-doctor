@@ -10,7 +10,8 @@
 - **Judge the fans against the fastest seen on this PC**, across its recordings, so "likely at full speed" can
   firm up (2026-11-19, the fan verdict). Worth it once several recordings with fans exist. It needs each
   recording's fan highs in `Diagnosis.stats` and the summary, a key that tells PCs apart, and the library feeding
-  the analysis. Revisit hook: `attribute.fan_verdict`'s high (`FAN_HIGH_PCT`), and the callers of `diagnose`.
+  the analysis. Revisit hook: the fastest kept up in `attribute.fan_verdict` (`kept_up`), and the callers of
+  `diagnose`.
 - **Cut a part bounded by `--duration` at the end the session announced** (`until` saved in `start_key`), so the
   analysis stops at the set length rather than at the recorded end with the stop's own seconds, and a press too late
   for a part could count and be judged there: worth trying for a terminal `--duration` (2026-11-10, the start key in
@@ -247,12 +248,21 @@ The session's:
   family's strongest item counts, so a scored fan line would add nothing to its family, and a family of its own would
   move the finding's rank. The verdict leads the advice instead, which the console shows two of.
   - **Scored**: rejected for that reason.
-- **A fan's high is the 95th percentile of its readings (chosen)**: one stray reading still inside the 12,000 RPM
-  bound would make a steady fan read as held back.
-  - **Its fastest reading**: rejected.
-- **Only the CPU and GPU fans are judged (chosen)**: a middle fan tops out at up to 9,200 RPM, outside the range.
-- **Full speed only where heat alone held the GPU (chosen)**, as `rules._cooler`: cooling does not lift the power
-  brake. Fans held back are said either way.
+- **A fan's fastest is the fastest it kept up, 3 readings in a row (chosen)**, in both sentences of the line: one
+  stray reading inside the 12,000 RPM bound, or two, would make a steady fan read as held back.
+  - **Its fastest reading**: rejected for that reason.
+  - **Its 95th percentile** (the first version): rejected in review. The line printed the maximum beside it, so
+    the two sentences disagreed; in a short part one stray still moved it, and in a long one it passed over 30 s
+    at a higher speed.
+- **The 5,500 RPM floor holds for the CPU and GPU fans; a middle fan is judged only for being held back
+  (chosen)**: a middle fan tops out at up to 9,200 RPM, and a slow one still holds the cooling back.
+- **Only readings that named heat itself are judged (chosen)**: a reading naming only the power brake says nothing
+  of heat, and an early version blamed a cool GPU's quiet fan on a fan setting. Where heat and the brake both held
+  the GPU, full speed is not said (cooling does not lift the brake, as `rules._cooler` holds), and a fan held back
+  still is.
+- **A fan standing still is named with a fault among its causes (chosen)**: a quiet mode slows a fan but does not
+  stop it at the GPU's heat limit, so the advice adds that a fan still standing still in the maker's own mode
+  needs a repair.
 - **The firmware's fan curve or mode**: rejected. The mode reads as a constant; the curve read returns the factory
   curve, not the one in force, posts commands to the embedded controller and answers 0 on some models; and CLAUDE.md
   keeps the reader to fan speeds.

@@ -320,10 +320,10 @@ the per-model top speeds G-Helper lists (5,500-9,200 RPM, section 4).
 ## 10. A yardstick for a fan at full speed (2026-11-19)
 
 Asked whether a recording's fans ran at full speed, so that the cooler and not a fan setting held the GPU back.
-Four read-only agents read Linux's asus-wmi driver, two decompiled ROG firmware tables and G-Helper's source, and a
-fourth re-read every cited line. Linux at `8dac6df`, G-Helper on main at `aa0037c` (the fan code is the same at
-v0.291, `f62d584`), the 2020 Zephyrus G14 table in zllovesuki's reverse_engineering (`32ad92b`,
-`G14/g14-dsdt.dsl`) and the ROG Ally table in ruineka's rog-ally-re (`3a0491d`, `acpi/dsdt.dsl`).
+Three read-only agents read lag-doctor's fan code, then Linux's asus-wmi driver with two decompiled ROG firmware
+tables, and G-Helper's source; a fourth re-read every cited line. Linux at `8dac6df`, G-Helper on main at `aa0037c`
+(the fan code is the same at v0.291, `f62d584`), the 2020 Zephyrus G14 table in zllovesuki's reverse_engineering
+(`32ad92b`, `G14/g14-dsdt.dsl`) and the ROG Ally table in ruineka's rog-ally-re (`3a0491d`, `acpi/dsdt.dsl`).
 
 - **No firmware call gives a fan's top speed.** Linux defines no such id, and its hwmon files have no `fanN_max`
   [verified: `include/linux/platform_data/x86/asus-wmi.h`:98-105; asus-wmi.c:3372-3386]. Both firmware tables
@@ -350,10 +350,10 @@ v0.291, `f62d584`), the 2020 Zephyrus G14 table in zllovesuki's reverse_engineer
   sets it [verified: G14 table 6526-6538; Ally table 8661-8673]. `atkacpi.decode` reads a high word other than
   `0x0001` as "no such fan", so a firmware that set it would read a fan at full speed as absent [unverified].
 
-So the verdict rests on the recording itself (`attribute.fan_verdict`, DESIGN.md "Frames and stats"): each fan's
-median while heat held the GPU against its own high in the part, and the range of tops in G-Helper's table (5,500 to
-7,800 RPM for the two main fans). "Likely at full speed" stays a likelihood: a mode whose curve flattens above 5,500
-RPM reads the same.
+So the verdict rests on the recording itself (`attribute.fan_verdict`, DESIGN.md "Headroom"): each fan's median
+while heat held the GPU against the fastest it kept up in the part, and for the CPU and GPU fans the slowest top in
+G-Helper's table (5,500 RPM; its CPU and GPU fans run 5,500 to 7,800, a middle fan up to 9,200). "Likely at full
+speed" stays a likelihood: a mode whose curve flattens above 5,500 RPM reads the same.
 
 ## Verification log (2026-11-17)
 
