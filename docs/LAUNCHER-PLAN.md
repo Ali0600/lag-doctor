@@ -40,7 +40,8 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   and the app's Play with the art (M6g and M6h, PR #62, merged 2026-11-19 after the owner's own run of Play on a game
   through Steam: "it seemed to work"), then screen 6, Add a game, with Record when it starts (M6i, PR #64, merged
   2026-11-19 on the owner's "Merge without a try": nobody has run it in the app yet), then program icons for Epic and
-  recorded games, Rename and Delete (M6j).
+  recorded games, Rename and Delete (M6j, PR #66, merged 2026-11-20 after the owner's own try in the app: "It
+  works", which covered #64's Add a game too).
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
