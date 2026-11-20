@@ -146,6 +146,39 @@ def test_the_headline_names_the_finding_that_claims_the_lags_own_events():
                     "confidence); possible: loading from disk.")
 
 
+def test_the_headline_never_lays_a_low_frame_rate_on_a_gpu_finding_that_says_it_costs_no_frames():
+    # At 140 FPS on 144 Hz under a GPU verdict, an unclaimed 3 s FPS drop read "Low frame rate (...), possibly running
+    # on the wrong GPU", while that finding said the integrated GPU costs the game no frames now and gpu_limit was
+    # checked and fine. There wrong_gpu and hybrid_copy are side notes; another fps finding still leads.
+    from lagdoctor.model import LagEvent
+    cap = synth.capture(synth.frames_table([7.0] * 600), hz=144.0, duration=60.0)
+    cap.sources = synth.sources(("frames", "system"))
+    drop = [LagEvent(1, "fps_drop", 20.0, 23.0, 100.0, {})]
+
+    def fps_finding(cause):
+        return Finding(cause=cause, title="t", category="fps", confidence="medium", score=0.4, summary="")
+
+    def text(causes, fps=140.0, verdict="gpu", steady_s=0.0):
+        b = {"verdict": verdict, "r": 0.99, "refresh_hz": 144.0, "steady_s": steady_s, "steady_fps": 100.0}
+        env = rules._Env(cap, {"stats": {"frames": 8000, "avg_fps": fps}, "bound": b})
+        assert env.frames_measured and env.refresh == 144.0
+        st = {"avg_fps": fps, "refresh_hz": 144.0, "duration_s": 60.0}
+        return dg.headline("low_fps", [fps_finding(c) for c in causes], st, drop, {"low_fps": 3.0}, env)
+
+    for cause in ("wrong_gpu", "hybrid_copy"):        # the two whose text says so (tests/test_analysis_rules.py)
+        words = dg.labels.cause_text(cause)
+        for verdict in ("gpu", "mixed"):
+            for fps in (140.0, 130.0):                                            # 0.9 x 144 Hz = 129.6
+                assert text([cause], fps, verdict).endswith(f"; possible: {words}."), (cause, verdict, fps)
+            assert text([cause], 129.0, verdict).endswith(f", possibly {words}."), (cause, verdict)
+        # nor does it hold a steady low rate there (a steady 100 FPS part of a 140 FPS average)
+        assert text([cause], steady_s=50.0).endswith(f"; possible: {words}."), cause
+        assert text([cause], 129.0, steady_s=50.0).endswith(f", possibly {words}."), cause
+        # it is skipped, not the end of the search: the next fps finding leads
+        assert text([cause, "not_focused"]).endswith(f", possibly {dg.labels.cause_text('not_focused')}."), cause
+    assert set(rules.PACED_BY_DISPLAY) <= set(dg.STEADY_LEADS["gpu"])      # the holder they would otherwise be
+
+
 def test_a_steady_low_frame_rate_is_led_by_the_part_that_holds_it_not_by_a_few_claimed_drops():
     # A real GPU-bound recording ran 58 FPS on a 144 Hz screen for 12 minutes with 6 FPS drops, 4 of them claimed by
     # background programs, and its headline blamed background programs: the steady low rate, most of the lag, was

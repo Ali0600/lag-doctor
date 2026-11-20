@@ -417,6 +417,53 @@ def test_wrong_gpu_never_offers_the_fix_for_a_path_that_is_not_a_plain_absolute_
     assert is_finding(res) and not any(f.fix_id for f in res.fixes)
 
 
+def test_wrong_gpu_at_the_displays_rate_agrees_with_gpu_limit_that_the_gpu_costs_no_frames():
+    # At 140 FPS on 144 Hz gpu_limit cleared ("the GPU sets the pace, but at 140 FPS the game already reaches the
+    # 144 Hz display") while wrong_gpu, in the same report, said the integrated GPU "is what holds the frame rate
+    # down" (or "is probably", under the 3D engine's fallback): at the display's rate it costs no frames seen
+    note = "only 240 steady frames over 8.0 s; a verdict needs 300 frames and 10 s"
+    cap = make(system=engine(99.0))
+    for bound in ({"verdict": "gpu", "r": 0.99}, {"verdict": "mixed", "r": 0.85},
+                  {"verdict": "gpu", "r": None, "notes": [note]}):
+        for fps, paced in ((140.0, True), (130.0, True), (129.0, False)):      # 0.9 x 144 Hz = 129.6
+            limit = run("gpu_limit", cap, stats={"avg_fps": fps}, bound=bound)
+            wrong = run("wrong_gpu", cap, stats={"avg_fps": fps}, bound=bound)
+            assert is_finding(wrong), (bound, fps, wrong)          # still the wrong GPU, with its fix
+            assert any(f.fix_id == "gpu_preference" for f in wrong.fixes), (bound, fps)
+            texts = [e.text for e in wrong.evidence]
+            reach = (f"At {fps:.0f} FPS the game already reaches the 144 Hz display, so the faster GPU would mostly "
+                     "add headroom.")
+            assert isinstance(limit, rules.Cleared) == paced, (bound, fps, limit)     # the two rules agree
+            if paced:
+                assert limit.text == (f"The GPU sets the pace, but at {fps:.0f} FPS the game already reaches the "
+                                      "144 Hz display.")
+                assert reach in texts, (bound, fps, texts)
+                assert wrong.confidence == "medium", (bound, fps, wrong)           # possible, as when capped
+                assert wrong.summary == (
+                    "Windows ran the game on Intel(R) UHD Graphics instead of NVIDIA GeForce RTX 3070 Laptop GPU. "
+                    f"At {fps:.0f} FPS the game already reaches the 144 Hz display, so that integrated GPU costs it "
+                    "no frames now, but the discrete GPU would give it far more headroom."), (bound, fps)
+            else:
+                assert reach not in texts and "already reaches" not in wrong.summary, (bound, fps)
+    below = run("wrong_gpu", cap, stats={"avg_fps": 129.0}, bound={"verdict": "gpu", "r": 0.99})
+    assert is_finding(below, "high") and "That integrated GPU is what holds the frame rate down." in below.summary
+    # any other verdict at that rate keeps its own words: a cap, VSync or the CPU sets the pace, never "the GPU"
+    idle = make(system=engine(5.0))
+    for bound in ({"verdict": "capped", "r": 0.05}, {"verdict": "vsync", "r": 0.30}, {"verdict": "cpu_main", "r": 0.40}):
+        limit = run("gpu_limit", idle, stats={"avg_fps": 140.0}, bound=bound)
+        wrong = run("wrong_gpu", idle, stats={"avg_fps": 140.0}, bound=bound)
+        assert "sets the pace" not in getattr(limit, "text", ""), (bound, limit)
+        texts = [e.text for e in wrong.evidence]
+        assert any(t.startswith("Right now the frame rate is limited by") for t in texts), (bound, texts)
+        assert not any("already reaches" in t for t in texts + [wrong.summary]), (bound, wrong)
+    # the display's rate is a frame-timing reading: without frame timing a stray FPS figure clears nothing
+    blind = make(ok=("system",), src={"frames": NO_FRAMES}, system=engine(99.0))
+    for cause in ("gpu_limit", "wrong_gpu"):
+        res = run(cause, blind, stats={"frames": 0, "avg_fps": 140.0}, bound={"verdict": "gpu"})
+        assert not isinstance(res, rules.Cleared), (cause, res)
+        assert "already reaches" not in " ".join([res.summary] + [e.text for e in res.evidence]), (cause, res)
+
+
 # ----------------------------------------------------------------------------- hybrid copy ---
 
 def test_hybrid_copy_on_the_dgpu_with_the_screen_on_the_igpu():
@@ -425,6 +472,25 @@ def test_hybrid_copy_on_the_dgpu_with_the_screen_on_the_igpu():
     frames = synth.frames_table([10.0] * 20, gpu_ms=9.5)
     frames[F.HYBRID] = [1] * 20
     assert is_finding(run("hybrid_copy", make(adapter=NV), bound={"verdict": "gpu"}, frames=frames), "high")
+
+
+def test_hybrid_copy_at_the_displays_rate_says_the_copy_costs_delay_not_frames():
+    # At 140 FPS on 144 Hz gpu_limit cleared ("the GPU sets the pace, but ... already reaches the display") while
+    # hybrid_copy said the copy "costs frame rate", and wrong_gpu, on a game on the integrated GPU, that it costs none
+    cost = "That costs frame rate and adds delay."
+    for bound in ({"verdict": "gpu", "r": 0.99}, {"verdict": "mixed", "r": 0.85}):
+        for fps, paced in ((140.0, True), (130.0, True), (129.0, False)):      # 0.9 x 144 Hz = 129.6
+            res = run("hybrid_copy", make(adapter=NV), stats={"avg_fps": fps}, bound=bound)
+            assert is_finding(res, "medium"), (bound, fps, res)           # the delay is still real: same rank
+            if paced:
+                assert res.summary.endswith(f"before it is shown. At {fps:.0f} FPS the game already reaches the "
+                                            "144 Hz display, so the copy costs it no frames now, but it adds "
+                                            "delay."), (bound, fps, res.summary)
+            else:
+                assert res.summary.endswith(f"before it is shown. {cost}"), (bound, fps, res.summary)
+    blind = make(ok=("system",), src={"frames": NO_FRAMES}, adapter=NV)
+    res = run("hybrid_copy", blind, stats={"frames": 0, "avg_fps": 140.0}, bound={"verdict": "gpu"})
+    assert is_finding(res) and res.summary.endswith(cost), res
 
 
 def test_hybrid_copy_is_ruled_out_on_the_gpu_that_drives_the_screen_and_gated_off_the_gpu_side():
