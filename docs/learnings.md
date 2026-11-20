@@ -1414,3 +1414,13 @@ where no stutter can be found. A game that slowed itself to 3 % of a CPU there r
 usual 25 %, as its own CPU work, "(normally 3%)", lift 13.5.
 **Takeaway**: draw the baseline from the same time the events could have come from; where too little is left, say so
 ("too little quiet time") rather than fall back to the time that was left out.
+
+### A measurement's own procedure can disturb what it measures at the window's edge
+When starting a measurement takes an action that touches the subject, the first moments of the window measure that
+action, not the subject.
+**Why it came up**: PR #67. A settings sweep run starts with Enter in the sweep's own window, then a key in the game.
+A game coming back to the front can show nothing new for a second or two (exclusive fullscreen most), and a key
+pressed then put that freeze in the window: counted, it halved a run's 1 % low and would have scored fullscreen as
+slower. The owner chose to keep such a run out and tell the player to wait a moment.
+**Takeaway**: find what the procedure itself does at the window's edges; keep a run that caught it out, with a reason
+the person can act on, rather than count it or drop it silently.
