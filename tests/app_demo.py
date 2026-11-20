@@ -38,6 +38,8 @@ MARKUP_EXE = "<b>quest</b>.exe"
 # it as text on the game's recordings, on Results and in Compare.
 MARKUP_NOTE = 'installed FrameFix <img src=x onerror="window.__pwned=1"> & <b>shadows</b> to low'
 PLAIN_NOTE = "installed FrameFix, shadows to low"
+# The name the window test gives a game it adds by hand (screen 6), markup too.
+MARKUP_ADDED = 'Moss <b>Garden</b> <img src=x onerror="window.__pwned=1">'
 
 
 @dataclass(frozen=True)

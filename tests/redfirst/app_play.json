@@ -29,8 +29,8 @@
  {
   "name": "play: installed games not recorded come in the stores' order",
   "file": "lagdoctor/app/views.py",
-  "old": "    rest = sorted((g for g in games if g.game_id not in out), key=lambda g: (g.game.title.casefold(), g.key))",
-  "new": "    rest = [g for g in games if g.game_id not in out]",
+  "old": "    rest.sort(key=lambda g: (g.name.casefold(), g.key))",
+  "new": "    pass",
   "tests": [
    "tests/test_app_views.py::test_the_library_lists_installed_games_and_shows_recordings_under_the_one_they_ran_from"
   ]
@@ -146,8 +146,8 @@
  {
   "name": "play: Play's steps said in Record's words",
   "file": "lagdoctor/app/views.py",
-  "old": "        if play is not None and state.phase in PLAY_DETAILS:",
-  "new": "        if False:",
+  "old": "        elif play is not None and state.phase in PLAY_DETAILS:",
+  "new": "        elif False:",
   "tests": [
    "tests/test_app_recording.py::test_play_moves_through_the_prompt_the_launch_and_the_wait_in_its_own_words"
   ]
@@ -155,7 +155,7 @@
  {
   "name": "play: Play's ends said in Record's words",
   "file": "lagdoctor/app/views.py",
-  "old": "        if play is not None and state.reason in PLAY_ENDS:",
+  "old": "        if play is not None and state.reason in ends:",
   "new": "        if False:",
   "tests": [
    "tests/test_app_recording.py::test_how_a_play_ended_is_said_in_plays_words"
@@ -173,7 +173,7 @@
  {
   "name": "play: Try again plays nothing",
   "file": "lagdoctor/app/views.py",
-  "old": "            \"play\": {\"game\": play[\"game\"]} if play is not None else None,",
+  "old": "            \"play\": {\"game\": play[\"game\"], \"wait\": by_hand} if play is not None else None,",
   "new": "            \"play\": None,",
   "tests": [
    "tests/test_app_recording.py::test_play_moves_through_the_prompt_the_launch_and_the_wait_in_its_own_words",
@@ -264,7 +264,7 @@
  {
   "name": "play: Play records the game that is running instead",
   "file": "lagdoctor/app/assets/app.js",
-  "old": "  ask('play', {game}).then((r) => {",
+  "old": "  ask(how === 'wait' ? 'wait' : 'play', {game}).then((r) => {",
   "new": "  ask('record').then((r) => {",
   "tests": [
    "tests/test_app_page.py::test_play_starts_an_installed_game_through_its_store_link_and_waits_for_it"
@@ -273,8 +273,8 @@
  {
   "name": "play: Try again records the game that is running instead",
   "file": "lagdoctor/app/assets/app.js",
-  "old": "    buttons.push(r.play ? playButton(r.play.game, r.ok ? 'Play again' : 'Try again')",
-  "new": "    buttons.push(false ? playButton(r.play.game, r.ok ? 'Play again' : 'Try again')",
+  "old": "    buttons.push(r.play ? playButton(r.play.game, r.ok ? (r.play.wait ? 'Record it again' : 'Play again') : 'Try again',",
+  "new": "    buttons.push(false ? playButton(r.play.game, r.ok ? (r.play.wait ? 'Record it again' : 'Play again') : 'Try again',",
   "tests": [
    "tests/test_app_page.py::test_play_starts_an_installed_game_through_its_store_link_and_waits_for_it"
   ]

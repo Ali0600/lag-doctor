@@ -12,6 +12,10 @@ A recording shows under an installed game when the program it ran (summary.json'
 folder, in any of its forms (target.folder_forms: the folder, and its real path through a junction); a folder that
 holds another listed game's, or a Program Files folder, takes none (store files are writable by any local account). An older recording, with no summary, follows the newest recording of its
 game that joined one. The installed game's id is its store's, not its exe's.
+
+A game added by hand (screen 6: app/added.py) joins recordings the same way, by its program's folder, unless a store
+lists that folder (listed_added: the store's entry shows it, with Play). A recorded game neither lists has
+Record when it starts on its page when its newest recording's program sits in a folder of its own (wait_folders).
 """
 from __future__ import annotations
 
@@ -184,6 +188,145 @@ class Installed:
         return STORE_NAMES.get(self.game.store, "")
 
 
+ADDED_BY_YOU = "Added by you"
+
+
+@dataclass(frozen=True)
+class AddedGame:
+    """A game the player added by hand (app/added.py): its program, the name it shows by, its folder (the program's,
+    as target.check_folder gives it) and that folder's forms, which the programs of its recordings ran from. It has no
+    Play, since lag-doctor never starts a program itself: its page offers Record when it starts, the folder wait."""
+    exe: str
+    name: str
+    folder: str
+    forms: tuple[str, ...]
+
+    @property
+    def key(self) -> str:
+        from lagdoctor.capture import target
+        return "added:" + target.fold_path(self.exe)
+
+    @property
+    def game_id(self) -> str:
+        return game_id(self.key)
+
+
+def added_id(exe: str) -> str:
+    """The id the page names an added game by: its program's, so the same program is one game."""
+    from lagdoctor.capture import target
+    return game_id("added:" + target.fold_path(exe))
+
+
+def added_games(kept: list[Any], forms_of: Any = None) -> list[AddedGame]:
+    """Each added game (added.Kept) with its folder's forms (`forms_of`, target.folder_forms by default, or the
+    folder alone when they cannot be worked out, as for a store game); one whose program's folder is no longer taken is
+    left out."""
+    from lagdoctor.app import added
+    if forms_of is None:
+        from lagdoctor.capture import target
+        forms_of = target.folder_forms
+    out = []
+    for k in kept:
+        try:
+            exe, folder = added.check_program(k.exe)
+        except ValueError:
+            continue
+        try:
+            forms = tuple(forms_of(folder))
+        except (OSError, ValueError):
+            forms = (folder,)
+        out.append(AddedGame(exe=exe, name=k.name, folder=folder, forms=forms or (folder,)))
+    return out
+
+
+def _within(forms: tuple[str, ...], others: tuple[str, ...]) -> bool:
+    """True when a folder (in any of its forms) is one of the other folder's forms, or under one."""
+    from lagdoctor.capture import target
+    mine = [target.fold_path(f) for f in forms]
+    theirs = [target.fold_path(f) for f in others]
+    return any(m == t or m.startswith(t + "\\") for m in mine for t in theirs)
+
+
+@dataclass(frozen=True)
+class RecordedGame:
+    """A recorded game no store lists and nobody added, as Add a game weighs a folder against it: its id, its name and
+    the folder of its newest recording's program."""
+    game_id: str
+    name: str
+    folder: str
+
+    @property
+    def forms(self) -> tuple[str, ...]:
+        return (self.folder,)
+
+
+def _stores_broad(games: list[Installed], roots: list[str] | None) -> set[str]:
+    return _broad(list(games), shared_roots() if roots is None else roots)
+
+
+def listed_added(added: list[AddedGame], games: list[Installed], roots: list[str] | None = None) -> list[AddedGame]:
+    """The added games the Library lists: not one whose folder is a store game's, or under one, since that store's
+    entry shows the same game, with Play; a store game whose folder is broad among the stores' (_broad: it takes no
+    recording) hides none."""
+    broad = _stores_broad(games, roots)
+    return [a for a in added if not any(_within(a.forms, g.forms) for g in games if g.key not in broad)]
+
+
+def clash(exe: str, forms: tuple[str, ...], games: list[Installed], added: list[AddedGame],
+          recorded: list[RecordedGame] = (), roots: list[str] | None = None) -> tuple[str, Any] | None:
+    """What a program the player picks meets in the Library already, as (how, the game), or None:
+    "same" (that program was added), "store" (its folder is a store game's, or under one, for a store game whose folder
+    is not broad), "added" (its folder is an added game's, or under one: the same game) and "holds" (its folder holds a
+    listed game's, or the folders of two recorded games no store lists: the folder wait could not tell them apart; one
+    is this program's own game, as an Unreal game's recordings ran from a folder under its stub's)."""
+    from lagdoctor.capture import target
+    for a in added:
+        if target.fold_path(a.exe) == target.fold_path(exe):
+            return "same", a
+    broad = _stores_broad(games, roots)
+    for g in games:
+        if g.key not in broad and _within(forms, g.forms):
+            return "store", g
+    for a in added:
+        if _within(forms, a.forms):
+            return "added", a
+    for g in list(games) + list(added):
+        if _within(g.forms, forms):
+            return "holds", g
+    under = [r for r in recorded if _within(r.forms, forms)]
+    if len(under) >= 2:
+        return "holds", under[0]
+    return None
+
+
+def wait_folders(recorded: dict[str, str], listed: list[Any], roots: list[str] | None = None) -> dict[str, str]:
+    """{game id: the folder Record when it starts waits on} for recorded games no store lists and nobody added
+    (`recorded`: their newest recording's program, by game id): its folder, when target.check_folder takes it, it is
+    no shared root (`roots`: shared_roots() when None), and it holds no listed game's folder (`listed`: the store and
+    added games, which have one of their own) and is no other recorded game's folder nor holds one. A folder of many
+    games would have the wait record whichever started first."""
+    from lagdoctor.capture import target
+    from lagdoctor.app import added
+    shared = {target.fold_path(r) for r in (shared_roots() if roots is None else roots)}
+    folders = {}
+    for gid, exe in recorded.items():
+        try:
+            _exe, folder = added.check_program(exe)
+        except ValueError:
+            continue
+        if target.fold_path(folder) not in shared:
+            folders[gid] = folder
+    out = {}
+    for gid, folder in folders.items():
+        mine = (folder,)
+        if any(_within(g.forms, mine) for g in listed):
+            continue
+        if any(other != gid and _within((f,), mine) for other, f in folders.items()):
+            continue
+        out[gid] = folder
+    return out
+
+
 def installed_games(log: Any = None) -> list[Any]:
     """The games Steam and the Epic launchers list as installed (stores/steam.py and epic.py, read from the stores'
     own files without starting either), each once; what could not be read is logged. The app's tests never come here:
@@ -231,9 +374,9 @@ def shared_roots() -> list[str]:
     return [os.environ[n] for n in names if os.environ.get(n)]
 
 
-def _broad(games: list[Installed], roots: list[str]) -> set[str]:
-    """The keys of installed games whose folder holds another listed game's folder, or is a shared root: a store file
-    that names one (any local account can write them) must not take every recording made under it."""
+def _broad(games: list[Any], roots: list[str]) -> set[str]:
+    """The keys of installed or added games whose folder holds another listed game's folder, or is a shared root: a
+    store file that names one (any local account can write them) must not take every recording made under it."""
     from lagdoctor.capture import target
     folded = {g.key: [target.fold_path(f) for f in g.forms] for g in games}
     shared = {target.fold_path(r) for r in roots}
@@ -262,12 +405,15 @@ def _holder(entry: Entry, games: list[Installed]) -> Installed | None:
     return min(holders, key=lambda g: g.key) if holders else None
 
 
-def joined(entries: list[Entry], games: list[Installed], roots: list[str] | None = None) -> dict[str, Installed]:
-    """{session id: the installed game the recording shows under}. A recording that names its exe joins the installed
-    game whose folder holds it (_holder), never one with a broad folder (_broad; `roots`: shared_roots() when None); one that names
-    none (an older recording, with no summary) follows the newest recording of its game (its exe's stem) that joined
-    one. Any other recording stays with its recorded game."""
-    usable = [g for g in games if g.key not in _broad(games, shared_roots() if roots is None else roots)]
+def joined(entries: list[Entry], games: list[Installed], roots: list[str] | None = None,
+           added: list[AddedGame] = ()) -> dict[str, Any]:
+    """{session id: the installed or added game the recording shows under}. A recording that names its exe joins the
+    game whose folder holds it (_holder), never one with a broad folder (_broad; `roots`: shared_roots() when None);
+    one that names none (an older recording, with no summary) follows the newest recording of its game (its exe's
+    stem) that joined one. Any other recording stays with its recorded game. `added`: the added games the Library
+    lists (listed_added), whose folders join recordings as a store game's do."""
+    holders = list(games) + list(added)
+    usable = [g for g in holders if g.key not in _broad(holders, shared_roots() if roots is None else roots)]
     out: dict[str, Installed] = {}
     newest: dict[str, Installed] = {}
     for e in entries:                                     # newest first

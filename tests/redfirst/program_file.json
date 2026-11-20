@@ -1,0 +1,420 @@
+[
+ {
+  "name": "program file: a part past the file's end read",
+  "file": "lagdoctor/stores/__init__.py",
+  "old": "        if not (isinstance(offset, int) and isinstance(n, int)) or offset < 0 or n < 0 or offset + n > self.size:",
+  "new": "        if not (isinstance(offset, int) and isinstance(n, int)) or offset < 0 or n < 0:",
+  "tests": [
+   "tests/test_stores_exe.py::test_open_file_reads_parts_within_the_file_and_its_budget"
+  ]
+ },
+ {
+  "name": "program file: a part before the file's start read",
+  "file": "lagdoctor/stores/__init__.py",
+  "old": "        if not (isinstance(offset, int) and isinstance(n, int)) or offset < 0 or n < 0 or offset + n > self.size:",
+  "new": "        if not (isinstance(offset, int) and isinstance(n, int)) or n < 0 or offset + n > self.size:",
+  "tests": [
+   "tests/test_stores_exe.py::test_open_file_reads_parts_within_the_file_and_its_budget"
+  ]
+ },
+ {
+  "name": "program file: no budget",
+  "file": "lagdoctor/stores/__init__.py",
+  "old": "        if n > self.left:",
+  "new": "        if n > self.left + (1 << 40):",
+  "tests": [
+   "tests/test_stores_exe.py::test_open_file_reads_parts_within_the_file_and_its_budget",
+   "tests/test_stores_exe.py::test_a_program_is_read_within_its_budget"
+  ]
+ },
+ {
+  "name": "program file: a read never counted against the budget",
+  "file": "lagdoctor/stores/__init__.py",
+  "old": "        self.left -= n",
+  "new": "        self.left -= 0",
+  "tests": [
+   "tests/test_stores_exe.py::test_open_file_reads_parts_within_the_file_and_its_budget"
+  ]
+ },
+ {
+  "name": "program file: a short read taken",
+  "file": "lagdoctor/stores/__init__.py",
+  "old": "        if len(data) != n:",
+  "new": "        if len(data) > n:",
+  "tests": [
+   "tests/test_stores_exe.py::test_open_file_names_a_file_that_shrank_while_it_was_read"
+  ]
+ },
+ {
+  "name": "program file: a folder opened as a program",
+  "file": "lagdoctor/stores/__init__.py",
+  "old": "        if not _stat_mode.S_ISREG(st.st_mode):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_folder_is_not_a_program"
+  ]
+ },
+ {
+  "name": "program file: opened without asking local_problem",
+  "file": "lagdoctor/stores/__init__.py",
+  "old": "            st = stat(self.path)",
+  "new": "            st = _stat(self.path)",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_program_off_the_local_disks_is_never_opened"
+  ]
+ },
+ {
+  "name": "exe: a file with no MZ read as a program",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    if dos[:2] != MZ:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_stores_exe.py::test_what_is_not_a_windows_program_is_named_so"
+  ]
+ },
+ {
+  "name": "exe: a header with no PE signature read",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    if head[:4] != PE or not 1 <= sections <= MAX_SECTIONS:",
+  "new": "    if not 1 <= sections <= MAX_SECTIONS:",
+  "tests": [
+   "tests/test_stores_exe.py::test_what_is_not_a_windows_program_is_named_so"
+  ]
+ },
+ {
+  "name": "exe: more sections than Windows takes read",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    if head[:4] != PE or not 1 <= sections <= MAX_SECTIONS:",
+  "new": "    if head[:4] != PE or not 1 <= sections:",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_program_listing_more_sections_than_windows_takes_is_refused"
+  ]
+ },
+ {
+  "name": "exe: a program of no sections read",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    if head[:4] != PE or not 1 <= sections <= MAX_SECTIONS:",
+  "new": "    if head[:4] != PE or not 0 <= sections <= MAX_SECTIONS:",
+  "tests": [
+   "tests/test_stores_exe.py::test_what_is_not_a_windows_program_is_named_so"
+  ]
+ },
+ {
+  "name": "exe: a 32-bit program's directories read at a 64-bit one's place",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        count_at, dirs_at = 92, 96                          # NumberOfRvaAndSizes, DataDirectory",
+  "new": "        count_at, dirs_at = 108, 112",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_program_is_named_by_its_product_name_and_shown_by_its_largest_icon"
+  ]
+ },
+ {
+  "name": "exe: a resource directory the optional header does not list read",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    if optional >= entry + 8 and optional >= count_at + 4 and _u32(opt, count_at) > RESOURCE_DIRECTORY:",
+  "new": "    if optional >= entry + 8 and optional >= count_at + 4:",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_program_whose_optional_header_lists_no_resource_directory_has_none"
+  ]
+ },
+ {
+  "name": "exe: a part of a section the file does not hold read",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "            if rva + n > va + raw_size:                     # past what the file holds of the section",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_resource_past_what_the_file_holds_of_its_section_is_named_so"
+  ]
+ },
+ {
+  "name": "exe: a directory past the resources read",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    if offset < 0 or offset + n > img.rsrc_size:",
+  "new": "    if offset < 0:",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_type_directory_pointing_past_the_resources_is_named_and_the_other_types_still_read"
+  ]
+ },
+ {
+  "name": "exe: every entry a directory claims read",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    count = min(_u16(head, 12) + _u16(head, 14), MAX_ENTRIES)",
+  "new": "    count = _u16(head, 12) + _u16(head, 14)",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_directory_listing_more_entries_than_its_cap_reads_only_the_cap"
+  ]
+ },
+ {
+  "name": "exe: a resource past its cap read",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        if size > cap:",
+  "new": "        if size > cap * 1000:",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_resource_larger_than_its_cap_is_refused_before_it_is_read"
+  ]
+ },
+ {
+  "name": "exe: the read budget ignored",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        with stores.open_file(path, READ_BUDGET) as f:",
+  "new": "        with stores.open_file(path, 4 << 20) as f:",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_program_is_read_within_its_budget"
+  ]
+ },
+ {
+  "name": "exe: version blocks walked without end",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        if budget[0] < 0:",
+  "new": "        if budget[0] < -(1 << 30):",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_version_resource_of_endless_blocks_stops_at_its_budget"
+  ]
+ },
+ {
+  "name": "exe: padding after the last block refused",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        if length == 0:                                     # padding after the last block",
+  "new": "        if length == 0 and False:",
+  "tests": [
+   "tests/test_stores_exe.py::test_padding_after_the_last_block_inside_its_parent_still_reads"
+  ]
+ },
+ {
+  "name": "exe: a block longer than its parent taken",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        if length < 6 or at + length > end:",
+  "new": "        if length < 6:",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_version_block_that_does_not_fit_in_its_parent_is_refused"
+  ]
+ },
+ {
+  "name": "exe: a text value's length taken in bytes",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        n = value_len * 2 if kind == 1 else value_len      # a text value's length counts characters",
+  "new": "        n = value_len",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_program_is_named_by_its_product_name_and_shown_by_its_largest_icon"
+  ]
+ },
+ {
+  "name": "exe: a resource that is no version resource read as one",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    if not roots or roots[0][0] != \"VS_VERSION_INFO\":",
+  "new": "    if not roots:",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_version_resource_that_is_not_one_is_refused"
+  ]
+ },
+ {
+  "name": "exe: the file description before the product name",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "            if product:",
+  "new": "            if product and False:",
+  "tests": [
+   "tests/test_stores_exe.py::test_the_first_string_table_with_a_product_name_names_it",
+   "tests/test_stores_exe.py::test_a_program_is_named_by_its_product_name_and_shown_by_its_largest_icon"
+  ]
+ },
+ {
+  "name": "exe: the last file description, not the first",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "            described = described or stores.name(strings.get(\"FileDescription\"))",
+  "new": "            described = stores.name(strings.get(\"FileDescription\")) or described",
+  "tests": [
+   "tests/test_stores_exe.py::test_the_first_string_table_with_a_product_name_names_it"
+  ]
+ },
+ {
+  "name": "exe: an icon image past 256 a side taken",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    return (w, h) if 0 < w <= MAX_ICON_SIDE and 0 < h <= MAX_ICON_SIDE else None",
+  "new": "    return (w, h) if 0 < w <= 4096 and 0 < h <= 4096 else None",
+  "tests": [
+   "tests/test_stores_exe.py::test_an_icon_image_its_header_does_not_hold_within_256_is_passed_over"
+  ]
+ },
+ {
+  "name": "exe: an icon image of no width or height taken",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    return (w, h) if 0 < w <= MAX_ICON_SIDE and 0 < h <= MAX_ICON_SIDE else None",
+  "new": "    return (w, h) if w <= MAX_ICON_SIDE and h <= MAX_ICON_SIDE else None",
+  "tests": [
+   "tests/test_stores_exe.py::test_an_icon_image_its_header_does_not_hold_within_256_is_passed_over"
+  ]
+ },
+ {
+  "name": "exe: an icon image no icon holds handed on",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        if icon_size(image) is not None:",
+  "new": "        if True:",
+  "tests": [
+   "tests/test_stores_exe.py::test_an_icon_image_its_header_does_not_hold_within_256_is_passed_over"
+  ]
+ },
+ {
+  "name": "exe: a bitmap of more planes, odd bits, compression or height taken",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        if _u16(data, 12) != 1 or _u16(data, 14) not in BITMAP_BITS or \\",
+  "new": "        if False and _u16(data, 12) != 1 or False and _u16(data, 14) not in BITMAP_BITS or False and \\",
+  "tests": [
+   "tests/test_stores_exe.py::test_an_icon_image_its_header_does_not_hold_within_256_is_passed_over"
+  ]
+ },
+ {
+  "name": "exe: any header length read as a bitmap's",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    elif len(data) >= 40 and _u32(data, 0) in BITMAP_HEADERS:",
+  "new": "    elif len(data) >= 40:",
+  "tests": [
+   "tests/test_stores_exe.py::test_an_icon_image_its_header_does_not_hold_within_256_is_passed_over"
+  ]
+ },
+ {
+  "name": "exe: a bitmap icon's colour depth written 32",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    bits = 32 if data.startswith(PNG_SIGNATURE) else _u16(data, 14)",
+  "new": "    bits = 32",
+  "tests": [
+   "tests/test_stores_exe.py::test_the_icon_file_names_its_image_as_its_header_does"
+  ]
+ },
+ {
+  "name": "exe: a 256 side written 256 in a byte",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    return struct.pack(\"<HHH\", 0, 1, 1) + struct.pack(\"<BBBBHHII\", w % 256, h % 256, 0, 0, 1, bits, len(data),",
+  "new": "    return struct.pack(\"<HHH\", 0, 1, 1) + struct.pack(\"<BBBBHHII\", w, h, 0, 0, 1, bits, len(data),",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_png_icon_image_is_taken_as_it_is"
+  ]
+ },
+ {
+  "name": "exe: the smallest icon image first",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        entries.append((-(w * h), -_u16(e, 6), i, _u16(e, 12)))       # wBitCount, nId",
+  "new": "        entries.append(((w * h), -_u16(e, 6), i, _u16(e, 12)))",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_program_is_named_by_its_product_name_and_shown_by_its_largest_icon",
+   "tests/test_stores_exe.py::test_the_largest_icon_image_is_taken_then_the_one_of_more_colours"
+  ]
+ },
+ {
+  "name": "exe: the fewer colours first",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        entries.append((-(w * h), -_u16(e, 6), i, _u16(e, 12)))       # wBitCount, nId",
+  "new": "        entries.append((-(w * h), _u16(e, 6), i, _u16(e, 12)))",
+  "tests": [
+   "tests/test_stores_exe.py::test_the_largest_icon_image_is_taken_then_the_one_of_more_colours"
+  ]
+ },
+ {
+  "name": "exe: more sizes read than the group holds",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    count = min(_u16(data, 4), (len(data) - 6) // 14)     # at most MAX_GROUP_ENTRIES: _icon reads no more",
+  "new": "    count = _u16(data, 4)",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_group_listing_more_sizes_than_it_holds_reads_those_it_holds"
+  ]
+ },
+ {
+  "name": "exe: a cursor's group read as an icon",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    if len(data) < 6 or _u16(data, 0) != 0 or _u16(data, 2) != 1:",
+  "new": "    if len(data) < 6 or _u16(data, 0) != 0:",
+  "tests": [
+   "tests/test_stores_exe.py::test_a_cursors_group_is_no_icon"
+  ]
+ },
+ {
+  "name": "exe: an icon id the file lacks looked up",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        if nid not in icons:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_stores_exe.py::test_an_icon_image_the_group_names_but_the_file_lacks_is_passed_over"
+  ]
+ },
+ {
+  "name": "exe: one icon image that cannot be read ends the icon",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "        except ValueError:\n            continue",
+  "new": "        except ValueError:\n            raise",
+  "tests": [
+   "tests/test_stores_exe.py::test_an_icon_image_past_its_cap_is_not_read"
+  ]
+ },
+ {
+  "name": "exe: the last group icon taken",
+  "file": "lagdoctor/stores/exe.py",
+  "old": "    ids = _group(_data(f, img, groups[0][1], 6 + 14 * MAX_GROUP_ENTRIES))",
+  "new": "    ids = _group(_data(f, img, groups[-1][1], 6 + 14 * MAX_GROUP_ENTRIES))",
+  "tests": [
+   "tests/test_stores_exe.py::test_the_first_group_icon_is_the_programs_icon"
+  ]
+ },
+ {
+  "name": "dialog guard: a test may open the real dialog",
+  "file": "tests/conftest.py",
+  "old": "    monkeypatch.setattr(dialogs, \"_get_open_file_name\", refuse)\n",
+  "new": "",
+  "tests": [
+   "tests/test_dialogs.py::test_conftest_keeps_every_test_off_the_real_dialog",
+   "tests/test_dialogs.py::test_the_dialog_guard_fails_a_test_that_reached_the_dialog"
+  ]
+ },
+ {
+  "name": "dialog guard: never fails a test",
+  "file": "tests/conftest.py",
+  "old": "    yield caught\n    assert caught == [], \" and \".join(caught)\n",
+  "new": "    yield caught\n",
+  "tests": [
+   "tests/test_dialogs.py::test_the_dialog_guard_fails_a_test_that_reached_the_dialog"
+  ]
+ },
+ {
+  "name": "dialog: the working folder changed",
+  "file": "lagdoctor/winapi/dialogs.py",
+  "old": "FLAGS = (OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR",
+  "new": "FLAGS = (OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY",
+  "tests": [
+   "tests/test_dialogs.py::test_the_dialog_lists_programs_only_takes_an_existing_file_and_changes_nothing"
+  ]
+ },
+ {
+  "name": "dialog: the pick added to the recent list",
+  "file": "lagdoctor/winapi/dialogs.py",
+  "old": "         | OFN_DONTADDTORECENT)",
+  "new": "         )",
+  "tests": [
+   "tests/test_dialogs.py::test_the_dialog_lists_programs_only_takes_an_existing_file_and_changes_nothing"
+  ]
+ },
+ {
+  "name": "dialog: the filter's list left unended",
+  "file": "lagdoctor/winapi/dialogs.py",
+  "old": "FILTER = \"Programs (*.exe)\\0*.exe\\0\"",
+  "new": "FILTER = \"Programs (*.exe)\\0*.exe\"",
+  "tests": [
+   "tests/test_dialogs.py::test_the_dialog_lists_programs_only_takes_an_existing_file_and_changes_nothing"
+  ]
+ },
+ {
+  "name": "dialog: owned by no window",
+  "file": "lagdoctor/winapi/dialogs.py",
+  "old": "    ofn.hwndOwner = hwnd or None",
+  "new": "    ofn.hwndOwner = None",
+  "tests": [
+   "tests/test_dialogs.py::test_the_dialog_lists_programs_only_takes_an_existing_file_and_changes_nothing"
+  ]
+ },
+ {
+  "name": "dialog: a failure taken for a close",
+  "file": "lagdoctor/winapi/dialogs.py",
+  "old": "    if code == 0:\n        return None",
+  "new": "    if True:\n        return None",
+  "tests": [
+   "tests/test_dialogs.py::test_a_dialog_that_failed_says_so_with_windows_code"
+  ]
+ }
+]

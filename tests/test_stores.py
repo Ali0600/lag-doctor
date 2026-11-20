@@ -388,7 +388,7 @@ def test_dot_dot_parts_are_worked_out_from_the_text_before_any_link_is_met(tmp_p
     assert target.local_problem(str(lib) + BS + ".." + BS + "Real") is None and read == []
 
 
-READERS = {"art", "epic", "keyvalues", "launch", "steam"}  # every module of lagdoctor/stores but its file access
+READERS = {"art", "epic", "exe", "keyvalues", "launch", "steam"}  # every module of lagdoctor/stores but its file access
 PATH_MODULES = {"os", "ntpath", "posixpath", "genericpath", "pathlib", "io", "shutil", "glob", "importlib",
                 "builtins", "winreg"}
 ALLOWED = {"os": {"path", "fspath", "PathLike", "DirEntry", "stat_result"}, "os.path": {"join", "dirname"},

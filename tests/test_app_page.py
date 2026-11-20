@@ -44,6 +44,7 @@ def run(tmp_path_factory) -> dict:
                           capture_output=True, encoding="utf-8", errors="replace", timeout=CHILD_TIMEOUT_S)
     facts = json.loads(out.read_text(encoding="utf-8")) if out.is_file() else {}
     facts["_exit"], facts["_stderr"], facts["_built"] = done.returncode, done.stderr[-3000:], built
+    facts["_home"] = str(home)
     return facts
 
 
@@ -102,6 +103,45 @@ def test_play_starts_an_installed_game_through_its_store_link_and_waits_for_it(r
     assert run["play_done"] == {"title": "Cancelled", "again": True}
     rep = run["play_report"]
     assert rep["prompt"] == "approved" and [m["t"] for m in rep["got"]] == ["elevated", "cancel"]
+
+
+@pytest.mark.needs("webview2")
+def test_add_a_game_reads_the_chosen_programs_name_and_icon_and_records_it_when_it_starts(run):
+    _ok(run)
+    exe = Path(run["_home"]) / "games" / "Moss Garden" / "mg.exe"
+    # The Open dialog (App's picker here), owned by the window, gave a made-up program: its name and its icon (a PNG
+    # in an icon file, from the window's art host) are shown before it is added.
+    assert run["add_picks"] == [True]
+    screen = dict(run["add_screen"])
+    assert screen.pop("size").startswith("50%")           # an icon sits in the tile's middle, on its colour
+    assert screen == {"name": "Moss Garden", "exe": str(exe), "folder": str(exe.parent), "art": "shown",
+                      "fit": "icon", "initials": "", "drawn": True, "note": False}      # its own name, not "mg"
+    assert run["bitmap_icon"] == [48, 48]                 # an icon of bitmaps only decodes too
+    # Added by a name like markup: shown as text, with Record when it starts and Remove, and no Play.
+    g = run["added_game"]
+    assert g["name"] == app_demo.MARKUP_ADDED and g["folder"] == str(exe.parent) and g["none"] is True
+    assert g["remove"] is True and g["play"] is False and g["made"] == 0 and g["pwned"] is False
+    assert "start the game yourself" in g["text"] and "Ctrl+Alt+S" in g["text"]
+    # Record when it starts: the prompt for the program's folder, then "start the game now", no link opened and
+    # the window left where it is; cancelled, it offers to try again.
+    first, again = run["wait_prompts"]                    # and Try again asked for the same folder's relay
+    for argv in (first, again):
+        assert argv[argv.index("--folder") + 1] == str(exe.parent) and "--wait-s" in argv
+    assert run["wait_again"] == "Start the game now"
+    w = run["wait_waiting"]
+    assert w["title"] == "Start the game now" and w["game"] == app_demo.MARKUP_ADDED
+    assert w["detail"].startswith(f"Start {app_demo.MARKUP_ADDED} yourself")
+    assert run["wait_links"] == [] and run["wait_minimized"] is False
+    assert run["wait_done"] == {"title": "Cancelled", "again": "Try again"}
+    assert run["wait_report"]["prompt"] == "approved"
+    assert [m["t"] for m in run["wait_report"]["got"]] == ["elevated", "cancel"]
+    # In the Library with its icon, among the games not recorded yet; removed with a second click, and gone.
+    lib = run["library_with_added"]
+    assert lib["names"] == run["library"]["names"] + [app_demo.MARKUP_ADDED]
+    assert lib["sub"] == "Added by you \u00b7 not recorded yet" and (lib["art"], lib["fit"]) == ("shown", "icon")
+    assert lib["made"] == 0 and lib["pwned"] is False
+    assert run["remove_armed"] == "Click again to remove it (its recordings stay)"
+    assert run["library_after_remove"] == run["library"]["names"]
 
 
 @pytest.mark.needs("webview2")

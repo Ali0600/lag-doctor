@@ -327,8 +327,10 @@ lagdoctor/
             pipe.py                                     the locked named pipe (the relay, the capture service)
             webview2.py                                 WebView2 from ctypes, through the runtime's own export (the app)
             launch.py                                   Explorer opens a link, as from a click (Play's store launch)
+            dialogs.py                                  Windows' Open dialog, for Add a game's program (the app)
   stores/   launch.py                                   Play's store links, built from fixed templates (M6)
             __init__.py steam.py epic.py keyvalues.py   the games each store has installed, from its own files (M6)
+            art.py exe.py                               a Steam game's cover; a picked program's name and icon (M6)
   relay/    protocol.py server.py client.py __main__.py   frame timing and the network trace with admin rights
             process.py                                  priority of other processes (fixes/priority)
   capture/  base.py (done) target.py sysmon.py gpumon.py fanmon.py netmon.py netflows.py presentmon.py inventory.py
@@ -340,6 +342,7 @@ lagdoctor/
   sweep/    inifile.py plan.py results.py runner.py command.py   `lagdoctor sweep`: settings tried run by run
   report/   charts.py labels.py console.py html.py (done) summary.py (summary.json, for the app's library)
   app/      main.py window.py bridge.py library.py views.py assets/ lag-doctor.ico     the desktop app (M1)
+            added.py                                    the games added by hand, in added-games.json (screen 6)
   setup.py  fetch + verify PresentMon
   control.py                                            `watch --control stdio`: a recording the app drives (M4)
   cli.py __main__.py
@@ -1974,8 +1977,9 @@ def epic.read(manifests=None, installations=None) -> Library   # by default unde
 ## The app (lagdoctor/app)
 
 `lagdoctor app` opens lag-doctor's own window (`docs/LAUNCHER-PLAN.md`): the recorded games and their results (M1),
-a recording of the game that is running (M4), and Play, which starts an installed store game and records it (M6). The window code is ported from M0's spike, which passed the
-owner's run.
+a recording of the game that is running (M4), Play, which starts an installed store game and records it (M6), and
+Add a game, whose page records a game the player starts themselves (screen 6). The window code is ported from M0's
+spike, which passed the owner's run.
 
 - **Start order** (`main.run`): the AppUserModel ID (`app.APP_ID`, also on the MSI's shortcut); per-monitor DPI
   awareness; one instance per lag-doctor home (the named mutex `Local\lag-doctor-app-<tag>`, the window class
@@ -2096,6 +2100,35 @@ owner's run.
   (`views.tile`'s `art`, `bridge.art_url`) only when the app holds one; the page loads it through an image outside
   the page and only then draws it over the initials, so a cover that cannot load leaves the tile as it was, and no
   `<img>` joins the page. The page's CSP takes images from its own host and the art host alone.
+- **Add a game** (screen 6, `App.do_pick_game`): Add a game in the Library opens Windows' Open dialog
+  (`winapi/dialogs.pick_program`: GetOpenFileNameW, modal to the window and run on its thread from `App.answer`,
+  programs only, the file must exist, the working folder and the recent list left alone). It comes only through
+  `App(picker=)`, which only `run()` passes: the real one waits for a person, and `tests/conftest.py`'s
+  `_no_real_dialog` fails a test that reaches it. The program's path must end in `.exe` and its folder pass
+  `target.check_folder` (no drive's root, nothing in the Windows folder) and be no Program Files folder itself; the
+  program must be on the local disks (`target.local_problem`). Its name and icon come from its own file
+  (`stores/exe.read`, through `stores.open_file`, which reads parts of it within a budget of 4 MB: the version
+  resource's ProductName, else its FileDescription, else the file's name; the first group icon's largest image whose
+  own header declares at most 256 a side, handed to the page as an icon file of that one image, `image/x-icon`,
+  through the art host as a cover is, and drawn in the tile's middle on its colour). The page shows the program, its
+  folder, its icon and the name, which the player may change, as a draft the page names only by a token (`d-` and 16
+  hex digits); `add_game {draft, name}` keeps it. A program the Library has already is met as that game's page
+  (`library.clash`): the same program, a folder that is a store game's or an added game's or under one; a folder
+  holding another listed game's folder is refused, since the wait could not tell the two apart. The games added by
+  hand are kept in `added-games.json` under the home (`app/added.py`: version 1, at most 200 games and 256 KB, each
+  entry checked as the store readers check theirs; a file that could not be read whole is moved aside as
+  `added-games.unread-<time>.json` before a new list replaces it, and a new list is written beside it and moved over
+  it). Each joins recordings by its program's folder as an installed game does (`library.joined`'s `added`, with the
+  same broad-folder rule), unless a store lists that folder or one holding it (`library.listed_added`: the store's
+  entry shows the game, with Play). Its page has no Play, since lag-doctor never starts a program itself, but **Record
+  when it starts** (`wait {game}`, `App.do_wait`): the recorder Play starts (`--wait-folder` for the program's folder),
+  with no link to open, so on `launch` the running screen says "Start the game now" (`views.SELF_TITLES`,
+  `SELF_DETAILS`, `SELF_ENDS`, with "do not start the game yet" until then) and the window stays where it is. A
+  recorded game no store lists and nobody added has it too, on the folder of its newest recording's program, when that
+  folder is no shared root and neither holds a listed game's folder nor is (or holds) another recorded game's
+  (`library.wait_folders`); a folder that is gone is said when the button is pressed. Remove from the Library (a
+  second click does it) takes an added game out of the list; its recordings stay, under their recorded game. Each
+  added program's icon is read once a run, within the art's 96 MB.
 - **The library** (`library.py`): one Entry per session folder named as `session_dir` names them, from its
   `summary.json`, else from the folder's name (stamp and game stem). A recording is a `watch` folder holding its
   capture; check-ups and `analyze` folders are left out. A game's key is `paths.folder_stem` of its exe name, case

@@ -1,0 +1,634 @@
+[
+ {
+  "name": "added: a file of any name kept as a program",
+  "file": "lagdoctor/app/added.py",
+  "old": "    if cut < 0 or len(name) <= 4 or not name.casefold().endswith(\".exe\") or any(c in '<>:\"|?*' for c in name):",
+  "new": "    if cut < 0 or len(name) <= 4 or any(c in '<>:\"|?*' for c in name):",
+  "tests": [
+   "tests/test_app_added.py::test_a_path_that_is_no_game_program_in_a_folder_of_its_own_is_refused"
+  ]
+ },
+ {
+  "name": "added: a name Windows refuses kept",
+  "file": "lagdoctor/app/added.py",
+  "old": "    if cut < 0 or len(name) <= 4 or not name.casefold().endswith(\".exe\") or any(c in '<>:\"|?*' for c in name):",
+  "new": "    if cut < 0 or len(name) <= 4 or not name.casefold().endswith(\".exe\"):",
+  "tests": [
+   "tests/test_app_added.py::test_a_path_that_is_no_game_program_in_a_folder_of_its_own_is_refused"
+  ]
+ },
+ {
+  "name": "added: a program named .exe alone kept",
+  "file": "lagdoctor/app/added.py",
+  "old": "    if cut < 0 or len(name) <= 4 or not name.casefold().endswith(\".exe\") or any(c in '<>:\"|?*' for c in name):",
+  "new": "    if cut < 0 or not name.casefold().endswith(\".exe\") or any(c in '<>:\"|?*' for c in name):",
+  "tests": [
+   "tests/test_app_added.py::test_a_path_that_is_no_game_program_in_a_folder_of_its_own_is_refused"
+  ]
+ },
+ {
+  "name": "added: a path of any length kept",
+  "file": "lagdoctor/app/added.py",
+  "old": "    if not isinstance(path, str) or not 4 <= len(path) <= MAX_PATH_CHARS or \\",
+  "new": "    if not isinstance(path, str) or not 4 <= len(path) or \\",
+  "tests": [
+   "tests/test_app_added.py::test_a_path_that_is_no_game_program_in_a_folder_of_its_own_is_refused"
+  ]
+ },
+ {
+  "name": "added: a path with a character no file name shows kept",
+  "file": "lagdoctor/app/added.py",
+  "old": "            any(unicodedata.category(c) in UNSHOWN for c in path):",
+  "new": "            False:",
+  "tests": [
+   "tests/test_app_added.py::test_a_path_that_is_no_game_program_in_a_folder_of_its_own_is_refused",
+   "tests/test_app_added.py::test_problems_are_plain_lines_named_up_to_twenty_and_counted_past"
+  ]
+ },
+ {
+  "name": "added: a program on a drive's root named by its letter alone",
+  "file": "lagdoctor/app/added.py",
+  "old": "        folder += \"\\\\\"                                  # C:\\game.exe: its folder is the drive, which check_folder names",
+  "new": "        pass",
+  "tests": [
+   "tests/test_app_added.py::test_a_path_that_is_no_game_program_in_a_folder_of_its_own_is_refused"
+  ]
+ },
+ {
+  "name": "added: an entry with more fields taken",
+  "file": "lagdoctor/app/added.py",
+  "old": "    if not isinstance(item, dict) or set(item) != {\"exe\", \"name\"}:",
+  "new": "    if not isinstance(item, dict):",
+  "tests": [
+   "tests/test_app_added.py::test_entries_that_are_not_a_program_and_a_name_are_left_out_and_named"
+  ]
+ },
+ {
+  "name": "added: an entry with no name to show taken",
+  "file": "lagdoctor/app/added.py",
+  "old": "    if name is None:\n        raise",
+  "new": "    if False:\n        raise",
+  "tests": [
+   "tests/test_app_added.py::test_entries_that_are_not_a_program_and_a_name_are_left_out_and_named"
+  ]
+ },
+ {
+  "name": "added: one program listed twice taken twice",
+  "file": "lagdoctor/app/added.py",
+  "old": "        if target.fold_path(kept.exe) in seen:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_added.py::test_entries_that_are_not_a_program_and_a_name_are_left_out_and_named"
+  ]
+ },
+ {
+  "name": "added: more than MAX_GAMES taken",
+  "file": "lagdoctor/app/added.py",
+  "old": "        if len(out) >= MAX_GAMES:",
+  "new": "        if len(out) >= MAX_GAMES + 100:",
+  "tests": [
+   "tests/test_app_added.py::test_at_most_max_games_are_taken"
+  ]
+ },
+ {
+  "name": "added: a list of another version read",
+  "file": "lagdoctor/app/added.py",
+  "old": "    if not isinstance(doc, dict) or doc.get(\"version\") != VERSION or not isinstance(doc.get(\"games\"), list):",
+  "new": "    if not isinstance(doc, dict) or not isinstance(doc.get(\"games\"), list):",
+  "tests": [
+   "tests/test_app_added.py::test_a_list_lag_doctor_did_not_write_is_named_and_none_of_it_taken"
+  ]
+ },
+ {
+  "name": "added: a list past its size read",
+  "file": "lagdoctor/app/added.py",
+  "old": "        data = stores.read_bytes(path, MAX_BYTES)",
+  "new": "        data = stores.read_bytes(path, 1 << 30)",
+  "tests": [
+   "tests/test_app_added.py::test_a_list_past_its_size_is_not_read"
+  ]
+ },
+ {
+  "name": "added: an unread list overwritten",
+  "file": "lagdoctor/app/added.py",
+  "old": "    if unread and os.path.lexists(path):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_app_added.py::test_a_list_that_was_not_read_whole_is_moved_aside_before_a_new_one_replaces_it"
+  ]
+ },
+ {
+  "name": "added: one list moved aside over another",
+  "file": "lagdoctor/app/added.py",
+  "old": "        while os.path.lexists(aside):",
+  "new": "        while False:",
+  "tests": [
+   "tests/test_app_added.py::test_a_list_that_was_not_read_whole_is_moved_aside_before_a_new_one_replaces_it"
+  ]
+ },
+ {
+  "name": "added: the new list written over the old one",
+  "file": "lagdoctor/app/added.py",
+  "old": "    temp = home / (NAME + \".new\")",
+  "new": "    temp = path",
+  "tests": [
+   "tests/test_app_added.py::test_a_write_that_fails_leaves_the_old_list_where_it_was"
+  ]
+ },
+ {
+  "name": "added: a list written off the local disks",
+  "file": "lagdoctor/app/added.py",
+  "old": "    if why is not None:\n        raise OSError(0, why)",
+  "new": "    if False:\n        raise OSError(0, why)",
+  "tests": [
+   "tests/test_app_added.py::test_a_list_off_the_local_disks_is_named_never_followed_and_never_written"
+  ]
+ },
+ {
+  "name": "added: no list yet read as a problem",
+  "file": "lagdoctor/app/added.py",
+  "old": "        return [], [str(exc)] if there else []",
+  "new": "        return [], [str(exc)]",
+  "tests": [
+   "tests/test_app_added.py::test_no_list_yet_is_none_and_no_problem"
+  ]
+ },
+ {
+  "name": "added: problems past twenty dropped uncounted",
+  "file": "lagdoctor/app/added.py",
+  "old": "    return out, problems.lines()",
+  "new": "    return out, problems.named",
+  "tests": [
+   "tests/test_app_added.py::test_problems_are_plain_lines_named_up_to_twenty_and_counted_past"
+  ]
+ },
+ {
+  "name": "library: an added game a store lists listed twice",
+  "file": "lagdoctor/app/library.py",
+  "old": "    return [a for a in added if not any(_within(a.forms, g.forms) for g in games if g.key not in broad)]",
+  "new": "    return list(added)",
+  "tests": [
+   "tests/test_app_added.py::test_an_added_game_a_store_lists_shows_as_the_stores_with_play"
+  ]
+ },
+ {
+  "name": "library: a broad store folder hides an added game",
+  "file": "lagdoctor/app/library.py",
+  "old": "    return [a for a in added if not any(_within(a.forms, g.forms) for g in games if g.key not in broad)]",
+  "new": "    return [a for a in added if not any(_within(a.forms, g.forms) for g in games)]",
+  "tests": [
+   "tests/test_app_added.py::test_an_added_game_under_a_broad_store_folder_stays_listed_and_is_not_the_stores"
+  ]
+ },
+ {
+  "name": "library: a broad store folder taken as the program's game",
+  "file": "lagdoctor/app/library.py",
+  "old": "        if g.key not in broad and _within(forms, g.forms):",
+  "new": "        if _within(forms, g.forms):",
+  "tests": [
+   "tests/test_app_added.py::test_an_added_game_under_a_broad_store_folder_stays_listed_and_is_not_the_stores"
+  ]
+ },
+ {
+  "name": "library: a store game's folder never met",
+  "file": "lagdoctor/app/library.py",
+  "old": "            return \"store\", g",
+  "new": "            pass",
+  "tests": [
+   "tests/test_app_added.py::test_a_program_the_library_has_already_is_met_as_its_game"
+  ]
+ },
+ {
+  "name": "library: an added game's folder never met",
+  "file": "lagdoctor/app/library.py",
+  "old": "            return \"added\", a",
+  "new": "            pass",
+  "tests": [
+   "tests/test_app_added.py::test_a_program_the_library_has_already_is_met_as_its_game"
+  ]
+ },
+ {
+  "name": "library: a folder of two recorded games taken",
+  "file": "lagdoctor/app/library.py",
+  "old": "    if len(under) >= 2:",
+  "new": "    if len(under) >= 3:",
+  "tests": [
+   "tests/test_app_added.py::test_a_folder_holding_two_recorded_games_is_refused_and_one_is_its_own"
+  ]
+ },
+ {
+  "name": "library: a stub's own game's folder refused",
+  "file": "lagdoctor/app/library.py",
+  "old": "    if len(under) >= 2:",
+  "new": "    if len(under) >= 1:",
+  "tests": [
+   "tests/test_app_added.py::test_a_folder_holding_two_recorded_games_is_refused_and_one_is_its_own"
+  ]
+ },
+ {
+  "name": "library: a folder's name taken for a folder under it",
+  "file": "lagdoctor/app/library.py",
+  "old": "    return any(m == t or m.startswith(t + \"\\\\\") for m in mine for t in theirs)",
+  "new": "    return any(m == t or m.startswith(t) for m in mine for t in theirs)",
+  "tests": [
+   "tests/test_app_added.py::test_an_added_game_a_store_lists_shows_as_the_stores_with_play"
+  ]
+ },
+ {
+  "name": "library: the same program met as its folder's game",
+  "file": "lagdoctor/app/library.py",
+  "old": "            return \"same\", a",
+  "new": "            pass",
+  "tests": [
+   "tests/test_app_added.py::test_a_program_the_library_has_already_is_met_as_its_game"
+  ]
+ },
+ {
+  "name": "library: a folder holding another game's taken",
+  "file": "lagdoctor/app/library.py",
+  "old": "            return \"holds\", g",
+  "new": "            pass",
+  "tests": [
+   "tests/test_app_added.py::test_a_program_the_library_has_already_is_met_as_its_game"
+  ]
+ },
+ {
+  "name": "library: a recorded game in a shared folder waited on",
+  "file": "lagdoctor/app/library.py",
+  "old": "        if target.fold_path(folder) not in shared:",
+  "new": "        if True:",
+  "tests": [
+   "tests/test_app_added.py::test_a_recorded_games_folder_of_many_games_is_not_waited_on"
+  ]
+ },
+ {
+  "name": "library: a recorded game's folder holding a listed game's waited on",
+  "file": "lagdoctor/app/library.py",
+  "old": "        if any(_within(g.forms, mine) for g in listed):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_added.py::test_a_recorded_games_folder_of_many_games_is_not_waited_on"
+  ]
+ },
+ {
+  "name": "library: two recorded games of one folder each waited on",
+  "file": "lagdoctor/app/library.py",
+  "old": "        if any(other != gid and _within((f,), mine) for other, f in folders.items()):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_added.py::test_a_recorded_games_folder_of_many_games_is_not_waited_on"
+  ]
+ },
+ {
+  "name": "library: added games join no recording",
+  "file": "lagdoctor/app/library.py",
+  "old": "    holders = list(games) + list(added)",
+  "new": "    holders = list(games)",
+  "tests": [
+   "tests/test_app_added.py::test_an_added_game_shows_by_its_name_with_its_recordings_and_waits_on_its_folder"
+  ]
+ },
+ {
+  "name": "views: a recorded game never waited on",
+  "file": "lagdoctor/app/views.py",
+  "old": "        out[gid].folder = folder",
+  "new": "        pass",
+  "tests": [
+   "tests/test_app_added.py::test_a_recorded_game_no_store_lists_waits_on_its_own_folder_when_it_has_one"
+  ]
+ },
+ {
+  "name": "views: a cover and an icon drawn alike",
+  "file": "lagdoctor/app/views.py",
+  "old": "            \"icon\": shown and game_id in icons}",
+  "new": "            \"icon\": shown}",
+  "tests": [
+   "tests/test_app_added.py::test_a_tile_says_when_its_art_is_a_programs_icon"
+  ]
+ },
+ {
+  "name": "views: an added game told it cannot be recorded from its start",
+  "file": "lagdoctor/app/views.py",
+  "old": "            \"play_note\": \"\" if found.installed is not None or wait is not None else",
+  "new": "            \"play_note\": \"\" if found.installed is not None else",
+  "tests": [
+   "tests/test_app_added.py::test_an_added_game_shows_by_its_name_with_its_recordings_and_waits_on_its_folder"
+  ]
+ },
+ {
+  "name": "views: a broad added game waits on its folder",
+  "file": "lagdoctor/app/views.py",
+  "old": "            tile.folder, tile.broad = None, True",
+  "new": "            pass",
+  "tests": [
+   "tests/test_app_added.py::test_an_added_game_whose_folder_is_broad_offers_no_wait_and_says_why"
+  ]
+ },
+ {
+  "name": "views: a broad added game told the store note",
+  "file": "lagdoctor/app/views.py",
+  "old": "            ADDED_BROAD_NOTE.format(folder=found.added.folder) if found.broad else PLAY_NOTE}",
+  "new": "            PLAY_NOTE}",
+  "tests": [
+   "tests/test_app_added.py::test_an_added_game_whose_folder_is_broad_offers_no_wait_and_says_why"
+  ]
+ },
+ {
+  "name": "views: a store game's recordings weighed as no store's",
+  "file": "lagdoctor/app/views.py",
+  "old": "        exe = _newest_exe(g.recs) if g.installed is None and g.added is None else None",
+  "new": "        exe = _newest_exe(g.recs)",
+  "tests": [
+   "tests/test_app_added.py::test_the_recorded_games_add_a_game_weighs_are_those_no_store_or_added_game_holds"
+  ]
+ },
+ {
+  "name": "views: an added game left out of Installed",
+  "file": "lagdoctor/app/views.py",
+  "old": "                    \"store\": g.store, \"installed\": g.installed is not None or g.added is not None,",
+  "new": "                    \"store\": g.store, \"installed\": g.installed is not None,",
+  "tests": [
+   "tests/test_app_added.py::test_an_added_game_shows_by_its_name_with_its_recordings_and_waits_on_its_folder"
+  ]
+ },
+ {
+  "name": "views: an added game named by no source",
+  "file": "lagdoctor/app/views.py",
+  "old": "        return ADDED_BY_YOU if self.added is not None else \"\"",
+  "new": "        return \"\"",
+  "tests": [
+   "tests/test_app_added.py::test_an_added_game_shows_by_its_name_with_its_recordings_and_waits_on_its_folder"
+  ]
+ },
+ {
+  "name": "views: Record when it starts in Play's words",
+  "file": "lagdoctor/app/views.py",
+  "old": "    by_hand = bool((play or {}).get(\"self\"))            # Record when it starts: the player starts the game",
+  "new": "    by_hand = False",
+  "tests": [
+   "tests/test_app_added.py::test_record_when_it_starts_says_when_to_start_the_game"
+  ]
+ },
+ {
+  "name": "views: Record when it starts ended in Play's words",
+  "file": "lagdoctor/app/views.py",
+  "old": "        ends = SELF_ENDS if by_hand else PLAY_ENDS",
+  "new": "        ends = PLAY_ENDS",
+  "tests": [
+   "tests/test_app_added.py::test_how_record_when_it_starts_ended_is_said_in_its_own_words"
+  ]
+ },
+ {
+  "name": "views: Try again plays a game added by hand",
+  "file": "lagdoctor/app/views.py",
+  "old": "            \"play\": {\"game\": play[\"game\"], \"wait\": by_hand} if play is not None else None,",
+  "new": "            \"play\": {\"game\": play[\"game\"], \"wait\": False} if play is not None else None,",
+  "tests": [
+   "tests/test_app_added.py::test_record_when_it_starts_says_when_to_start_the_game"
+  ]
+ },
+ {
+  "name": "bridge: a draft named by anything",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "    return isinstance(v, str) and DRAFT_ID.fullmatch(v) is not None",
+  "new": "    return isinstance(v, str)",
+  "tests": [
+   "tests/test_app_added.py::test_the_page_names_a_draft_only_by_its_token_and_a_name_only_as_text"
+  ]
+ },
+ {
+  "name": "bridge: a name of any length",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "    return isinstance(v, str) and len(v) <= MAX_NAME_CHARS      # an empty one is the app's to refuse, in words",
+  "new": "    return isinstance(v, str)",
+  "tests": [
+   "tests/test_app_added.py::test_the_page_names_a_draft_only_by_its_token_and_a_name_only_as_text"
+  ]
+ },
+ {
+  "name": "app: a program in a Program Files folder itself added",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if any(target.fold_path(f) in shared for f in forms):        # its real path too, behind a junction",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_added.py::test_a_program_in_a_program_files_folder_itself_is_refused"
+  ]
+ },
+ {
+  "name": "app: a Program Files folder behind a junction added",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if any(target.fold_path(f) in shared for f in forms):        # its real path too, behind a junction",
+  "new": "        if target.fold_path(folder) in shared:",
+  "tests": [
+   "tests/test_app_added.py::test_a_program_in_a_program_files_folder_itself_is_refused"
+  ]
+ },
+ {
+  "name": "app: a folder of two recorded games added",
+  "file": "lagdoctor/app/main.py",
+  "old": "        found = library.clash(program, forms, games, listed, views.recorded_games(entries, games, listed))",
+  "new": "        found = library.clash(program, forms, games, listed)",
+  "tests": [
+   "tests/test_app_added.py::test_a_program_whose_folder_holds_two_recorded_games_is_refused"
+  ]
+ },
+ {
+  "name": "app: an unread list overwritten by a remove",
+  "file": "lagdoctor/app/main.py",
+  "old": "                added.save(self.home, rest, unread=bool(problems))",
+  "new": "                added.save(self.home, rest, unread=False)",
+  "tests": [
+   "tests/test_app_added.py::test_removing_from_a_list_that_held_an_unread_entry_keeps_its_bytes_aside"
+  ]
+ },
+ {
+  "name": "app: a window with no picker opens one",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if self.picker is None:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_added.py::test_a_dialog_that_failed_is_said_and_a_second_while_one_is_up_is_refused",
+   "tests/test_app_added.py::test_an_app_given_no_picker_never_opens_the_real_dialog"
+  ]
+ },
+ {
+  "name": "app: a closed dialog read as a program",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if not path:\n            self.window.post(bridge.reply(req.id, {\"cancelled\": True}))",
+  "new": "        if False:\n            self.window.post(bridge.reply(req.id, {\"cancelled\": True}))",
+  "tests": [
+   "tests/test_app_added.py::test_the_dialog_is_owned_by_the_window_and_closing_it_changes_nothing"
+  ]
+ },
+ {
+  "name": "app: a program off the local disks added",
+  "file": "lagdoctor/app/main.py",
+  "old": "            raise Gone(f\"lag-doctor adds only programs on this PC's own disks: {why}.\")",
+  "new": "            pass",
+  "tests": [
+   "tests/test_app_added.py::test_a_program_off_the_local_disks_is_refused_unread"
+  ]
+ },
+ {
+  "name": "app: a program whose folder holds another game's offered",
+  "file": "lagdoctor/app/main.py",
+  "old": "            if view[\"existing\"] is None:\n                raise Gone(view[\"why\"])",
+  "new": "            if False:\n                raise Gone(view[\"why\"])",
+  "tests": [
+   "tests/test_app_added.py::test_a_program_whose_folder_holds_another_games_is_refused"
+  ]
+ },
+ {
+  "name": "app: a second Open dialog over the first",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if self.picking:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_added.py::test_a_dialog_that_failed_is_said_and_a_second_while_one_is_up_is_refused"
+  ]
+ },
+ {
+  "name": "app: any draft added",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if d is None or d.token != draft:",
+  "new": "        if d is None:",
+  "tests": [
+   "tests/test_app_added.py::test_a_name_with_nothing_to_show_or_a_draft_never_given_is_refused"
+  ]
+ },
+ {
+  "name": "app: a game added with no name",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if shown is None:\n            raise Gone(\"Give",
+  "new": "        if False:\n            raise Gone(\"Give",
+  "tests": [
+   "tests/test_app_added.py::test_a_name_with_nothing_to_show_or_a_draft_never_given_is_refused"
+  ]
+ },
+ {
+  "name": "app: a game added meanwhile added again",
+  "file": "lagdoctor/app/main.py",
+  "old": "            if found is not None:\n                raise Gone(views.clash_view(*found)[\"why\"])",
+  "new": "            if False:\n                raise Gone(views.clash_view(*found)[\"why\"])",
+  "tests": [
+   "tests/test_app_added.py::test_a_game_added_meanwhile_is_not_added_twice"
+  ]
+ },
+ {
+  "name": "app: more games added than the list holds",
+  "file": "lagdoctor/app/main.py",
+  "old": "            if len(kept) >= added.MAX_GAMES:",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_app_added.py::test_the_library_holds_at_most_max_games_added_by_hand"
+  ]
+ },
+ {
+  "name": "app: an unread list overwritten by an add",
+  "file": "lagdoctor/app/main.py",
+  "old": "                added.save(self.home, kept + [added.Kept(exe=d.exe, name=shown)], unread=bool(problems))",
+  "new": "                added.save(self.home, kept + [added.Kept(exe=d.exe, name=shown)], unread=False)",
+  "tests": [
+   "tests/test_app_added.py::test_adding_over_a_list_that_could_not_be_read_keeps_its_bytes_aside"
+  ]
+ },
+ {
+  "name": "app: a draft added twice",
+  "file": "lagdoctor/app/main.py",
+  "old": "            if self.draft is d:\n                self.draft = None",
+  "new": "            if self.draft is d:\n                pass",
+  "tests": [
+   "tests/test_app_added.py::test_adding_keeps_the_program_by_the_name_given_and_opens_its_page"
+  ]
+ },
+ {
+  "name": "app: a game removed that was never added",
+  "file": "lagdoctor/app/main.py",
+  "old": "            if len(rest) == len(kept):\n                raise Gone(\"That game was not added by hand",
+  "new": "            if False:\n                raise Gone(\"That game was not added by hand",
+  "tests": [
+   "tests/test_app_added.py::test_removing_an_added_game_keeps_its_recordings_under_their_recorded_game"
+  ]
+ },
+ {
+  "name": "app: a folder that is gone waited on",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if not there:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_added.py::test_record_when_it_starts_refuses_a_folder_that_is_gone_or_a_game_with_none"
+  ]
+ },
+ {
+  "name": "app: Record when it starts told as Play",
+  "file": "lagdoctor/app/main.py",
+  "old": "        play = {\"game\": game, \"title\": name, \"store\": \"\", \"self\": True}",
+  "new": "        play = {\"game\": game, \"title\": name, \"store\": \"\"}",
+  "tests": [
+   "tests/test_app_added.py::test_record_when_it_starts_waits_on_the_added_games_folder_and_opens_no_link"
+  ]
+ },
+ {
+  "name": "app: each program's icon read at every listing",
+  "file": "lagdoctor/app/main.py",
+  "old": "                if g.game_id in self.art_tried:\n                    continue",
+  "new": "                if False:\n                    continue",
+  "tests": [
+   "tests/test_app_added.py::test_each_added_programs_icon_is_read_once_a_run"
+  ]
+ },
+ {
+  "name": "app: icons past the art's total held",
+  "file": "lagdoctor/app/main.py",
+  "old": "            if game_id in self.art or self.art_bytes + len(icon[1]) > art.MAX_TOTAL_BYTES:",
+  "new": "            if game_id in self.art:",
+  "tests": [
+   "tests/test_app_added.py::test_icons_past_the_arts_total_are_left_out"
+  ]
+ },
+ {
+  "name": "app: an icon held as a cover",
+  "file": "lagdoctor/app/main.py",
+  "old": "            self.icons.add(game_id)",
+  "new": "            pass",
+  "tests": [
+   "tests/test_app_added.py::test_the_program_chosen_is_shown_with_its_name_and_icon_before_it_is_added"
+  ]
+ },
+ {
+  "name": "page: Record when it starts asks for Play",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "  ask(how === 'wait' ? 'wait' : 'play', {game}).then((r) => {",
+  "new": "  ask('play', {game}).then((r) => {",
+  "tests": [
+   "tests/test_app_page.py::test_add_a_game_reads_the_chosen_programs_name_and_icon_and_records_it_when_it_starts"
+  ]
+ },
+ {
+  "name": "page: an icon drawn over the whole tile",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "      c.style.background = t.icon === true ? `center / 50% no-repeat url(\"${t.art}\"), ${colour}`",
+  "new": "      c.style.background = false ? `center / 50% no-repeat url(\"${t.art}\"), ${colour}`",
+  "tests": [
+   "tests/test_app_page.py::test_add_a_game_reads_the_chosen_programs_name_and_icon_and_records_it_when_it_starts"
+  ]
+ },
+ {
+  "name": "page: Try again after a wait plays instead",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "      r.play.wait ? 'wait' : 'play')",
+  "new": "      'play')",
+  "tests": [
+   "tests/test_app_page.py::test_add_a_game_reads_the_chosen_programs_name_and_icon_and_records_it_when_it_starts"
+  ]
+ },
+ {
+  "name": "page: Remove at the first click",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "    if (b.dataset.armed !== '1') {",
+  "new": "    if (false) {",
+  "tests": [
+   "tests/test_app_page.py::test_add_a_game_reads_the_chosen_programs_name_and_icon_and_records_it_when_it_starts"
+  ]
+ }
+]

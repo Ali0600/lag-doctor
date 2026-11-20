@@ -1,7 +1,8 @@
 'use strict';
-// lag-doctor's screens: Library, a game's page, Results, Compare, Settings and a running recording. Everything shown
-// comes from the app over JSON web messages (lagdoctor/app/bridge.py). Text from a capture or the PC (a game's title,
-// a process name, evidence) is put on the page as text only: el() makes text nodes, and nothing here parses markup.
+// lag-doctor's screens: Library, a game's page, Add a game, Results, Compare, Settings and a running recording.
+// Everything shown comes from the app over JSON web messages (lagdoctor/app/bridge.py). Text from a capture or the PC
+// (a game's title, a process name, evidence) is put on the page as text only: el() makes text nodes, and nothing here
+// parses markup.
 
 const wv = window.chrome && window.chrome.webview;
 const $ = (id) => document.getElementById(id);
@@ -233,19 +234,23 @@ function seriesChart(spec, extra) {
 // The art host's URL for one game, exactly as the app builds it (bridge.art_url): nothing else is ever loaded.
 const ART_URL = /^https:\/\/art\.lagdoctor\.example\/g-[0-9a-f]{16}$/;
 
-// A cover: the game's initials on its colour, and its art from the store's cache over them once that has loaded (a
-// probe image outside the page loads it first, so a cover that cannot load leaves the initials as they were).
+// A cover: the game's initials on its colour, and its art over them once that has loaded (a probe image outside the
+// page loads it first, so art that cannot load leaves the initials as they were): a store's cover fills the tile, an
+// added game's program icon sits in its middle, on the colour.
 function tileCover(t, big) {
   const c = el('div', {class: 'cover'}, t.initials);
-  c.style.background = `linear-gradient(160deg, hsl(${t.hue}, 55%, 46%), hsl(${(t.hue + 40) % 360}, 50%, 30%))`;
+  const colour = `linear-gradient(160deg, hsl(${t.hue}, 55%, 46%), hsl(${(t.hue + 40) % 360}, 50%, 30%))`;
+  c.style.background = colour;
   if (big) c.style.fontSize = '54px';
   if (typeof t.art === 'string' && ART_URL.test(t.art)) {
     c.dataset.art = 'loading';
     const probe = new Image();
     probe.addEventListener('load', () => {
       c.textContent = '';
-      c.style.background = `center / cover no-repeat url("${t.art}")`;
+      c.style.background = t.icon === true ? `center / 50% no-repeat url("${t.art}"), ${colour}`
+        : `center / cover no-repeat url("${t.art}")`;
       c.dataset.art = 'shown';
+      if (t.icon === true) c.dataset.fit = 'icon';
     });
     probe.addEventListener('error', () => { c.dataset.art = 'none'; });
     probe.src = t.art;
@@ -277,9 +282,10 @@ const SCREENS = {
     if (!data.games.length) {
       show(strip, el('h1', null, 'Your games'), el('div', {class: 'empty'},
         el('p', null, 'No games yet.'),
-        el('p', {class: 'muted'}, 'lag-doctor lists the games Steam and the Epic Games launcher have installed. ' +
-          'You can also start a game yourself, then press Record the game that\'s running: when the recording is ' +
-          'analysed, the game appears here with its results.'), recordButton()));
+        el('p', {class: 'muted'}, 'lag-doctor lists the games Steam and the Epic Games launcher have installed, and ' +
+          'any game you add by its program. You can also start a game yourself, then press Record the game that\'s ' +
+          'running: when the recording is analysed, the game appears here with its results.'),
+        el('div', {class: 'row'}, recordButton(), addButton())));
       return;
     }
     let filter = 'all', query = '';
@@ -302,7 +308,7 @@ const SCREENS = {
     show(strip,
       el('div', {class: 'row tools'}, search, ...chips, el('span', {class: 'spacer'}),
         el('span', {class: 'muted'}, `${data.games.length} game${data.games.length === 1 ? '' : 's'}, ` +
-          `${data.recordings} recording${data.recordings === 1 ? '' : 's'}`), recordButton()),
+          `${data.recordings} recording${data.recordings === 1 ? '' : 's'}`), recordButton(), addButton()),
       // The Recent row only when the library holds more than it: with a few games it would repeat them all.
       recent.length && data.games.length > recent.length ? el('section', {class: 'recent'}, el('h2', null, 'Recent'),
         el('div', {class: 'grid'}, ...recent.map(gameCard))) : null,
@@ -336,19 +342,24 @@ const SCREENS = {
         'Play with lag-doctor'),
       el('p', {class: 'muted'}, ...prose(`${g.play.text} lag-doctor has ${g.play.store} start the game, and waits for ` +
         'it without touching it.')))
+      : g.wait ? el('div', {class: 'card play', id: 'wait-card'},
+        el('button', {class: 'btn primary big', type: 'button', id: 'wait', on: {click: (e) => startPlay(e.target, g.id,
+          'wait')}}, 'Record when it starts'),
+        el('p', {class: 'muted'}, ...prose(g.wait.text)),
+        el('p', {class: 'muted'}, 'Its folder: ', el('code', {id: 'wait-folder'}, g.wait.folder)))
       : el('div', {class: 'card'}, el('p', {class: 'muted'}, ...prose(g.play_note)));
+    const remove = g.added ? removeButton(g.id) : null;
+    const hero = el('div', {class: 'hero'}, tileCover(g.tile, true),
+      el('div', null, el('h1', {id: 'game-name'}, g.name),
+        el('p', {class: 'muted'}, [g.exe_name, g.store].filter(Boolean).join(' · ')), play, remove));
     if (!last) {
-      show(el('div', {class: 'hero'}, tileCover(g.tile, true),
-        el('div', null, el('h1', {id: 'game-name'}, g.name),
-          el('p', {class: 'muted'}, [g.exe_name, g.store].filter(Boolean).join(' · ')), play)),
-        el('p', {class: 'muted', id: 'no-recordings'}, 'No recordings of this game yet. Press Play with lag-doctor: ' +
-          'once the recording is analysed, it appears here.'));
+      show(hero, el('p', {class: 'muted', id: 'no-recordings'}, 'No recordings of this game yet. ' +
+        (g.wait ? 'Press Record when it starts' : 'Press Play with lag-doctor') +
+        ': once the recording is analysed, it appears here.'));
       return;
     }
     show(
-      el('div', {class: 'hero'}, tileCover(g.tile, true),
-        el('div', null, el('h1', {id: 'game-name'}, g.name),
-          el('p', {class: 'muted'}, [g.exe_name, g.store].filter(Boolean).join(' · ')), play)),
+      hero,
       el('h2', null, 'Last recording'),
       el('div', {class: 'card'},
         el('div', {class: 'row'}, el('span', {class: 'badge ' + last.lag_key}, last.lag_type),
@@ -361,6 +372,33 @@ const SCREENS = {
       el('p', {class: 'muted'}, 'Click a recording for its results. Tick two to compare them.'),
       el('table', null, el('thead', null, el('tr', null, ...['', 'When', 'Length', 'Verdict', 'Avg FPS', '1% low',
         'Stutters / min', 'Top cause'].map((h) => el('th', null, h)))), el('tbody', null, ...rows)));
+  },
+
+  // Screen 6: the program the player chose in Windows' Open dialog (args.draft, the app's answer to pick_game), with
+  // the name it will show by, which they may change; or the game of the Library's it already is.
+  async add(args, live) {
+    const d = args.draft || {};
+    if (!live()) return;
+    if (!d.draft) {
+      show(el('h1', null, 'Add a game'), el('p', {id: 'add-why'}, ...prose(d.why || '')),
+        el('div', {class: 'row'}, d.existing ? el('button', {class: 'btn primary', type: 'button', id: 'add-open',
+          on: {click: () => { stack.length = 0; go('game', {game: d.existing}, false); }}}, 'Open its page') : null,
+        addButton('Choose another program')));
+      return;
+    }
+    const name = el('input', {type: 'text', id: 'add-name', maxlength: 200, value: d.name, spellcheck: 'false'});
+    const confirm = el('button', {class: 'btn primary', type: 'button', id: 'add-confirm',
+      on: {click: (e) => addGame(e.target, d.draft, name.value)}}, 'Add to the Library');
+    name.addEventListener('keydown', (e) => { if (e.key === 'Enter') confirm.click(); });
+    show(el('h1', null, 'Add a game'),
+      el('div', {class: 'hero'}, tileCover(d.tile, true),
+        el('div', {class: 'add'}, el('label', {for: 'add-name'}, 'Its name in the Library'), name,
+          d.note ? el('p', {class: 'muted', id: 'add-note'}, d.note) : null,
+          el('p', {class: 'muted'}, 'Its program: ', el('code', {id: 'add-exe'}, d.exe)),
+          el('p', {class: 'muted'}, 'Its folder: ', el('code', {id: 'add-folder'}, d.folder)),
+          el('p', {class: 'muted'}, ...prose(d.text)),
+          el('div', {class: 'row'}, confirm, addButton('Choose another program')))));
+    name.focus();
   },
 
   async results(args, live) {
@@ -542,9 +580,10 @@ function startRecording(button) {
   });
 }
 
-function startPlay(button, game) {
+// Play (how 'play') or Record when it starts (how 'wait'), for the game the page names.
+function startPlay(button, game, how = 'play') {
   if (button) button.disabled = true;
-  ask('play', {game}).then((r) => {
+  ask(how === 'wait' ? 'wait' : 'play', {game}).then((r) => {
     recordingPushed(r);
     stack.length = 0;
     go('recording', {}, false);
@@ -554,9 +593,55 @@ function startPlay(button, game) {
   });
 }
 
-function playButton(game, label) {
-  return el('button', {class: 'btn primary', type: 'button', id: 'play-again', on: {click: (e) => startPlay(e.target, game)}},
-    label);
+function playButton(game, label, how = 'play') {
+  return el('button', {class: 'btn primary', type: 'button', id: 'play-again',
+    on: {click: (e) => startPlay(e.target, game, how)}}, label);
+}
+
+// Add a game (screen 6): Windows' Open dialog, opened by the app; the program chosen is shown on its own screen.
+function startAdd(button) {
+  if (button) button.disabled = true;
+  ask('pick_game').then((r) => {
+    if (button) button.disabled = false;
+    if (!r || r.cancelled) return;
+    go('add', {draft: r}, !(current && current.name === 'add'));
+  }).catch((err) => {
+    if (button) button.disabled = false;
+    recError(err);
+  });
+}
+
+function addButton(label) {
+  return el('button', {class: 'btn', type: 'button', id: 'add-game', on: {click: (e) => startAdd(e.target)}},
+    label || 'Add a game');
+}
+
+function addGame(button, draft, name) {
+  button.disabled = true;
+  ask('add_game', {draft, name}).then((r) => {
+    stack.length = 0;
+    go('game', {game: r.game}, false);
+  }).catch((err) => {
+    button.disabled = false;
+    recError(err);
+  });
+}
+
+// Remove from the Library, for a game added by hand: a second click does it, and its recordings stay.
+function removeButton(game) {
+  const b = el('button', {class: 'btn', type: 'button', id: 'remove-game', on: {click: () => {
+    if (b.dataset.armed !== '1') {
+      b.dataset.armed = '1';
+      b.textContent = 'Click again to remove it (its recordings stay)';
+      return;
+    }
+    b.disabled = true;
+    ask('remove_game', {game}).then(() => { stack.length = 0; go('library', {}, false); }).catch((err) => {
+      b.disabled = false;
+      recError(err);
+    });
+  }}}, 'Remove from the Library');
+  return b;
 }
 
 function recordButton(label) {
@@ -599,7 +684,8 @@ function drawRecording() {
       buttons.push(el('button', {class: 'btn primary', type: 'button', id: 'rec-results',
         on: {click: () => go('results', {session: r.session})}}, 'Open its results'));
     }
-    buttons.push(r.play ? playButton(r.play.game, r.ok ? 'Play again' : 'Try again')
+    buttons.push(r.play ? playButton(r.play.game, r.ok ? (r.play.wait ? 'Record it again' : 'Play again') : 'Try again',
+      r.play.wait ? 'wait' : 'play')
       : recordButton(r.ok ? 'Record again' : 'Try again'));
     buttons.push(el('button', {class: 'btn', type: 'button', on: {click: () => { stack.length = 0; go('library', {}, false); }}},
       'Back to the library'));

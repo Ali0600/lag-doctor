@@ -1381,3 +1381,17 @@ file whose size cannot be read is refused.
 write. The first version capped only the file size; a review traced the decode in Blink's image decoder.
 **Takeaway**: for untrusted media, bound the declared dimensions as well as the bytes, from the header, before
 keeping the file.
+
+### Check a hand-written file parser against the platform's own reader of the same bytes
+
+When you parse a format yourself and also build its test files yourself, one misreading of the spec can sit in both,
+and every test agrees with it. Windows can read the same files independently: `LoadLibraryExW` as a data file,
+`FindResourceW` and `LoadResource` for a resource's bytes, `VerQueryValueW` for the version strings,
+`LookupIconIdFromDirectoryEx` for the icon Windows would pick, and `CreateIconFromResourceEx` to prove an image is
+one Windows can show. Comparing the parser's answers with those, on the made-up files and on a real program, checks
+the parser and the test files' builder at once.
+**Why it came up**: M6i's Add a game reads a picked program's name and icon from its PE resources in Python
+(`stores/exe.py`), so Windows never loads the program, and `tests/pe_build.py` makes the programs its tests read.
+`tests/test_stores_exe.py` has Windows read the same files, and this Python's own `python.exe`.
+**Takeaway**: give a hand-rolled parser, and the fixtures you built for it, an independent reader of the same bytes:
+the platform's own API.
