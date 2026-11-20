@@ -727,9 +727,11 @@ def _wrong_gpu(cap: Capture, ctx: dict) -> Any:
         c.neutral("frame_timing", "the integrated GPU shares the limit with the CPU")
     elif v == "unknown":
         c.lack("frame_timing", W_STEADY, "whether the GPU limits the frame rate could not be judged")
-    else:
+    elif _other_limit(e):              # the same predicate as the headline's (costs_no_frames)
         c.against("frame_timing", W_STEADY, f"right now the frame rate is limited by {labels.BOUND.get(v, v)}, "
-                                            "not by the GPU, so the faster GPU would mostly add headroom")
+                                            "not by the GPU, so the faster GPU would mostly add headroom"
+                  if v != "waiting" else "right now the game is waiting on something, not on the GPU, so the "
+                                         "faster GPU would mostly add headroom")
     fixes = [_gpu_preference_fix(e, best)]
     limited = v == "gpu" and not paced
     summary = (f"Windows ran the game on {_name(game)} instead of {_name(best)}. "
@@ -738,7 +740,12 @@ def _wrong_gpu(cap: Capture, ctx: dict) -> Any:
                   "That integrated GPU is what holds the frame rate down." if limited else
                   f"At {fps:.0f} FPS the game already reaches the {e.refresh:.0f} Hz display, so that integrated "
                   "GPU costs it no frames now, but the discrete GPU would give it far more headroom." if paced else
-                  "It is not the limit at the moment, but the discrete GPU would give the game far more headroom."))
+                  "It is not the limit at the moment, but the discrete GPU would give the game far more headroom."
+                  if _other_limit(e) else
+                  "That integrated GPU shares the limit with the CPU, and the discrete GPU would give the game far "
+                  "more headroom." if v == "mixed" and e.frames_measured else
+                  "Whether it holds the frame rate down could not be judged, but the discrete GPU would give the "
+                  "game far more headroom."))
     return c.conclude(f"The game ran on the integrated GPU, not on {_name(best)}", summary, fixes)
 
 
@@ -808,11 +815,27 @@ def _gpu_reaches_display(e: _Env) -> bool:
     """Frame timing names the GPU the limit or a share of it ("gpu", "mixed", the 3D engine's fallback too), yet the
     game already reaches the display (LIMIT_FPS_FRAC): the display sets the pace, so the GPU costs no frames the
     player sees. One predicate for gpu_limit's firm clear there, what wrong_gpu and hybrid_copy say then
-    (PACED_BY_DISPLAY) and the headline, which never lets those two explain a low frame rate there."""
+    (PACED_BY_DISPLAY) and the headline (costs_no_frames), which never lets those two explain a low frame rate there."""
     return e.frames_measured and e.verdict in ("gpu", "mixed") and _fps_reaches_display(e)
 
 
 PACED_BY_DISPLAY = ("wrong_gpu", "hybrid_copy")     # where _gpu_reaches_display holds, they say they cost no frames
+OTHER_LIMITS = ("capped", "vsync", "cpu_main", "cpu_all", "waiting")   # every verdict naming a limit but the GPU's
+
+
+def _other_limit(e: _Env) -> bool:
+    """Frame timing names a limit other than the GPU (OTHER_LIMITS: a cap, VSync, the CPU, waiting): wrong_gpu says
+    the integrated GPU is not the limit at the moment then. Never the 3D engine's fallback, a "gpu" verdict."""
+    return e.frames_measured and e.verdict in OTHER_LIMITS
+
+
+def costs_no_frames(e: _Env) -> tuple[str, ...]:
+    """The causes whose own text says that in this capture they cost no frames now, which the headline never lets
+    explain a low frame rate: wrong_gpu and hybrid_copy at the display's rate (PACED_BY_DISPLAY), and wrong_gpu
+    under another limit (_other_limit; hybrid_copy is gated off the GPU side there)."""
+    if _gpu_reaches_display(e):
+        return PACED_BY_DISPLAY
+    return ("wrong_gpu",) if _other_limit(e) else ()
 
 
 def _gpu_by_engine(e: _Env) -> bool:
