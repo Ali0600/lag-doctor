@@ -38,7 +38,7 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   below), the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
   names), `watch --wait-folder` with the re-arm (M6e, PR #58), Play's order on the control channel (M6f, PR #61),
   and the app's Play with the art (M6g and M6h, PR #62, merged 2026-11-19 after the owner's own run of Play on a game
-  through Steam: "it seemed to work"), then screen 6, Add a game, with Record when it starts (M6i).
+  through Steam: "it seemed to work"), then screen 6, Add a game, with Record when it starts (M6i, PR #64).
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -701,8 +701,8 @@ labelled, as in the terminal.
   game again. Not yet: the "ready" chime when the game is found (the start key's ready chime plays once the recording
   starts), the picker when two programs qualify, and a hint that a closed Steam starts first beyond the waiting
   words.
-- [x] Screen 6, Add a game, and the folder wait for games without Play (M6i; DESIGN.md, The app, Add a game); the
-  CLI had it already (`watch --wait-folder`, M6e). Add a game in the Library opens Windows' Open dialog
+- [x] Screen 6, Add a game, and the folder wait for games without Play (M6i, PR #64; DESIGN.md, The app, Add a
+  game); the CLI had it already (`watch --wait-folder`, M6e). Add a game in the Library opens Windows' Open dialog
   (`winapi/dialogs.py`) for the game's program; its name (the version resource's ProductName, else FileDescription,
   else the file's name) and its icon (the first group icon's largest image) are read from its own file
   (`stores/exe.py`, a reader of the PE resources through `stores.open_file`, in parts within 4 MB, checked against

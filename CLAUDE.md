@@ -306,7 +306,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   that builds an App never lists this PC's store library or reads its Steam cache: give it `tests/app_demo.py`'s
   made-up `INSTALLED` and `covers`, and an `open_link` and `play_recorder` of the test's own (the default opens a real
   store link, which starts a game). `App(picker=)`, Add a game's Open dialog (screen 6), defaults to none as well: the
-  real one waits for a person, and `tests/conftest.py`'s `_no_real_dialog` fails a test that reaches it. A test that
+  real one waits for a person, and `tests/conftest.py`'s `_no_real_dialog` fails a test that reaches it. Its own test
+  (`tests/test_dialogs.py`) puts a stand-in under the guard's seam (`dialogs._GetOpenFileNameW`): a sabotage of the
+  guard switches the autouse copy off too, and without the stand-in the first red-first run of it opened Windows' real
+  Open dialog, which sat on the owner's screen until the run's 10-minute bound (PR #64, 2026-11-19). A test that
   adds a game picks a made-up program (`tests/pe_build.py`) under its own `tmp_path`, never a game's file.
 - **The overhead benchmark** (`scripts/overhead/bench.py`, `docs/research/overhead.md`) opens a LagLab window for
   about 6.5 minutes a suite and holds lag-doctor's capture lock for the whole run, so the owner's own `watch` refuses
