@@ -38,7 +38,8 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   below), the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
   names), `watch --wait-folder` with the re-arm (M6e, PR #58), Play's order on the control channel (M6f, PR #61),
   and the app's Play with the art (M6g and M6h, PR #62, merged 2026-11-19 after the owner's own run of Play on a game
-  through Steam: "it seemed to work"), then screen 6, Add a game, with Record when it starts (M6i, PR #64).
+  through Steam: "it seemed to work"), then screen 6, Add a game, with Record when it starts (M6i, PR #64, merged
+  2026-11-19 on the owner's "Merge without a try": nobody has run it in the app yet).
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
