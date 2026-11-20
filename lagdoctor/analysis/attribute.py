@@ -1144,6 +1144,9 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
     load = _load_part(cap)
     veto = _turbo_veto(load, _baseline(load.series, windows))
     usual = _usual_presents(fr)
+    # signals read, yet none with a usual level: no moment can say whether anything moved, its side's either
+    unjudged = (_few_quiet(bool(away)) if any(p.series.measured for c in causes for p in c.parts)
+                and all(b is None for c in causes for b in bases[c.name].values()) else None)
     hz = fa.refresh_hz(cap)
     period = 1000.0 / hz if hz else None
 
@@ -1226,7 +1229,7 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
         elif not names:
             screen = _screen_hold(fr, ev, usual, period) if side in ("cpu", None) else None
             res, line = _residual(side, side_source, thread, thread_base, ev, measured, screen and screen[1],
-                                  thread_tick, covered=bool(away))
+                                  thread_tick, covered=bool(away), unjudged=unjudged)
             if screen and line == screen[1]:
                 why[0] = screen[0]            # its slowest frame, never "the CPU side was slow" beside a held screen
             if res:
@@ -1293,6 +1296,14 @@ def _blind(c: _Cause, bases: dict[int, _Baseline | None], away: list[tuple[float
             return False
         seen = True
     return seen
+
+
+FEW_QUIET = "there was too little quiet time"   # the start of _few_quiet's reason, which rules.py tells apart
+
+
+def few_quiet(why: Any) -> bool:
+    """Whether a summary entry's `why` is _few_quiet's: the signal was read, but had no usual level."""
+    return isinstance(why, str) and why.startswith(FEW_QUIET)
 
 
 def _few_quiet(covered: bool) -> str:
@@ -1468,12 +1479,14 @@ def _hold_reading(thread: _Series, base: _Baseline | None, ev: LagEvent, tick: f
 
 def _residual(side: str | None, source: str | None, thread: _Series, base: _Baseline | None, ev: LagEvent,
               measured: set[str], screen: str | None = None, tick: float | None = None,
-              covered: bool = False) -> tuple[str | None, str]:
+              covered: bool = False, unjudged: str | None = None) -> tuple[str | None, str]:
     """When no signal moved: the GPU's own work (GPU side), no cause of the game's when the screen held while the game
     kept presenting (`screen`, _screen_hold's reason), the game's own work (its busiest thread saturated, or working
     through a long frozen frame) or the game waiting on itself. Never a guess when the system was not measured, and the
     GPU is called idle only when the event's own frames showed it (A3). `tick` is one reading's quiet spread
     (_tick_spread)."""
+    if (side == "gpu" or side == "mixed") and unjudged:    # no signal had a usual level: "nothing else moved" unknown
+        return None, f"the GPU side was slow, but {unjudged}, so the cause is unknown"
     if side == "gpu" or side == "mixed":
         return "gpu_spike", "nothing else moved: the GPU's own work took long"
     if screen:

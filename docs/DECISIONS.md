@@ -255,13 +255,18 @@ The ends of PresentMon's rows (`frames._hidden`, `EDGES`):
 - **The stats alone** (hidden_s and the rate): rejected in mapping. The bound would have judged a busy thread behind
   the cover at the end ("cpu_main") beside a headline saying that time was left out.
 - **The rate over the rows' own span**: rejected. It fixes one output of three and moves every capture's rate.
+- **No trailing end when the game exited (chosen, in review)**: a game closing its window first reads another window
+  in front until its process ends, which the foreground cannot tell from a cover; a real cover just before the
+  game was closed is then judged as before this change. An end is also stopped by any frame the game showed on
+  another swap chain (a second screen showing its menus), and open at the chain's own first or last frame.
 
 A cover a part's edge cuts (`frames.row_covers`, `Capture.covers`):
 - **A: carry each row's judgement from the whole recording (chosen)**: cut with the very rows the part keeps, taken
   by the part's `main_chain` wherever the part itself can tell. A cover shown in bursts, cut at 14 s, read "1
   stutter (worst 312 ms)" that the whole recording left out; and the reverse, a run the whole recording judged (a
   reading "in front" in its middle), read as time behind once the cut dropped that reading. A frozen screen that
-  began before the part is left out, as `frames_inside` leaves out such frames.
+  began before the part is left out, as `frames_inside` leaves out such frames. So are a part's ends (in review):
+  each chain's time behind, ends included, is carried and cut to the part.
 - **B: carry time spans**: rejected. Rows that share a time at a stretch's edge (frame generation) could be marked
   apart from the whole recording's.
 - **C: relax the rule at a part's open edges**: rejected. The 312 ms frames ended runs that did not touch the edge.
@@ -272,8 +277,10 @@ The lift test's quiet baseline (`attribute._quiet_grid`):
   against. A game that slowed itself to 3 % behind a cover read six stutters in front at its usual 25 % as its own
   CPU work, "(normally 3%)", lift 13.5. With it: `_blind` reads the most a signal read outside that time; where time
   was hidden, `not_focused`'s lift never counts against it (its own cost test judges it); too little quiet time in
-  front says so, never that the signal was not measured; and `background_hogs`' usual CPU figure leaves that time out
-  too, so the two "normally" figures one report shows agree.
+  front says so, never that the signal was not measured (nor, in review, do the residual causes' and
+  `background_hogs`' reasons, nor is a GPU-side stutter the GPU's own work when nothing had a usual level); and
+  `background_hogs`' usual CPU figure leaves that time out too, so the two "normally" figures one report shows
+  agree. Without frame timing, `wrong_gpu` now reads the GPU gate's own probable reading (`_probable_gpu`).
 - **B: hidden time as event spans**: rejected. The 2 s guard would then wrap every cover too, 4 s of time in front
   lost each, and frequent Alt+Tabs would relax the guard for sparse events.
 - **C: blank every reading inside a cover**: rejected. Widest reach: a stutter at an Alt+Tab loses the readings that

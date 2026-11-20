@@ -1185,8 +1185,12 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
   themselves down behind other windows, so they are not judged by when the game presented them either. `hidden_s` is
   the stretches' own time (rows PresentMon lost inside one count), less any `FRONT` part, and the edges' (`EDGES`,
   `frames.hidden_spans` joins them): PresentMon writes no row for a window covered from the start and loses the
-  frames after the last one shown, so the time from the capture's (or part's) start to the chain's first row, and
-  from its last row to the last foreground reading, is judged as a run by the same rule. Stutters a minute
+  frames after the last one shown, so the time from the capture's start to the chain's first row, and from its last
+  row to the last foreground reading, is judged as a run by the same rule, open at those rows (the frames judge
+  them) and ended by any frame the game showed on another swap chain. Not after the last row when the recording
+  ended because the game exited (`frames.edge_bounds`): a game closing its window first reads another window in
+  front until its process ends. A part takes its ends from the whole recording's judgement of that time too.
+  Stutters a minute
   count the capture less `hidden_s`; the headline says how much was left out, and with every frame in it frame timing
   reads not measured, with that reason (`rules.no_frames_why`, naming the part). Attribution's quiet baseline leaves
   the same time out (`attribute._quiet_grid`), and so does `background_hogs`' usual CPU figure. Without display
@@ -1374,7 +1378,8 @@ as frame-timing evidence). Each 4 Hz signal is then "active" when its busiest 1 
 `[t_start − 0.5 s, t_end + 0.25 s]` clears both a robust z-score (≥ 3.5 against the median/MAD of quiet 1 s
 windows with no event within 2 s and none in time behind another window, a tick padded, where no event can be
 found; the guard relaxes to 1 s, then 0.5 s, when fewer than 8 quiet windows exist; with too few even then, a
-signal that was read says there was too little quiet time to tell its usual level, never that it was not measured)
+signal that was read says there was too little quiet time to tell its usual level, never that it was not measured,
+and no stutter is the GPU's own work or the game waiting on itself, since whether anything else moved is unknown)
 and an absolute floor. Where more than half the quiet windows share one value the MAD is 0, and the mean absolute
 deviation × √(π/2) is the spread instead; only a baseline that never moves leaves the floor alone to decide (the
 first real capture's disk reads were 0 in 54 % of its quiet seconds, and every read of 1 MiB/s counted). Lift
@@ -1492,7 +1497,9 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   where `gpu_limit` clears itself (`rules._gpu_reaches_display`, one predicate for both rules, `hybrid_copy` and
   the headline); there it says the integrated GPU costs no frames seen yet, the discrete one only headroom. Under
   another limit (`rules._other_limit`) it says the integrated GPU is not the limit at the moment; under `mixed` that
-  it shares the limit with the CPU; under `unknown` or without frame timing that it could not be judged.
+  it shares the limit with the CPU. Without frame timing it says the integrated GPU probably holds the frame rate
+  down when the 3D engine named the GPU, and probably held it down at times when the engine was busy long enough
+  (`rules._probable_gpu`, the GPU gate's own reading); else, and under `unknown`, that it could not be judged.
 - `hybrid_copy`: the game rendered on one adapter while its window is on a display driven by the other
   (`HybridPresent = 1` is strong evidence, 0 is not evidence). At the display's rate its summary says the copy costs
   no frames seen, only delay; its rank stays.

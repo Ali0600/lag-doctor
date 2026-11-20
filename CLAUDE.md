@@ -175,8 +175,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `FRONT` (time behind another window, DESIGN.md "Frames and stats"), and a tuple, `EDGES` (such time before its
   first row or after its last): copy or cut it by its own items, never by `F.ALL`, which drops them and judges a
   covered window's frames again, and keep `EDGES` a tuple, which a row-by-row copy (`sweep/results.clipped_frames`)
-  leaves out instead of cutting. A measured part takes HIDDEN and FRONT from `Capture.covers` (`crop.crop`, the
-  whole recording's judgement), never from its own rows alone. A frame test builds its capture and goes
+  leaves out instead of cutting. A measured part takes HIDDEN, FRONT and EDGES from `Capture.covers` (`crop.crop`,
+  the whole recording's judgement), never from its own rows alone. A frame test builds its capture and goes
   through `main_chain`, since a dict built by hand has no `HIDDEN` and hides nothing.
 - **A rule test asserts the kind it expects.** `rules.run_rule` turns a rule that raises into Unchecked ("the check
   failed"), so `assert not is_finding(res) or ...` passes on a crash: a sabotage that crashed `bufferbloat` survived

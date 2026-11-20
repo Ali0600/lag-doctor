@@ -167,8 +167,9 @@ def crop(cap: Capture, t0: Any, t1: Any, how: str = "set") -> Capture:
     lo, hi = check_span(cap, t0, t1)
     recorded = recorded_s(cap)
     table = dict(cap.frames) if isinstance(cap.frames, dict) else {}
+    spans: dict = {}
     if isinstance(table.get(F.T), list):    # the whole recording's covers, cut with the very rows the part keeps
-        table[_HIDDEN], table[_FRONT] = fa.row_covers(cap)
+        table[_HIDDEN], table[_FRONT], spans = fa.row_covers(cap)
     w = window.window(cap, lo, hi, frames=table)
     frames = frames_inside(w["frames"], lo)
     hid, front = frames.pop(_HIDDEN, None), frames.pop(_FRONT, None)
@@ -184,7 +185,7 @@ def crop(cap: Capture, t0: Any, t1: Any, how: str = "set") -> Capture:
                   start_key=copy.deepcopy(cap.start_key), **cut)
     out.span = {"from_s": lo, "to_s": hi, "recorded_s": recorded, "how": how}
     if hid is not None and front is not None:   # a frozen screen that began before the part measured time outside it
-        out.covers = (hid, [f if isinstance(f, tuple) and f[0] >= lo else None for f in front])
+        out.covers = (hid, [f if isinstance(f, tuple) and f[0] >= lo else None for f in front], spans)
     return out
 
 

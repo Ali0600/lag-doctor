@@ -523,9 +523,8 @@ def test_a_part_ends_where_the_part_does():
     # a part from 5 s to 25 s of a recording covered from 20 s on: 5 s of the part was behind, never 10 s of it
     cap = synth.laglab("hitch", covered=[(20.0, 30.0)]).cap
     part = crop.crop(cap, 5.0, 25.0)
-    last = max(t for t in part.system[S.T] if t is not None)          # its last foreground reading ends what is known
-    assert 24.5 < last <= 25.0
-    assert fa.frame_stats(fa.main_chain(part), part.duration_s)["hidden_s"] == pytest.approx(last - 20.0, abs=0.05)
+    # the whole recording's judgement of that time, cut at the part's end (its foreground was read on past it)
+    assert fa.frame_stats(fa.main_chain(part), part.duration_s)["hidden_s"] == pytest.approx(5.0, abs=0.05)
     assert diagnose(part).headline.endswith(AWAY)
 
 
@@ -536,6 +535,72 @@ def test_the_bound_never_judges_a_cover_at_the_recordings_end():
         cap.system[col] = [100.0 if t > 20.0 else v for t, v in zip(cap.system[S.T], cap.system[col])]
     fr = fa.main_chain(cap)
     assert fa.bound(cap, fr, [])["busiest_thread"] < 0.5
+
+
+def test_a_parts_ends_are_judged_as_the_whole_recording_judged_that_time():
+    # a 15 s gap with no frame, a reading "in front" in its middle: the whole recording judged it a frozen screen; a
+    # part from 13 s, past that reading, judged its own start edge and called 12 s of it time behind another window
+    cap = game([(10.0, 8.0, True), (25.0, 15000.0, True), (30.0, 8.0, True)],
+               focus=lambda t: 1 if t < 10.0 or abs(t - 12.0) < 0.1 or t > 25.0 else 0)
+    cap.sources = synth.sources(("frames", "system"))
+    whole = diagnose(cap)
+    assert whole.stats["hidden_s"] == 0.0 and [round(e.severity) for e in stutters(whole)] == [15000], whole.headline
+    d = diagnose(crop.crop(cap, 13.0, 30.0))
+    assert d.stats["hidden_s"] == 0.0 and AWAY not in d.headline, d.headline
+
+
+def test_the_time_after_the_games_last_frame_is_no_cover_when_the_game_exited():
+    # a game shutting down closes its window first: the foreground reads another window until the process ends
+    cap = synth.laglab("hitch", covered=[(20.0, 30.0)]).cap
+    cap.target["stop_reason"] = "game exited"
+    assert diagnose(cap).stats["hidden_s"] == 0.0
+    cap.target["stop_reason"] = "duration"
+    assert diagnose(cap).stats["hidden_s"] == pytest.approx(10.0, abs=0.05)
+    # a cover from the start is no shutdown, whatever ended the recording
+    cap = drop_rows(synth.laglab("hitch", covered=[(0.0, 10.0)]).cap, lambda x: x >= 10.0)
+    cap.target["stop_reason"] = "game exited"
+    assert diagnose(cap).stats["hidden_s"] == pytest.approx(9.75, abs=0.05)
+
+
+def test_no_frame_of_the_chain_lies_inside_an_edge():
+    # an edge from the chain's own last frame took that frame out of the frame chart's scale and its note, though the
+    # analysis counted it (the worst frame, a stutter)
+    for cov, keep in (([(20.0, 30.0)], lambda x: True), ([(0.0, 10.0)], lambda x: x >= 10.0)):
+        fr = fa.main_chain(drop_rows(synth.laglab("hitch", covered=cov).cap, keep))
+        assert fr[fa.EDGES], cov
+        assert not [x for x in fr[F.T] for a, b in fr[fa.EDGES] if a <= x <= b], cov
+        starts = [a for a, _ in fa.hidden_spans(fr)]
+        assert not fa._in_spans(fr[F.T][-1 if cov[0][0] else 0], fa.hidden_spans(fr), starts), cov
+
+
+def test_a_frame_shown_on_another_chain_ends_an_edge():
+    # the game showed its menus on another swap chain until 20 s while another window had the foreground (a second
+    # screen): the main chain's start edge read 20 s behind another window though Windows showed every frame
+    cap = game([(20.0, 8.0, False), (30.0, 8.0, True)], focus=lambda t: 0 if t < 20.0 else 1)
+    menus = [k * 0.1 for k in range(1, 200)]               # fewer shown frames than the game's own chain
+    cap = drop_rows(cap, lambda x: x > 20.0)
+    for name in cap.frames:
+        extra = {F.T: menus, F.SWAP_CHAIN: ["0x1"] * len(menus), F.DISPLAYED: [1] * len(menus),
+                 F.FRAME_MS: [100.0] * len(menus), F.DISPLAY_MS: [100.0] * len(menus)}.get(name, [None] * len(menus))
+        cap.frames[name] = list(cap.frames[name]) + list(extra)
+    fr = fa.main_chain(cap)
+    assert set(fr[F.SWAP_CHAIN]) == {"0x0"} and fr[F.T][0] > 20.0
+    assert fr[fa.EDGES] == () and fa.frame_stats(fr, cap.duration_s)["hidden_s"] == 0.0, fr[fa.EDGES]
+    part = crop.crop(cap, 5.0, 30.0)                    # a part takes the whole recording's judgement of that time
+    assert fa.frame_stats(fa.main_chain(part), part.duration_s)["hidden_s"] == 0.0
+    # the same start with no other chain is time behind
+    fr = fa.main_chain(drop_rows(cap, lambda x: x > 20.0))
+    assert fa.frame_stats(fr, cap.duration_s)["hidden_s"] == pytest.approx(20.0, abs=0.05)
+    # and the same at the end: the game's chain stops at 10 s, another shows on to the end
+    cap = game([(10.0, 8.0, True), (30.0, 8.0, False)], focus=lambda t: 1 if t < 10.0 else 0)
+    cap = drop_rows(cap, lambda x: x <= 10.0)
+    later = [10.0 + k * 0.1 for k in range(1, 200)]
+    for name in cap.frames:
+        extra = {F.T: later, F.SWAP_CHAIN: ["0x1"] * len(later), F.DISPLAYED: [1] * len(later),
+                 F.FRAME_MS: [100.0] * len(later), F.DISPLAY_MS: [100.0] * len(later)}.get(name, [None] * len(later))
+        cap.frames[name] = list(cap.frames[name]) + list(extra)
+    fr = fa.main_chain(cap)
+    assert set(fr[F.SWAP_CHAIN]) == {"0x0"} and fr[fa.EDGES] == (), fr[fa.EDGES]
 
 
 def test_hidden_spans_read_only_well_formed_edges():

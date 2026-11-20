@@ -1517,6 +1517,29 @@ def test_a_causes_example_keeps_a_long_why_line_whole():
     assert f"For example at 2.0 s: {line}." in [e.text for e in res.evidence]
 
 
+def test_a_signal_read_with_no_usual_level_is_never_said_not_measured_by_the_rules():
+    # attribution says "there was too little quiet time ... to tell its usual level" (the time behind another window
+    # left out of its baseline); beside it the rules said the same causes "were not measured" and that there were "no
+    # CPU, disk or GPU readings for other programs", though every one of them was read
+    few = "there was too little quiet time with the game's window in front to tell its usual level"
+    events = [LagEvent(id=i, kind="stutter", t_start=1.0 + i, t_end=1.15 + i, severity=150.0,
+                       detail={"side": "cpu", "why": ["side line", "a line"]}, causes=["game_stall"]) for i in range(1, 7)]
+    causes = {"game_stall": lift("supports", a=6, n=6, lift_=None),
+              "game_cpu_spike": lift("not_measured", a=0, n=6, why=few),
+              "asset_streaming": lift("not_measured", a=0, n=6, why="no game I/O or disk counters")}
+    res = run("game_stall", make(), events=events, causes=causes)
+    said = res.text if isinstance(res, rules.Unchecked) else " ".join(e.text for e in res.evidence)
+    assert f"the game's own CPU work could not be judged ({few}), so it was not ruled out" in said, said
+    assert "loading from disk was not measured, so it was not ruled out" in said, said    # truly not measured
+    unread = {k: lift("not_measured", a=0, n=6, why=few) for k in ("background_cpu", "background_disk", "background_gpu")}
+    res = run("background_hogs", hogs(hog_others(0.0)), events=[stutter(i, 2.0 * i) for i in range(1, 7)], causes=unread)
+    assert isinstance(res, rules.Unchecked) and res.text == f"other programs' use was read, but {few}", res
+    unread = {k: lift("not_measured", a=0, n=6, why="no CPU readings for other processes")
+              for k in ("background_cpu", "background_disk", "background_gpu")}
+    res = run("background_hogs", hogs(hog_others(0.0)), events=[stutter(i, 2.0 * i) for i in range(1, 7)], causes=unread)
+    assert isinstance(res, rules.Unchecked) and res.text == "no CPU, disk or GPU readings for other programs", res
+
+
 def test_one_stutter_is_said_as_one():
     one = [stutter(1, 5.0, "game_cpu_spike")]
     few = {k: lift("too_few_events", a=0, n=1) for k in ("background_cpu", "background_disk", "background_gpu")}

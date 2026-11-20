@@ -744,6 +744,9 @@ def _wrong_gpu(cap: Capture, ctx: dict) -> Any:
                   if _other_limit(e) else
                   "That integrated GPU shares the limit with the CPU, and the discrete GPU would give the game far "
                   "more headroom." if v == "mixed" and e.frames_measured else
+                  "That integrated GPU probably held the frame rate down at times: frame timing was not measured, "
+                  "but its 3D engine stayed busy long enough. The discrete GPU would give the game far more "
+                  "headroom." if (_probable_gpu(e) or (False,))[0] else
                   "Whether it holds the frame rate down could not be judged, but the discrete GPU would give the "
                   "game far more headroom."))
     return c.conclude(f"The game ran on the integrated GPU, not on {_name(best)}", summary, fixes)
@@ -2606,7 +2609,9 @@ def _background_hogs(cap: Capture, ctx: dict) -> Any:
         return Unchecked("background_hogs", f"only {n} {what}: linking them to another program needs at least "
                                             f"{MIN_EVENTS}")
     if not entries or all(v.get("label") == "not_measured" for v in entries.values()):
-        c.lack("background", W_EVENT_STRONG, "no CPU, disk or GPU readings for other programs")
+        few = next((w for v in entries.values() if attribute.few_quiet(w := _text(v.get("why"), 200))), None)
+        c.lack("background", W_EVENT_STRONG, f"other programs' use was read, but {few}" if few else
+               "no CPU, disk or GPU readings for other programs")
         return c.conclude()
     # Any one mechanism (CPU, disk, GPU) makes the cause; the others staying quiet is no evidence against it.
     some_support = any(v.get("label") == "supports" for v in entries.values())
@@ -3455,7 +3460,10 @@ def _residual_items(c: _Case, entry: dict, ids: list[int], phrase: str, what: st
     for other, (fam, _, _, _, _) in STUTTER_CAUSES.items():
         o = e.causes.get(other)
         if other not in RESIDUAL_CAUSES and isinstance(o, dict) and o.get("label") == "not_measured":
-            c.lack(fam, W_STEADY, f"{labels.cause_text(other)} was not measured, so it was not ruled out")
+            why = _text(o.get("why"), 200)
+            c.lack(fam, W_STEADY, f"{labels.cause_text(other)} could not be judged ({why}), so it was not ruled out"
+                   if attribute.few_quiet(why) else
+                   f"{labels.cause_text(other)} was not measured, so it was not ruled out")
     if c.cause == "game_stall" and ids:
         thread = e.sys_rows(S.GAME_TOP_THREAD_PCT)
         levels = []

@@ -1147,6 +1147,12 @@ def test_too_little_quiet_time_in_front_is_said_never_as_a_signal_not_measured()
     assert summary["game_cpu_spike"]["label"] == "not_measured" and summary["game_cpu_spike"]["why"] == few
     assert events and all(e.detail["why"][-1] == f"the game's CPU use was read, but {few}, so the cause is unknown"
                           for e in events), events[0].detail["why"]
+    # a GPU-side stutter as well: "nothing else moved" cannot be said where no signal had a usual level
+    events, summary = analyse(covered(lag_cap(times=tuple(2.0 * i for i in range(1, 13)), duration=60.0,
+                                              stutter_gpu_ms=155.0), 25.5, 58.0, {}))
+    assert events and all(e.causes == [] and e.detail["why"][-1] == f"the GPU side was slow, but {few}, so the cause "
+                          "is unknown" for e in events), (firsts(events), events[0].detail["why"])
+    assert summary["gpu_spike"]["a"] == 0
     # never covered, the same few quiet seconds say so without the window
     _, summary = analyse(lag_cap(times=tuple(1.0 * i for i in range(1, 29)), duration=30.0))
     assert summary["game_cpu_spike"]["why"] == "there was too little quiet time to tell its usual level"

@@ -219,7 +219,7 @@ def test_the_headline_never_lays_a_low_frame_rate_on_the_wrong_gpu_where_it_says
     for verdict in ("cpu_main", "cpu_all", "waiting"):                  # a steady low rate that no confident limit held
         assert judge(verdict, steady_s=25.0)[1].endswith(f"; possible: {words}."), verdict
     assert judge("cpu_main", fps=140.0)[1].endswith(f"; possible: {words}.")          # the display's rate, CPU-side
-    # its own words where it may lead: mixed, unknown, and a capture without frame timing whatever the bound says
+    # its own words where it may lead: mixed, unknown, and a capture without frame timing under a cap
     assert judge("mixed")[0].summary.endswith("That integrated GPU shares the limit with the CPU, and the discrete GPU "
                                               "would give the game far more headroom.")
     could_not = "Whether it holds the frame rate down could not be judged, but the discrete GPU would give the game"
@@ -227,6 +227,19 @@ def test_the_headline_never_lays_a_low_frame_rate_on_the_wrong_gpu_where_it_says
     blind = make(ok=("system",), src={"frames": NO_FRAMES})
     res, _ = judge("capped", cap=blind)
     assert could_not in res.summary and "not the limit" not in res.summary, res.summary
+    # without frame timing the GPU gate's own reading speaks: the 3D engine named the GPU, or was busy long enough
+    b = {"verdict": "gpu", "notes": [], "refresh_hz": 144.0, "busiest_thread": 0.40}     # the engine's, no r
+    ctx = {"frames": {}, "stats": {"frames": 0}, "bound": b, "events": [], "event_causes": {}}
+    assert "is probably what holds the frame rate down" in rules.run_rule(rules.RULE_BY_CAUSE["wrong_gpu"], blind,
+                                                                         ctx).summary
+    b = {"verdict": "unknown", "notes": [], "refresh_hz": 144.0, "busiest_thread": 0.40,
+         "gpu_probable": {"holds": True, "seconds": 150.0, "share": 0.25, "marks": 0, "marks_busy": 0}}
+    ctx = {"frames": {}, "stats": {"frames": 0}, "bound": b, "events": [], "event_causes": {}}
+    res = rules.run_rule(rules.RULE_BY_CAUSE["wrong_gpu"], blind, ctx)
+    assert is_finding(res) and "probably held the frame rate down at times" in res.summary, res.summary
+    ctx = {**ctx, "bound": {**b, "gpu_probable": {**b["gpu_probable"], "holds": False}}}       # a fresh env
+    ctx.pop("_env", None)
+    assert could_not in rules.run_rule(rules.RULE_BY_CAUSE["wrong_gpu"], blind, ctx).summary
 
 
 def test_a_steady_low_frame_rate_is_led_by_the_part_that_holds_it_not_by_a_few_claimed_drops():
