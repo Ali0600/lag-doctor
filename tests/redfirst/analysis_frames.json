@@ -2132,8 +2132,8 @@
  {
   "name": "main_chain marks nothing",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "    out[HIDDEN], out[FRONT] = hidden_rows(out[F.T], out[F.DISPLAYED], focus_readings(cap))",
-  "new": "    out[HIDDEN], out[FRONT] = [], []",
+  "old": "    hid, front, out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap), edge_bounds(cap),",
+  "new": "    hid, front, out[EDGES] = [], [], _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap), edge_bounds(cap),",
   "tests": [
    "tests/test_analysis_covered.py::test_a_covered_window_is_never_judged_and_the_time_left_out_is_said"
   ]
@@ -2873,6 +2873,333 @@
   "new": "    if False:",
   "tests": [
    "tests/test_app_views.py::test_the_app_draws_the_swap_chain_its_diagnosis_analysed"
+  ]
+ },
+ {
+  "name": "no edge judged",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if bounds is not None:            # no row marks the time",
+  "new": "    if False:            # no row marks the time",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too"
+  ]
+ },
+ {
+  "name": "the time before the first row never judged",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        ends = [(max(bounds[0], seen[k - 1]) if k else bounds[0], tf[0], True)]",
+  "new": "        ends = []",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too"
+  ]
+ },
+ {
+  "name": "the time after the last row never judged",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        if bounds[1] is not None:     # the sampler stops",
+  "new": "        if False:     # the sampler stops",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too"
+  ]
+ },
+ {
+  "name": "an edge runs past the last foreground reading",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "min(bounds[1], rt[-1], seen[k] if k < len(seen) else math.inf)",
+  "new": "min(bounds[1], seen[k] if k < len(seen) else math.inf)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_an_edge_is_judged_by_the_stretchs_own_rule"
+  ]
+ },
+ {
+  "name": "any edge counts as time behind",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "            s = stretch(a, b) if b > a else None",
+  "new": "            s = (a, b) if b > a else None",
+  "tests": [
+   "tests/test_analysis_covered.py::test_an_edge_is_judged_by_the_stretchs_own_rule"
+  ]
+ },
+ {
+  "name": "main_chain gives no bounds",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    hid, front, out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap), edge_bounds(cap),",
+  "new": "    hid, front, out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap), None,",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too"
+  ]
+ },
+ {
+  "name": "a part's edges counted from the recording's start",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    lo, dur = float(start) if start is not None else 0.0, _bounded(cap.duration_s)",
+  "new": "    lo, dur = 0.0, _bounded(cap.duration_s)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_part_ends_where_the_part_does"
+  ]
+ },
+ {
+  "name": "hidden_spans leaves the edges out",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    for e in fr.get(EDGES) or ():",
+  "new": "    for e in ():",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too",
+   "tests/test_analysis_covered.py::test_the_bound_never_judges_a_cover_at_the_recordings_end"
+  ]
+ },
+ {
+  "name": "hidden_spans out of time order",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    spans.sort()\n    return spans",
+  "new": "    return spans",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too"
+  ]
+ },
+ {
+  "name": "an edge of no length read",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        if a is not None and b is not None and b > a:\n            spans.append",
+  "new": "        if a is not None and b is not None:\n            spans.append",
+  "tests": [
+   "tests/test_analysis_covered.py::test_hidden_spans_read_only_well_formed_edges"
+  ]
+ },
+ {
+  "name": "an edge of one number read",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "if isinstance(e, (tuple, list)) and len(e) == 2 else (None, None)",
+  "new": "if isinstance(e, (tuple, list)) else (None, None)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_hidden_spans_read_only_well_formed_edges"
+  ]
+ },
+ {
+  "name": "a part's rows judged again on what is left",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if carried is not None and hid:   # a measured part",
+  "new": "    if False:   # a measured part",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_part_judges_each_row_of_a_cover_its_edge_cuts_as_the_whole_recording_does",
+   "tests/test_analysis_covered.py::test_a_part_never_hides_what_the_whole_recording_judged"
+  ]
+ },
+ {
+  "name": "a part that cannot tell takes the whole recording's covers",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if carried is not None and hid:   # a measured part",
+  "new": "    if carried is not None:   # a measured part",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_part_that_cannot_tell_carries_nothing"
+  ]
+ },
+ {
+  "name": "the covers of a chain that cannot tell read anyway",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        for k, i in enumerate(pick if h else ()):",
+  "new": "        for k, i in enumerate(pick):",
+  "tests": [
+   "tests/test_analysis_covered.py::test_crop_carries_the_covers_of_a_capture_that_cannot_tell"
+  ]
+ },
+ {
+  "name": "the covers judged over every chain at once",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "            rows.setdefault(_chain_key(_at(chains, i)), []).append(i)",
+  "new": "            rows.setdefault(None, []).append(i)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_covers_a_part_carries_are_judged_chain_by_chain_as_main_chain_judges_its_own"
+  ]
+ },
+ {
+  "name": "the quiet grid counts time behind another window",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        quiet = _quiet_grid(start, end, spans, guard, away)",
+  "new": "        quiet = _quiet_grid(start, end, spans, guard)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_time_behind_another_window_never_sets_a_signals_usual_level"
+  ]
+ },
+ {
+  "name": "a quiet window may overlap time behind another window",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if (j < 0 or merged[j][1] < a) and (g < 0 or gone[g][1] <= w):",
+  "new": "        if j < 0 or merged[j][1] < a:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_time_behind_another_window_never_sets_a_signals_usual_level"
+  ]
+ },
+ {
+  "name": "blind read over time behind another window",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        vals = [x for t, x in zip(p.series.t, p.series.v) if x is not None and not fa._in_spans(t, gone, starts)]",
+  "new": "        vals = [x for x in p.series.v if x is not None]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_signal_is_blind_by_the_most_it_read_where_a_moment_could_be_found"
+  ]
+ },
+ {
+  "name": "0 of n behind a covered window counted against not_focused",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if c.name == \"not_focused\" and away and label == \"contradicts\":",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_signal_is_blind_by_the_most_it_read_where_a_moment_could_be_found"
+  ]
+ },
+ {
+  "name": "not_focused never counted against",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if c.name == \"not_focused\" and away and label == \"contradicts\":",
+  "new": "        if c.name == \"not_focused\" and label == \"contradicts\":",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_signal_is_blind_by_the_most_it_read_where_a_moment_could_be_found"
+  ]
+ },
+ {
+  "name": "too little quiet time said as not measured",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        return _few_quiet(covered)\n",
+  "new": "        return c.why_missing\n",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_too_little_quiet_time_in_front_is_said_never_as_a_signal_not_measured"
+  ]
+ },
+ {
+  "name": "too little quiet time always said of the window",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    return (\"there was too little quiet time with the game's window in front to tell its usual level\" if covered else",
+  "new": "    return (\"there was too little quiet time with the game's window in front to tell its usual level\" if True else",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_too_little_quiet_time_in_front_is_said_never_as_a_signal_not_measured"
+  ]
+ },
+ {
+  "name": "a read thread with no usual level said as not measured",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if base is None and thread.measured:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_too_little_quiet_time_in_front_is_said_never_as_a_signal_not_measured"
+  ]
+ },
+ {
+  "name": "the residual never told of the window",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "                                  thread_tick, covered=bool(away), unjudged=unjudged)",
+  "new": "                                  thread_tick, covered=False, unjudged=unjudged)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_too_little_quiet_time_in_front_is_said_never_as_a_signal_not_measured"
+  ]
+ },
+ {
+  "name": "a frame on another chain never ends the head",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        ends = [(max(bounds[0], seen[k - 1]) if k else bounds[0], tf[0], True)]",
+  "new": "        ends = [(bounds[0], tf[0], True)]",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_frame_shown_on_another_chain_ends_an_edge"
+  ]
+ },
+ {
+  "name": "a frame on another chain never ends the tail",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "min(bounds[1], rt[-1], seen[k] if k < len(seen) else math.inf)",
+  "new": "min(bounds[1], rt[-1], math.inf)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_frame_shown_on_another_chain_ends_an_edge"
+  ]
+ },
+ {
+  "name": "main_chain finds no frame on another chain",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "                                     _shown_elsewhere(t, chains, shown_col, rows, best))",
+  "new": "                                     [])",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_frame_shown_on_another_chain_ends_an_edge"
+  ]
+ },
+ {
+  "name": "the head edge closed at the chain's first frame",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "                found.append((s[0], min(s[1], math.nextafter(tf[0], -math.inf))) if head",
+  "new": "                found.append((s[0], s[1]) if head",
+  "tests": [
+   "tests/test_analysis_covered.py::test_no_frame_of_the_chain_lies_inside_an_edge"
+  ]
+ },
+ {
+  "name": "the tail edge closed at the chain's last frame",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "                             else (max(s[0], math.nextafter(tf[-1], math.inf)), s[1]))",
+  "new": "                             else (s[0], s[1]))",
+  "tests": [
+   "tests/test_analysis_covered.py::test_no_frame_of_the_chain_lies_inside_an_edge"
+  ]
+ },
+ {
+  "name": "a part judges its own ends again",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        out[EDGES] = _ends_of(carried[2].get(best) or [], capture_bounds(cap), out[F.T])",
+  "new": "        pass",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_parts_ends_are_judged_as_the_whole_recording_judged_that_time",
+   "tests/test_analysis_covered.py::test_a_part_ends_where_the_part_does"
+  ]
+ },
+ {
+  "name": "the whole recording's chains carry no time behind",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        spans[key] = hidden_spans({F.T: ct, HIDDEN: h, FRONT: f, EDGES: e})",
+  "new": "        spans[key] = []",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_part_ends_where_the_part_does"
+  ]
+ },
+ {
+  "name": "the whole recording's covers blind to other chains",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "                          _shown_elsewhere(t, chains, shown, rows, key))",
+  "new": "                          [])",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_frame_shown_on_another_chain_ends_an_edge"
+  ]
+ },
+ {
+  "name": "the game's exit never ends the tail",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    return (bounds[0], None) if bounds is not None and exited else bounds",
+  "new": "    return bounds",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_time_after_the_games_last_frame_is_no_cover_when_the_game_exited"
+  ]
+ },
+ {
+  "name": "a GPU-side stutter with no usual level is the GPU's own work",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if (side == \"gpu\" or side == \"mixed\") and unjudged:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_too_little_quiet_time_in_front_is_said_never_as_a_signal_not_measured"
+  ]
+ },
+ {
+  "name": "signals with no usual level read as judged",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "                and all(b is None for c in causes for b in bases[c.name].values()) else None)",
+  "new": "                and False else None)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_too_little_quiet_time_in_front_is_said_never_as_a_signal_not_measured"
+  ]
+ },
+ {
+  "name": "no reason told apart as too little quiet time",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    return isinstance(why, str) and why.startswith(FEW_QUIET)",
+  "new": "    return False",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_signal_read_with_no_usual_level_is_never_said_not_measured_by_the_rules"
   ]
  }
 ]

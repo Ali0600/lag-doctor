@@ -334,7 +334,8 @@ def frame_scale(d: Diagnosis, cap: Capture, t: list, ms: list) -> tuple[float, l
     # drawing there shows one frame as long as the time behind). A part without frames of its own takes the whole
     # recording's scale and says nothing of frames cut off.
     # Time behind another window as the analysis judged it: a part on the part cut as its analysis cut it, since its
-    # main chain can be another than the whole recording's, and a cover its edge cuts is judged on what is left.
+    # main chain can be another than the whole recording's; a cover its edge cuts, as the whole recording judged it
+    # (analysis/crop.py carries each row's judgement into the part).
     from lagdoctor.analysis import frames as fa
     from lagdoctor.analysis.crop import crop
     behind = fa.hidden_spans(fa.main_chain(crop(cap, part["from_s"], part["to_s"]) if part else cap))

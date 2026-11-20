@@ -173,8 +173,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   mode) and cropped to 1100x1690, just below the third finding. Never shoot one of the owner's own recordings.
 - **Column names come from `lagdoctor/model.py`** (`F`, `S`, `G`, `N`); `SeriesBuilder` rejects unknown names. The
   dict `frames.main_chain` returns also holds two per-row lists that are no capture column, `frames.HIDDEN` and
-  `FRONT` (time behind another window, DESIGN.md "Frames and stats"): copy or cut it by its own items, never by
-  `F.ALL`, which drops them and judges a covered window's frames again. A frame test builds its capture and goes
+  `FRONT` (time behind another window, DESIGN.md "Frames and stats"), and a tuple, `EDGES` (such time before its
+  first row or after its last): copy or cut it by its own items, never by `F.ALL`, which drops them and judges a
+  covered window's frames again, and keep `EDGES` a tuple, which a row-by-row copy (`sweep/results.clipped_frames`)
+  leaves out instead of cutting. A measured part takes HIDDEN, FRONT and EDGES from `Capture.covers` (`crop.crop`,
+  the whole recording's judgement), never from its own rows alone. A frame test builds its capture and goes
   through `main_chain`, since a dict built by hand has no `HIDDEN` and hides nothing.
 - **A rule test asserts the kind it expects.** `rules.run_rule` turns a rule that raises into Unchecked ("the check
   failed"), so `assert not is_finding(res) or ...` passes on a crash: a sabotage that crashed `bufferbloat` survived
@@ -513,6 +516,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   M6c's branch, which touches nothing the sweep imports: exit 2, so the settings were not all put back), then passed
   3 of 3 alone and twice in its file. Its fake world's journal waits 0.3 s for its lock, which a loaded PC may
   outrun (not measured); rerun it alone before blaming a change.
+  `tests/test_control.py::test_the_relay_is_started_through_the_windows_prompt` failed once in a full local run
+  (2026-11-20, a branch that touched no control, relay or app code: `IndexError` at `fake_relay["launches"][-1]`,
+  so the 0.1 s watch ended before it launched the stand-in relay), then passed 3 of 3 alone; rerun it alone first.
   `tests/test_folder_wait.py::test_a_real_laglab_window_is_found_by_its_folder` (needs a GPU, so not on CI) failed on
   2026-11-17 with "a window from the game's folder (python.exe) never drew within 20 seconds", alone and on main's own
   `target.py` alike, with no other LagLab window open and the screen unlocked: LagLab's draws did not reach the GPU

@@ -249,9 +249,9 @@ def _old_clean(obj):
     return obj
 
 
-# Capture fields the file format never held, named here rather than read from model.py: `span` exists only on a copy
-# cut to part of a recording (analysis/crop.py), which is never saved.
-NEVER_SAVED = ("span",)
+# Capture fields the file format never held, named here rather than read from model.py: `span` and `covers` exist
+# only on a copy cut to part of a recording (analysis/crop.py), which is never saved.
+NEVER_SAVED = ("span", "covers")
 
 
 def _old_save(cap: Capture, path) -> None:

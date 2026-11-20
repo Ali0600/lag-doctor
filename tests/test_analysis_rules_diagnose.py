@@ -179,6 +179,69 @@ def test_the_headline_never_lays_a_low_frame_rate_on_a_gpu_finding_that_says_it_
     assert set(rules.PACED_BY_DISPLAY) <= set(dg.STEADY_LEADS["gpu"])      # the holder they would otherwise be
 
 
+def test_the_headline_never_lays_a_low_frame_rate_on_the_wrong_gpu_where_it_says_it_is_not_the_limit():
+    # Under a cap, VSync, the CPU or waiting, wrong_gpu said "It is not the limit at the moment", yet an unclaimed FPS
+    # drop, or a steady low rate no confident limit held, read "Low frame rate (...), possibly running on the wrong
+    # GPU". Its summary also said "not the limit" under mixed, unknown and without frame timing, where it leads.
+    from lagdoctor.model import LagEvent
+    from tests.test_analysis_rules import NO_FRAMES, is_finding, make
+    assert set(rules.OTHER_LIMITS) == set(dg.labels.BOUND) - {"gpu", "mixed", "unknown"}    # every verdict sorted
+    words = dg.labels.cause_text("wrong_gpu")
+    later = Finding(cause="not_focused", title="t", category="fps", confidence="medium", score=0.1, summary="")
+    r_of = {"gpu": 0.97, "mixed": 0.85, "unknown": None}
+
+    def judge(verdict, fps=40.0, steady_s=0.0, cap=None, more=()):
+        cap = cap or make()
+        b = {"verdict": verdict, "notes": [], "refresh_hz": 144.0, "r": r_of.get(verdict, 0.40), "busiest_thread": 0.40,
+             "steady_fps": fps, "steady_s": steady_s}
+        ctx = {"frames": {}, "stats": {"frames": 3000, "avg_fps": fps, "duration_s": 30.0}, "bound": b,
+               "events": [], "event_causes": {}}
+        res = rules.run_rule(rules.RULE_BY_CAUSE["wrong_gpu"], cap, ctx)
+        assert is_finding(res), (verdict, res)
+        evs = [] if steady_s else [LagEvent(1, "fps_drop", 20.0, 23.0, 30.0, {})]
+        st = {"avg_fps": fps, "refresh_hz": 144.0, "duration_s": 30.0}
+        return res, dg.headline("low_fps", [res, *more], st, evs, {"low_fps": steady_s or 3.0}, rules._env(cap, ctx))
+
+    for verdict in dg.labels.BOUND:
+        res, text = judge(verdict)
+        texts = [e.text for e in res.evidence]
+        if verdict in rules.OTHER_LIMITS:
+            assert res.confidence == "medium" and "It is not the limit at the moment" in res.summary, (verdict, res)
+            assert any(t.startswith("Right now") and "would mostly add headroom" in t for t in texts), (verdict, texts)
+            assert text.endswith(f"; possible: {words}."), (verdict, text)            # a side note, never the cause
+            assert judge(verdict, more=(later,))[1].endswith(", possibly the game not being the active window."), \
+                verdict                                                          # skipped, not the end of the search
+        else:
+            assert "not the limit" not in res.summary, (verdict, res.summary)
+            assert text.endswith(f", {dg.CONNECT[res.confidence]} {words}."), (verdict, text)    # it leads, as before
+    assert "neither the CPU nor the GPU: the game is waiting on something, not by the GPU" not in " ".join(
+        e.text for e in judge("waiting")[0].evidence)                                    # said as one plain sentence
+    for verdict in ("cpu_main", "cpu_all", "waiting"):                  # a steady low rate that no confident limit held
+        assert judge(verdict, steady_s=25.0)[1].endswith(f"; possible: {words}."), verdict
+    assert judge("cpu_main", fps=140.0)[1].endswith(f"; possible: {words}.")          # the display's rate, CPU-side
+    # its own words where it may lead: mixed, unknown, and a capture without frame timing under a cap
+    assert judge("mixed")[0].summary.endswith("That integrated GPU shares the limit with the CPU, and the discrete GPU "
+                                              "would give the game far more headroom.")
+    could_not = "Whether it holds the frame rate down could not be judged, but the discrete GPU would give the game"
+    assert could_not in judge("unknown")[0].summary
+    blind = make(ok=("system",), src={"frames": NO_FRAMES})
+    res, _ = judge("capped", cap=blind)
+    assert could_not in res.summary and "not the limit" not in res.summary, res.summary
+    # without frame timing the GPU gate's own reading speaks: the 3D engine named the GPU, or was busy long enough
+    b = {"verdict": "gpu", "notes": [], "refresh_hz": 144.0, "busiest_thread": 0.40}     # the engine's, no r
+    ctx = {"frames": {}, "stats": {"frames": 0}, "bound": b, "events": [], "event_causes": {}}
+    assert "is probably what holds the frame rate down" in rules.run_rule(rules.RULE_BY_CAUSE["wrong_gpu"], blind,
+                                                                         ctx).summary
+    b = {"verdict": "unknown", "notes": [], "refresh_hz": 144.0, "busiest_thread": 0.40,
+         "gpu_probable": {"holds": True, "seconds": 150.0, "share": 0.25, "marks": 0, "marks_busy": 0}}
+    ctx = {"frames": {}, "stats": {"frames": 0}, "bound": b, "events": [], "event_causes": {}}
+    res = rules.run_rule(rules.RULE_BY_CAUSE["wrong_gpu"], blind, ctx)
+    assert is_finding(res) and "probably held the frame rate down at times" in res.summary, res.summary
+    ctx = {**ctx, "bound": {**b, "gpu_probable": {**b["gpu_probable"], "holds": False}}}       # a fresh env
+    ctx.pop("_env", None)
+    assert could_not in rules.run_rule(rules.RULE_BY_CAUSE["wrong_gpu"], blind, ctx).summary
+
+
 def test_a_steady_low_frame_rate_is_led_by_the_part_that_holds_it_not_by_a_few_claimed_drops():
     # A real GPU-bound recording ran 58 FPS on a 144 Hz screen for 12 minutes with 6 FPS drops, 4 of them claimed by
     # background programs, and its headline blamed background programs: the steady low rate, most of the lag, was

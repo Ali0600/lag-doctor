@@ -368,7 +368,7 @@ def headline(lag_type: str, findings: list[Finding], stats: dict[str, Any], evs:
     else:
         kinds = []
     steady = steady_low_s(env.bound, env.frames_measured) if "low_fps" in kinds else 0.0
-    paced = rules.PACED_BY_DISPLAY if rules._gpu_reaches_display(env) else ()   # their own text: no frames lost
+    paced = rules.costs_no_frames(env)          # their own text says they cost no frames now
     lead, explains, also = _lead(kinds, findings, evs, env.verdict, steady, paced)
     severe = _severe(stats, evs) if env.frames_measured and "stutter" not in kinds else None
     cpu_open = rules._cpu_not_ruled_out(env) is not None

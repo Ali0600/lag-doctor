@@ -226,6 +226,72 @@
 
 ---
 
+## 2026-11-19: Time behind another window is judged at the ends and across a part's edge too, and never sets a usual level
+
+The owner asked for "the 2 analysis fixes": the headline naming the wrong GPU where it says it is not the limit, and
+the three gaps the covered-window entry below (2026-11-11) left for later or that its fix left open. Four read-only
+agents mapped each (the code path, a failing input, the options, every other reader); where it forked, the
+implementing session chose, and the owner has not weighed in.
+
+The headline under another limit:
+- **A: one predicate for the rule's words and the headline (chosen)**, `rules.costs_no_frames`: at the display's rate
+  `PACED_BY_DISPLAY` (PR #63), under a cap, VSync, the CPU or waiting (`_other_limit`, `OTHER_LIMITS`, which a test
+  holds equal to every verdict but `gpu`, `mixed` and `unknown`) the wrong GPU. Its summary there says "It is not the
+  limit at the moment", now only there: under `mixed` it said so too while ranked likely.
+- **B: a flag on the Finding**: rejected. It changes the saved diagnosis and every reader of it for one headline.
+- **C: the fallback skips every GPU-side cause under a non-GPU verdict**: rejected. A second predicate the rule's
+  words can drift from, and it would drop `gpu_contention`, whose text does claim a cost.
+
+The ends of PresentMon's rows (`frames._hidden`, `EDGES`):
+- **A: each end judged as a run by the stretch's own rule (chosen)**: from the capture's or part's start to the first
+  row, and from the last row to the last foreground reading (the sampler stops before the recording does, and an
+  unread tail would fail the reading rule). Every reader of `hidden_spans` then agrees: `hidden_s`, the stutter
+  rate, the headline, the bound and the rules' steady windows, the FPS-drop grid.
+- **The leading end counted alike (chosen)**: lag-doctor cannot tell a covered window from PresentMon still starting,
+  but the rule needs a second of readings "another window" first, and the app's Record starts with lag-doctor's own
+  window in front, so a real cover there is the common case. The cost: a recording started from a terminal that kept
+  the focus while the game showed can leave out up to a second or two. Counting only the trailing end: rejected for
+  the app's case; saying the leading end apart: deferred, not worth a second sentence yet.
+- **The stats alone** (hidden_s and the rate): rejected in mapping. The bound would have judged a busy thread behind
+  the cover at the end ("cpu_main") beside a headline saying that time was left out.
+- **The rate over the rows' own span**: rejected. It fixes one output of three and moves every capture's rate.
+- **No trailing end when the game exited (chosen, in review)**: a game closing its window first reads another window
+  in front until its process ends, which the foreground cannot tell from a cover; a real cover just before the
+  game was closed is then judged as before this change. An end is also stopped by any frame the game showed on
+  another swap chain (a second screen showing its menus), and open at the chain's own first or last frame.
+
+A cover a part's edge cuts (`frames.row_covers`, `Capture.covers`):
+- **A: carry each row's judgement from the whole recording (chosen)**: cut with the very rows the part keeps, taken
+  by the part's `main_chain` wherever the part itself can tell. A cover shown in bursts, cut at 14 s, read "1
+  stutter (worst 312 ms)" that the whole recording left out; and the reverse, a run the whole recording judged (a
+  reading "in front" in its middle), read as time behind once the cut dropped that reading. A frozen screen that
+  began before the part is left out, as `frames_inside` leaves out such frames. So are a part's ends (in review):
+  each chain's time behind, ends included, is carried and cut to the part.
+- **B: carry time spans**: rejected. Rows that share a time at a stretch's edge (frame generation) could be marked
+  apart from the whole recording's.
+- **C: relax the rule at a part's open edges**: rejected. The 312 ms frames ended runs that did not touch the edge.
+
+The lift test's quiet baseline (`attribute._quiet_grid`):
+- **A: leave hidden time out of the quiet grid, a tick padded, with no event guard around it (chosen)**: no event can
+  be found behind a covered window, so a baseline read there set the usual level by readings no moment is judged
+  against. A game that slowed itself to 3 % behind a cover read six stutters in front at its usual 25 % as its own
+  CPU work, "(normally 3%)", lift 13.5. With it: `_blind` reads the most a signal read outside that time; where time
+  was hidden, `not_focused`'s lift never counts against it (its own cost test judges it); too little quiet time in
+  front says so, never that the signal was not measured (nor, in review, do the residual causes' and
+  `background_hogs`' reasons, nor is a GPU-side stutter the GPU's own work when nothing had a usual level); and
+  `background_hogs`' usual CPU figure leaves that time out too, so the two "normally" figures one report shows
+  agree. Without frame timing, `wrong_gpu` now reads the GPU gate's own probable reading (`_probable_gpu`).
+- **B: hidden time as event spans**: rejected. The 2 s guard would then wrap every cover too, 4 s of time in front
+  lost each, and frequent Alt+Tabs would relax the guard for sparse events.
+- **C: blank every reading inside a cover**: rejected. Widest reach: a stutter at an Alt+Tab loses the readings that
+  are `not_focused`'s only chance to show.
+
+Left open: `sweep/results.clipped_frames` cuts the whole recording's frames by row and does not clip a frozen screen
+that began before its window (its docstring says it does). Revisit hooks: `rules.costs_no_frames`, `frames._hidden`
+(the `ends`), `frames.row_covers` and `crop.crop`, `attribute._quiet_grid`'s `away`.
+
+---
+
 ## 2026-11-19: The GPU heat finding judges the fans within the recording (the fan verdict)
 
 The fan line was context only (PR #57). After a recording whose fans ran near their fastest while heat still held
@@ -889,9 +955,9 @@ What `not_focused` needs:
 
 Also: with no frames, PresentMon's own warning ("overflowed present events") is kept, and the status says why it
 writes nothing for a window covered from the start. The lift test's "contradicts" is dropped where the cause's quiet
-level is already its top (`attribute._blind`), as for a game behind another window most of the time. Left for later:
-a measured part re-judges a cover cut by its edge on the cut length (carrying the whole recording's stretches into
-the part needs `crop.py`), and the time a cover keeps no PresentMon row before the first or after the last.
+level is already its top (`attribute._blind`), as for a game behind another window most of the time. Left for later,
+and done since (2026-11-19 entry above): a measured part re-judged a cover cut by its edge on the cut length,
+and the time a cover keeps no PresentMon row before the first or after the last was not left out.
 
 Revisit hook: `frames.hidden_rows` (the stretch), `rules._not_focused` and `_focus_split` (the cost); the backlog's
 window-visibility reading would replace the foreground as the stretch's second witness.

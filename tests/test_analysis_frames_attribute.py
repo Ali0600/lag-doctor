@@ -1092,6 +1092,72 @@ def test_an_older_table_blames_by_any_adapter_and_says_so():
 
 # ------------------------------------------------------------------------------- the baseline ---
 
+def covered(cap, a, b, during):
+    """Another window covered the game's from a to b: its frames there unshown (no display change), the foreground
+    reading another window, and `during` ({S column: value}) on the sampler's ticks inside."""
+    t = cap.frames[F.T]
+    cap.frames[F.DISPLAYED] = [0 if a < x < b else s for x, s in zip(t, cap.frames[F.DISPLAYED])]
+    cap.frames[F.DISPLAY_MS] = [None if a < x < b else d for x, d in zip(t, cap.frames[F.DISPLAY_MS])]
+    ts = cap.system[S.T]
+    for col, v in {S.GAME_FOCUSED: 0, **during}.items():
+        cap.system[col] = [v if a <= x <= b else y for x, y in zip(ts, cap.system[col])]
+    return cap
+
+
+def test_time_behind_another_window_never_sets_a_signals_usual_level():
+    # The game slowed itself to 3 % of a CPU behind a window covering it from 26 s to 58 s: the busiest thread's usual
+    # level read 3 % from those seconds, where no stutter can be found, and six stutters in front at its usual 25 %
+    # read "6 of 6 coincided with the game's own CPU work (lift 13.5)", each "(normally 3%)"
+    cap = covered(lag_cap(duration=60.0), 26.0, 58.0, {S.GAME_TOP_THREAD_PCT: 3.0})
+    assert fa.frame_stats(fa.main_chain(cap), 60.0)["hidden_s"] == pytest.approx(32.0, abs=0.1)
+    events, summary = analyse(cap)
+    assert len(events) == 6 and summary["game_cpu_spike"]["label"] == "neutral", summary["game_cpu_spike"]
+    assert summary["game_cpu_spike"]["a"] == 0 and firsts(events) == ["game_stall"] * 6, firsts(events)
+    assert "waited on itself" in events[0].detail["why"][-1], events[0].detail["why"]
+    assert not any("normally 3%" in line for e in events for line in e.detail["why"])
+    # the thread at its usual level behind the window too: the game waited on itself, as it always read
+    assert firsts(analyse(covered(lag_cap(duration=60.0), 26.0, 58.0, {}))[0]) == ["game_stall"] * 6
+    # behind another window yet shown (a second screen) is judged time: its 3 % is the usual level, as before
+    cap = lag_cap(duration=60.0)
+    for col, v in ((S.GAME_FOCUSED, 0), (S.GAME_TOP_THREAD_PCT, 3.0)):
+        cap.system[col] = [v if 26.0 <= x <= 58.0 else y for x, y in zip(cap.system[S.T], cap.system[col])]
+    assert analyse(cap)[1]["game_cpu_spike"]["label"] == "supports"
+
+
+def test_a_signal_is_blind_by_the_most_it_read_where_a_moment_could_be_found():
+    # other programs' GPU use at 30 % in front and 60 % behind the window: with the cover left out of the baseline, its
+    # 60 % stopped it being blind, and "only 0 of 12 coincided with another program's GPU use rising" was said of a
+    # signal that could not rise in front; nor may "0 of 12 came behind another window" be said where none could be found
+    times = tuple(3.0 * i for i in range(1, 13))
+    cap = covered(lag_cap(times=times, duration=70.0, base={**BASE, S.GPU_OTHER_PCT: 30.0}), 40.0, 68.0,
+                  {S.GPU_OTHER_PCT: 60.0})
+    events, summary = analyse(cap)
+    assert len(events) == 12
+    assert summary["background_gpu"].get("blind") is True and summary["background_gpu"]["label"] != "contradicts"
+    assert summary["not_focused"]["label"] == "neutral", summary["not_focused"]
+    # in front throughout, "0 of 12 came behind another window" is true, and still counts against it
+    assert analyse(lag_cap(times=times, duration=70.0))[1]["not_focused"]["label"] == "contradicts"
+
+
+def test_too_little_quiet_time_in_front_is_said_never_as_a_signal_not_measured():
+    # stutters every 2 s up to 24 s, then covered to 58 s: no quiet second in front was left to tell the usual level
+    cap = covered(lag_cap(times=tuple(2.0 * i for i in range(1, 13)), duration=60.0), 25.5, 58.0, {})
+    events, summary = analyse(cap)
+    few = "there was too little quiet time with the game's window in front to tell its usual level"
+    assert summary["game_cpu_spike"]["label"] == "not_measured" and summary["game_cpu_spike"]["why"] == few
+    assert events and all(e.detail["why"][-1] == f"the game's CPU use was read, but {few}, so the cause is unknown"
+                          for e in events), events[0].detail["why"]
+    # a GPU-side stutter as well: "nothing else moved" cannot be said where no signal had a usual level
+    events, summary = analyse(covered(lag_cap(times=tuple(2.0 * i for i in range(1, 13)), duration=60.0,
+                                              stutter_gpu_ms=155.0), 25.5, 58.0, {}))
+    assert events and all(e.causes == [] and e.detail["why"][-1] == f"the GPU side was slow, but {few}, so the cause "
+                          "is unknown" for e in events), (firsts(events), events[0].detail["why"])
+    assert summary["gpu_spike"]["a"] == 0
+    # never covered, the same few quiet seconds say so without the window
+    _, summary = analyse(lag_cap(times=tuple(1.0 * i for i in range(1, 29)), duration=30.0))
+    assert summary["game_cpu_spike"]["why"] == "there was too little quiet time to tell its usual level"
+
+
 def test_dense_events_relax_the_quiet_guard():
     # an event every 2.5 s to 27 s: no 1 s window is 2 s or 1 s clear of events (bar 4 at the end), but
     # two per gap are 0.5 s clear

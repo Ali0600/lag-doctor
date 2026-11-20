@@ -274,6 +274,10 @@ class Capture:
     # Set only on a copy cut to part of the recording (analysis/crop.py): {from_s, to_s, recorded_s, how}. Never saved
     # or read from a file, which always holds the whole recording.
     span: dict[str, Any] | None = field(default=None, init=False)
+    # Set with `span`: (HIDDEN, FRONT) of each of the part's frame rows as the whole recording judged them, and each
+    # chain's time behind another window (analysis.frames.row_covers), which main_chain takes over the part's own
+    # judgement. Never saved either.
+    covers: tuple[list, list, dict] | None = field(default=None, init=False, compare=False, repr=False)
 
     def to_json(self) -> dict[str, Any]:
         return _clean_floats(self._fields())
