@@ -428,8 +428,8 @@ def _hidden(t: Sequence[Any], shown: Sequence[Any], readings: list[tuple[float, 
 def hidden_spans(fr: dict[str, list]) -> list[tuple[float, float]]:
     """(from, to) of each stretch behind another window, in time order (callers bisect their starts): those HIDDEN
     marks, from the last frame before it (the last one shown before the game went behind another window), or its
-    first row, to its last row, less a part of it FRONT judges as a frozen screen; and EDGES, before the first row and
-    after the last. A stretch's end may touch an edge's start: every reader sums or merges them."""
+    first row, to its last row, less every frozen screen FRONT judges in it (_row_spans); and EDGES, before the first
+    row and after the last. A stretch's end may touch an edge's start: every reader sums or merges them."""
     spans = _row_spans(fr)
     for e in fr.get(EDGES) or ():
         a, b = (_bounded(x) for x in e) if isinstance(e, (tuple, list)) and len(e) == 2 else (None, None)
@@ -440,7 +440,11 @@ def hidden_spans(fr: dict[str, list]) -> list[tuple[float, float]]:
 
 
 def _row_spans(fr: dict[str, list]) -> list[tuple[float, float]]:
-    """The stretches HIDDEN marks (hidden_spans)."""
+    """The stretches HIDDEN marks (hidden_spans): each run of rows from the frame before it, or its first row, to its
+    last row, less every frozen screen FRONT holds on a row of it, which stall_gaps judges instead. One in front
+    before the game went behind starts a run and one in front before a frame was shown ends it, but either can sit on
+    a row inside one: _hidden's FRONT goes on the shown frame ending its own run, and stretches whose rows touch (a
+    shown burst joining two) read as one run here."""
     t, hid, front = fr.get(F.T) or [], fr.get(HIDDEN) or [], fr.get(FRONT) or []
     out: list[tuple[float, float]] = []
     i = 0
@@ -453,10 +457,13 @@ def _row_spans(fr: dict[str, list]) -> list[tuple[float, float]]:
             j += 1
         a = _bounded(t[i - 1]) if i > 0 else None
         a = float(a) if a is not None else float(t[i])
-        iv = _at(front, j)
-        if isinstance(iv, tuple) and iv[0] <= a < iv[1]:
-            a = min(float(iv[1]), float(t[j]))
-        out.append((a, float(t[j])))
+        end = float(t[j])
+        for f0, f1 in (iv for r in range(i, j + 1) if isinstance(iv := _at(front, r), tuple)):   # rows: time order
+            if f0 > a:                                # behind until the frozen screen began
+                out.append((a, min(float(f0), end)))
+            if f1 > a:
+                a = min(float(f1), end)
+        out.append((a, end))
         i = j + 1
     return out
 
