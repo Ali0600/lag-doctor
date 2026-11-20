@@ -673,8 +673,8 @@
  {
   "name": "unmeasured causes not ruled out keep coverage",
   "file": "lagdoctor/analysis/rules.py",
-  "old": "            c.lack(fam, W_STEADY, f\"{labels.cause_text(other)} was not measured",
-  "new": "            c.neutral(fam, f\"{labels.cause_text(other)} was not measured",
+  "old": "            c.lack(fam, W_STEADY, f\"{labels.cause_text(other)} could not be judged",
+  "new": "            c.neutral(fam, f\"{labels.cause_text(other)} could not be judged",
   "tests": [
    "tests/test_analysis_rules.py::test_a_residual_cause_loses_coverage_when_another_cause_was_not_measured"
   ]
@@ -3549,7 +3549,7 @@
  {
   "name": "the headline lets a GPU finding that costs no frames explain a low frame rate",
   "file": "lagdoctor/analysis/diagnose.py",
-  "old": "    paced = rules.PACED_BY_DISPLAY if rules._gpu_reaches_display(env) else ()",
+  "old": "    paced = rules.costs_no_frames(env)",
   "new": "    paced = ()",
   "tests": [
    "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_a_gpu_finding_that_says_it_costs_no_frames"
@@ -3580,6 +3580,105 @@
   "new": "                    ), None) if steady_s > 0 else None)",
   "tests": [
    "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_a_gpu_finding_that_says_it_costs_no_frames"
+  ]
+ },
+ {
+  "name": "the headline only knows the display's rate",
+  "file": "lagdoctor/analysis/diagnose.py",
+  "old": "    paced = rules.costs_no_frames(env)",
+  "new": "    paced = rules.PACED_BY_DISPLAY if rules._gpu_reaches_display(env) else ()",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_the_wrong_gpu_where_it_says_it_is_not_the_limit"
+  ]
+ },
+ {
+  "name": "wrong_gpu under another limit left out of the headline's skip",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return (\"wrong_gpu\",) if _other_limit(e) else ()",
+  "new": "    return ()",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_the_wrong_gpu_where_it_says_it_is_not_the_limit"
+  ]
+ },
+ {
+  "name": "waiting missing from the other limits",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "OTHER_LIMITS = (\"capped\", \"vsync\", \"cpu_main\", \"cpu_all\", \"waiting\")",
+  "new": "OTHER_LIMITS = (\"capped\", \"vsync\", \"cpu_main\", \"cpu_all\")",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_the_wrong_gpu_where_it_says_it_is_not_the_limit"
+  ]
+ },
+ {
+  "name": "another limit read without frame timing",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return e.frames_measured and e.verdict in OTHER_LIMITS",
+  "new": "    return e.verdict in OTHER_LIMITS",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_the_wrong_gpu_where_it_says_it_is_not_the_limit"
+  ]
+ },
+ {
+  "name": "waiting said as limited by neither",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                  if v != \"waiting\" else \"right now the game is waiting on something",
+  "new": "                  if True else \"right now the game is waiting on something",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_the_wrong_gpu_where_it_says_it_is_not_the_limit"
+  ]
+ },
+ {
+  "name": "not the limit said under mixed and unknown",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                  if _other_limit(e) else\n",
+  "new": "                  if not limited else\n",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_the_wrong_gpu_where_it_says_it_is_not_the_limit"
+  ]
+ },
+ {
+  "name": "mixed said as could not be judged",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                  \"more headroom.\" if v == \"mixed\" and e.frames_measured else",
+  "new": "                  \"more headroom.\" if False else",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_the_wrong_gpu_where_it_says_it_is_not_the_limit"
+  ]
+ },
+ {
+  "name": "a program's usual CPU read behind another window",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif not fa._in_spans(t, away, away_starts):\n            normal.append(total)",
+  "new": "        else:\n            normal.append(total)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_background_hogs_usual_cpu_leaves_out_time_behind_another_window"
+  ]
+ },
+ {
+  "name": "a cause with no usual level said not measured",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                   if attribute.few_quiet(why) else\n",
+  "new": "                   if False else\n",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_signal_read_with_no_usual_level_is_never_said_not_measured_by_the_rules"
+  ]
+ },
+ {
+  "name": "read programs said unread",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        c.lack(\"background\", W_EVENT_STRONG, f\"other programs' use was read, but {few}\" if few else",
+  "new": "        c.lack(\"background\", W_EVENT_STRONG, f\"other programs' use was read, but {few}\" if False else",
+  "tests": [
+   "tests/test_analysis_rules.py::test_a_signal_read_with_no_usual_level_is_never_said_not_measured_by_the_rules"
+  ]
+ },
+ {
+  "name": "the probable GPU left out of wrong_gpu's words",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "                  \"headroom.\" if (_probable_gpu(e) or (False,))[0] else\n",
+  "new": "                  \"headroom.\" if False else\n",
+  "tests": [
+   "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_the_wrong_gpu_where_it_says_it_is_not_the_limit"
   ]
  }
 ]

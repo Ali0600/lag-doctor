@@ -76,6 +76,8 @@ HIDDEN = "hidden"            # main_chain's list beside the F columns: True for 
                              # cannot be told (no display tracking, no foreground readings). Such frames are never judged.
 FRONT = "front"              # main_chain's list beside them: on the frame ending a stretch, (from, to) of its run spent
                              # in front with no frame shown, judged as one frozen screen; else None
+EDGES = "edges"              # main_chain's tuple, no per-row list: (from, to) of such a stretch before the chain's first
+                             # row or after its last, where PresentMon wrote none (_hidden); hidden_spans adds them
 HIDDEN_MIN_S = 1.0           # [inferred] a stretch is a run of frames not shown lasting >= 1 s (four sampler ticks) ...
 HIDDEN_PAD_S = TICK_PAD_S    # ... judged by the foreground readings at least one tick inside it: a window loses the
                              # foreground as it is covered, a tick and a frame's way to the screen apart ...
@@ -173,7 +175,7 @@ def main_chain(cap: Capture, chain: Any = None) -> dict[str, list]:
         if _num(_at(shown_col, i)) == 1:
             shown[key] = shown.get(key, 0) + 1
     if not rows:
-        return {**{c: [] for c in F.ALL}, HIDDEN: [], FRONT: []}
+        return {**{c: [] for c in F.ALL}, HIDDEN: [], FRONT: [], EDGES: ()}
     best = max(rows, key=lambda k: (shown.get(k, 0), len(rows[k])))   # max() keeps the first of equals
     if isinstance(chain, str) and chain in rows:      # the chain asked for by name; a saved record can hold anything
         best = chain
@@ -182,8 +184,73 @@ def main_chain(cap: Capture, chain: Any = None) -> dict[str, list]:
     for name in F.ALL:
         col = _col(cap.frames, name)
         out[name] = [_clean(name, _at(col, i)) for i in pick]
-    out[HIDDEN], out[FRONT] = hidden_rows(out[F.T], out[F.DISPLAYED], focus_readings(cap))
+    hid, front, out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap), edge_bounds(cap),
+                                     _shown_elsewhere(t, chains, shown_col, rows, best))
+    carried = getattr(cap, "covers", None)
+    if carried is not None and hid:   # a measured part: its rows and ends as the whole recording judged them
+        hid, front = [_at(carried[0], i) is True for i in pick], [_at(carried[1], i) for i in pick]
+        out[EDGES] = _ends_of(carried[2].get(best) or [], capture_bounds(cap), out[F.T])
+    out[HIDDEN], out[FRONT] = hid, front
     return out
+
+
+def _shown_elsewhere(t: list, chains: list, shown: list, rows: dict[str | None, list[int]], chain: str | None
+                     ) -> list[float]:
+    """The times, in order, of every frame Windows showed on another chain than `chain`: the game was seen then."""
+    return sorted(float(t[i]) for key, idx in rows.items() if key != chain for i in idx if _num(_at(shown, i)) == 1)
+
+
+def _ends_of(spans: list[tuple[float, float]], bounds: tuple[float, float] | None, t: list) -> tuple:
+    """The part of the whole recording's time behind another window (its chain's hidden_spans) before a part's first
+    row and after its last, clipped to the part and open at those rows: a part's ends are judged as the whole recording
+    judged that time, never again on what is left of it (row_covers)."""
+    if bounds is None or not t:
+        return ()
+    ends = ((bounds[0], math.nextafter(float(t[0]), -math.inf)), (math.nextafter(float(t[-1]), math.inf), bounds[1]))
+    return tuple((max(a, x), min(b, y)) for a, b in spans for x, y in ends if min(b, y) > max(a, x))
+
+
+def row_covers(cap: Capture) -> tuple[list[bool | None], list[tuple[float, float] | None],
+                                      dict[str | None, list[tuple[float, float]]]]:
+    """HIDDEN and FRONT of every row of `cap.frames`, in its own row order, and each chain's hidden_spans, EDGES
+    included, each chain judged as main_chain judges the one it picks (_hidden); None for a row with no time or of a
+    chain that cannot tell. analysis/crop.py carries them into a measured part (Capture.covers), so a cover the
+    part's edge cuts is judged as the whole recording judged it, never again on what is left of it."""
+    t, chains, shown = _col(cap.frames, F.T), _col(cap.frames, F.SWAP_CHAIN), _col(cap.frames, F.DISPLAYED)
+    hid: list[bool | None] = [None] * len(t)
+    front: list[tuple[float, float] | None] = [None] * len(t)
+    rows: dict[str | None, list[int]] = {}
+    for i, ti in enumerate(t):
+        if _bounded(ti) is not None:
+            rows.setdefault(_chain_key(_at(chains, i)), []).append(i)
+    readings, bounds = focus_readings(cap), edge_bounds(cap)
+    spans: dict[str | None, list[tuple[float, float]]] = {}
+    for key, chain_rows in rows.items():
+        pick = sorted(chain_rows, key=lambda i: t[i])
+        ct = [_clean(F.T, t[i]) for i in pick]
+        h, f, e = _hidden(ct, [_clean(F.DISPLAYED, _at(shown, i)) for i in pick], readings, bounds,
+                          _shown_elsewhere(t, chains, shown, rows, key))
+        for k, i in enumerate(pick if h else ()):
+            hid[i], front[i] = h[k], f[k]
+        spans[key] = hidden_spans({F.T: ct, HIDDEN: h, FRONT: f, EDGES: e})
+    return hid, front, spans
+
+
+def edge_bounds(cap: Capture) -> tuple[float, float | None] | None:
+    """capture_bounds, its end None where the recording ended because the game exited: the time after its last frame
+    is its own shutdown, never a cover, though the foreground reads another window while it closes."""
+    bounds = capture_bounds(cap)
+    exited = isinstance(cap.target, dict) and cap.target.get("stop_reason") == "game exited"
+    return (bounds[0], None) if bounds is not None and exited else bounds
+
+
+def capture_bounds(cap: Capture) -> tuple[float, float] | None:
+    """(start, end) in the recording's own seconds of what `cap` holds: a measured part's (analysis/crop.py keeps the
+    recording's times, and its duration_s is the part's length), else 0 to the duration; None without a duration."""
+    span = getattr(cap, "span", None)
+    start = _bounded(span.get("from_s")) if isinstance(span, dict) else None
+    lo, dur = float(start) if start is not None else 0.0, _bounded(cap.duration_s)
+    return (lo, lo + float(dur)) if dur is not None and dur > 0 else None
 
 
 def focus_readings(cap: Capture) -> list[tuple[float, int | None]]:
@@ -200,7 +267,15 @@ def focus_readings(cap: Capture) -> list[tuple[float, int | None]]:
 
 def hidden_rows(t: Sequence[Any], shown: Sequence[Any],
                 readings: list[tuple[float, int | None]]) -> tuple[list[bool], list[tuple[float, float] | None]]:
-    """(HIDDEN, FRONT) for one chain's rows in time order. HIDDEN marks the stretches in which another window was in
+    """(HIDDEN, FRONT) for one chain's rows in time order (_hidden, which main_chain calls for its EDGES too)."""
+    hid, front, _ = _hidden(t, shown, readings, None)
+    return hid, front
+
+
+def _hidden(t: Sequence[Any], shown: Sequence[Any], readings: list[tuple[float, int | None]],
+            bounds: tuple[float, float | None] | None, seen: Sequence[float] = ()
+            ) -> tuple[list[bool], list[tuple[float, float] | None], tuple[tuple[float, float], ...]]:
+    """(HIDDEN, FRONT, EDGES) for one chain's rows in time order. HIDDEN marks the stretches in which another window was in
     front and Windows showed almost none of the game's frames, so no frame there says anything the player saw (PM
     2.4: PresentMon holds the frames it did not show behind the next shown one, whose display change then spans the
     whole stretch). FRONT holds, on the frame ending such a stretch, the part of its run spent in front with nothing
@@ -218,12 +293,18 @@ def hidden_rows(t: Sequence[Any], shown: Sequence[Any],
     there were shown.
 
     A frozen screen while the game is in front reads the same but for the foreground: so without foreground readings,
-    or with one "in front" or unknown in the middle of a run, nothing of it is hidden. ([], []) when the chain has no
-    display tracking or no reading says either way."""
+    or with one "in front" or unknown in the middle of a run, nothing of it is hidden. ([], [], ()) when the chain has
+    no display tracking or no reading says either way.
+
+    EDGES, with `bounds` (edge_bounds: the capture's start and end, the end None where the game exited): the time
+    before the chain's first row and after its last, up to the last foreground reading, judged as a run by the same
+    rule (stretch), each ended by a frame the game showed on another chain (`seen`, in time order) and open at the
+    chain's own first or last frame. PresentMon writes no row for a window covered from the start, and loses the
+    frames after the last one shown (PM 2.4), so such time has no row to mark."""
     n = len(t)
     known = [r for r in readings if r[1] is not None]
     if not n or not known or not any(_num(v) in (0, 1) for v in shown):
-        return [], []
+        return [], [], ()
     tf = [float(x) for x in t]
     rt = [x for x, _ in readings]
     flags = [_num(_at(shown, i)) for i in range(n)]
@@ -273,6 +354,20 @@ def hidden_rows(t: Sequence[Any], shown: Sequence[Any],
             return None
         return (a, b) if b - a >= HIDDEN_MIN_S and vouched(a + HIDDEN_PAD_S, b - HIDDEN_PAD_S, 2) else None
 
+    found: list[tuple[float, float]] = []
+    if bounds is not None:            # no row marks the time before the first row or after the last: the foreground does
+        k = bisect.bisect_left(seen, tf[0])            # a frame the game showed on another chain ends the run there
+        ends = [(max(bounds[0], seen[k - 1]) if k else bounds[0], tf[0], True)]
+        if bounds[1] is not None:     # the sampler stops before the recording does: its last reading ends the tail
+            k = bisect.bisect_right(seen, tf[-1])
+            ends.append((tf[-1], min(bounds[1], rt[-1], seen[k] if k < len(seen) else math.inf), False))
+        for a, b, head in ends:
+            s = stretch(a, b) if b > a else None
+            if s is not None:         # open at the chain's own first or last frame, which the frames judge
+                found.append((s[0], min(s[1], math.nextafter(tf[0], -math.inf))) if head
+                             else (max(s[0], math.nextafter(tf[-1], math.inf)), s[1]))
+    edges = tuple(found)
+
     # items: (first row, last row, from, to, front, the row FRONT goes on), the rows marked first..last
     items: list[tuple[int, int, float, float, tuple[float, float] | None, int]] = []
     for i, j, a, b in runs():
@@ -290,7 +385,7 @@ def hidden_rows(t: Sequence[Any], shown: Sequence[Any],
         else:
             items.append((i, last, a, b, None, last))
     if not items:
-        return [False] * n, [None] * n
+        return [False] * n, [None] * n, edges
     starts = [it[2] for it in items]
     pieces = list(items)
     for i, j, a, b in runs():
@@ -327,12 +422,25 @@ def hidden_rows(t: Sequence[Any], shown: Sequence[Any],
             out[p[5]] = True                          # the frame ending a run spans it: never judged by itself
             if p[4] is not None:
                 front[p[5]] = p[4]
-    return out, front
+    return out, front, edges
 
 
 def hidden_spans(fr: dict[str, list]) -> list[tuple[float, float]]:
-    """(from, to) of each stretch HIDDEN marks: from the last frame before it (the last one shown before the game went
-    behind another window), or its first row, to its last row; a part of it FRONT judges as a frozen screen is not."""
+    """(from, to) of each stretch behind another window, in time order (callers bisect their starts): those HIDDEN
+    marks, from the last frame before it (the last one shown before the game went behind another window), or its
+    first row, to its last row, less a part of it FRONT judges as a frozen screen; and EDGES, before the first row and
+    after the last. A stretch's end may touch an edge's start: every reader sums or merges them."""
+    spans = _row_spans(fr)
+    for e in fr.get(EDGES) or ():
+        a, b = (_bounded(x) for x in e) if isinstance(e, (tuple, list)) and len(e) == 2 else (None, None)
+        if a is not None and b is not None and b > a:
+            spans.append((float(a), float(b)))
+    spans.sort()
+    return spans
+
+
+def _row_spans(fr: dict[str, list]) -> list[tuple[float, float]]:
+    """The stretches HIDDEN marks (hidden_spans)."""
     t, hid, front = fr.get(F.T) or [], fr.get(HIDDEN) or [], fr.get(FRONT) or []
     out: list[tuple[float, float]] = []
     i = 0

@@ -1396,6 +1396,25 @@ the parser and the test files' builder at once.
 **Takeaway**: give a hand-rolled parser, and the fixtures you built for it, an independent reader of the same bytes:
 the platform's own API.
 
+### A window cut from a recording keeps the recording's judgement of what it cuts
+Judging an item again on the remnant a window's edge leaves gives another answer at that edge: the remnant is
+shorter and has lost the context that decided it (the neighbour it bridged to, the reading that ruled it out).
+**Why it came up**: PR #65. A measured part cut at 14 s inside a cover shown in bursts judged the bursts' short runs
+again on what was left and named a 312 ms stutter the whole recording left out as time behind another window; the
+reverse, a run the whole recording judged because of a reading the cut dropped, read as time behind. The part's
+frame-less ends had the same flaw, which only the review found after the rows were fixed.
+**Takeaway**: classify once over the whole recording, carry the result by row and for the gaps between rows, and cut
+that; never classify the remnant again.
+
+### A baseline drawn where the event can never be seen is a selection bias
+A "usual level" taken over time in which the event being tested could not have been observed compares the events
+with a population they could never belong to.
+**Why it came up**: PR #65. The lift test's quiet baseline counted the seconds a game spent behind another window,
+where no stutter can be found. A game that slowed itself to 3 % of a CPU there read six stutters in front, at its
+usual 25 %, as its own CPU work, "(normally 3%)", lift 13.5.
+**Takeaway**: draw the baseline from the same time the events could have come from; where too little is left, say so
+("too little quiet time") rather than fall back to the time that was left out.
+
 ### "Move to the Recycle Bin" deletes for good when the path is not a full one
 
 Windows' `SHFileOperationW` sends what it deletes to the Recycle Bin only with `FOF_ALLOWUNDO` and a fully qualified

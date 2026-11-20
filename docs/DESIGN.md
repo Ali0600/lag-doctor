@@ -1111,7 +1111,12 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
   present was never shown, the next one carries the wait); later rows cannot reach that far. A start set at the end of
   a loading screen would otherwise make the wait a frame of the part. From the recording's own start every row is
   kept, as the whole recording's analysis keeps PresentMon's first. The HTML frame chart counts the part's frames
-  through the same function. A table source with rows, but none in the span, becomes `unavailable`, "it recorded
+  through the same function. Each frame row keeps the whole recording's judgement of time behind another window
+  (`frames.row_covers`, every chain as `main_chain` judges its own, carried as `Capture.covers` and never saved),
+  which the part's `main_chain` takes wherever the part itself can tell (display tracking and a foreground reading),
+  so a cover the part's edge cuts is judged as the whole recording judged it, never again on what is left; a
+  frozen screen (`FRONT`) that began before t0 is left out, as `frames_inside` leaves such frames out. A table
+  source with rows, but none in the span, becomes `unavailable`, "it recorded
   nothing in the measured part", and the rules' "needs X" reasons then say it "recorded nothing in the measured part"
   rather than "was not recorded"; a source that failed keeps its own reason.
 - **net_flows** (`crop.NET_FLOWS`, one decision per key the collectors write, which a test holds to
@@ -1179,11 +1184,19 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
   the cap and VSync verdict behind the FPS-drop target, pacing episodes (none spans one), `dropped_pct`, and the
   steady windows of the bound and the rules (`frames.not_steady_spans`). Nobody saw those frames, and many games slow
   themselves down behind other windows, so they are not judged by when the game presented them either. `hidden_s` is
-  the stretches' own time (rows PresentMon lost inside one count), less any `FRONT` part; time behind another window
-  before PresentMon's first row or after its last is not in it, since there is no row to place it. Stutters a minute
+  the stretches' own time (rows PresentMon lost inside one count), less any `FRONT` part, and the edges' (`EDGES`,
+  `frames.hidden_spans` joins them): PresentMon writes no row for a window covered from the start and loses the
+  frames after the last one shown, so the time from the capture's start to the chain's first row, and from its last
+  row to the last foreground reading, is judged as a run by the same rule, open at those rows (the frames judge
+  them) and ended by any frame the game showed on another swap chain. Not after the last row when the recording
+  ended because the game exited (`frames.edge_bounds`): a game closing its window first reads another window in
+  front until its process ends. A part takes its ends from the whole recording's judgement of that time too.
+  Stutters a minute
   count the capture less `hidden_s`; the headline says how much was left out, and with every frame in it frame timing
-  reads not measured, with that reason (`rules.no_frames_why`, naming the part). Without display tracking or
-  foreground readings nothing is hidden: a frozen screen while the game is in front looks the same, and is lag.
+  reads not measured, with that reason (`rules.no_frames_why`, naming the part). Attribution's quiet baseline leaves
+  the same time out (`attribute._quiet_grid`), and so does `background_hogs`' usual CPU figure. Without display
+  tracking or foreground readings nothing is hidden: a frozen screen while the game is in front looks the same,
+  and is lag.
 - `low1_fps` / `low01_fps` = FPS of the average of exactly `ceil(p·n)` slowest frames (never "all frames ≥ the
   quantile", which sweeps in ties, LC 2.5); `p1_fps` = 1000 / P99 frame time, reported separately and labelled.
   Below 1,000 frames the 1% figures are `None` ("not enough frames"), below 10,000 the 0.1% figure (LC 2.6).
@@ -1204,9 +1217,9 @@ hitch_rate_bound                           float | None    3/n when zero hitches
 dropped_pct                                float           % of frames never displayed (outside time behind another window)
 frames_source                              str             "display" or "present"
 hidden_s                                   float           seconds behind another window with almost none of the game's
-                                                           frames shown, left out of every frame figure (only where
-                                                           PresentMon has rows); None without display tracking or
-                                                           foreground readings
+                                                           frames shown, left out of every frame figure (before the
+                                                           first row and after the last too); None without display
+                                                           tracking or foreground readings
 bound, bound_r, gpu_busy_pct               str, float, float   verdict; r; 100 x median GPU busy / median frame time
 steady_fps                                 float           the frame rate outside stutters and FPS drops (bound)
 bound_gpu_ms, bound_frame_ms               float           G and FT of r: median GPU busy less the HAGS margin, median
@@ -1364,7 +1377,10 @@ stopping while the game kept presenting), the side is None: the bound verdict ne
 for a slow frame that simply has no GPU timing (`detail["side_source"]` = "verdict", which rules do not count
 as frame-timing evidence). Each 4 Hz signal is then "active" when its busiest 1 s mean in
 `[t_start − 0.5 s, t_end + 0.25 s]` clears both a robust z-score (≥ 3.5 against the median/MAD of quiet 1 s
-windows with no event within 2 s; the guard relaxes to 1 s, then 0.5 s, when fewer than 8 quiet windows exist)
+windows with no event within 2 s and none in time behind another window, a tick padded, where no event can be
+found; the guard relaxes to 1 s, then 0.5 s, when fewer than 8 quiet windows exist; with too few even then, a
+signal that was read says there was too little quiet time to tell its usual level, never that it was not measured,
+and no stutter is the GPU's own work or the game waiting on itself, since whether anything else moved is unknown)
 and an absolute floor. Where more than half the quiet windows share one value the MAD is 0, and the mean absolute
 deviation × √(π/2) is the spread instead; only a baseline that never moves leaves the floor alone to decide (the
 first real capture's disk reads were 0 in 54 % of its quiet seconds, and every read of 1 MiB/s counted). Lift
@@ -1373,9 +1389,11 @@ stretch as long as each event's window (judged, like the event, on its busiest 1
 averaged over the events (`attribute._expected`; a length too few quiet stretches reach is taken at the longest
 that 8 do): a mark's 4.25 s window once met a plain 1 s share, 0.36 where its own length gave 0.64.
 A cause is *blind* (`blind: true`, never "contradicts") when every measured part's quiet level is already at its
-floor or past it, and that level plus the floor is past the most its signal ever read: no moment could rise. A game
-behind another window in most quiet seconds has its "behind" signal at 1.0, so "only 0 of 12 coincided with another
-window being in front" would be false; a signal that never moved off nothing is not blind.
+floor or past it, and that level plus the floor is past the most its signal ever read outside time behind another
+window: no moment could rise. A game behind another window in most quiet seconds has its "behind" signal at 1.0,
+so "only 0 of 12 coincided with another window being in front" would be false; a signal that never moved off
+nothing is not blind. Where time was hidden, `not_focused`'s lift never counts against it: no moment is ever found
+behind a covered window, and its own cost test (`rules._not_focused`) judges it.
 A move that something else explains does not count: the CPU's clock (`cpu_perf_pct`) falling while it stays at or
 above base speed, at a moment the whole machine's CPU use (`cpu_total_pct` times the logical CPUs, the game's
 included) rose by background_cpu's floor for all programs and its z test, is turbo, which runs slower the more cores
@@ -1478,7 +1496,11 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   exists; likely, unless frame timing names another limit (a cap, VSync, the CPU, waiting) or the game reaches the
   display's rate, where it is possible. That rate is 90 % of the refresh or more under a `gpu` or `mixed` verdict,
   where `gpu_limit` clears itself (`rules._gpu_reaches_display`, one predicate for both rules, `hybrid_copy` and
-  the headline); there it says the integrated GPU costs no frames seen yet, the discrete one only headroom.
+  the headline); there it says the integrated GPU costs no frames seen yet, the discrete one only headroom. Under
+  another limit (`rules._other_limit`) it says the integrated GPU is not the limit at the moment; under `mixed` that
+  it shares the limit with the CPU. Without frame timing it says the integrated GPU probably holds the frame rate
+  down when the 3D engine named the GPU, and probably held it down at times when the engine was busy long enough
+  (`rules._probable_gpu`, the GPU gate's own reading); else, and under `unknown`, that it could not be judged.
 - `hybrid_copy`: the game rendered on one adapter while its window is on a display driven by the other
   (`HybridPresent = 1` is strong evidence, 0 is not evidence). At the display's rate its summary says the copy costs
   no frames seen, only delay; its rank stays.
@@ -1646,9 +1668,10 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   `gpu` the GPU's limit, throttling, wrong GPU, copy between GPUs or another program on it; for `cpu_main` and
   `cpu_all` the CPU's limit or throttling). With both, the other is a side note ("; likely: ..."), so a mixed lag
   names the cause of each part, and the claimer the headline used to name is never dropped from it. Without either,
-  one of the lag's category, else the top finding as a side note. At the display's rate the two GPU findings that
-  then say they cost no frames (`rules.PACED_BY_DISPLAY`: wrong GPU, copy between GPUs) neither hold the steady rate
-  nor stand for the lag's category: the next one does, or they stay a side note. A GPU-bound recording at 58 FPS on a 144 Hz screen once led
+  one of the lag's category, else the top finding as a side note. A finding whose own text says it costs no frames
+  now (`rules.costs_no_frames`: at the display's rate the wrong GPU and the copy between GPUs, `PACED_BY_DISPLAY`;
+  under a cap, VSync, the CPU or waiting the wrong GPU) neither holds the steady rate nor stands for the lag's
+  category: the next one does, or it stays a side note. A GPU-bound recording at 58 FPS on a 144 Hz screen once led
   with the background programs that claimed 4 of its 6 FPS drops. Whenever the lag type is not stutter and there were
   severe hitches or freezes it adds "; also N severe hitches, worst X ms"; an open gap reads "the game server
   stopped answering at 13m 22s"; with zero hitches it says "no hitches ≥ 50 ms in N frames (at most 3/N at 95 %)";

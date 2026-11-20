@@ -58,7 +58,8 @@ def test_main_chain_sorts_by_time_and_turns_junk_into_none():
 
 def test_main_chain_of_no_frames_is_empty_columns():
     fr = fa.main_chain(make_cap({}))
-    assert set(fr) == set(F.ALL) | {fa.HIDDEN, fa.FRONT} and all(v == [] for v in fr.values())
+    assert set(fr) == set(F.ALL) | {fa.HIDDEN, fa.FRONT, fa.EDGES} and all(v == [] for k, v in fr.items() if k != fa.EDGES)
+    assert fr[fa.EDGES] == ()                               # a tuple: no per-row list for a row-by-row copy to cut
 
 
 # ----------------------------------------------------------------------------------- statistics ---
