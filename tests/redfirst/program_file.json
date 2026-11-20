@@ -366,8 +366,8 @@
  {
   "name": "dialog guard: never fails a test",
   "file": "tests/conftest.py",
-  "old": "    yield caught\n    assert caught == [], \" and \".join(caught)\n",
-  "new": "    yield caught\n",
+  "old": "    monkeypatch.setattr(dialogs, \"_extended_error\", lambda: 0)\n    yield caught\n    assert caught == [], \" and \".join(caught)\n",
+  "new": "    monkeypatch.setattr(dialogs, \"_extended_error\", lambda: 0)\n    yield caught\n",
   "tests": [
    "tests/test_dialogs.py::test_the_dialog_guard_fails_a_test_that_reached_the_dialog"
   ]

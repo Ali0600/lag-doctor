@@ -1424,3 +1424,17 @@ pressed then put that freeze in the window: counted, it halved a run's 1 % low a
 slower. The owner chose to keep such a run out and tell the player to wait a moment.
 **Takeaway**: find what the procedure itself does at the window's edges; keep a run that caught it out, with a reason
 the person can act on, rather than count it or drop it silently.
+
+### "Move to the Recycle Bin" deletes for good when the path is not a full one
+
+Windows' `SHFileOperationW` sends what it deletes to the Recycle Bin only with `FOF_ALLOWUNDO` and a fully qualified
+path: Microsoft's page on `SHFILEOPSTRUCTW` says a name without one is deleted permanently, flag or no flag. The same
+call also expands `*` and `?` in the name, fails on a `\\?\` path, and can return 0 for an operation that was
+cancelled, so its `fAnyOperationsAborted` must be read too. A folder too large for the Recycle Bin, or on a drive
+with none, is deleted for good rather than recycled: `FOF_WANTNUKEWARNING` has Windows warn first, and shellapi.h's
+own comments say it partially overrides `FOF_NOCONFIRMATION` and that the progress and error flags still let it show.
+**Why it came up**: M6j's Delete moves recordings to the Recycle Bin (`winapi/recycle.py`). The app's home can be
+named by a relative path (`LAGDOCTOR_HOME`), so the app hands over `os.path.abspath` of each folder, and the module
+refuses anything but a drive letter's full path, with no wildcard and no `.` or `..` part, before Windows is called.
+**Takeaway**: before relying on an undoable delete, read what the API does with a path that is not a full one, and
+refuse such paths yourself.

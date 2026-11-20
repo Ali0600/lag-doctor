@@ -206,6 +206,24 @@ def _games(entries: list[Entry], games: list[Installed] | tuple = (), added: lis
     return list(out.values()) + rest
 
 
+def icon_programs(entries: list[Entry], games: list[Installed] | tuple = (),
+                  added: list[AddedGame] | tuple = ()) -> dict[str, list[str]]:
+    """{game id: the programs its tile's icon may come from, the first that has one}: an added game's own program, an
+    installed game's as its store names it (Epic's), then the program of its newest recording that names one. The app
+    reads them only for a game whose tile holds no cover (App.read_icons)."""
+    from lagdoctor.capture import target
+    out: dict[str, list[str]] = {}
+    for g in _games(entries, games, added):
+        own = g.added.exe if g.added is not None else getattr(g.installed.game, "exe", None) if g.installed else None
+        found = []
+        for exe in (own, _newest_exe(g.recs)):
+            if isinstance(exe, str) and all(target.fold_path(exe) != target.fold_path(f) for f in found):
+                found.append(exe)
+        if found:
+            out[g.id] = found
+    return out
+
+
 def recorded_games(entries: list[Entry], games: list[Installed] | tuple = (),
                    added: list[AddedGame] | tuple = ()) -> list[RecordedGame]:
     """The recorded games no store lists and nobody added, each with the folder of its newest recording's program
@@ -363,6 +381,25 @@ def clash_view(how: str, game: Any) -> dict[str, Any]:
     store = game.store_name if isinstance(game, Installed) else ""
     return {"existing": game.game_id if how != "holds" else None,
             "why": CLASH_WORDS[how].format(name=name, store=store or "its store")}
+
+
+# ------------------------------------------------------------------------------------------- deleting them --
+
+DELETED = ("{n} recordings were deleted. Unless Windows asked to delete them for good, they are in the Recycle Bin, "
+           "where Windows can put them back.")
+DELETED_ONE = ("The recording was deleted. Unless Windows asked to delete it for good, it is in the Recycle Bin, where "
+               "Windows can put it back.")
+NOT_DELETED = "The recording of {when} was not deleted: {why}."
+
+
+def deleted_view(done: int, failed: list[tuple[Entry, str]], listed: bool) -> dict[str, Any]:
+    """What the page says once recordings were deleted (`done` of them handed to the Recycle Bin, `failed` with why
+    not, each by its start, else its folder's name), and whether their game is still in the Library (`listed`: a
+    recorded game no store lists and nobody added leaves it with its last recording). A folder Windows asked to
+    delete for good, and the player let it, is gone too, and lag-doctor cannot tell it from one recycled."""
+    said = [DELETED_ONE if done == 1 else DELETED.format(n=done)] if done else []
+    said += [NOT_DELETED.format(when=when_text(e.started) if e.started else e.id, why=why) for e, why in failed]
+    return {"text": " ".join(said), "deleted": done, "listed": listed}
 
 
 # ------------------------------------------------------------------------------------------------ results --

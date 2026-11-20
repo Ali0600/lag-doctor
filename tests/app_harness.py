@@ -15,6 +15,7 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -490,6 +491,30 @@ def script(facts: dict, app: App):
                  fit: c.dataset.fit || null, made: {MADE}, pwned: window.__pwned === 1}};
     }})()""")
     yield js(CLICK_GAME.format(name=json.dumps("Moss")))
+    yield until("!!document.getElementById('rename-game')")
+    # Rename: Escape keeps the old name; a new one, like markup, is saved with Enter and shows as text, in the Library
+    # too.
+    key = "document.getElementById('rename-name').dispatchEvent(new KeyboardEvent('keydown', {{key: '{}'}})); true"
+    yield js("document.getElementById('rename-game').click(); true")
+    yield until("!!document.getElementById('rename-name')")
+    hidden = yield js("document.getElementById('rename-game').hidden")         # while the form is open
+    yield js(key.format("Escape"))
+    yield until("!!document.getElementById('game-name') && !document.getElementById('rename-name')")
+    facts["rename_hidden"] = [hidden, (yield js("document.getElementById('rename-game').hidden"))]
+    kept = yield js("document.getElementById('game-name').textContent")
+    yield js("document.getElementById('rename-game').click(); true")
+    yield until("!!document.getElementById('rename-name')")
+    facts["rename_offered"] = yield js("document.getElementById('rename-name').value")
+    yield js(f"document.getElementById('rename-name').value = {json.dumps(app_demo.MARKUP_RENAMED)}; true")
+    yield js(key.format("Enter"))
+    yield until(f"!!document.getElementById('game-name') && document.getElementById('game-name').textContent === "
+                f"{json.dumps(app_demo.MARKUP_RENAMED)}")
+    facts["renamed"] = yield js(f"""(() => ({{kept: {json.dumps(kept)}, name: document.getElementById('game-name')
+        .textContent, form: !!document.getElementById('rename-form'), made: {MADE}, pwned: window.__pwned === 1}}))()""")
+    yield js("document.querySelector('[data-go=library]').click(); true")
+    yield until("document.querySelectorAll('#games .game').length > 0")
+    facts["library_renamed"] = yield js("[...document.querySelectorAll('#games .game .name')].map((n) => n.textContent)")
+    yield js(CLICK_GAME.format(name=json.dumps("Moss")))
     yield until("!!document.getElementById('remove-game')")
     yield js("document.getElementById('remove-game').click(); true")
     facts["remove_armed"] = yield js("document.getElementById('remove-game').textContent")
@@ -497,6 +522,39 @@ def script(facts: dict, app: App):
     yield until("document.querySelectorAll('#games .game').length > 0 && !document.getElementById('remove-game')")
     facts["library_after_remove"] = yield js("[...document.querySelectorAll('#games .game .name')]"
                                              ".map((n) => n.textContent)")
+
+    # Delete: Demo Racer's older recording, picked on its page, goes with a second click to the Recycle Bin (App's
+    # trash, here a folder of this home's): the page is drawn again with the one left and what was said.
+    old, other = sorted(e.id for e in library.scan(app.sessions) if e.is_recording and e.game == "Demo Racer")
+    yield js(CLICK_GAME.format(name=json.dumps("Demo Racer")))
+    yield until("document.querySelectorAll('tr[data-session]').length === 2")
+    facts["delete_before"] = yield js("[!!document.getElementById('delete-picked'), "
+                                      "document.getElementById('delete-picked').disabled]")
+    pick = f"document.querySelector('tr[data-session={json.dumps(old)}] input').click(); true"
+    yield js(pick)
+    yield js(pick)                                     # picked and unpicked: nothing to delete again
+    facts["delete_unpicked"] = yield js("document.getElementById('delete-picked').disabled")
+    yield js(pick)
+    # Armed, then another pick: the click is undone (a second one would otherwise delete both unasked).
+    pick_other = f"document.querySelector('tr[data-session={json.dumps(other)}] input').click(); true"
+    yield js("document.getElementById('delete-picked').click(); true")
+    yield js(pick_other)
+    facts["delete_disarmed"] = yield js("document.getElementById('delete-picked').textContent")
+    yield js(pick_other)
+    yield js("document.getElementById('delete-picked').click(); true")
+    facts["delete_armed"] = yield js("document.getElementById('delete-picked').textContent")
+    yield js("document.getElementById('delete-picked').click(); true")
+    yield until("!!document.getElementById('said')")
+    facts["deleted"] = yield js("""(() => ({said: document.getElementById('said').textContent,
+        name: (document.getElementById('game-name') || {}).textContent || null,
+        rows: [...document.querySelectorAll('tr[data-session]')].map((r) => r.dataset.session)}))()""")
+    facts["delete_old"], facts["delete_trashed"] = old, list(rig.trashed)
+    # What it said shows once: not again when Back returns to the page from the recording left.
+    yield js(f"document.querySelector('tr[data-session={json.dumps(other)}]').click(); true")
+    yield until("!!document.getElementById('frames') || !!document.querySelector('[data-chart=frames]')")
+    yield js("document.getElementById('back').click(); true")
+    yield until("document.querySelectorAll('tr[data-session]').length === 1")
+    facts["said_after_back"] = yield js("!!document.getElementById('said')")
 
     # Recovery. The renderer crashes: the window loads its page again.
     yield ("crash_renderer",)
@@ -679,7 +737,7 @@ def main(argv: list[str]) -> int:
     # this harness's own, and the sounds and the taskbar flash are only noted.
     rig = types.SimpleNamespace(played=[], flashes=[], prompts=[], relays=[], report=home / "fake-recorder-report.json",
                                 library_asks=[], links=[], play_report=home / "fake-recorder-play-report.json",
-                                wait_report=home / "fake-recorder-wait-report.json", picks=[])
+                                wait_report=home / "fake-recorder-wait-report.json", picks=[], trashed=[])
     # Add a game's program, made up: what App's picker hands back in place of Windows' Open dialog.
     moss = home / "games" / "Moss Garden" / "mg.exe"             # its own name is not its file's: "Moss Garden"
     moss.parent.mkdir(parents=True, exist_ok=True)
@@ -696,6 +754,12 @@ def main(argv: list[str]) -> int:
                                 "press_at": 30.0, "end": "stop", "report": str(rig.report)}), encoding="utf-8")
     play_plan = home / "fake-recorder-play-plan.json"
 
+    def trash(path: str, hwnd) -> None:
+        # the Recycle Bin's stand-in: never this PC's own; the folder is moved into this home's "bin"
+        rig.trashed.append([path, hwnd == app.window.hwnd])
+        (home / "bin").mkdir(exist_ok=True)
+        shutil.move(path, home / "bin" / Path(path).name)
+
     def play_recorder(folder: str) -> list[str]:
         # watch --wait-folder's stand-in for the game the page chose: it waits for the game until the player cancels
         mine = str(rig.wait_report if folder == str(moss.parent) else rig.play_report)     # Record when it starts
@@ -709,7 +773,7 @@ def main(argv: list[str]) -> int:
               flash=rig.flashes.append, installed=lambda: list(app_demo.INSTALLED),
               forms_of=lambda folder: (folder,), open_link=lambda link, should_go: rig.links.append(link),
               play_recorder=play_recorder, covers=app_demo.covers,
-              picker=lambda hwnd: (rig.picks.append(hwnd == app.window.hwnd), str(moss))[1])
+              picker=lambda hwnd: (rig.picks.append(hwnd == app.window.hwnd), str(moss))[1], trash=trash)
     app.harness = rig
     real_library = app.do_library
     app.do_library = lambda: (rig.library_asks.append(1), real_library())[1]     # counts the page's asks

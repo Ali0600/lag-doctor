@@ -39,7 +39,8 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   names), `watch --wait-folder` with the re-arm (M6e, PR #58), Play's order on the control channel (M6f, PR #61),
   and the app's Play with the art (M6g and M6h, PR #62, merged 2026-11-19 after the owner's own run of Play on a game
   through Steam: "it seemed to work"), then screen 6, Add a game, with Record when it starts (M6i, PR #64, merged
-  2026-11-19 on the owner's "Merge without a try": nobody has run it in the app yet).
+  2026-11-19 on the owner's "Merge without a try": nobody has run it in the app yet), then program icons for Epic and
+  recorded games, Rename and Delete (M6j).
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -651,8 +652,8 @@ labelled, as in the terminal.
 - [x] The art (M6h, PR #62; DESIGN.md, The app, Cover art): a Steam game's portrait cover from Steam's own cache
   (`stores/art.py`, through `stores`' file access, the type told from the bytes), answered by the window itself on a
   second host (`art.lagdoctor.example`, WebResourceRequested) by game id only, and drawn over the generated tile once
-  it has loaded. Not yet: GOG Galaxy's cache, and the exe's own icon (for Epic games and games recorded before), so
-  those keep the generated tile; games added by hand show their program's icon since M6i.
+  it has loaded. A game with no cover shows its program's icon (M6j): an added game's since M6i, an Epic game's
+  launch program, else its newest recording's program. Not yet: GOG Galaxy's cache.
 - [x] The store launch: a policy module that builds each URI from its fixed template and refuses when elevated, over
   a thin `winapi/launch.py` that only hands the link to Explorer's `IShellDispatch2::ShellExecute` (DESIGN.md keeps
   policy out of `winapi/`). The `test_no_handles` extension ships with it. Built: `lagdoctor/stores/launch.py`
@@ -713,8 +714,11 @@ labelled, as in the terminal.
   program's folder, with no link opened ("Start the game now" once Windows' prompt is answered). A recorded game no
   store lists has it too, on its newest recording's program's folder, when that folder is its own. A program the
   Library has already is met as that game, and a folder holding another game's (or two recorded games') is refused,
-  since the wait could not tell them apart. Not yet: the exe's icon for Epic games and games recorded before (the
-  reader is there), renaming a game after it is added (Remove and add it again), and GOG Galaxy's cache.
+  since the wait could not tell them apart. Not yet: GOG Galaxy's cache.
+- [x] Icons, Rename and Delete (M6j; DESIGN.md, The app, Program icons and Delete): a tile with no cover shows its
+  program's icon (an added game's, the program an Epic launcher names, else its newest recording's); an added game's
+  page has Rename; and on any game's page the recordings ticked for Compare can be deleted with a second click, to
+  Windows' Recycle Bin (`winapi/recycle.py`), where Windows can put them back.
 
 What a check against FINAL FANTASY VII REBIRTH found on 2026-11-09 (research note, section 14), as parts of the items
 above:

@@ -122,8 +122,10 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
   game itself between them. **Play with lag-doctor**, on an installed game's page, has the game's store start it
   once Windows' prompt is answered (lag-doctor never starts or touches the game itself) and records it from its
   folder, as `watch --wait-folder` does, with its window out of the way. **Add a game** adds any other game by
-  its program (picked in Windows' Open dialog; its name and icon come from the file), and its page's **Record when
-  it starts** waits for you to start the game yourself and records it from its start, the same way. **Record the
+  its program (picked in Windows' Open dialog; its name and icon come from the file, and you can rename it), and its
+  page's **Record when it starts** waits for you to start the game yourself and records it from its start, the same
+  way; a game with no cover shows its program's icon. Tick recordings on a game's page to compare two or delete them
+  (to the Recycle Bin, where Windows can put them back). **Record the
   game that's running** records the busiest game with a window instead, a game you started yourself. Each asks one
   UAC prompt from the window for frame timing, and measures 10 minutes from your press of **Ctrl+Alt+S** once you
   are in the game, so its startup, menus and loading are left out (shaded on Results' charts); with no press within
@@ -369,14 +371,14 @@ connection to Microsoft, as the runtime does on its own.
   says how far off the next limit is (the CPU, the GPU or the screen, and how
   many times faster the limiting part must get), from thread CPU time rather than PresentMon's CPU Busy, which
   read 16.55 ms of a 16.9 ms GPU-bound frame.
-- **Testing that proves itself**: 5,526 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 5,644 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 44 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 4,256 deliberate
-  sabotages in 67 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 4,343 deliberate
+  sabotages in 68 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes, and a settings sweep that edits a game's settings file
   between runs and puts it back byte for byte, all behind a write-ahead journal, readback verification, undo and
   crash healing, with a handle-free identity check before touching any process; the sweep compares settings by

@@ -25,14 +25,17 @@ MAX_MESSAGE_CHARS = 16 * 1024              # a request is a few dozen characters
 MAX_ID = 2 ** 31 - 1
 
 # What the page may ask for, and the fields each request carries besides its id: {kind: {field: checker}}.
-SESSION_ID = re.compile(r"[0-9]{8}-[0-9]{6}-[\w.-]{1,64}")      # a session folder's name (capture.session.session_dir)
+# A session folder's name (capture.session.session_dir), never ending in a dot: Windows drops a last dot from a path,
+# so one would name the folder of the same name without it.
+SESSION_ID = re.compile(r"[0-9]{8}-[0-9]{6}-[\w.-]{0,63}[\w-]")
 GAME_ID = re.compile(r"g-[0-9a-f]{16}")
 DRAFT_ID = re.compile(r"d-[0-9a-f]{16}")          # a program the player chose, before it is added (screen 6)
 MAX_NAME_CHARS = 400                               # a name the player typed; the app keeps 200 of it (stores.name)
+MAX_DELETE = 100                                   # recordings one Delete names: a hundred ids are about 9,000 characters
 
 
 def _session(v: Any) -> bool:
-    return isinstance(v, str) and SESSION_ID.fullmatch(v) is not None and ".." not in v
+    return isinstance(v, str) and SESSION_ID.fullmatch(v) is not None     # one part: no ".." can be one
 
 
 def _game(v: Any) -> bool:
@@ -45,6 +48,11 @@ def _draft(v: Any) -> bool:
 
 def _name(v: Any) -> bool:
     return isinstance(v, str) and len(v) <= MAX_NAME_CHARS      # an empty one is the app's to refuse, in words
+
+
+def _sessions(v: Any) -> bool:
+    """One to MAX_DELETE session ids, none twice."""
+    return isinstance(v, list) and 1 <= len(v) <= MAX_DELETE and all(_session(s) for s in v) and len(set(v)) == len(v)
 
 
 def _count(v: Any) -> bool:
@@ -67,6 +75,8 @@ REQUESTS = {
     "pick_game": {},               # Windows' Open dialog, for the program of a game to add (screen 6)
     "add_game": {"draft": _draft, "name": _name},     # add the program chosen, by the name the player gave it
     "remove_game": {"game": _game},                   # take a game added by hand out of the Library
+    "rename_game": {"game": _game, "name": _name},    # change the name a game added by hand shows by
+    "delete_recordings": {"game": _game, "sessions": _sessions},    # recordings of that game, to the Recycle Bin
     "stop_recording": {},
     "cancel_recording": {},
     "recording": {},               # where that recording has got to

@@ -28,6 +28,12 @@ FILE_ATTRIBUTE_OFFLINE = 0x1000                                 # winnt.h; a clo
 NOT_LOCAL = "is not on a local fixed or removable disk"
 NOT_LISTED = "so its game is not listed"
 BS = chr(92)
+LANTERN_EXE, HARBOR_EXE = "Lantern.exe", "HarborLights.exe"    # the programs the launchers name, in each folder
+
+
+def exe(folder, name: str = LANTERN_EXE) -> str:
+    """The program a Game keeps (Game.exe): the launcher's, in the folder's own form."""
+    return str(folder) + BS + name
 
 
 def link(namespace: str, item: str, app: str) -> str:
@@ -57,7 +63,7 @@ def harbor(folder, **fields) -> dict:
     """A legacy manifest for Harbor Lights."""
     return manifest(folder, **{"AppName": APP2, "CatalogNamespace": NS2, "CatalogItemId": ITEM2,
                                "MainGameAppName": APP2, "MainGameCatalogNamespace": NS2, "MainGameCatalogItemId": ITEM2,
-                               "DisplayName": "Harbor Lights", **fields})
+                               "DisplayName": "Harbor Lights", "LaunchExecutable": HARBOR_EXE, **fields})
 
 
 HEADER = {"version": 1, "writtenAt": "2026-11-01T09:00:00Z", "entries": 0}
@@ -67,13 +73,14 @@ def record(n: int, folder, **fields) -> dict:
     """A Preview record of Harbor Lights as the launcher writes one, with `fields` changed (DROP leaves one out)."""
     out = {"installationId": iid(n), "complete": True, "dir": str(folder), "platform": "Windows", "namespace": NS2,
            "itemId": ITEM2, "artifactId": APP2, "version": "1.0.2", "tags": [""], "sidecar": {"revision": 1},
-           "launchCommand": "", "launchExecutable": "HarborLights.exe", "writtenAt": "2026-11-01T09:00:01Z"}
+           "launchCommand": "", "launchExecutable": HARBOR_EXE, "writtenAt": "2026-11-01T09:00:01Z"}
     out.update(fields)
     return {k: v for k, v in out.items() if v is not DROP}
 
 
 def lantern_record(n: int, folder, **fields) -> dict:
-    return record(n, folder, namespace=NS, itemId=ITEM, artifactId=APP, **fields)
+    return record(n, folder, **{"namespace": NS, "itemId": ITEM, "artifactId": APP, "launchExecutable": LANTERN_EXE,
+                                **fields})
 
 
 def tombstone(n: int, **fields) -> dict:
@@ -140,7 +147,7 @@ def test_a_legacy_base_game_is_listed_with_its_id_link_folder_and_title(world):
     folder = world.folder("Lantern Drift")
     world.item("0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F0F.item", manifest(folder))
     lib = world.read()
-    assert lib == Library([Game("epic", LANTERN, "Lantern Drift", str(folder), link(NS, ITEM, APP))], [])
+    assert lib == Library([Game("epic", LANTERN, "Lantern Drift", str(folder), link(NS, ITEM, APP), exe(folder))], [])
     assert "/" not in lib.games[0].folder                       # Windows' form, though the file has forward slashes
 
 
@@ -170,7 +177,7 @@ def test_the_manifests_are_the_item_files_at_the_top_of_the_folder_in_any_case(w
     (world.manifests / "Pending").mkdir()                      # the launcher's own, for installs in progress
     (world.manifests / "Pending" / "0C0C.item").write_text("{", encoding="utf-8")
     assert world.read() == Library([Game("epic", LANTERN, "Lantern Drift", str(world.folder("Lantern Drift")),
-                                         link(NS, ITEM, APP))], [])
+                                         link(NS, ITEM, APP), exe(world.folder("Lantern Drift")))], [])
 
 
 def test_the_manifests_are_read_in_the_order_of_their_names(world):
@@ -230,8 +237,8 @@ def test_a_folder_not_on_a_local_disk_is_named_before_it_is_looked_at(world, mon
     monkeypatch.setattr(target, "_lstat", lambda path: looked.append(path) or real_lstat(path))
     monkeypatch.setattr(stores, "_stat", lambda path: looked.append(path) or real_stat(path))
     # The folder on Q: is named for its drive, not as missing: the drive is judged before anything is looked at.
-    assert world.read() == Library([Game("epic", HARBOR, "Harbor Lights", str(here), link(NS2, ITEM2, APP2))],
-                                   [f"{p1}: {far} {says}, {NOT_LISTED}"])
+    assert world.read() == Library([Game("epic", HARBOR, "Harbor Lights", str(here), link(NS2, ITEM2, APP2),
+                                         exe(here, HARBOR_EXE))], [f"{p1}: {far} {says}, {NOT_LISTED}"])
     assert looked and not [p for p in looked if p.upper().startswith("Q:")]
 
 
@@ -313,7 +320,7 @@ def test_two_manifests_for_one_game_list_it_once_and_name_the_one_in_another_fol
     world.item("02.item", manifest(first, InstallLocation=str(first).lower() + "\\"))   # the same folder, written so
     copy = world.item("03.item", manifest(other))
     lib = world.read()
-    assert lib.games == [Game("epic", LANTERN, "Lantern Drift", str(first), link(NS, ITEM, APP))]
+    assert lib.games == [Game("epic", LANTERN, "Lantern Drift", str(first), link(NS, ITEM, APP), exe(first))]
     assert lib.problems == [f"{copy} names the same game as {world.manifests / '01.item'}, but in another folder "
                             f"({other}), so only the first is listed"]
 
@@ -368,12 +375,54 @@ def test_no_manifests_folder_is_no_problem_and_one_that_cannot_be_listed_is(tmp_
     assert lib.problems[0].startswith(f"{tmp_path / 'Manifests'} could not be read (")
 
 
+@pytest.mark.parametrize("launch, kept", [
+    ("Lantern.exe", "Lantern.exe"),
+    ("Binaries/Win64/Lantern-Win64-Shipping.exe", "Binaries" + BS + "Win64" + BS + "Lantern-Win64-Shipping.exe"),
+    ("Binaries//Win64//L.EXE", "Binaries" + BS + "Win64" + BS + "L.EXE"),     # Windows' form: one separator each
+])
+def test_the_program_a_manifest_names_is_kept_in_windows_own_form(world, launch, kept):
+    folder = world.folder("Lantern Drift")
+    world.item("01.item", manifest(folder, LaunchExecutable=launch))
+    assert world.read().games[0].exe == exe(folder, kept)
+
+
+@pytest.mark.parametrize("launch", [
+    "", DROP, None, 7, ["Lantern.exe"], "Lantern.txt", ".exe", "Lantern", "Binaries/",
+    "..\\Lantern.exe", "Binaries\\..\\..\\Other\\x.exe", "Binaries\\.\\x.exe",     # out of its folder, or a dot part
+    "\\Lantern.exe", "/Lantern.exe", "C:\\Windows\\notepad.exe", "C:Lantern.exe",    # rooted, or a drive's
+    "\\\\server\\share\\x.exe", "Lantern.exe ", "Lantern.exe.", "Bin.\\x.exe", "Lan<tern>.exe", "Lan\x00tern.exe",
+    "L" * 600 + ".exe",                                                      # past MAX_LAUNCH_CHARS
+])
+def test_a_manifest_naming_no_program_in_its_folder_lists_its_game_with_none(world, launch):
+    folder = world.folder("Lantern Drift")
+    world.item("01.item", manifest(folder, LaunchExecutable=launch))
+    lib = world.read()
+    assert [g.id for g in lib.games] == [LANTERN] and lib.games[0].exe is None and lib.problems == []
+
+
+def test_a_program_path_at_the_folders_cap_is_refused_and_one_inside_it_kept():
+    folder = "D:" + BS + "Games"
+    room = target.MAX_FOLDER_CHARS - len(folder) - 1               # what is left of a folder's path below it
+    assert epic.program(folder, "a" * room + BS + "x.exe") == folder + BS + "a" * room + BS + "x.exe"
+    assert epic.program(folder, "a" * (room + 1) + BS + "x.exe") is None
+
+
+def test_the_program_a_preview_record_names_is_kept_and_a_bad_one_is_none(world):
+    folder = world.folder("HarborLights")
+    world.lines(HEADER, record(1, folder, launchExecutable="Bin/Harbor.exe"))
+    assert world.read().games[0].exe == exe(folder, "Bin" + BS + "Harbor.exe")
+    world.lines(HEADER, record(1, folder, launchExecutable="..\\..\\Harbor.exe"))
+    lib = world.read()
+    assert lib.games[0].id == HARBOR and lib.games[0].exe is None and lib.problems == []
+
+
 # ---------------------------------------------------------------- the Preview ---
 
 def test_a_preview_game_is_listed_from_its_record(world):
     folder = world.folder("HarborLights")
     world.lines(HEADER, record(1, folder))
-    assert world.read() == Library([Game("epic", HARBOR, "HarborLights", str(folder), link(NS2, ITEM2, APP2))], [])
+    assert world.read() == Library([Game("epic", HARBOR, "HarborLights", str(folder), link(NS2, ITEM2, APP2),
+                                         exe(folder, HARBOR_EXE))], [])
 
 
 def test_the_journal_must_start_with_the_header_lag_doctor_knows(world):
@@ -412,8 +461,10 @@ def test_the_last_record_for_an_install_wins_in_file_order_never_by_its_stamp(wo
                 record(1, new, writtenAt="2026-11-01T09:00:01Z"),      # later in the file, earlier by its stamp
                 record(3, world.folder("Tidewater"), itemId="f6" * 16, artifactId="Tidewater"),
                 record(3, world.folder("Tidewater"), itemId="f6" * 16, artifactId="Tidewater", complete=False))
-    assert world.read() == Library([Game("epic", LANTERN, "LanternDrift", str(lantern), link(NS, ITEM, APP)),
-                                    Game("epic", HARBOR, "HarborLights2", str(new), link(NS2, ITEM2, APP2))], [])
+    assert world.read() == Library([Game("epic", LANTERN, "LanternDrift", str(lantern), link(NS, ITEM, APP),
+                                         exe(lantern)),
+                                    Game("epic", HARBOR, "HarborLights2", str(new), link(NS2, ITEM2, APP2),
+                                         exe(new, HARBOR_EXE))], [])
 
 
 def test_a_tombstone_removes_an_install_and_a_later_record_brings_it_back(world):
@@ -422,8 +473,8 @@ def test_a_tombstone_removes_an_install_and_a_later_record_brings_it_back(world)
                 lantern_record(1, lantern), tombstone(1),
                 record(2, harbor_dir), {"installationId": iid(2), "deleted": True}, record(2, harbor_dir),
                 tombstone(3))                                   # one it never listed
-    assert world.read() == Library([Game("epic", HARBOR, "HarborLights", str(harbor_dir), link(NS2, ITEM2, APP2))],
-                                   [])
+    assert world.read() == Library([Game("epic", HARBOR, "HarborLights", str(harbor_dir), link(NS2, ITEM2, APP2),
+                                         exe(harbor_dir, HARBOR_EXE))], [])
 
 
 def test_add_on_records_installs_in_progress_and_unreal_engine_are_passed_over_quietly(world):
@@ -444,7 +495,8 @@ def test_a_half_written_last_line_is_passed_over_quietly_and_a_whole_bad_one_is_
     folder = world.folder("HarborLights")
     cut = json.dumps(record(2, folder, itemId="f6" * 16), separators=(",", ":"))[:57]
     world.lines(HEADER, record(1, folder), tail=cut)
-    assert world.read() == Library([Game("epic", HARBOR, "HarborLights", str(folder), link(NS2, ITEM2, APP2))], [])
+    assert world.read() == Library([Game("epic", HARBOR, "HarborLights", str(folder), link(NS2, ITEM2, APP2),
+                                         exe(folder, HARBOR_EXE))], [])
     world.lines(HEADER, record(1, folder), cut)                 # the same line, but a line break ends it
     lib = world.read()
     assert [g.id for g in lib.games] == [HARBOR]
@@ -527,7 +579,8 @@ def test_a_journal_past_its_caps_is_named_and_not_read(world, monkeypatch):
 def test_a_journal_with_windows_line_breaks_is_read(world):
     folder = world.folder("HarborLights")
     world.lines(HEADER, record(1, folder), tombstone(1), record(1, folder), end="\r\n")
-    assert world.read() == Library([Game("epic", HARBOR, "HarborLights", str(folder), link(NS2, ITEM2, APP2))], [])
+    assert world.read() == Library([Game("epic", HARBOR, "HarborLights", str(folder), link(NS2, ITEM2, APP2),
+                                         exe(folder, HARBOR_EXE))], [])
 
 
 def test_no_journal_is_no_problem_and_a_folder_in_its_place_is(world, tmp_path):
@@ -548,8 +601,10 @@ def test_a_game_both_launchers_list_is_listed_once_with_the_previews_folder_and_
     world.item("03.item", harbor(moved_from, DisplayName="Harbor Lights (old)"))
     world.item("04.item", manifest(lantern))
     world.lines(HEADER, record(1, new))
-    assert world.read() == Library([Game("epic", HARBOR, "Harbor Lights: Remastered", str(new), link(NS2, ITEM2, APP2)),
-                                    Game("epic", LANTERN, "Lantern Drift", str(lantern), link(NS, ITEM, APP))], [])
+    assert world.read() == Library([Game("epic", HARBOR, "Harbor Lights: Remastered", str(new), link(NS2, ITEM2, APP2),
+                                         exe(new, HARBOR_EXE)),
+                                    Game("epic", LANTERN, "Lantern Drift", str(lantern), link(NS, ITEM, APP),
+                                         exe(lantern))], [])
 
 
 def test_a_game_the_preview_still_has_a_record_of_is_never_listed_from_a_legacy_manifest(world):
@@ -558,7 +613,8 @@ def test_a_game_the_preview_still_has_a_record_of_is_never_listed_from_a_legacy_
     world.item("02.item", manifest(lantern))
     world.lines(HEADER, record(1, folder, complete=False),     # the Preview is updating it
                 lantern_record(2, lantern), tombstone(2))      # and uninstalled this one: the legacy launcher's stands
-    assert world.read() == Library([Game("epic", LANTERN, "Lantern Drift", str(lantern), link(NS, ITEM, APP))], [])
+    assert world.read() == Library([Game("epic", LANTERN, "Lantern Drift", str(lantern), link(NS, ITEM, APP),
+                                    exe(lantern))], [])
 
 
 def test_no_games_command_line_is_kept_or_quoted(world):

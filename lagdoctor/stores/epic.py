@@ -29,6 +29,9 @@ A game the Preview still has a record of is taken as the Preview has it: a legac
 passed over, even while the Preview's record says that the game is being updated.
 
 Nothing here reads a game's command line (LaunchCommand, launchCommand): an Epic launch carries a sign-in code there.
+Its program (LaunchExecutable, launchExecutable: a path relative to the install folder) is kept as Game.exe when it is
+a path ending in .exe inside that folder, for the app to read its icon (stores/exe.py, which finds out whether it is
+a program at all) and nothing else; anything else is None, quietly, and the game is listed all the same.
 """
 from __future__ import annotations
 
@@ -63,6 +66,7 @@ MAX_CATALOG_ITEMS = 100_000
 HEADER_VERSION = 1              # the only one seen
 INSTALLATION_ID = re.compile(r"[0-9A-F]{32}", re.ASCII)      # as the Preview writes it
 ENGINE_NAMESPACE = "ue"         # Unreal Engine's own installs
+MAX_LAUNCH_CHARS = 512          # a program's path below its install folder, as a launcher names it
 
 
 # ---------------------------------------------------------------- JSON as Epic writes it ---
@@ -120,11 +124,32 @@ def _not_installed(folder: str) -> str | None:
     return None
 
 
+def program(folder: str, launch: object) -> str | None:
+    """The program a launcher's entry names (`launch`, a path relative to the install folder `folder`, as
+    target.check_folder gives it) in Windows' own form; None when it names none, or anything but a file ending in .exe
+    inside that folder: a rooted path, a drive (its colon is refused in a name, and in a folder's name by
+    check_folder), a . or .. part (check_folder), or a name Windows would refuse."""
+    if not isinstance(launch, str) or len(launch) > MAX_LAUNCH_CHARS:
+        return None
+    rel = launch.replace("/", "\\")
+    if rel.startswith("\\"):
+        return None
+    cut = rel.rfind("\\")
+    name = rel[cut + 1:]
+    if len(name) <= 4 or not name.casefold().endswith(".exe") or any(c in '<>:"|?*' or ord(c) < 32 for c in name):
+        return None
+    try:
+        inside = target.check_folder(folder + ("\\" + rel[:cut] if cut >= 0 else ""))
+    except ValueError:
+        return None
+    return inside + "\\" + name
+
+
 def _game(where: str, namespace: object, item: object, app: object, location: object, name: str,
-          taken: set[str] | frozenset[str] = frozenset()) -> Game | str | None:
+          taken: set[str] | frozenset[str] = frozenset(), exe: object = None) -> Game | str | None:
     """The game one entry of a launcher names: a Game; None when `taken` holds its id already; else a str that says
     which field fails. `name` is its title when the launcher gives one (stores.name), else "" for the folder's name;
-    either way stores.title cleans it."""
+    either way stores.title cleans it. `exe`: the program the entry names, relative to its folder (program)."""
     try:
         link = launch.epic_link(namespace, item, app)
     except ValueError as exc:
@@ -139,7 +164,7 @@ def _game(where: str, namespace: object, item: object, app: object, location: ob
     why = _not_installed(folder)
     if why is not None:
         return f"{where}: {why}, so its game is not listed"
-    return Game(STORE, gid, stores.title(name, ntpath.basename(folder)), folder, link)
+    return Game(STORE, gid, stores.title(name, ntpath.basename(folder)), folder, link, program(folder, exe))
 
 
 def _keep(kept: dict[str, tuple[Game, str]], got: Game | str | None, where: str, problems: stores.Problems) -> None:
@@ -267,7 +292,7 @@ def _manifest_game(path: str, obj: dict, taken: set[str]) -> Game | str | None:
         if main not in (None, "", app):
             return None                     # an add-on, by the name of its base game's app
     return _game(path, namespace, obj.get("CatalogItemId"), app, obj.get("InstallLocation"),
-                 stores.name(obj.get("DisplayName")) or "", taken)
+                 stores.name(obj.get("DisplayName")) or "", taken, obj.get("LaunchExecutable"))
 
 
 # ---------------------------------------------------------------- the Preview ---
@@ -410,7 +435,7 @@ def _record_game(where: str, rec: dict, titles: dict[str, str],
         return None                         # Unreal Engine itself
     name = (catalog().get(item, "") if isinstance(item, str) else "") or \
         (titles.get(app, "") if isinstance(app, str) else "")
-    return _game(where, namespace, item, app, rec.get("dir"), name)
+    return _game(where, namespace, item, app, rec.get("dir"), name, exe=rec.get("launchExecutable"))
 
 
 def _record_id(rec: dict) -> str | None:

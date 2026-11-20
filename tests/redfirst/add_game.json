@@ -499,8 +499,8 @@
  {
   "name": "app: a game added with no name",
   "file": "lagdoctor/app/main.py",
-  "old": "        if shown is None:\n            raise Gone(\"Give",
-  "new": "        if False:\n            raise Gone(\"Give",
+  "old": "        if shown is None:\n            raise Gone(\"Give the game a name to show by.\")\n        entries, games = self.scan(), self.scan_games()",
+  "new": "        if False:\n            raise Gone(\"Give the game a name to show by.\")\n        entries, games = self.scan(), self.scan_games()",
   "tests": [
    "tests/test_app_added.py::test_a_name_with_nothing_to_show_or_a_draft_never_given_is_refused"
   ]
@@ -571,10 +571,10 @@
  {
   "name": "app: each program's icon read at every listing",
   "file": "lagdoctor/app/main.py",
-  "old": "                if g.game_id in self.art_tried:\n                    continue",
-  "new": "                if False:\n                    continue",
+  "old": "                    if key in self.icons_tried:\n                        continue",
+  "new": "                    if False:\n                        continue",
   "tests": [
-   "tests/test_app_added.py::test_each_added_programs_icon_is_read_once_a_run"
+   "tests/test_app_edits.py::test_a_program_found_without_an_icon_is_not_read_again_but_a_new_one_is"
   ]
  },
  {
@@ -625,8 +625,8 @@
  {
   "name": "page: Remove at the first click",
   "file": "lagdoctor/app/assets/app.js",
-  "old": "    if (b.dataset.armed !== '1') {",
-  "new": "    if (false) {",
+  "old": "    if (b.dataset.armed !== '1') {\n      b.dataset.armed = '1';\n      b.textContent = 'Click again to remove",
+  "new": "    if (false) {\n      b.dataset.armed = '1';\n      b.textContent = 'Click again to remove",
   "tests": [
    "tests/test_app_page.py::test_add_a_game_reads_the_chosen_programs_name_and_icon_and_records_it_when_it_starts"
   ]

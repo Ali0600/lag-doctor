@@ -328,9 +328,10 @@ lagdoctor/
             webview2.py                                 WebView2 from ctypes, through the runtime's own export (the app)
             launch.py                                   Explorer opens a link, as from a click (Play's store launch)
             dialogs.py                                  Windows' Open dialog, for Add a game's program (the app)
+            recycle.py                                  a recording's folder to the Recycle Bin (the app's Delete)
   stores/   launch.py                                   Play's store links, built from fixed templates (M6)
             __init__.py steam.py epic.py keyvalues.py   the games each store has installed, from its own files (M6)
-            art.py exe.py                               a Steam game's cover; a picked program's name and icon (M6)
+            art.py exe.py                               a Steam game's cover; a program's name and icon (M6)
   relay/    protocol.py server.py client.py __main__.py   frame timing and the network trace with admin rights
             process.py                                  priority of other processes (fixes/priority)
   capture/  base.py (done) target.py sysmon.py gpumon.py fanmon.py netmon.py netflows.py presentmon.py inventory.py
@@ -2117,7 +2118,8 @@ spike, which passed the owner's run.
   type told from its bytes (JPEG, PNG or WebP; some `.jpg` files hold PNG data), at most 4 MB each and 96 MB in all,
   and only when its header declares at most 4,096 pixels a side and 4 million in all (`art.image_size`: a small file
   can declare a huge image, which the page would decode whole).
-  Epic keeps no image on the PC, so an Epic game keeps its generated tile. `App(covers=)` reads them once a run, on a
+  Epic keeps no image on the PC, so an Epic game shows its program's icon instead (Program icons, below), else its
+  generated tile. `App(covers=)` reads them once a run, on a
   worker thread at the listing (`App.read_art`), only when run() gives it `art.covers`, so no test reads this PC's
   Steam cache (the window tests give it `tests/app_demo.py`'s made-up cover). A tile names its cover's URL
   (`views.tile`'s `art`, `bridge.art_url`) only when the app holds one; the page loads it through an image outside
@@ -2150,8 +2152,43 @@ spike, which passed the owner's run.
   recorded game no store lists and nobody added has it too, on the folder of its newest recording's program, when that
   folder is no shared root and neither holds a listed game's folder nor is (or holds) another recorded game's
   (`library.wait_folders`); a folder that is gone is said when the button is pressed. Remove from the Library (a
-  second click does it) takes an added game out of the list; its recordings stay, under their recorded game. Each
-  added program's icon is read once a run, within the art's 96 MB.
+  second click does it) takes an added game out of the list; its recordings stay, under their recorded game.
+  **Rename** (`rename_game {game, name}`, `App.do_rename_game`) changes the name an added game shows by, in place of
+  its page's heading (Enter saves, Escape keeps the old one): its program, its id and its recordings stay, and the
+  list is saved as Add saves it (an unread file moved aside first).
+- **Program icons** (`views.icon_programs`, `App.read_icons`): a game whose tile holds no cover shows the icon of the
+  first of its programs that has one: an added game's own, an installed game's as its launcher names it
+  (`stores.Game.exe`: Epic's `LaunchExecutable` or `launchExecutable`, relative to the install folder, kept by
+  `epic.program` only as a file ending in `.exe` inside that folder with no `.` or `..` part, else None, quietly, and
+  the game listed all the same; Steam's manifests name none), then the program of its newest recording that names one
+  (`summary.json`'s `exe`). Each goes through `added.check_program` first (a recording's summary is as writable as any
+  of the player's files) and is read once a run (`stores/exe.read`, so never off the local disks or online only,
+  and only a regular file), within the art's 96 MB; a cover from the store's cache wins, and is never read past.
+- **Delete** (`delete_recordings {game, sessions}`, `App.do_delete_recordings` and `App.delete`): on a game's page the
+  recordings ticked for Compare (at most `bridge.MAX_DELETE`, 100, at once, none twice) go with a second click to
+  Windows' Recycle Bin, where Windows can put them back. Each id must be a recording listed under the game the page
+  names (never a folder the page names; `bridge.SESSION_ID` takes no name ending in a dot, which Windows would drop
+  and so name another folder), and nothing is deleted while a recording runs: this window's own (`rec_state`), or any
+  other in this Windows session (a terminal's `watch`, or a recorder an earlier window left running), whose
+  `capture.session.CaptureLock` each holds until its analysis ends (`App(capture_lock=)`, which only `run()` passes:
+  looked at and let go at once). Both are looked at on the UI thread right before the first move; a recording that
+  starts after makes a folder of its own. Each folder goes on the UI thread, by its full path (`os.path.abspath`),
+  only when
+  `target.local_problem` finds it on this PC's own disks, through `App(trash=)`, which only `run()` passes
+  (`winapi/recycle.to_recycle_bin`: SHFileOperationW with FO_DELETE and FOF_ALLOWUNDO, no progress, confirmation or
+  error dialog, but FOF_WANTNUKEWARNING, so Windows asks, owned by the window, before deleting anything for good
+  rather than recycling it; only a drive letter's full path within MAX_PATH with no `.` or `..` part and no wildcard
+  is handed over, since a name without a full path is deleted for good even with FOF_ALLOWUNDO; a 0 with
+  `fAnyOperationsAborted` set is a cancel, `recycle.Cancelled`, which ends the delete: the rest would only ask
+  again; one delete at a time, since that question runs a message loop that answers the page meanwhile). Each folder is checked gone afterwards. The page says the recordings were deleted, and are in the Recycle
+  Bin unless Windows asked to delete them for good (when the player said yes there, lag-doctor cannot tell); what was
+  not deleted is said by the recording's time (else its folder's name) and why (`views.deleted_view`); the last
+  recording read is let go; and the page is drawn again with what was said, or the Library when a recorded game went
+  with its last recording (a listing that fails then still answers, as listed). `tests/conftest.py`'s
+  `_no_real_recycle_bin` fails a test that reaches the real call (its own test stubs `recycle._SHFileOperationW`
+  under the seam), and `tests/test_recycle_live.py` moves a made-up folder for real on GitHub's runner only, finds it
+  in that drive's Recycle Bin by the `$I` record naming its path, and takes it out again. `lagdoctor fix` says so when
+  the recording it acts on is gone (`cli.remembered_report`), and the fix journal is kept apart (`fix-journal.json`).
 - **The library** (`library.py`): one Entry per session folder named as `session_dir` names them, from its
   `summary.json`, else from the folder's name (stamp and game stem). A recording is a `watch` folder holding its
   capture; check-ups and `analyze` folders are left out. A game's key is `paths.folder_stem` of its exe name, case

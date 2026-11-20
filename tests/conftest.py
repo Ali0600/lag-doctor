@@ -170,6 +170,28 @@ def dialog_guard(monkeypatch):
     assert caught == [], " and ".join(caught)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_recycle_bin(monkeypatch):
+    """No test moves anything into this PC's Recycle Bin (Delete's, winapi/recycle.py): what it moved would stay there,
+    in the owner's own Recycle Bin. One that reaches it reads as a move Windows refused, and fails at its end. A test's
+    own patch overrides this (tests/test_recycle_live.py's child process, on GitHub's runner only, is out of reach)."""
+    yield from recycle_guard(monkeypatch)
+
+
+def recycle_guard(monkeypatch):
+    """_no_real_recycle_bin's body: refuses the real call while it is suspended, yields the list of reaches, and raises
+    AssertionError at its end if anything reached (tests/test_recycle.py drives it to prove that)."""
+    from lagdoctor.winapi import recycle
+    caught = []
+
+    def refuse(op):
+        caught.append("a test reached this PC's real Recycle Bin")
+        return 0x78                                  # the page's DE_ACCESSDENIEDSRC: nothing was moved
+    monkeypatch.setattr(recycle, "_file_operation", refuse)
+    yield caught
+    assert caught == [], " and ".join(caught)
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "needs(*names): what the test needs from the machine; it skips when "
                             f"{capabilities.ABSENT_ENV} lists one of them (tests/capabilities.py)")
