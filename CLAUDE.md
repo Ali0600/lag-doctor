@@ -114,7 +114,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). Commit before
   picking: a pick by `git diff --name-only origin/main HEAD` cannot see an uncommitted edit (PR #53's first pick left
   out `frames.py`'s 112). A picked set runs about 3.7 s a mutation here (PR #53's 1,098 took 67 minutes), and one heavy in the window's own
-  tests about 8 s (each run of `tests/test_app_page.py` opens the real window: PR #62's 308 took about 40 minutes). Every mutation on
+  tests about 8 s (each run of `tests/test_app_page.py` opens the real window: PR #62's 308 took about 40 minutes,
+  PR #64's 466, 71 of them on the window, about 68). Every mutation on
   `lagdoctor/analysis/rules.py` (456 after PR #52) takes up to an hour here (PR #50's 494 picked mutations took about
   70 minutes, PR #51's 744 about 36 and PR #52's 643 about 38 on a quiet PC): start it in the background as soon as the code is settled, and
   review meanwhile with agents that run no tests (no second pytest meanwhile, so write the next change's tests without
