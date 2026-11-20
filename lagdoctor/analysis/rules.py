@@ -2516,6 +2516,8 @@ def _name_cpu(e: _Env, name: str, spans: list[tuple[float, float]],
     With `pids`, only those processes count, so a steady job of the same name never props up the figure (A5)."""
     during, normal = [], []
     starts = [a for a, _ in spans]
+    away = fa.not_steady_spans([], e.fr, pad=fa.TICK_PAD_S)   # behind another window: never "normally", as attribution's
+    away_starts = [a for a, _ in away]                          # quiet baseline leaves it out (attribute.attribute)
     for row in e.cap.others if isinstance(e.cap.others, list) else []:
         if not (isinstance(row, (list, tuple)) and len(row) == 2 and fa._bounded(row[0]) is not None
                 and isinstance(row[1], (list, tuple))):
@@ -2525,7 +2527,10 @@ def _name_cpu(e: _Env, name: str, spans: list[tuple[float, float]],
                                              and len(p) >= 3 and p[1] == name and (pids is None or p[0] in pids))
                           if x is not None and x >= 0)
         i = bisect.bisect_right(starts, t) - 1
-        (during if i >= 0 and t <= spans[i][1] else normal).append(total)
+        if i >= 0 and t <= spans[i][1]:
+            during.append(total)
+        elif not fa._in_spans(t, away, away_starts):
+            normal.append(total)
     return (st.mean(during) if during else None), (st.median(normal) if normal else None)
 
 

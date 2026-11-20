@@ -3644,5 +3644,14 @@
   "tests": [
    "tests/test_analysis_rules_diagnose.py::test_the_headline_never_lays_a_low_frame_rate_on_the_wrong_gpu_where_it_says_it_is_not_the_limit"
   ]
+ },
+ {
+  "name": "a program's usual CPU read behind another window",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "        elif not fa._in_spans(t, away, away_starts):\n            normal.append(total)",
+  "new": "        else:\n            normal.append(total)",
+  "tests": [
+   "tests/test_analysis_rules.py::test_background_hogs_usual_cpu_leaves_out_time_behind_another_window"
+  ]
  }
 ]

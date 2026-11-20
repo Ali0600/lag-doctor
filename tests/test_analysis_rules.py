@@ -2429,6 +2429,28 @@ def test_background_hogs_names_programs_using_a_quarter_cpu_during_the_lag(cpu, 
     assert ("hog.exe" in res.title) is named
 
 
+def test_background_hogs_usual_cpu_leaves_out_time_behind_another_window():
+    # hog.exe ran 150 % of a CPU only while another window covered the game, from 6.5 s on: its "normally" read 150 %
+    # from those seconds, against the attribution's own usual level, read in front only (attribute.attribute)
+    events = [stutter(i, float(i), "background_cpu", process="hog.exe", process_pids=[20000, 20004])
+              for i in range(1, 6)]
+    others = hog_others(40.0, t_events=(1.0, 2.0, 3.0, 4.0, 5.0))
+    for t, procs in others:
+        if t > 6.5:
+            for p in procs:
+                if p[1] == "hog.exe":
+                    p[2] = 75.0
+    times = [0.05 * k for k in range(1, 601)]
+    covered = {F.T: times, rules.fa.HIDDEN: [t > 6.5 for t in times], rules.fa.FRONT: [None] * len(times)}
+    causes = {"background_cpu": lift("supports", a=5, n=5), "background_disk": lift("neutral", a=0, n=5),
+              "background_gpu": lift("neutral", a=0, n=5)}
+    texts = lambda res: " ".join(ev.text for ev in res.evidence)                      # noqa: E731
+    res = run("background_hogs", hogs(others), events=events, causes=causes, frames=covered)
+    assert is_finding(res) and "against 0% normally" in texts(res), texts(res)
+    res = run("background_hogs", hogs(others), events=events, causes=causes)          # in front all the time
+    assert is_finding(res) and "against 150% normally" in texts(res), texts(res)
+
+
 def test_background_hogs_quiet_disk_and_gpu_are_no_evidence_against_a_cpu_hog():
     causes = {"background_cpu": lift("supports", a=12, n=12),
               "background_disk": lift("contradicts", a=0, n=12), "background_gpu": lift("contradicts", a=0, n=12)}

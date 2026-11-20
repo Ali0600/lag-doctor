@@ -3011,5 +3011,86 @@
   "tests": [
    "tests/test_analysis_covered.py::test_the_covers_a_part_carries_are_judged_chain_by_chain_as_main_chain_judges_its_own"
   ]
+ },
+ {
+  "name": "the quiet grid counts time behind another window",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        quiet = _quiet_grid(start, end, spans, guard, away)",
+  "new": "        quiet = _quiet_grid(start, end, spans, guard)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_time_behind_another_window_never_sets_a_signals_usual_level"
+  ]
+ },
+ {
+  "name": "a quiet window may overlap time behind another window",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if (j < 0 or merged[j][1] < a) and (g < 0 or gone[g][1] <= w):",
+  "new": "        if j < 0 or merged[j][1] < a:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_time_behind_another_window_never_sets_a_signals_usual_level"
+  ]
+ },
+ {
+  "name": "blind read over time behind another window",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        vals = [x for t, x in zip(p.series.t, p.series.v) if x is not None and not fa._in_spans(t, gone, starts)]",
+  "new": "        vals = [x for x in p.series.v if x is not None]",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_signal_is_blind_by_the_most_it_read_where_a_moment_could_be_found"
+  ]
+ },
+ {
+  "name": "0 of n behind a covered window counted against not_focused",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if c.name == \"not_focused\" and away and label == \"contradicts\":",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_signal_is_blind_by_the_most_it_read_where_a_moment_could_be_found"
+  ]
+ },
+ {
+  "name": "not_focused never counted against",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        if c.name == \"not_focused\" and away and label == \"contradicts\":",
+  "new": "        if c.name == \"not_focused\" and label == \"contradicts\":",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_a_signal_is_blind_by_the_most_it_read_where_a_moment_could_be_found"
+  ]
+ },
+ {
+  "name": "too little quiet time said as not measured",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "        return _few_quiet(covered)\n",
+  "new": "        return c.why_missing\n",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_too_little_quiet_time_in_front_is_said_never_as_a_signal_not_measured"
+  ]
+ },
+ {
+  "name": "too little quiet time always said of the window",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    return (\"there was too little quiet time with the game's window in front to tell its usual level\" if covered else",
+  "new": "    return (\"there was too little quiet time with the game's window in front to tell its usual level\" if True else",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_too_little_quiet_time_in_front_is_said_never_as_a_signal_not_measured"
+  ]
+ },
+ {
+  "name": "a read thread with no usual level said as not measured",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "    if base is None and thread.measured:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_too_little_quiet_time_in_front_is_said_never_as_a_signal_not_measured"
+  ]
+ },
+ {
+  "name": "the residual never told of the window",
+  "file": "lagdoctor/analysis/attribute.py",
+  "old": "                                  thread_tick, covered=bool(away))",
+  "new": "                                  thread_tick, covered=False)",
+  "tests": [
+   "tests/test_analysis_frames_attribute.py::test_too_little_quiet_time_in_front_is_said_never_as_a_signal_not_measured"
+  ]
  }
 ]

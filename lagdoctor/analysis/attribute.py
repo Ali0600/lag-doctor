@@ -974,16 +974,20 @@ def _grid_stride(start: float, end: float) -> float:
     return max(BASE_STRIDE_S, (end - start) / MAX_QUIET_WINDOWS)
 
 
-def _quiet_grid(start: float, end: float, spans: list[tuple[float, float]],
-                guard: float) -> list[tuple[int, tuple[float, float]]]:
+def _quiet_grid(start: float, end: float, spans: list[tuple[float, float]], guard: float,
+                away: list[tuple[float, float]] = ()) -> list[tuple[int, tuple[float, float]]]:
     """(step number, window) of the 1 s windows from start to end, one per step of _grid_stride, that keep `guard`
-    seconds away from every span. Consecutive step numbers are windows one step apart."""
+    seconds away from every span and overlap none of `away` (time behind another window: no event can be found
+    there, so it is never quiet either). Consecutive step numbers are windows one step apart, so a run of them never
+    crosses time left out."""
     merged: list[tuple[float, float]] = []
     for a, b in sorted(spans):
         if merged and a <= merged[-1][1]:
             merged[-1] = (merged[-1][0], max(merged[-1][1], b))
         else:
             merged.append((a, b))
+    gone = fa._merge(list(away))
+    gone_starts = [a for a, _ in gone]
     starts = [a for a, _ in merged]
     stride = _grid_stride(start, end)
     out = []
@@ -994,16 +998,18 @@ def _quiet_grid(start: float, end: float, spans: list[tuple[float, float]],
             break
         a, b = w - guard, w + BASE_WINDOW_S + guard
         j = bisect.bisect_right(starts, b) - 1
-        if j < 0 or merged[j][1] < a:
+        g = bisect.bisect_left(gone_starts, w + BASE_WINDOW_S) - 1        # the last left-out span starting before its end
+        if (j < 0 or merged[j][1] < a) and (g < 0 or gone[g][1] <= w):
             out.append((k, (w, w + BASE_WINDOW_S)))
         k += 1
     return out
 
 
-def _quiet_windows(start: float, end: float, spans: list[tuple[float, float]], guard: float) -> list[tuple[float, float]]:
+def _quiet_windows(start: float, end: float, spans: list[tuple[float, float]], guard: float,
+                   away: list[tuple[float, float]] = ()) -> list[tuple[float, float]]:
     """1 s windows from start to end, one per tick (at most MAX_QUIET_WINDOWS), that keep `guard` seconds
-    away from every span."""
-    return [w for _, w in _quiet_grid(start, end, spans, guard)]
+    away from every span and overlap none of `away`."""
+    return [w for _, w in _quiet_grid(start, end, spans, guard, away)]
 
 
 def _slides(a: float, b: float, stride: float) -> int:
@@ -1115,13 +1121,16 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
     causes = _causes(cap, others)
     thread = _system(cap, S.GAME_TOP_THREAD_PCT)
 
-    # quiet 1 s windows: no attributed event (or mark) within the guard distance
+    # quiet 1 s windows: no attributed event (or mark) within the guard distance, and none in time behind another
+    # window (frames.hidden_spans, a tick padded as the bound's steady windows are): no event can be found there, so
+    # a baseline read there would set the usual level by readings no moment is ever judged against
     spans = sorted((e.t_start, e.t_end) for e in events if e.kind in ATTRIBUTED_KINDS + ("mark",))
+    away = fa.not_steady_spans([], fr, pad=fa.TICK_PAD_S)
     times = [x for c in causes for p in c.parts for x in p.series.t]
     start, end = (min(times), max(times)) if times else (0.0, 0.0)
     guard, quiet = QUIET_GUARD_S, []
     while True:
-        quiet = _quiet_grid(start, end, spans, guard)
+        quiet = _quiet_grid(start, end, spans, guard, away)
         if len(quiet) >= MIN_BASE_WINDOWS or guard <= QUIET_GUARD_MIN_S:
             break
         guard = max(QUIET_GUARD_MIN_S, guard / 2.0)
@@ -1179,16 +1188,18 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
         lift = (a_cnt / m) / max(b, LIFT_B_FLOOR) if b is not None and m else None
         ever = any(c.name in measured for _, _, _, measured, _ in acts)
         label = _label(a_cnt, m, lift, measured=ever)
-        blind = _blind(c, bases[c.name])
+        blind = _blind(c, bases[c.name], away)
         if blind and label == "contradicts":      # no moment could rise: "only 0 of n" would be false, not evidence
             label = "neutral"
+        if c.name == "not_focused" and away and label == "contradicts":   # no moment behind a covered window is ever
+            label = "neutral"         # found, so "0 of n came behind another window" cannot show it (rules' cost does)
         w = (3.0 if lift is not None and lift >= LIFT_STRONG else 2.0) if label == "supports" else 1.0
         if c.name in CAPPED_AT_POSSIBLE:
             w = min(w, 1.0)
         weight[c.name] = w / 2.0 if half else w
         summary[c.name] = {"a": a_cnt, "n": m, "share": 0.0, "lift": lift, "label": label, "b": b,
                            "weight": weight[c.name], "time_share": 0.0, "baseline_guard_s": guard,
-                           "why": "" if ever else c.why_missing}
+                           "why": "" if ever else _unjudged_why(c, bases[c.name], bool(away))}
         if left:
             summary[c.name]["left_out"] = left
             summary[c.name]["left_out_why"] = _left_out_why(c)
@@ -1215,7 +1226,7 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
         elif not names:
             screen = _screen_hold(fr, ev, usual, period) if side in ("cpu", None) else None
             res, line = _residual(side, side_source, thread, thread_base, ev, measured, screen and screen[1],
-                                  thread_tick)
+                                  thread_tick, covered=bool(away))
             if screen and line == screen[1]:
                 why[0] = screen[0]            # its slowest frame, never "the CPU side was slow" beside a held screen
             if res:
@@ -1264,20 +1275,38 @@ def attribute(cap: Capture, fr: dict[str, list], events: Iterable[LagEvent], bou
     return summary
 
 
-def _blind(c: _Cause, bases: dict[int, _Baseline | None]) -> bool:
+def _blind(c: _Cause, bases: dict[int, _Baseline | None], away: list[tuple[float, float]] = ()) -> bool:
     """No moment could have counted although the cause was there: every measured part's quiet level is itself a rise
-    from nothing (at its floor or past it), and that level plus the floor is past the most its signal ever read. A
-    game behind another window in most quiet seconds has its "behind" signal at the top, 1.0, so a moment behind it
-    cannot stand out. A signal that never moved off nothing is no such case: "0 of n coincided" is then true."""
+    from nothing (at its floor or past it), and that level plus the floor is past the most its signal ever read, `away`
+    (time behind another window, left out of the baseline too) left out. A game behind another window in most quiet
+    seconds has its "behind" signal at the top, 1.0, so a moment behind it cannot stand out. A signal that never moved
+    off nothing is no such case: "0 of n coincided" is then true."""
     seen = False
+    gone = fa._merge(list(away))
+    starts = [a for a, _ in gone]
     for k, p in enumerate(c.parts):
-        base, vals = bases.get(k), [x for x in p.series.v if x is not None]
+        base = bases.get(k)
+        vals = [x for t, x in zip(p.series.t, p.series.v) if x is not None and not fa._in_spans(t, gone, starts)]
         if base is None or not vals:
             continue
         if p.direction < 0 or base.med < p.floor(base.med) or base.med + p.floor(base.med) <= max(vals):
             return False
         seen = True
     return seen
+
+
+def _few_quiet(covered: bool) -> str:
+    """Why a signal that was read has no usual level: too little quiet time, the time behind another window left out."""
+    return ("there was too little quiet time with the game's window in front to tell its usual level" if covered else
+            "there was too little quiet time to tell its usual level")
+
+
+def _unjudged_why(c: _Cause, bases: dict[int, _Baseline | None], covered: bool) -> str:
+    """Why a cause was judged at no moment: too little quiet time when it was read yet no part has a usual level
+    (_few_quiet), else what was not measured (why_missing)."""
+    if any(p.series.measured for p in c.parts) and all(bases.get(k) is None for k in range(len(c.parts))):
+        return _few_quiet(covered)
+    return c.why_missing
 
 
 def _label(a: int, n: int, lift: float | None, measured: bool) -> str:
@@ -1438,7 +1467,8 @@ def _hold_reading(thread: _Series, base: _Baseline | None, ev: LagEvent, tick: f
 
 
 def _residual(side: str | None, source: str | None, thread: _Series, base: _Baseline | None, ev: LagEvent,
-              measured: set[str], screen: str | None = None, tick: float | None = None) -> tuple[str | None, str]:
+              measured: set[str], screen: str | None = None, tick: float | None = None,
+              covered: bool = False) -> tuple[str | None, str]:
     """When no signal moved: the GPU's own work (GPU side), no cause of the game's when the screen held while the game
     kept presenting (`screen`, _screen_hold's reason), the game's own work (its busiest thread saturated, or working
     through a long frozen frame) or the game waiting on itself. Never a guess when the system was not measured, and the
@@ -1448,6 +1478,8 @@ def _residual(side: str | None, source: str | None, thread: _Series, base: _Base
         return "gpu_spike", "nothing else moved: the GPU's own work took long"
     if screen:
         return None, screen
+    if base is None and thread.measured:            # read, but never in enough quiet time (`covered`: the time behind
+        return None, f"the game's CPU use was read, but {_few_quiet(covered)}, so the cause is unknown"   # left out)
     if "game_cpu_spike" not in measured or base is None:
         return None, "the game's CPU use was not measured at this moment, so the cause is unknown"
     a, b = ev.t_start - WINDOW_BEFORE_S, ev.t_end + WINDOW_AFTER_S
