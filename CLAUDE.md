@@ -119,7 +119,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `lagdoctor/analysis/rules.py` (456 after PR #52) takes up to an hour here (PR #50's 494 picked mutations took about
   70 minutes, PR #51's 744 about 36 and PR #52's 643 about 38 on a quiet PC): start it in the background as soon as the code is settled, and
   review meanwhile with agents that run no tests (no second pytest meanwhile, so write the next change's tests without
-  running them; the full suite may run beside such agents, about 8.5 minutes). A guard a later edit makes redundant
+  running them; the full suite may run beside such agents, about 8.5 minutes). While another session's run holds
+  pytest, a test that takes no fixtures can still be called from plain Python, which shares no pytest temp folder,
+  and a sabotage can be pre-checked that way on a temp copy of `lagdoctor/` and `tests/` (PR #67 pre-checked its 25
+  so during another session's 511-mutation run; the gate is still `redfirst.py`). A guard a later edit makes redundant
   (PR #51: `return out or None` after an `if not proc_ded: return None`) leaves its mutation equivalent, so it can
   only survive: drop the redundant check and its mutation together. An `old` that
   still occurs once can still go dead: a change that sends its test down a new path leaves the sabotaged line
