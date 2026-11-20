@@ -113,9 +113,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `file` or tests the change touches, picked by path from all of `tests/redfirst/`, never from a list kept by hand
   (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). Commit before
   picking: a pick by `git diff --name-only origin/main HEAD` cannot see an uncommitted edit (PR #53's first pick left
-  out `frames.py`'s 112). A picked set runs about 3.7 s a mutation here (PR #53's 1,098 took 67 minutes), and one heavy in the window's own
+  out `frames.py`'s 112). Merge `origin/main` into the branch first, too: worktrees share their refs, so another
+  session's fetch moves `origin/main` under yours, and the two-dot diff then counts main's new files as the branch's
+  (PR #66's first pick took 1,644 mutations, 511 once main was merged). A picked set runs about 3.7 s a mutation here (PR #53's 1,098 took 67 minutes), and one heavy in the window's own
   tests about 8 s (each run of `tests/test_app_page.py` opens the real window: PR #62's 308 took about 40 minutes,
-  PR #64's 466, 71 of them on the window, about 68). Every mutation on
+  PR #64's 466, 71 of them on the window, about 68, and PR #66's 511, 83 on the window, 69). Every mutation on
   `lagdoctor/analysis/rules.py` (456 after PR #52) takes up to an hour here (PR #50's 494 picked mutations took about
   70 minutes, PR #51's 744 about 36 and PR #52's 643 about 38 on a quiet PC): start it in the background as soon as the code is settled, and
   review meanwhile with agents that run no tests (no second pytest meanwhile, so write the next change's tests without
@@ -319,6 +321,8 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   guard switches the autouse copy off too, and without the stand-in the first red-first run of it opened Windows' real
   Open dialog, which sat on the owner's screen until the run's 10-minute bound (PR #64, 2026-11-19). A test that
   adds a game picks a made-up program (`tests/pe_build.py`) under its own `tmp_path`, never a game's file.
+  `App(capture_lock=)`, the lock name Delete looks at for another process's recording, defaults to none as well, so
+  a test never meets the owner's own `watch`; a test of it holds a lock of its own name (`elevation.hold_named_mutex`).
   `App(trash=)`, Delete's move to the Recycle Bin (`winapi/recycle.to_recycle_bin`), defaults to none too: the real
   one puts the test's folder in the owner's own Recycle Bin, so `tests/conftest.py`'s `_no_real_recycle_bin` fails a
   test that reaches it, its own test (`tests/test_recycle.py`) stubs `recycle._SHFileOperationW` under the guard's
@@ -539,8 +543,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   2026-11-17 with "a window from the game's folder (python.exe) never drew within 20 seconds", alone and on main's own
   `target.py` alike, with no other LagLab window open and the screen unlocked: LagLab's draws did not reach the GPU
   counters then. It failed again on 2026-11-19, with `test_sysmon_target.py`'s windowed-renderer test beside it, both
-  on main's own `target.py` too (byte-copied in, restored by hash): this PC's state. Run that control before blaming a
-  change. `tests/test_app_page.py::test_record_runs_a_recording_the_window_follows_with_the_game_named_as_text` read
+  on main's own `target.py` too (byte-copied in, restored by hash): this PC's state; and on 2026-11-20 alone, on
+  origin/main's own tree (a `git worktree add --detach` under `%TEMP%`, its `lagdoctor.__file__` checked). Run that
+  control before blaming a change. `tests/test_app_page.py::test_record_runs_a_recording_the_window_follows_with_the_game_named_as_text` read
   BAD-BASE once in a long red-first run (PR #62, 2026-11-19: its baseline failed under the run's load) and passed its
   baseline and was CAUGHT when that one mutation was rerun alone: rerun such a mutation alone before blaming a change.
   `tests/test_redfirst.py::test_the_job_counts_every_process_under_pytest_and_ending_it_ends_them_all` failed once on
