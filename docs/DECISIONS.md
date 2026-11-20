@@ -287,7 +287,11 @@ The lift test's quiet baseline (`attribute._quiet_grid`):
   are `not_focused`'s only chance to show.
 
 Left open: `sweep/results.clipped_frames` cuts the whole recording's frames by row and does not clip a frozen screen
-that began before its window (its docstring says it does). Revisit hooks: `rules.costs_no_frames`, `frames._hidden`
+that began before its window (its docstring says it does). Done 2026-11-20, by the sweep's own rule (the part inside
+the window counts), not dropped as `crop` drops it: a sweep's window is cut exactly (DESIGN, "The settings sweep").
+Run, the gap was wider than read: such a freeze at the press was never counted (no frame before it to judge a stall
+by), one across the end counted past it or not at all, frames not shown at either edge counted whole or not at all,
+and a recording without display tracking read as one frame. Revisit hooks: `rules.costs_no_frames`, `frames._hidden`
 (the `ends`), `frames.row_covers` and `crop.crop`, `attribute._quiet_grid`'s `away`.
 
 ---

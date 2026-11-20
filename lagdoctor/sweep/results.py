@@ -20,6 +20,7 @@ is "no measurable difference", never a winner. The 1 % low gets the same compari
 """
 from __future__ import annotations
 
+import bisect
 import math
 import statistics
 from typing import Any, Sequence
@@ -64,10 +65,34 @@ def _round(v: Any, digits: int = 3) -> float | None:
 
 # ------------------------------------------------------------- one run --
 
+def _clip(iv: Any, t0: float, t1: float) -> tuple[float, float] | None:
+    """A frozen screen (a FRONT's (from, to)) cut to the window, None when none of it is inside."""
+    if not isinstance(iv, tuple) or len(iv) != 2:
+        return None
+    a, b = max(float(iv[0]), t0), min(float(iv[1]), t1)
+    return (a, b) if b > a else None
+
+
+def _shown_rows(fr: dict[str, list], behind: bool = False) -> list[int]:
+    """The rows of `fr` whose frame was shown, as the report's display series judges them (frames.display_series), in
+    order: those behind another window left out unless `behind`; none where the rows have no display tracking."""
+    rows, _, _, source = fa.display_series({**fr, fa.HIDDEN: []} if behind else fr)
+    return rows if source == "display" else []
+
+
 def clipped_frames(cap: Capture, t0: float, t1: float) -> dict[str, list]:
-    """The main swap chain's rows inside (t0, t1], plus the first row after t1, with the edges cut to the window: the
-    first row's frame and display times are cut to the part after t0, and the row after t1 becomes a row at t1 holding
-    the part of its interval before t1. So a freeze across either edge counts only its part inside the window."""
+    """The main swap chain's rows inside (t0, t1], plus the first row after t1, with the edges cut to the window, so a
+    freeze across either edge counts only its part inside it. HIDDEN and FRONT are the whole recording's (main_chain).
+
+    At t0: the first row's frame time is cut to the part after t0, and so is the display time of the first frame shown
+    (it reaches back to the frame shown before it, which may be well before t0 when the frames between were never
+    shown). A frozen screen in front (FRONT) is cut to the window; before the window's first frame in front, where no
+    frame can judge it as a stall, it is its own row's frame, and the time behind another window before it none.
+
+    At t1: the row after it becomes a row at t1 holding its present interval's part before t1 and, as a frame shown,
+    the time since the last frame shown (the screen showed nothing new until after t1), or, where the frame shown next
+    ends time behind another window, nothing but the frozen screen of that time (its FRONT, cut to the window). Without
+    display tracking it holds no display time: the time between presents is the series then, as in the report."""
     fr = fa.main_chain(cap)
     ts = fr.get(F.T) or []
     inside = [i for i, t in enumerate(ts) if (v := _finite(t)) is not None and t0 < v <= t1]
@@ -76,23 +101,47 @@ def clipped_frames(cap: Capture, t0: float, t1: float) -> dict[str, list]:
     out = {name: [col[i] if i < len(col) else None for i in keep] for name, col in fr.items() if isinstance(col, list)}
     if not keep:
         return out
-    cols = (F.FRAME_MS, F.DISPLAY_MS)
+    n = len(keep)
+    times, frame, disp, shown, hid, front = (out.setdefault(name, [None] * n) for name in (
+        F.T, F.FRAME_MS, F.DISPLAY_MS, F.DISPLAYED, fa.HIDDEN, fa.FRONT))
+    for k in range(n):
+        front[k] = _clip(front[k], t0, t1)
     if inside:
-        first = 0
         part = (float(ts[inside[0]]) - t0) * 1000.0
-        for name in cols:
-            v = _finite(out[name][first]) if name in out else None
-            if v is not None and v > part:
-                out[name][first] = round(part, 6)
+        v = _finite(frame[0])
+        if v is not None and v > part:
+            frame[0] = round(part, 6)
+        first = next((r for r in _shown_rows(out, behind=True) if r < len(inside)), None)
+        if first is not None and (v := _finite(disp[first])) is not None:
+            disp[first] = min(v, round((float(times[first]) - t0) * 1000.0, 6))
+        seen = _shown_rows(out)
+        for r in range(min(seen[0] if seen else n, len(inside))):
+            if front[r] is not None:                  # nothing before it to judge it by: a frame of its own
+                a, b = front[r]
+                hid[r], disp[r], front[r] = False, round((b - a) * 1000.0, 6), None
     if after is not None:
-        last = len(keep) - 1
+        last = n - 1
         prev = float(ts[inside[-1]]) if inside else t0
         part = (t1 - prev) * 1000.0
-        out[F.T][last] = t1
-        for name in cols:
-            if name in out:
-                out[name][last] = round(part, 6) if part > 0 else None
+        times[last], frame[last] = t1, round(part, 6) if part > 0 else None
+        every = _shown_rows(fr, behind=True)
+        k = bisect.bisect_left(every, after)
+        nxt = every[k] if k < len(every) else None     # the frame shown next: its display change spans t1
+        if hid[last] is True or (nxt is not None and _item(fr.get(fa.HIDDEN), nxt) is True):
+            hid[last] = True                           # behind another window at t1, or since the last frame shown
+            if nxt is not None:
+                front[last] = _clip(_item(fr.get(fa.FRONT), nxt), t0, t1)
+        elif every:                                    # without display tracking it makes up no display time
+            before = [r for r in _shown_rows(out, behind=True) if r < last]
+            part = (t1 - (float(times[before[-1]]) if before else t0)) * 1000.0
+            disp[last] = round(part, 6) if part > 0 else None
+            if part > 0:
+                shown[last] = 1
     return out
+
+
+def _item(col: Any, i: int) -> Any:
+    return col[i] if isinstance(col, list) and 0 <= i < len(col) else None
 
 
 def window_metrics(cap: Capture, t0: float, window_s: float) -> dict[str, Any]:
