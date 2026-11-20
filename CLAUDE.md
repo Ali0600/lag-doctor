@@ -182,7 +182,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   first row or after its last): copy or cut it by its own items, never by `F.ALL`, which drops them and judges a
   covered window's frames again, and keep `EDGES` a tuple, which a row-by-row copy (`sweep/results.clipped_frames`)
   leaves out instead of cutting, and cut each `FRONT` (a frozen screen's from and to) to the copy's own window: a row
-  the copy keeps can hold one that began before it or ends after it. A measured part takes HIDDEN, FRONT and EDGES
+  the copy keeps can hold one that began before it or ends after it. Read `FRONT` on every row of a `HIDDEN` run, never
+  only its last: `_hidden` puts each on the shown frame ending its own run, and a shown burst joining two stretches
+  leaves that frame inside the run (until PR #68, `frames._row_spans` read only the last, and `hidden_s` counted such a
+  freeze as time behind too). A measured part takes HIDDEN, FRONT and EDGES
   from `Capture.covers` (`crop.crop`, the whole recording's judgement), never from its own rows alone. A frame test builds its capture and goes
   through `main_chain`, since a dict built by hand has no `HIDDEN` and hides nothing.
 - **A rule test asserts the kind it expects.** `rules.run_rule` turns a rule that raises into Unchecked ("the check
