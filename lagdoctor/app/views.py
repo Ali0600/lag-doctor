@@ -385,17 +385,20 @@ def clash_view(how: str, game: Any) -> dict[str, Any]:
 
 # ------------------------------------------------------------------------------------------- deleting them --
 
-DELETED = "{n} recordings were moved to the Recycle Bin, where Windows can put them back."
-DELETED_ONE = "The recording was moved to the Recycle Bin, where Windows can put it back."
+DELETED = ("{n} recordings were deleted. Unless Windows asked to delete them for good, they are in the Recycle Bin, "
+           "where Windows can put them back.")
+DELETED_ONE = ("The recording was deleted. Unless Windows asked to delete it for good, it is in the Recycle Bin, where "
+               "Windows can put it back.")
 NOT_DELETED = "The recording of {when} was not deleted: {why}."
 
 
 def deleted_view(done: int, failed: list[tuple[Entry, str]], listed: bool) -> dict[str, Any]:
-    """What the page says once recordings were deleted (`done` of them moved to the Recycle Bin, `failed` with why
-    not), and whether their game is still in the Library (`listed`: a recorded game no store lists and nobody added
-    leaves it with its last recording)."""
+    """What the page says once recordings were deleted (`done` of them handed to the Recycle Bin, `failed` with why
+    not, each by its start, else its folder's name), and whether their game is still in the Library (`listed`: a
+    recorded game no store lists and nobody added leaves it with its last recording). A folder Windows asked to
+    delete for good, and the player let it, is gone too, and lag-doctor cannot tell it from one recycled."""
     said = [DELETED_ONE if done == 1 else DELETED.format(n=done)] if done else []
-    said += [NOT_DELETED.format(when=when_text(e.started), why=why) for e, why in failed]
+    said += [NOT_DELETED.format(when=when_text(e.started) if e.started else e.id, why=why) for e, why in failed]
     return {"text": " ".join(said), "deleted": done, "listed": listed}
 
 

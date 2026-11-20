@@ -14,7 +14,8 @@ shellapi.h's (Windows SDK 10.0.26100.0). What Microsoft's pages on them say, and
 - The call returns its own codes, not Win32 errors (so never GetLastError), and it can return 0 for an operation that
   was cancelled: fAnyOperationsAborted is read too.
 The caller checks the folder is gone afterwards (App.delete), and the tests never reach the real call
-(tests/conftest.py's _no_real_recycle_bin; tests/test_recycle_live.py runs it on GitHub's runner only).
+(tests/conftest.py's _no_real_recycle_bin; tests/test_recycle_live.py runs it on GitHub's runner only). Its errors
+reach the page, so they are plain words (tests/test_user_text.py reads this module too).
 """
 from __future__ import annotations
 
@@ -50,6 +51,10 @@ _SHFileOperationW.restype = ctypes.c_int
 _SHFileOperationW.argtypes = (ctypes.POINTER(SHFILEOPSTRUCTW),)
 
 
+class Cancelled(OSError):
+    """The move was cancelled: by the player, in a question of Windows', or by Windows itself."""
+
+
 def _file_operation(op) -> int:
     """SHFileOperationW, looked up when called (the tests replace this: the real one moves the folder into this PC's
     own Recycle Bin)."""
@@ -76,7 +81,8 @@ def names(path: str) -> str:
 
 def to_recycle_bin(path: str, hwnd: int | None) -> None:
     """Move the file or folder at `path` (a full path: refused) to the Recycle Bin, any question Windows asks owned by
-    the window `hwnd`. ValueError for a path refused here; OSError, with Windows' code, when it was not moved."""
+    the window `hwnd`. ValueError for a path refused here; Cancelled when the move was cancelled; OSError, with
+    Windows' code, when it was not moved."""
     why = refused(path)
     if why is not None:
         raise ValueError(why)
@@ -88,6 +94,6 @@ def to_recycle_bin(path: str, hwnd: int | None) -> None:
     op.fFlags = FLAGS
     code = _file_operation(ctypes.byref(op))
     if op.fAnyOperationsAborted or code == DE_OPCANCELLED:
-        raise OSError(0, "moving it to the Recycle Bin was cancelled")
+        raise Cancelled(0, "moving it to the Recycle Bin was cancelled")
     if code != 0:
         raise OSError(0, f"Windows could not move it to the Recycle Bin (code 0x{code:X})")

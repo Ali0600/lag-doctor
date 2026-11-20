@@ -2144,16 +2144,24 @@ spike, which passed the owner's run.
 - **Delete** (`delete_recordings {game, sessions}`, `App.do_delete_recordings` and `App.delete`): on a game's page the
   recordings ticked for Compare (at most `bridge.MAX_DELETE`, 100, at once, none twice) go with a second click to
   Windows' Recycle Bin, where Windows can put them back. Each id must be a recording listed under the game the page
-  names (never a folder the page names), and nothing is deleted while a recording runs (looked at on the worker and
-  again on the UI thread). Each folder goes on the UI thread, by its full path (`os.path.abspath`), only when
+  names (never a folder the page names; `bridge.SESSION_ID` takes no name ending in a dot, which Windows would drop
+  and so name another folder), and nothing is deleted while a recording runs: this window's own (`rec_state`), or any
+  other in this Windows session (a terminal's `watch`, or a recorder an earlier window left running), whose
+  `capture.session.CaptureLock` each holds until its analysis ends (`App(capture_lock=)`, which only `run()` passes:
+  looked at and let go at once). Both are looked at on the UI thread right before the first move; a recording that
+  starts after makes a folder of its own. Each folder goes on the UI thread, by its full path (`os.path.abspath`),
+  only when
   `target.local_problem` finds it on this PC's own disks, through `App(trash=)`, which only `run()` passes
   (`winapi/recycle.to_recycle_bin`: SHFileOperationW with FO_DELETE and FOF_ALLOWUNDO, no progress, confirmation or
   error dialog, but FOF_WANTNUKEWARNING, so Windows asks, owned by the window, before deleting anything for good
   rather than recycling it; only a drive letter's full path within MAX_PATH with no `.` or `..` part and no wildcard
   is handed over, since a name without a full path is deleted for good even with FOF_ALLOWUNDO; a 0 with
-  `fAnyOperationsAborted` set is a cancel). Each folder is checked gone afterwards; what was not deleted is said by
-  the recording's time and why (`views.deleted_view`), the last recording read is let go, and the page is drawn again
-  with what was said, or the Library when a recorded game went with its last recording. `tests/conftest.py`'s
+  `fAnyOperationsAborted` set is a cancel, `recycle.Cancelled`, which ends the delete: the rest would only ask
+  again). Each folder is checked gone afterwards. The page says the recordings were deleted, and are in the Recycle
+  Bin unless Windows asked to delete them for good (when the player said yes there, lag-doctor cannot tell); what was
+  not deleted is said by the recording's time (else its folder's name) and why (`views.deleted_view`); the last
+  recording read is let go; and the page is drawn again with what was said, or the Library when a recorded game went
+  with its last recording (a listing that fails then still answers, as listed). `tests/conftest.py`'s
   `_no_real_recycle_bin` fails a test that reaches the real call (its own test stubs `recycle._SHFileOperationW`
   under the seam), and `tests/test_recycle_live.py` moves a made-up folder for real on GitHub's runner only, finds it
   in that drive's Recycle Bin by the `$I` record naming its path, and takes it out again. `lagdoctor fix` says so when

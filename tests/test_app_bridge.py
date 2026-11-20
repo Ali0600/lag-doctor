@@ -111,6 +111,7 @@ def test_each_request_kind_parses_with_exactly_its_fields():
     msg(type="request", id=1, kind="results", session="C:\\Users\\x\\capture.ldcap.json.gz"),
     msg(type="request", id=1, kind="results", session=["20261104-194500-a"]),
     msg(type="request", id=1, kind="results", session="20261104-194500-" + "a" * 65),
+    msg(type="request", id=1, kind="results", session="20261104-194500-a."),        # Windows drops the last dot
     msg(type="request", id=1, kind="game", game="demoracer"),              # a name, not an id
     msg(type="request", id=1, kind="game", game="g-0123456789ABCDEF"),
     msg(type="request", id=1, kind="moment", session="20261104-194500-a", event=-1),

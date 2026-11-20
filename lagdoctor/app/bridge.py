@@ -25,7 +25,9 @@ MAX_MESSAGE_CHARS = 16 * 1024              # a request is a few dozen characters
 MAX_ID = 2 ** 31 - 1
 
 # What the page may ask for, and the fields each request carries besides its id: {kind: {field: checker}}.
-SESSION_ID = re.compile(r"[0-9]{8}-[0-9]{6}-[\w.-]{1,64}")      # a session folder's name (capture.session.session_dir)
+# A session folder's name (capture.session.session_dir), never ending in a dot: Windows drops a last dot from a path,
+# so one would name the folder of the same name without it.
+SESSION_ID = re.compile(r"[0-9]{8}-[0-9]{6}-[\w.-]{0,63}[\w-]")
 GAME_ID = re.compile(r"g-[0-9a-f]{16}")
 DRAFT_ID = re.compile(r"d-[0-9a-f]{16}")          # a program the player chose, before it is added (screen 6)
 MAX_NAME_CHARS = 400                               # a name the player typed; the app keeps 200 of it (stores.name)

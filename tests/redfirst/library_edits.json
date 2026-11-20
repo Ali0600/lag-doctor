@@ -413,7 +413,7 @@
  {
   "name": "views: what was not deleted left unsaid",
   "file": "lagdoctor/app/views.py",
-  "old": "    said += [NOT_DELETED.format(when=when_text(e.started), why=why) for e, why in failed]",
+  "old": "    said += [NOT_DELETED.format(when=when_text(e.started) if e.started else e.id, why=why) for e, why in failed]",
   "new": "    said += []",
   "tests": [
    "tests/test_app_edits.py::test_a_move_windows_refused_or_that_left_the_folder_is_said_and_the_others_still_go",
@@ -627,6 +627,124 @@
   "new": "            except ZeroDivisionError as exc:  # noqa: BLE001 - said, the page answered, and the other recordings still go",
   "tests": [
    "tests/test_app_edits.py::test_an_error_moving_one_recording_is_said_and_the_page_still_answered"
+  ]
+ },
+ {
+  "name": "app: another process's recording not looked for",
+  "file": "lagdoctor/app/main.py",
+  "old": "        why_not = self.other_recording()",
+  "new": "        why_not = None",
+  "tests": [
+   "tests/test_app_edits.py::test_nothing_is_deleted_while_another_process_records"
+  ]
+ },
+ {
+  "name": "app: another process's recording taken as none",
+  "file": "lagdoctor/app/main.py",
+  "old": "        return None if free else (",
+  "new": "        return None if True else (",
+  "tests": [
+   "tests/test_app_edits.py::test_nothing_is_deleted_while_another_process_records"
+  ]
+ },
+ {
+  "name": "app: the capture lock kept after looking",
+  "file": "lagdoctor/app/main.py",
+  "old": "        finally:\n            lock.release()\n",
+  "new": "        finally:\n            pass\n",
+  "tests": [
+   "tests/test_app_edits.py::test_nothing_is_deleted_while_another_process_records"
+  ]
+ },
+ {
+  "name": "app: a lock Windows cannot read ends the request",
+  "file": "lagdoctor/app/main.py",
+  "old": "        except OSError as exc:\n            self.log(f\"looking for a recording before deleting: {exc}\")",
+  "new": "        except ZeroDivisionError as exc:\n            self.log(f\"looking for a recording before deleting: {exc}\")",
+  "tests": [
+   "tests/test_app_edits.py::test_nothing_is_deleted_when_windows_cannot_say_whether_one_records"
+  ]
+ },
+ {
+  "name": "app: a cancelled move taken as a failed one",
+  "file": "lagdoctor/app/main.py",
+  "old": "            except recycle.Cancelled:",
+  "new": "            except ZeroDivisionError:",
+  "tests": [
+   "tests/test_app_edits.py::test_a_move_the_player_cancelled_ends_the_delete"
+  ]
+ },
+ {
+  "name": "app: the rest tried after a cancel",
+  "file": "lagdoctor/app/main.py",
+  "old": "                failed += [(x, \"it was not tried, since the one before it was cancelled\") for x in trash.entries[i + 1:]]\n                break",
+  "new": "                continue",
+  "tests": [
+   "tests/test_app_edits.py::test_a_move_the_player_cancelled_ends_the_delete"
+  ]
+ },
+ {
+  "name": "app: a listing that fails after a delete leaves the page unanswered",
+  "file": "lagdoctor/app/main.py",
+  "old": "        except Exception as exc:  # noqa: BLE001 - the folders are gone: the page must hear so",
+  "new": "        except ZeroDivisionError as exc:  # noqa: BLE001 - the folders are gone: the page must hear so",
+  "tests": [
+   "tests/test_app_edits.py::test_a_listing_that_fails_after_the_delete_still_says_what_was_deleted"
+  ]
+ },
+ {
+  "name": "views: an undated recording named as -",
+  "file": "lagdoctor/app/views.py",
+  "old": "    said += [NOT_DELETED.format(when=when_text(e.started) if e.started else e.id, why=why) for e, why in failed]",
+  "new": "    said += [NOT_DELETED.format(when=when_text(e.started), why=why) for e, why in failed]",
+  "tests": [
+   "tests/test_app_edits.py::test_the_words_a_deletion_says"
+  ]
+ },
+ {
+  "name": "recycle: a cancel raised as any failure",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "        raise Cancelled(0, \"moving it to the Recycle Bin was cancelled\")",
+  "new": "        raise OSError(0, \"moving it to the Recycle Bin was cancelled\")",
+  "tests": [
+   "tests/test_recycle.py::test_a_move_windows_did_not_make_is_said"
+  ]
+ },
+ {
+  "name": "bridge: a session id ending in a dot",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "SESSION_ID = re.compile(r\"[0-9]{8}-[0-9]{6}-[\\w.-]{0,63}[\\w-]\")",
+  "new": "SESSION_ID = re.compile(r\"[0-9]{8}-[0-9]{6}-[\\w.-]{1,64}\")",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_is_refused",
+   "tests/test_app_edits.py::test_a_session_id_ending_in_a_dot_is_none_windows_keeps_apart"
+  ]
+ },
+ {
+  "name": "added: a device's name kept as a program",
+  "file": "lagdoctor/app/added.py",
+  "old": "    if name.split(\".\", 1)[0].rstrip(\" \").casefold() in DEVICES:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_app_added.py::test_a_path_that_is_no_game_program_in_a_folder_of_its_own_is_refused"
+  ]
+ },
+ {
+  "name": "added: a device's name before a space kept",
+  "file": "lagdoctor/app/added.py",
+  "old": "    if name.split(\".\", 1)[0].rstrip(\" \").casefold() in DEVICES:",
+  "new": "    if name.split(\".\", 1)[0].casefold() in DEVICES:",
+  "tests": [
+   "tests/test_app_added.py::test_a_path_that_is_no_game_program_in_a_folder_of_its_own_is_refused"
+  ]
+ },
+ {
+  "name": "added: the superscript ports kept",
+  "file": "lagdoctor/app/added.py",
+  "old": "                                                               \"\\u00b9\", \"\\u00b2\", \"\\u00b3\")})",
+  "new": "                                                               )})",
+  "tests": [
+   "tests/test_app_added.py::test_a_path_that_is_no_game_program_in_a_folder_of_its_own_is_refused"
   ]
  }
 ]

@@ -67,6 +67,10 @@ def test_a_program_is_kept_by_its_path_in_windows_own_form(path, kept):
     ("run.exe", "is not a program"),
     ("D:\\Games\\Mo\nss\\run.exe", "not the path of a program"),
     ("D:\\Games\\Moss\\r<n.exe", "is not a program"),
+    ("D:\\Games\\Moss\\COM1.exe", "names one of Windows' devices"),        # the serial port, to Windows 10
+    ("D:\\Games\\Moss\\nul.EXE", "names one of Windows' devices"),
+    ("D:\\Games\\Moss\\Lpt\u00b9.exe", "names one of Windows' devices"),
+    ("D:\\Games\\Moss\\con .tar.exe", "names one of Windows' devices"),
     ("D:\\Games\\" + "x" * 600 + ".exe", "not the path of a program"),
     ("D:\\Games\\Mo" + chr(0xD800) + "ss\\run.exe", "not the path of a program"),       # a lone surrogate
     ("D:\\Games\\Mo" + chr(0x2028) + "ss\\run.exe", "not the path of a program"),       # a line separator

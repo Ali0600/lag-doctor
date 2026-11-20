@@ -78,6 +78,7 @@ def test_a_move_windows_did_not_make_is_said(monkeypatch, code, aborted, words):
     with pytest.raises(OSError) as raised:
         recycle.to_recycle_bin(FOLDER, None)
     assert raised.value.strerror == words
+    assert isinstance(raised.value, recycle.Cancelled) is words.endswith("cancelled")   # a cancel ends App.delete
 
 
 def test_conftest_keeps_every_test_off_the_real_recycle_bin():

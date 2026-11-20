@@ -40,8 +40,9 @@ class Game:
     title: str          # the store's name for it, else its folder's name, each cleaned for display (title)
     folder: str         # its install folder, as target.check_folder gives it; it existed when read
     link: str           # the link Play opens (launch.steam_link or launch.epic_link)
-    exe: str | None = None  # the program its launcher names, inside its folder (Epic's; a Steam manifest names none),
-                            # read only for its icon; None when none is named, or one that is not a program in it
+    exe: str | None = None  # the program its launcher names, a path ending in .exe inside its folder (Epic's; a
+                            # Steam manifest names none), read only for its icon, which checks it is a program; None
+                            # when none is named, or the path named is not one of those
 
 
 @dataclass

@@ -125,7 +125,9 @@ class App:
     (app/added.py). A game whose tile holds no cover shows its program's icon (stores/exe.py), from the first program
     views.icon_programs names for it that has one. `trash(path, hwnd)` moves a recording's folder to the Recycle Bin
     (winapi/recycle.to_recycle_bin, which only run() passes as well: no test puts anything in the PC's own Recycle
-    Bin); without it, Delete is not offered."""
+    Bin); without it, Delete answers that it is not available. `capture_lock` names the lock every recording holds
+    until its analysis ends (capture.session.CAPTURE_LOCK_NAME, which only run() passes, so a test never meets the
+    owner's own recording): Delete deletes nothing while another process holds it."""
 
     def __init__(self, *, home: Path, runtime: dict, create_fn, log: Callable[[str], None],
                  tell: Callable[[str], None] = tell, activate: bool = True, on_ready: Callable[["App"], None] | None
@@ -138,7 +140,7 @@ class App:
                  forms_of: Callable[[str], tuple[str, ...]] | None = None,
                  covers: Callable[[list], dict] | None = None,
                  picker: Callable[[int | None], str | None] | None = None,
-                 trash: Callable[[str, int | None], Any] | None = None) -> None:
+                 trash: Callable[[str, int | None], Any] | None = None, capture_lock: str | None = None) -> None:
         self.home = Path(home)
         self.sessions = self.home / "sessions"
         self.sessions.mkdir(parents=True, exist_ok=True)
@@ -178,6 +180,7 @@ class App:
         self.picking = False                        # Windows' Open dialog is up
         self.draft: Draft | None = None             # the program the player chose last, before it is added
         self.trash = trash
+        self.capture_lock = capture_lock
         self.open_link = open_link or _open_store_link
         self.rec_link: str | None = None            # the store link of the game the running Play opens
         self.launcher = launcher
@@ -664,10 +667,14 @@ class App:
     def delete(self, req: bridge.Request, trash: "Trash") -> None:
         """On the UI thread: each recording's folder to the Recycle Bin (`trash`), any warning of Windows' owned by the
         window, and each one checked gone; then what the page says, read on a worker (deleted). Only a folder on this
-        PC's own disks is handed over, by its full path: anything else would be deleted for good, not recycled. Never
-        while a recording runs, which may be analysing into a folder the listing shows: looked at here, right before
-        the first move, where no deletion can begin after a recording has."""
+        PC's own disks is handed over, by its full path (a share keeps no Recycle Bin of this PC's, and a path that is
+        not a full one is deleted for good). Never while a recording runs, which may be analysing into a folder the
+        listing shows: this window's own (rec_state), or another one's, a terminal's `watch` or a recorder this window
+        left running when it closed (the capture lock, which each holds until its analysis ends). Both are looked at
+        here, right before the first move: a recording that starts after it makes a folder of its own. A move the
+        player cancelled in Windows' question ends the delete: the rest would only ask again."""
         from lagdoctor.capture import target
+        from lagdoctor.winapi import recycle
         if self.trash is None:
             self.window.post(bridge.reply(req.id, error="Deleting recordings is not available in this window."))
             return
@@ -676,8 +683,12 @@ class App:
                 self.window.post(bridge.reply(req.id, error="A recording is running: delete recordings once it has "
                                                             "ended."))
                 return
+        why_not = self.other_recording()
+        if why_not is not None:
+            self.window.post(bridge.reply(req.id, error=why_not))
+            return
         done, failed = [], []
-        for e in trash.entries:
+        for i, e in enumerate(trash.entries):
             folder = os.path.abspath(e.folder)
             why = target.local_problem(folder)
             if why is not None:
@@ -685,6 +696,10 @@ class App:
                 continue
             try:
                 self.trash(folder, self.window.hwnd)
+            except recycle.Cancelled:
+                failed.append((e, "it was cancelled"))
+                failed += [(x, "it was not tried, since the one before it was cancelled") for x in trash.entries[i + 1:]]
+                break
             except (OSError, ValueError) as exc:
                 self.log(f"moving {e.id} to the Recycle Bin: {exc}")
                 failed.append((e, (exc.strerror if isinstance(exc, OSError) else None) or str(exc)))
@@ -707,10 +722,32 @@ class App:
                                   lambda result, error: self.answer(req, result, error)):
             self.window.post(bridge.reply(req.id, views.deleted_view(len(done), failed, True)))
 
+    def other_recording(self) -> str | None:
+        """Why Delete must wait for another process's recording, in plain words, or None: the capture lock, held by
+        whatever records in this Windows session, looked at and let go at once (`capture_lock`; None: not looked at)."""
+        from lagdoctor.capture import session as sess
+        if self.capture_lock is None:
+            return None
+        lock = sess.CaptureLock(self.capture_lock)
+        try:
+            free = lock.acquire()
+        except OSError as exc:
+            self.log(f"looking for a recording before deleting: {exc}")
+            return "lag-doctor could not tell whether a recording is running, so it deleted nothing."
+        finally:
+            lock.release()
+        return None if free else ("Another lag-doctor recording is running, in a terminal or from an earlier window: "
+                                  "delete recordings once it has ended.")
+
     def deleted(self, game: str, done: int, failed: list) -> dict:
-        """What the page says once recordings were deleted, and whether their game is still in the Library."""
-        entries, games = self.scan(), self.scan_games()
-        listed = views.game_view(entries, game, None, games, added=self.scan_added(games)) is not None
+        """What the page says once recordings were deleted, and whether their game is still in the Library (said as
+        listed when the listing cannot be read again: the page then shows the game's page, and says why not)."""
+        try:
+            entries, games = self.scan(), self.scan_games()
+            listed = views.game_view(entries, game, None, games, added=self.scan_added(games)) is not None
+        except Exception as exc:  # noqa: BLE001 - the folders are gone: the page must hear so
+            self.log(f"listing the games after a delete:\n{''.join(traceback.format_exception(exc))}")
+            listed = True
         return views.deleted_view(done, failed, listed)
 
     def _start(self, argv: Callable[[], list[str]], *, play: dict | None = None, link: str | None = None,
@@ -917,11 +954,12 @@ def run() -> int:
         if hr < 0:
             tell(f"lag-doctor's window could not start COM (HRESULT 0x{hr & 0xFFFFFFFF:08X}).")
             return 1
+        from lagdoctor.capture import session as sess
         from lagdoctor.stores import art
         from lagdoctor.winapi import dialogs, recycle
         app = App(home=home, runtime=runtime, create_fn=create_fn, log=log,
                   installed=lambda: library.installed_games(log), covers=art.covers, picker=dialogs.pick_program,
-                  trash=recycle.to_recycle_bin)
+                  trash=recycle.to_recycle_bin, capture_lock=sess.CAPTURE_LOCK_NAME)
         try:
             app.run()
         finally:

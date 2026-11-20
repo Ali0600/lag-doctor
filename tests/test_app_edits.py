@@ -269,6 +269,37 @@ def test_a_recording_not_listed_under_the_game_named_is_never_deleted(tmp_path, 
     assert app.trash.moved == [] and first.exists() and star.exists()
 
 
+def test_nothing_is_deleted_while_another_process_records(tmp_path):
+    import uuid
+    from lagdoctor.winapi import elevation
+    app, (first, second, star), moss = deleting(tmp_path)
+    app.capture_lock = f"Local\\lag-doctor-test-capture-{uuid.uuid4().hex}"     # this test's own, never the owner's
+    held = elevation.hold_named_mutex(app.capture_lock)       # a terminal's watch, analysing
+    try:
+        assert ask(app, "delete_recordings", game=moss, sessions=[first.name]) == (
+            "Another lag-doctor recording is running, in a terminal or from an earlier window: delete recordings once "
+            "it has ended.")
+        assert app.trash.moved == [] and first.exists()
+    finally:
+        elevation.release_named_mutex(held)
+    # once it has ended: each delete looks again and lets the lock go, so the next one is free as well
+    assert ask(app, "delete_recordings", game=moss, sessions=[first.name])["deleted"] == 1
+    assert ask(app, "delete_recordings", game=moss, sessions=[second.name])["deleted"] == 1
+
+
+def test_nothing_is_deleted_when_windows_cannot_say_whether_one_records(tmp_path, monkeypatch):
+    from lagdoctor.winapi import elevation
+    app, (first, second, star), moss = deleting(tmp_path)
+    app.capture_lock = "Local\\lag-doctor-test-capture-unread"
+
+    def fail(name):
+        raise OSError(5, "Access is denied")
+    monkeypatch.setattr(elevation, "hold_named_mutex", fail)
+    assert ask(app, "delete_recordings", game=moss, sessions=[first.name]) == (
+        "lag-doctor could not tell whether a recording is running, so it deleted nothing.")
+    assert app.trash.moved == [] and first.exists()
+
+
 def test_nothing_is_deleted_while_a_recording_runs(tmp_path):
     app, (first, second, star), moss = deleting(tmp_path)
     app.rec_state = recording.RecordingState()                      # starting: active
@@ -293,6 +324,29 @@ def test_a_move_windows_refused_or_that_left_the_folder_is_said_and_the_others_s
     assert got["text"] == " ".join([views.DELETED_ONE, views.NOT_DELETED.format(when="10 Nov 2026, 10:00",
                                                                                why="it is not a folder's path")])
     assert first.exists() and not second.exists()
+
+
+def test_a_move_the_player_cancelled_ends_the_delete(tmp_path):
+    from lagdoctor.winapi import recycle
+    app, (first, second, star), moss = deleting(
+        tmp_path, fail={"20261111-100000-moss": recycle.Cancelled(0, "moving it to the Recycle Bin was cancelled")})
+    got = ask(app, "delete_recordings", game=moss, sessions=[second.name, first.name])
+    assert got["text"] == " ".join([
+        views.NOT_DELETED.format(when="11 Nov 2026, 10:00", why="it was cancelled"),
+        views.NOT_DELETED.format(when="10 Nov 2026, 10:00", why="it was not tried, since the one before it was "
+                                                                "cancelled")])
+    assert [p for p, _ in app.trash.moved] == [str(second)] and first.exists() and second.exists()
+
+
+def test_a_listing_that_fails_after_the_delete_still_says_what_was_deleted(tmp_path, monkeypatch):
+    app, (first, second, star), moss = deleting(tmp_path)
+
+    def broken(*a, **k):
+        raise RuntimeError("made up")
+    monkeypatch.setattr(views, "game_view", broken)
+    assert ask(app, "delete_recordings", game=moss, sessions=[first.name]) == {
+        "text": views.DELETED_ONE, "deleted": 1, "listed": True}
+    assert not first.exists()
 
 
 def test_an_error_moving_one_recording_is_said_and_the_page_still_answered(tmp_path):
@@ -352,8 +406,29 @@ def test_each_deletion_is_logged_by_its_folders_name(tmp_path):
 def test_the_words_a_deletion_says():
     when = library.Entry(id="20261110-100000-moss", folder=Path("x"), kind="watch", game="moss", game_key="moss",
                          exe_name=None, started=datetime(2026, 11, 10, 10), summary=None)
-    assert views.deleted_view(1, [], True) == {"text": "The recording was moved to the Recycle Bin, where Windows can "
-                                                       "put it back.", "deleted": 1, "listed": True}
-    assert views.deleted_view(3, [(when, "it is still there")], False)["text"] == (
-        "3 recordings were moved to the Recycle Bin, where Windows can put them back. The recording of 10 Nov 2026, "
-        "10:00 was not deleted: it is still there.")
+    undated = library.Entry(id="20261111-100000-moss", folder=Path("y"), kind="watch", game="moss", game_key="moss",
+                            exe_name=None, started=None, summary=None)
+    # Windows may have asked to delete one for good, and the player said yes: the words promise no Recycle Bin then.
+    assert views.deleted_view(1, [], True) == {"text": "The recording was deleted. Unless Windows asked to delete it "
+                                                       "for good, it is in the Recycle Bin, where Windows can put it "
+                                                       "back.", "deleted": 1, "listed": True}
+    assert views.deleted_view(3, [(when, "it is still there"), (undated, "it was cancelled")], False)["text"] == (
+        "3 recordings were deleted. Unless Windows asked to delete them for good, they are in the Recycle Bin, where "
+        "Windows can put them back. The recording of 10 Nov 2026, 10:00 was not deleted: it is still there. The "
+        "recording of 20261111-100000-moss was not deleted: it was cancelled.")
+
+
+def test_the_pages_cap_on_a_delete_is_the_bridges():
+    from lagdoctor.app import ASSETS, bridge
+    import re
+    [cap] = re.findall(r"^const MAX_DELETE = (\d+);$", (ASSETS / "app.js").read_text(encoding="utf-8"), re.M)
+    assert int(cap) == bridge.MAX_DELETE          # a larger one would send what the bridge drops unanswered
+
+
+def test_a_session_id_ending_in_a_dot_is_none_windows_keeps_apart():
+    from lagdoctor.app import bridge
+    # Windows drops a last dot: ...-moss. would name ...-moss's folder
+    assert bridge.SESSION_ID.fullmatch("20261110-100000-moss") and bridge.SESSION_ID.fullmatch("20261110-100000-m.s")
+    assert not bridge.SESSION_ID.fullmatch("20261110-100000-moss.")
+    assert bridge.SESSION_ID.fullmatch("20261110-100000-" + "a" * 64)
+    assert not bridge.SESSION_ID.fullmatch("20261110-100000-" + "a" * 65)

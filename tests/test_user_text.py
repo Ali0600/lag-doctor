@@ -3,7 +3,8 @@
 Those shorthands point into docs/research and the review notes. They belong in comments and docstrings next
 to the code, never in the report, the console or a fix's description. A static scan of the string literals of
 every lagdoctor module, on the syntax tree, so docstrings and comments do not count while f-string parts do.
-lagdoctor/winapi is left out: its strings are struct-layout labels and import-time errors for developers.
+lagdoctor/winapi is left out: its strings are struct-layout labels and import-time errors for developers, but for
+the modules whose errors the page shows the player (PAGE_WINAPI).
 """
 from __future__ import annotations
 
@@ -39,8 +40,12 @@ def citations(source: str, name: str = "<source>") -> list[tuple[str, str]]:
             for m in CITATION.finditer(node.value)]
 
 
+PAGE_WINAPI = {"recycle.py"}      # winapi modules whose errors the page shows the player (Delete's)
+
+
 def user_modules() -> list[Path]:
-    return sorted(p for p in (ROOT / "lagdoctor").rglob("*.py") if "winapi" not in p.relative_to(ROOT).parts)
+    return sorted(p for p in (ROOT / "lagdoctor").rglob("*.py")
+                  if "winapi" not in p.relative_to(ROOT).parts or p.name in PAGE_WINAPI)
 
 
 RESTART_WORDS = re.compile(r"\brestart|next time the game starts", re.I)

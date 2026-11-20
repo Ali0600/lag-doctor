@@ -30,8 +30,8 @@ passed over, even while the Preview's record says that the game is being updated
 
 Nothing here reads a game's command line (LaunchCommand, launchCommand): an Epic launch carries a sign-in code there.
 Its program (LaunchExecutable, launchExecutable: a path relative to the install folder) is kept as Game.exe when it is
-a program inside that folder, for the app to read its icon (stores/exe.py) and nothing else; anything else is no
-program, quietly, and the game is listed all the same.
+a path ending in .exe inside that folder, for the app to read its icon (stores/exe.py, which finds out whether it is
+a program at all) and nothing else; anything else is None, quietly, and the game is listed all the same.
 """
 from __future__ import annotations
 
