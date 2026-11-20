@@ -325,6 +325,92 @@ def test_a_part_cut_inside_a_cover_hides_what_the_whole_recording_hides():
     assert d.measured["frames"].startswith("every frame of the measured part came while another window was in front")
 
 
+BURSTS = [(10.0, 8.0, True), (14.0, 8.0, False), (14.08, 8.0, True), (14.38, 8.0, False), (14.46, 8.0, True),
+          (14.76, 8.0, False), (14.84, 8.0, True), (15.14, 8.0, False), (15.22, 8.0, True), (18.0, 8.0, False),
+          (30.0, 8.0, True)]                         # covered from 10 s to 18 s, shown in three bursts in between
+
+
+def bursts_focus(t):
+    return 0 if 10.0 <= t <= 18.0 else 1
+
+
+def test_a_part_judges_each_row_of_a_cover_its_edge_cuts_as_the_whole_recording_does():
+    # Cut at 14 s, the bursts' short runs lost the stretch they bridged to and were judged again on what was left: "1
+    # stutter (4.7 a minute, worst 312 ms)", where the whole recording named none
+    cap = game(BURSTS, focus=bursts_focus)
+    wfr, whid = chain(cap)
+    whole = dict(zip(wfr[F.T], whid))
+    assert len(whole) == len(wfr[F.T]) and stutter_list(cap)[2] == []
+    assert fa.frame_stats(wfr, cap.duration_s)["dropped_pct"] == 0.0
+    cuts = ([(t0, 30.0) for t0 in (13.5, 13.9, 14.0, 14.05, 14.3, 14.5, 14.9, 15.18)]
+            + [(3.0, t1) for t1 in (14.1, 14.5, 14.9, 15.18, 15.5)])
+    for t0, t1 in cuts:
+        part = crop.crop(cap, t0, t1)
+        fr, hid = chain(part)
+        assert len(hid) == len(fr[F.T]) > 0 and all(h == whole[x] for x, h in zip(fr[F.T], hid)), (t0, t1)
+        assert stutter_list(part)[2] == [], (t0, t1)
+        assert fa.frame_stats(fr, part.duration_s)["dropped_pct"] == 0.0, (t0, t1)
+    fr, hid = chain(crop.crop(cap, 14.0, 30.0))         # the frames that ended the bursts' runs are in it, and hidden
+    assert [h for x, h in zip(fr[F.T], hid) if abs(x - 14.384) < 0.004 or abs(x - 14.768) < 0.004] == [True, True]
+
+
+def test_the_covers_a_part_carries_are_judged_chain_by_chain_as_main_chain_judges_its_own():
+    # an overlay's chain shown every 0.1 s beside the game's: judged with the game's frames, its rows would split the
+    # cover into runs a tenth of a second long
+    cap = game(BURSTS, focus=bursts_focus)
+    overlay = [0.05 + 0.1 * k for k in range(300)]
+    for name in cap.frames:
+        extra = {F.T: overlay, F.SWAP_CHAIN: ["0x1"] * 300, F.DISPLAYED: [1] * 300, F.FRAME_MS: [100.0] * 300,
+                 F.DISPLAY_MS: [100.0] * 300}.get(name, [None] * 300)
+        cap.frames[name] = list(cap.frames[name]) + list(extra)
+    wfr, whid = chain(cap)
+    assert set(wfr[F.SWAP_CHAIN]) == {"0x0"} and any(whid)
+    fr, hid = chain(crop.crop(cap, 0.0, 30.0))          # from the recording's own start: every row of it
+    assert hid == whid
+    assert stutter_list(crop.crop(cap, 14.0, 30.0))[2] == []
+
+
+def test_a_part_never_hides_what_the_whole_recording_judged():
+    # a reading "in front" in a run's middle leaves it judged; cut off by the part's start, it no longer read so, and the
+    # part called that time behind another window
+    cap = game([(10.0, 8.0, True), (16.0, 8.0, False), (30.0, 8.0, True)],
+               focus=lambda t: 1 if 11.4 < t < 11.6 else (0 if 10.0 <= t <= 16.0 else 1))
+    cap.sources = synth.sources(("frames", "system"))
+    assert diagnose(cap).stats["hidden_s"] == 0.0
+    d = diagnose(crop.crop(cap, 12.0, 30.0))
+    assert d.stats["hidden_s"] == 0.0 and AWAY not in d.headline, d.headline
+
+
+def test_a_part_never_judges_a_frozen_screen_that_began_before_it():
+    # frozen in front from 10.0 s to 10.5 s, then covered; the frame ending it kept by the part (its display change was
+    # not recorded, so nothing says it reached back): its frozen screen began before the part, as no frame of it may
+    cap = game([(10.0, 8.0, True), (10.6, 600.0, False), (16.0, 8.0, False), (30.0, 8.0, True)],
+               focus=lambda t: 1 if t < 10.6 or t > 16.0 else 0)
+    k = next(i for i, x in enumerate(cap.frames[F.T]) if x > 16.0 and cap.frames[F.DISPLAYED][i] == 1)
+    cap.frames[F.DISPLAY_MS][k] = None
+    fr, _ = chain(cap)
+    assert fr[fa.FRONT][fr[F.T].index(cap.frames[F.T][k])] == pytest.approx((10.0, 10.5), abs=0.01)
+    part = crop.crop(cap, 10.3, 30.0)
+    fr, _ = chain(part)
+    assert cap.frames[F.T][k] in fr[F.T] and not [f for f in fr[fa.FRONT] if f is not None], fr[fa.FRONT]
+    assert not [e for e in ev.find_events(part, fr, fa.frame_stats(fr, part.duration_s)) if e.t_start < 10.3]
+
+
+def test_a_part_that_cannot_tell_carries_nothing():
+    # the sampler read nothing in the part: whatever the whole recording judged, the part says it could not tell
+    part = crop.crop(unread(game(BURSTS, focus=bursts_focus), 13.0, 31.0), 14.0, 30.0)
+    fr, _ = chain(part)
+    assert fr[fa.HIDDEN] == [] and fa.frame_stats(fr, part.duration_s)["hidden_s"] is None
+
+
+def test_crop_carries_the_covers_of_a_capture_that_cannot_tell():
+    # a capture with no foreground reading at all: no cover to carry, and nothing that fails for it
+    cap = synth.laglab("hitch").cap
+    cap.system[S.GAME_FOCUSED] = [None] * len(cap.system[S.T])
+    part = crop.crop(cap, 5.0, 25.0)
+    assert part.covers is not None and not any(part.covers[0]) and fa.main_chain(part)[fa.HIDDEN] == []
+
+
 def test_frames_presentmon_lost_inside_a_cover_are_time_behind_it_all_the_same():
     cap = synth.laglab("smooth", covered=[(10.0, 16.0)]).cap
     keep = [i for i, x in enumerate(cap.frames[F.T]) if not 11.0 < x < 15.0]

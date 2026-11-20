@@ -184,9 +184,34 @@ def main_chain(cap: Capture, chain: Any = None) -> dict[str, list]:
     for name in F.ALL:
         col = _col(cap.frames, name)
         out[name] = [_clean(name, _at(col, i)) for i in pick]
-    out[HIDDEN], out[FRONT], out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap),
-                                                  capture_bounds(cap))
+    hid, front, out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap), capture_bounds(cap))
+    carried = getattr(cap, "covers", None)
+    if carried is not None and hid:   # a measured part: its rows as the whole recording judged them (row_covers)
+        hid, front = [_at(carried[0], i) is True for i in pick], [_at(carried[1], i) for i in pick]
+    out[HIDDEN], out[FRONT] = hid, front
     return out
+
+
+def row_covers(cap: Capture) -> tuple[list[bool | None], list[tuple[float, float] | None]]:
+    """HIDDEN and FRONT of every row of `cap.frames`, in its own row order, each chain judged as main_chain judges the
+    one it picks (hidden_rows); None for a row with no time or of a chain that cannot tell. analysis/crop.py carries
+    them into a measured part (Capture.covers), so a cover the part's edge cuts is judged as the whole recording
+    judged it, never again on what is left of it."""
+    t, chains, shown = _col(cap.frames, F.T), _col(cap.frames, F.SWAP_CHAIN), _col(cap.frames, F.DISPLAYED)
+    hid: list[bool | None] = [None] * len(t)
+    front: list[tuple[float, float] | None] = [None] * len(t)
+    rows: dict[str | None, list[int]] = {}
+    for i, ti in enumerate(t):
+        if _bounded(ti) is not None:
+            rows.setdefault(_chain_key(_at(chains, i)), []).append(i)
+    readings = focus_readings(cap)
+    for chain_rows in rows.values():
+        pick = sorted(chain_rows, key=lambda i: t[i])
+        h, f = hidden_rows([_clean(F.T, t[i]) for i in pick], [_clean(F.DISPLAYED, _at(shown, i)) for i in pick],
+                           readings)
+        for k, i in enumerate(pick if h else ()):
+            hid[i], front[i] = h[k], f[k]
+    return hid, front
 
 
 def capture_bounds(cap: Capture) -> tuple[float, float] | None:

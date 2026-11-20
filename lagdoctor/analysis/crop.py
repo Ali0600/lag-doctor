@@ -46,6 +46,7 @@ OK_STATES = ("ok", "partial")
 EMPTY_IN_SPAN = "it recorded nothing in the measured part"
 LENGTH_UNKNOWN = "the recording's length is not known"     # key_part's why when no part can be picked at all
 MARK_LATE_S = 1.0                # capture/session.py keeps a lag-key press up to 1 s after the recording stopped
+_HIDDEN, _FRONT = "\x00hidden", "\x00front"   # crop's own columns beside the frame table's: never a capture column
 SERVER_BIN_S = 1.0               # net_flows server_rx: [t, packets] for the second that ends at t
 ROLE_COLUMNS = {"gateway": N.GW_RTT_MS, "internet": N.INET_RTT_MS, "server": N.SERVER_RTT_MS}
 SERVER_TOTALS = ("rx_packets", "tx_packets", "rx_bytes", "tx_bytes")
@@ -165,8 +166,12 @@ def crop(cap: Capture, t0: Any, t1: Any, how: str = "set") -> Capture:
         raise ValueError(f"not a way a span is set: {how!r}")
     lo, hi = check_span(cap, t0, t1)
     recorded = recorded_s(cap)
-    w = window.window(cap, lo, hi)
+    table = dict(cap.frames) if isinstance(cap.frames, dict) else {}
+    if isinstance(table.get(F.T), list):    # the whole recording's covers, cut with the very rows the part keeps
+        table[_HIDDEN], table[_FRONT] = fa.row_covers(cap)
+    w = window.window(cap, lo, hi, frames=table)
     frames = frames_inside(w["frames"], lo)
+    hid, front = frames.pop(_HIDDEN, None), frames.pop(_FRONT, None)
     late = hi + MARK_LATE_S if hi >= recorded else hi
     marks = [m for m in _list(cap.marks) if (v := _time(m)) is not None and lo <= v <= late]
     others = [row for row in _list(cap.others)
@@ -178,6 +183,8 @@ def crop(cap: Capture, t0: Any, t1: Any, how: str = "set") -> Capture:
                   target=copy.deepcopy(cap.target), inventory=copy.deepcopy(cap.inventory), notes=list(cap.notes),
                   start_key=copy.deepcopy(cap.start_key), **cut)
     out.span = {"from_s": lo, "to_s": hi, "recorded_s": recorded, "how": how}
+    if hid is not None and front is not None:   # a frozen screen that began before the part measured time outside it
+        out.covers = (hid, [f if isinstance(f, tuple) and f[0] >= lo else None for f in front])
     return out
 
 

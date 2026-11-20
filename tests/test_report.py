@@ -987,6 +987,17 @@ def test_a_parts_frame_chart_takes_the_time_behind_another_window_from_the_parts
     assert re.search(r"the worst took 30\d\d ms", html_report.render(_part(cap, 16.5, 30.0), cap))
 
 
+def test_a_parts_frame_chart_never_names_a_frame_of_a_cover_its_edge_cut():
+    # cut at 14 s inside a cover shown in bursts, the chart's note named a 312 ms frame the whole recording left out as
+    # time behind another window, and so did the part's analysis
+    from tests.test_analysis_covered import BURSTS, bursts_focus, game
+    cap = game(BURSTS, focus=bursts_focus)
+    cap.sources = synth.sources(("frames", "system"))
+    d = _part(cap, 14.0, 30.0)
+    assert d.stats["hidden_s"] == pytest.approx(4.0, abs=0.05)
+    assert not re.search(r"the worst took 3\d\d ms", html_report.render(d, cap))
+
+
 def test_presses_outside_the_part_are_counted_as_the_recording_keeps_them():
     """A part that ends with the recording keeps a press up to 1 s past its end, as the recording does."""
     to_end = {"from_s": 10.0, "to_s": 25.0, "recorded_s": 25.0, "how": "set"}

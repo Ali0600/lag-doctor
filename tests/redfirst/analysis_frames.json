@@ -2132,8 +2132,8 @@
  {
   "name": "main_chain marks nothing",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "    out[HIDDEN], out[FRONT], out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap),",
-  "new": "    out[HIDDEN], out[FRONT] = [], []; _, _, out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap),",
+  "old": "    hid, front, out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap), capture_bounds(cap))",
+  "new": "    hid, front, out[EDGES] = [], [], _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap), capture_bounds(cap))[2]",
   "tests": [
    "tests/test_analysis_covered.py::test_a_covered_window_is_never_judged_and_the_time_left_out_is_said"
   ]
@@ -2923,8 +2923,8 @@
  {
   "name": "main_chain gives no bounds",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "                                                  capture_bounds(cap))",
-  "new": "                                                  None)",
+  "old": "    hid, front, out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap), capture_bounds(cap))",
+  "new": "    hid, front, out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap), None)",
   "tests": [
    "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too"
   ]
@@ -2973,6 +2973,43 @@
   "new": "if isinstance(e, (tuple, list)) else (None, None)",
   "tests": [
    "tests/test_analysis_covered.py::test_hidden_spans_read_only_well_formed_edges"
+  ]
+ },
+ {
+  "name": "a part's rows judged again on what is left",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if carried is not None and hid:   # a measured part",
+  "new": "    if False:   # a measured part",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_part_judges_each_row_of_a_cover_its_edge_cuts_as_the_whole_recording_does",
+   "tests/test_analysis_covered.py::test_a_part_never_hides_what_the_whole_recording_judged"
+  ]
+ },
+ {
+  "name": "a part that cannot tell takes the whole recording's covers",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if carried is not None and hid:   # a measured part",
+  "new": "    if carried is not None:   # a measured part",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_part_that_cannot_tell_carries_nothing"
+  ]
+ },
+ {
+  "name": "the covers of a chain that cannot tell read anyway",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        for k, i in enumerate(pick if h else ()):",
+  "new": "        for k, i in enumerate(pick):",
+  "tests": [
+   "tests/test_analysis_covered.py::test_crop_carries_the_covers_of_a_capture_that_cannot_tell"
+  ]
+ },
+ {
+  "name": "the covers judged over every chain at once",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "            rows.setdefault(_chain_key(_at(chains, i)), []).append(i)",
+  "new": "            rows.setdefault(None, []).append(i)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_the_covers_a_part_carries_are_judged_chain_by_chain_as_main_chain_judges_its_own"
   ]
  }
 ]
