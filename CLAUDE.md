@@ -316,8 +316,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   one puts the test's folder in the owner's own Recycle Bin, so `tests/conftest.py`'s `_no_real_recycle_bin` fails a
   test that reaches it, its own test (`tests/test_recycle.py`) stubs `recycle._SHFileOperationW` under the guard's
   seam, and only `tests/test_recycle_live.py`, on GitHub's runner (`scripts/stage2/guard.py`), moves a folder for
-  real. A program icon is read for any game with a program (an Epic launcher's, a recording's `summary.json` `exe`):
-  a test gives each a made-up program under its own `tmp_path`, never a path a real game could sit at.
+  real. A program icon is read for any game with a program and no cover (an Epic launcher's, a recording's
+  `summary.json` `exe`): a test that needs an icon makes its program under its own `tmp_path` (`tests/pe_build.py`).
+  `tests/app_demo.py`'s recordings name made-up programs under `C:\Games`, which an App with no covers then looks for
+  there, read-only (`stores.open_file`'s stat first); keep them names no real game has.
 - **The overhead benchmark** (`scripts/overhead/bench.py`, `docs/research/overhead.md`) opens a LagLab window for
   about 6.5 minutes a suite and holds lag-doctor's capture lock for the whole run, so the owner's own `watch` refuses
   meanwhile (exit 4), and the benchmark refuses to start while a recording runs: run it when the owner is not

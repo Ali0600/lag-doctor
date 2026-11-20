@@ -31,7 +31,8 @@ MAX_PATH_CHARS = target.MAX_FOLDER_CHARS + 1 + 255     # the folder, a separator
 # Characters no program's path is taken with: controls, formatting marks (which reorder or hide text), a surrogate on
 # its own (which no file can be written with as UTF-8), private and unassigned code points, line and paragraph breaks.
 UNSHOWN = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
-# Windows' reserved device names, which Windows 10 takes as the device whatever extension follows (COM1.exe is the
+# Windows' reserved device names (Microsoft's "Naming Files, Paths, and Namespaces", read 2026-11-20: these, the
+# superscript digits included), which Windows 10 takes as the device whatever extension follows (COM1.exe is the
 # serial port), so opening or looking at such a file would reach a device: never a program's name.
 DEVICES = frozenset({"con", "prn", "aux", "nul"} | {f"{d}{n}" for d in ("com", "lpt")
                                                      for n in ("1", "2", "3", "4", "5", "6", "7", "8", "9",

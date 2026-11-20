@@ -37,7 +37,7 @@ def test_a_folder_goes_to_the_recycle_bin_by_its_full_path_with_no_dialog_but_wi
     assert ctypes.sizeof(ctypes.create_unicode_buffer(recycle.names(FOLDER))) == 2 * (len(FOLDER) + 2)
     for flag in ("FOF_ALLOWUNDO", "FOF_WANTNUKEWARNING", "FOF_SILENT", "FOF_NOCONFIRMATION", "FOF_NOERRORUI"):
         assert op["flags"] & getattr(recycle, flag), flag
-    assert op["flags"] == recycle.FLAGS
+    assert op["flags"] == recycle.FLAGS == 0x4454                 # those five and no other
 
 
 def test_the_flags_and_the_structure_are_the_sdks():
@@ -53,7 +53,8 @@ def test_the_flags_and_the_structure_are_the_sdks():
     "\\lag-doctor\\sessions\\x", "D:lag-doctor\\x", "D:\\", "D:", "\\\\server\\share\\sessions\\x",
     "\\\\?\\D:\\lag-doctor\\sessions\\x", "D:/lag-doctor/sessions/x", "D:\\lag-doctor\\..\\x", "D:\\lag-doctor\\.\\x",
     "D:\\lag-doctor\\sessions\\*", "D:\\lag-doctor\\sessions\\2026?", "D:\\lag-doctor\\sessions\\x\\",
-    "D:\\lag-doctor\\\\sessions", "D:\\lag-doctor\\x\0D:\\other", "D:\\lag-doctor\\x\nD:\\y", "D:\\lag-doctor\\x.",
+    "D:\\lag-doctor\\\\sessions", "D:\\lag-doctor\\x\0D:\\other", "D:\\lag-doctor\\x\nD:\\y", "D:\\lag-doctor\\x\ty",
+    "D:\\lag-doctor\\x.",
     "D:\\lag-doctor\\x ", "D:\\a:b", "D:\\" + "a" * 257, "", None, 5,
 ])
 def test_a_path_that_is_not_a_full_one_is_refused_before_windows_is_called(monkeypatch, path):

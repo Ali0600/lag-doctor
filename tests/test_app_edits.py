@@ -71,11 +71,11 @@ def test_an_epic_games_tile_shows_the_icon_of_the_program_its_launcher_names(tmp
 
 
 def test_the_program_chosen_in_add_a_game_is_not_read_again_at_the_listing(tmp_path, monkeypatch):
-    exe = program(tmp_path)
+    exe = program(tmp_path, icons=[])                    # no icon: nothing in the art stops a second look
     app = make_app(tmp_path, picked=lambda hwnd: exe)
     seen = reads(monkeypatch)
     ask(app, "add_game", draft=ask(app, "pick_game")["draft"], name="Moss Garden")
-    assert tile_of(app, "Moss Garden")["tile"]["icon"] is True and seen == [exe]
+    assert tile_of(app, "Moss Garden")["tile"]["icon"] is False and seen == [exe]
 
 
 def test_a_store_cover_is_kept_and_no_program_is_read_for_it(tmp_path, monkeypatch):
@@ -300,6 +300,17 @@ def test_nothing_is_deleted_when_windows_cannot_say_whether_one_records(tmp_path
     assert app.trash.moved == [] and first.exists()
 
 
+def test_one_delete_at_a_time(tmp_path):
+    app, (first, second, star), moss = deleting(tmp_path)
+    app.deleting = True                                  # another one's Windows question is up
+    assert ask(app, "delete_recordings", game=moss, sessions=[first.name]) == (
+        "lag-doctor is still moving recordings to the Recycle Bin.")
+    assert app.trash.moved == [] and first.exists()
+    app.deleting = False
+    assert ask(app, "delete_recordings", game=moss, sessions=[first.name])["deleted"] == 1
+    assert app.deleting is False
+
+
 def test_nothing_is_deleted_while_a_recording_runs(tmp_path):
     app, (first, second, star), moss = deleting(tmp_path)
     app.rec_state = recording.RecordingState()                      # starting: active
@@ -386,7 +397,7 @@ def test_an_app_given_no_recycle_bin_deletes_nothing(tmp_path):
     assert bin_.moved == [] and first.exists()
 
 
-def test_a_deleted_recording_is_never_served_from_the_one_read_last(tmp_path):
+def test_a_deleted_recordings_capture_is_let_go(tmp_path):
     app, (first, second, star), moss = deleting(tmp_path)
     app.loaded = (first.name, None, None, None)                       # as load() keeps the last recording read
     ask(app, "delete_recordings", game=moss, sessions=[first.name])

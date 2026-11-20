@@ -571,7 +571,9 @@ function updateBar() {
 function recError(err) {
   const old = $('rec-error');
   if (old) old.remove();
-  view().prepend(el('p', {class: 'error', id: 'rec-error'}, String(err && err.message || err)));
+  const p = el('p', {class: 'error', id: 'rec-error'}, String(err && err.message || err));
+  view().prepend(p);
+  p.scrollIntoView({block: 'nearest'});          // seen from a long page scrolled down (Delete's picks)
 }
 
 function startRecording(button) {
@@ -684,6 +686,7 @@ function renameButton(g) {
 // its last recording.
 const MAX_DELETE = 100;
 function deleteButton(game, chosen) {
+  let busy = false;                    // asked: a pick meanwhile enables nothing
   const b = el('button', {class: 'btn', type: 'button', disabled: true, id: 'delete-picked', on: {click: () => {
     const n = chosen.size;
     if (b.dataset.armed !== '1') {
@@ -691,16 +694,18 @@ function deleteButton(game, chosen) {
       b.textContent = `Click again to move ${n === 1 ? 'it' : `these ${n}`} to the Recycle Bin`;
       return;
     }
-    b.disabled = true;
+    b.disabled = busy = true;
     ask('delete_recordings', {game, sessions: [...chosen]}).then((r) => {
       if (r.listed) go('game', {game, said: r.text}, false);
       else { stack.length = 0; go('library', {said: r.text}, false); }
     }).catch((err) => {
+      busy = false;
       b.disabled = false;
       recError(err);
     });
   }}}, 'Delete the picked');
   b.picked = () => {                   // the picks changed: a click armed for the old ones is undone
+    if (busy) return;
     delete b.dataset.armed;
     b.disabled = chosen.size === 0 || chosen.size > MAX_DELETE;
     b.textContent = chosen.size > MAX_DELETE ? `Pick at most ${MAX_DELETE} to delete` : 'Delete the picked';

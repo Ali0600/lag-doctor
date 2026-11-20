@@ -181,6 +181,7 @@ class App:
         self.draft: Draft | None = None             # the program the player chose last, before it is added
         self.trash = trash
         self.capture_lock = capture_lock
+        self.deleting = False                       # a delete is moving folders (Windows' question may be up)
         self.open_link = open_link or _open_store_link
         self.rec_link: str | None = None            # the store link of the game the running Play opens
         self.launcher = launcher
@@ -672,9 +673,8 @@ class App:
         listing shows: this window's own (rec_state), or another one's, a terminal's `watch` or a recorder this window
         left running when it closed (the capture lock, which each holds until its analysis ends). Both are looked at
         here, right before the first move: a recording that starts after it makes a folder of its own. A move the
-        player cancelled in Windows' question ends the delete: the rest would only ask again."""
-        from lagdoctor.capture import target
-        from lagdoctor.winapi import recycle
+        player cancelled in Windows' question ends the delete: the rest would only ask again. One delete at a time:
+        Windows' question runs a message loop, which answers the page's other requests meanwhile."""
         if self.trash is None:
             self.window.post(bridge.reply(req.id, error="Deleting recordings is not available in this window."))
             return
@@ -687,8 +687,28 @@ class App:
         if why_not is not None:
             self.window.post(bridge.reply(req.id, error=why_not))
             return
+        if self.deleting:                           # Windows' question runs a message loop that answers the page too
+            self.window.post(bridge.reply(req.id, error="lag-doctor is still moving recordings to the Recycle Bin."))
+            return
+        self.deleting = True
+        try:
+            done, failed = self.move(trash.entries)
+        finally:
+            self.deleting = False
+        gone = {e.id for e in done}
+        with self.lock:
+            if self.loaded is not None and self.loaded[0] in gone:
+                self.loaded = None
+        if not self.window.submit(lambda: self.deleted(trash.game, len(done), failed),
+                                  lambda result, error: self.answer(req, result, error)):
+            self.window.post(bridge.reply(req.id, views.deleted_view(len(done), failed, True)))
+
+    def move(self, entries: tuple) -> tuple[list, list]:
+        """delete's moves, one recording at a time: (those moved, [(those not, why)])."""
+        from lagdoctor.capture import target
+        from lagdoctor.winapi import recycle
         done, failed = [], []
-        for i, e in enumerate(trash.entries):
+        for i, e in enumerate(entries):
             folder = os.path.abspath(e.folder)
             why = target.local_problem(folder)
             if why is not None:
@@ -698,7 +718,7 @@ class App:
                 self.trash(folder, self.window.hwnd)
             except recycle.Cancelled:
                 failed.append((e, "it was cancelled"))
-                failed += [(x, "it was not tried, since the one before it was cancelled") for x in trash.entries[i + 1:]]
+                failed += [(x, "it was not tried, since the one before it was cancelled") for x in entries[i + 1:]]
                 break
             except (OSError, ValueError) as exc:
                 self.log(f"moving {e.id} to the Recycle Bin: {exc}")
@@ -714,13 +734,7 @@ class App:
                 continue
             self.log(f"moved a recording to the Recycle Bin: {e.id}")
             done.append(e)
-        gone = {e.id for e in done}
-        with self.lock:
-            if self.loaded is not None and self.loaded[0] in gone:
-                self.loaded = None
-        if not self.window.submit(lambda: self.deleted(trash.game, len(done), failed),
-                                  lambda result, error: self.answer(req, result, error)):
-            self.window.post(bridge.reply(req.id, views.deleted_view(len(done), failed, True)))
+        return done, failed
 
     def other_recording(self) -> str | None:
         """Why Delete must wait for another process's recording, in plain words, or None: the capture lock, held by

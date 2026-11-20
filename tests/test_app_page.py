@@ -148,6 +148,7 @@ def test_add_a_game_reads_the_chosen_programs_name_and_icon_and_records_it_when_
 def test_an_added_game_is_renamed_in_place_and_its_new_name_shows_as_text(run):
     _ok(run)
     assert run["rename_offered"] == app_demo.MARKUP_ADDED            # the name it has, to change
+    assert run["rename_hidden"] == [True, False]                      # Rename hides while its form is open
     assert run["renamed"] == {"kept": app_demo.MARKUP_ADDED, "name": app_demo.MARKUP_RENAMED, "form": False,
                               "made": 0, "pwned": False}
     assert run["library_renamed"] == run["library"]["names"] + [app_demo.MARKUP_RENAMED]
@@ -160,11 +161,13 @@ def test_picked_recordings_are_deleted_with_a_second_click_into_the_recycle_bin(
     old = run["delete_old"]
     assert old.startswith("20261101-") and run["delete_before"] == [True, True]     # nothing picked: nothing to do
     assert run["delete_unpicked"] is True
+    assert run["delete_disarmed"] == "Delete the picked"            # armed, then another pick: asked again
     assert run["delete_armed"] == "Click again to move it to the Recycle Bin"
     assert run["delete_trashed"] == [[str(home / "sessions" / old), True]]       # its full path; owned by the window
     d = run["deleted"]
     assert d["said"] == views.DELETED_ONE and d["name"] == "Demo Racer" and len(d["rows"]) == 1 and old not in d["rows"]
     assert not (home / "sessions" / old).exists() and (home / "bin" / old / "capture.ldcap.json.gz").is_file()
+    assert run["said_after_back"] is False                           # said once, not again on Back
 
 
 @pytest.mark.needs("webview2")

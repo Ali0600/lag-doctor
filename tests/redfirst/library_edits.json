@@ -230,15 +230,6 @@
   ]
  },
  {
-  "name": "app: a rename kept as typed",
-  "file": "lagdoctor/app/main.py",
-  "old": "            kept[at] = added.Kept(exe=kept[at].exe, name=shown)",
-  "new": "            kept[at] = added.Kept(exe=kept[at].exe, name=name)",
-  "tests": [
-   "tests/test_app_edits.py::test_renaming_an_added_game_keeps_its_program_its_id_and_its_recordings"
-  ]
- },
- {
   "name": "app: a rename over an unread list overwrites it",
   "file": "lagdoctor/app/main.py",
   "old": "                added.save(self.home, kept, unread=bool(problems))",
@@ -388,7 +379,7 @@
   "old": "            if self.loaded is not None and self.loaded[0] in gone:\n                self.loaded = None",
   "new": "            if self.loaded is not None and self.loaded[0] in gone:\n                pass",
   "tests": [
-   "tests/test_app_edits.py::test_a_deleted_recording_is_never_served_from_the_one_read_last"
+   "tests/test_app_edits.py::test_a_deleted_recordings_capture_is_let_go"
   ]
  },
  {
@@ -677,7 +668,7 @@
  {
   "name": "app: the rest tried after a cancel",
   "file": "lagdoctor/app/main.py",
-  "old": "                failed += [(x, \"it was not tried, since the one before it was cancelled\") for x in trash.entries[i + 1:]]\n                break",
+  "old": "                failed += [(x, \"it was not tried, since the one before it was cancelled\") for x in entries[i + 1:]]\n                break",
   "new": "                continue",
   "tests": [
    "tests/test_app_edits.py::test_a_move_the_player_cancelled_ends_the_delete"
@@ -745,6 +736,70 @@
   "new": "                                                               )})",
   "tests": [
    "tests/test_app_added.py::test_a_path_that_is_no_game_program_in_a_folder_of_its_own_is_refused"
+  ]
+ },
+ {
+  "name": "app: a recording of any game deleted",
+  "file": "lagdoctor/app/main.py",
+  "old": "        mine = {e.id: e for e in views.game_entries(entries, game, games, self.scan_added(games))}",
+  "new": "        mine = {e.id: e for e in entries if e.is_recording}",
+  "tests": [
+   "tests/test_app_edits.py::test_a_recording_not_listed_under_the_game_named_is_never_deleted"
+  ]
+ },
+ {
+  "name": "app: two deletes at once",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if self.deleting:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_edits.py::test_one_delete_at_a_time"
+  ]
+ },
+ {
+  "name": "app: a delete never ends",
+  "file": "lagdoctor/app/main.py",
+  "old": "        finally:\n            self.deleting = False",
+  "new": "        finally:\n            pass",
+  "tests": [
+   "tests/test_app_edits.py::test_one_delete_at_a_time",
+   "tests/test_app_edits.py::test_nothing_is_deleted_while_another_process_records"
+  ]
+ },
+ {
+  "name": "page: an armed Delete kept armed when the picks change",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "    if (busy) return;\n    delete b.dataset.armed;",
+  "new": "    if (busy) return;",
+  "tests": [
+   "tests/test_app_page.py::test_picked_recordings_are_deleted_with_a_second_click_into_the_recycle_bin"
+  ]
+ },
+ {
+  "name": "page: what a deletion said shown again on Back",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "  const text = args.said;\n  delete args.said;",
+  "new": "  const text = args.said;",
+  "tests": [
+   "tests/test_app_page.py::test_picked_recordings_are_deleted_with_a_second_click_into_the_recycle_bin"
+  ]
+ },
+ {
+  "name": "page: Rename left hidden after Escape",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "      form.replaceWith(heading);\n      b.hidden = false;",
+  "new": "      form.replaceWith(heading);",
+  "tests": [
+   "tests/test_app_page.py::test_an_added_game_is_renamed_in_place_and_its_new_name_shows_as_text"
+  ]
+ },
+ {
+  "name": "page: Rename shown while its form is open",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "    heading.replaceWith(form);\n    b.hidden = true;",
+  "new": "    heading.replaceWith(form);",
+  "tests": [
+   "tests/test_app_page.py::test_an_added_game_is_renamed_in_place_and_its_new_name_shows_as_text"
   ]
  }
 ]

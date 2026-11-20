@@ -2157,7 +2157,7 @@ spike, which passed the owner's run.
   rather than recycling it; only a drive letter's full path within MAX_PATH with no `.` or `..` part and no wildcard
   is handed over, since a name without a full path is deleted for good even with FOF_ALLOWUNDO; a 0 with
   `fAnyOperationsAborted` set is a cancel, `recycle.Cancelled`, which ends the delete: the rest would only ask
-  again). Each folder is checked gone afterwards. The page says the recordings were deleted, and are in the Recycle
+  again; one delete at a time, since that question runs a message loop that answers the page meanwhile). Each folder is checked gone afterwards. The page says the recordings were deleted, and are in the Recycle
   Bin unless Windows asked to delete them for good (when the player said yes there, lag-doctor cannot tell); what was
   not deleted is said by the recording's time (else its folder's name) and why (`views.deleted_view`); the last
   recording read is let go; and the page is drawn again with what was said, or the Library when a recorded game went
