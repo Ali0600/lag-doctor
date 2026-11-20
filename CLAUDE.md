@@ -519,6 +519,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `tests/test_control.py::test_the_relay_is_started_through_the_windows_prompt` failed once in a full local run
   (2026-11-20, a branch that touched no control, relay or app code: `IndexError` at `fake_relay["launches"][-1]`,
   so the 0.1 s watch ended before it launched the stand-in relay), then passed 3 of 3 alone; rerun it alone first.
+  On CI, `tests/test_relay_live.py::test_the_real_relay_for_a_folder_judges_each_game_by_its_own_read_and_records_the_
+  one_it_took` failed once (PR #65, 2026-11-20, a change to the analysis only) on its check that no process it started
+  sits under the recorder or the relay, and passed on the rerun of that job: rerun the failed job before blaming a
+  change, and read which process the check found if it repeats.
   `tests/test_folder_wait.py::test_a_real_laglab_window_is_found_by_its_folder` (needs a GPU, so not on CI) failed on
   2026-11-17 with "a window from the game's folder (python.exe) never drew within 20 seconds", alone and on main's own
   `target.py` alike, with no other LagLab window open and the screen unlocked: LagLab's draws did not reach the GPU
