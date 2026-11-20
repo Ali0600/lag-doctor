@@ -122,7 +122,10 @@ class App:
     the stores' own, so a test that builds an App never lists the PC's own library or reads its art. `picker(hwnd)`,
     Add a game's (screen 6), returns the program the player chose in Windows' Open dialog (winapi/dialogs.pick_program,
     which only run() passes too: it waits for a person), or None. The games added by hand are the home's own
-    (app/added.py), and each one's icon is read from its program (stores/exe.py)."""
+    (app/added.py). A game whose tile holds no cover shows its program's icon (stores/exe.py), from the first program
+    views.icon_programs names for it that has one. `trash(path, hwnd)` moves a recording's folder to the Recycle Bin
+    (winapi/recycle.to_recycle_bin, which only run() passes as well: no test puts anything in the PC's own Recycle
+    Bin); without it, Delete is not offered."""
 
     def __init__(self, *, home: Path, runtime: dict, create_fn, log: Callable[[str], None],
                  tell: Callable[[str], None] = tell, activate: bool = True, on_ready: Callable[["App"], None] | None
@@ -134,7 +137,8 @@ class App:
                  open_link: Callable[[str], Any] | None = None,
                  forms_of: Callable[[str], tuple[str, ...]] | None = None,
                  covers: Callable[[list], dict] | None = None,
-                 picker: Callable[[int | None], str | None] | None = None) -> None:
+                 picker: Callable[[int | None], str | None] | None = None,
+                 trash: Callable[[str, int | None], Any] | None = None) -> None:
         self.home = Path(home)
         self.sessions = self.home / "sessions"
         self.sessions.mkdir(parents=True, exist_ok=True)
@@ -153,6 +157,7 @@ class App:
         self.art: dict[str, tuple[str, bytes]] = {}     # a game id's cover, as covers() read it, or its program's icon
         self.icons: set[str] = set()                    # the game ids whose art is a program's icon
         self.art_tried: set[str] = set()                # the game ids whose cover was looked for (once a run)
+        self.icons_tried: set[tuple[str, str]] = set()  # (game id, program) whose icon was looked for (once a run)
         self.art_bytes = 0
         self.art_lock = threading.Lock()                # one reading of covers at a time
         self.window = AppWindow(runtime=runtime, create_fn=create_fn, data_folder=self.home / "webview",
@@ -172,6 +177,7 @@ class App:
         self.picker = picker
         self.picking = False                        # Windows' Open dialog is up
         self.draft: Draft | None = None             # the program the player chose last, before it is added
+        self.trash = trash
         self.open_link = open_link or _open_store_link
         self.rec_link: str | None = None            # the store link of the game the running Play opens
         self.launcher = launcher
@@ -209,6 +215,9 @@ class App:
             return
         if isinstance(result, Pick):                # the Open dialog is modal to the window: on the UI thread
             self.pick(req)
+            return
+        if isinstance(result, Trash):               # Windows' warning, if any, is owned by the window: on the UI thread
+            self.delete(req, result)
             return
         if isinstance(result, Open):                # ShellExecute wants COM: on the UI thread, which is STA
             try:
@@ -303,21 +312,32 @@ class App:
         listed = library.listed_added(library.added_games(kept, self.forms_of), games)
         with self.lock:
             self.added = listed
-        self.read_icons(listed)
         return listed
 
-    def read_icons(self, games: list[library.AddedGame]) -> None:
-        """Look once a run for the icon of each added game's program not looked at yet (stores/exe.read), within the
-        art's budget, as read_art does for covers."""
+    def read_icons(self, programs: dict[str, list[str]]) -> None:
+        """For each game whose tile holds no cover or icon yet, the icon of the first of its programs
+        (views.icon_programs: an added game's, an Epic game's, its newest recording's) that has one, within the art's
+        budget, as read_art keeps covers. Each program is looked at once a run (stores/exe.read), and only one that
+        added.check_program takes: a recording's summary.json is as writable as any file of the player's."""
+        from lagdoctor.capture import target
         from lagdoctor.stores import exe
         with self.art_lock:
-            for g in games:
-                if g.game_id in self.art_tried:
-                    continue
-                self.art_tried.add(g.game_id)
-                found = exe.read(g.exe)
-                if found.icon is not None:
-                    self.keep_icon(g.game_id, found.icon)
+            for gid, paths in programs.items():
+                for path in paths:
+                    with self.lock:
+                        if gid in self.art:
+                            break
+                    key = (gid, target.fold_path(path))
+                    if key in self.icons_tried:
+                        continue
+                    self.icons_tried.add(key)
+                    try:
+                        program, _folder = added.check_program(path)
+                    except ValueError:
+                        continue
+                    found = exe.read(program)
+                    if found.icon is not None:
+                        self.keep_icon(gid, found.icon)
 
     def keep_icon(self, game_id: str, icon: tuple[str, bytes]) -> None:
         """Hold a program's icon for the art host, within art.MAX_TOTAL_BYTES (art_lock held)."""
@@ -367,6 +387,7 @@ class App:
         entries = self.scan()
         games = self.scan_games()
         listed = self.scan_added(games)
+        self.read_icons(views.icon_programs(entries, games, listed))
         return views.library_view(entries, self.readiness or self.get_readiness(), games, art=self.art_ids(),
                                   added=listed, icons=self.icon_ids())
 
@@ -374,6 +395,7 @@ class App:
         entries = self.scan()
         games = self.scan_games()
         listed = self.scan_added(games)
+        self.read_icons(views.icon_programs(entries, games, listed))
         view = views.game_view(entries, game, library.last_session(self.home, self.sessions), games,
                                play=views.play_words(self.start_key, recording.WINDOW_S, LAG_KEY), art=self.art_ids(),
                                added=listed, icons=self.icon_ids())
@@ -553,7 +575,7 @@ class App:
             self.log(f"adding a game: {problem}")
         gid = library.added_id(program)
         with self.art_lock:
-            self.art_tried.add(gid)                 # its icon is looked for now, not again at the next listing
+            self.icons_tried.add((gid, target.fold_path(program)))     # looked at now, not again at the next listing
             if read.icon is not None:
                 self.keep_icon(gid, read.icon)
         token = "d-" + secrets.token_hex(8)
@@ -608,6 +630,88 @@ class App:
         with self.lock:
             self.added = [a for a in self.added if a.game_id != game]
         return {}
+
+    def do_rename_game(self, game: str, name: str) -> dict:
+        """Change the name a game added by hand shows by: its program, its id and its recordings stay as they were."""
+        from lagdoctor import stores
+        shown = stores.name(name)
+        if shown is None:
+            raise Gone("Give the game a name to show by.")
+        with self.added_lock:
+            kept, problems = added.load(self.home)
+            at = next((i for i, k in enumerate(kept) if library.added_id(k.exe) == game), None)
+            if at is None:
+                raise Gone("That game was not added by hand, so it keeps the name its store or its recordings give it.")
+            kept[at] = added.Kept(exe=kept[at].exe, name=shown)
+            try:
+                added.save(self.home, kept, unread=bool(problems))
+            except OSError as exc:
+                self.log(f"saving the games added by hand: {exc}")
+                raise Gone(f"lag-doctor could not save its list of games ({exc.strerror or exc}).") from None
+        return {"game": game, "name": shown}
+
+    # ---------------------------------------------------------------- deleting recordings
+
+    def do_delete_recordings(self, game: str, sessions: list[str]) -> "Trash":
+        """The recordings to delete, each one listed under the game the page names (never a folder the page names):
+        answer() moves them to the Recycle Bin on the UI thread (delete)."""
+        entries, games = self.scan(), self.scan_games()
+        mine = {e.id: e for e in views.game_entries(entries, game, games, self.scan_added(games))}
+        if any(s not in mine for s in sessions):
+            raise Gone("Some of those recordings are no longer listed under this game: open its page again.")
+        return Trash(game=game, entries=tuple(mine[s] for s in sessions))
+
+    def delete(self, req: bridge.Request, trash: "Trash") -> None:
+        """On the UI thread: each recording's folder to the Recycle Bin (`trash`), any warning of Windows' owned by the
+        window, and each one checked gone; then what the page says, read on a worker (deleted). Only a folder on this
+        PC's own disks is handed over, by its full path: anything else would be deleted for good, not recycled. Never
+        while a recording runs, which may be analysing into a folder the listing shows: looked at here, right before
+        the first move, where no deletion can begin after a recording has."""
+        from lagdoctor.capture import target
+        if self.trash is None:
+            self.window.post(bridge.reply(req.id, error="Deleting recordings is not available in this window."))
+            return
+        with self.lock:
+            if self.rec_state is not None and self.rec_state.active:
+                self.window.post(bridge.reply(req.id, error="A recording is running: delete recordings once it has "
+                                                            "ended."))
+                return
+        done, failed = [], []
+        for e in trash.entries:
+            folder = os.path.abspath(e.folder)
+            why = target.local_problem(folder)
+            if why is not None:
+                failed.append((e, f"lag-doctor deletes only recordings on this PC's own disks ({why})"))
+                continue
+            try:
+                self.trash(folder, self.window.hwnd)
+            except (OSError, ValueError) as exc:
+                self.log(f"moving {e.id} to the Recycle Bin: {exc}")
+                failed.append((e, (exc.strerror if isinstance(exc, OSError) else None) or str(exc)))
+                continue
+            except Exception as exc:  # noqa: BLE001 - said, the page answered, and the other recordings still go
+                self.log(f"moving {e.id} to the Recycle Bin:\n{''.join(traceback.format_exception(exc))}")
+                failed.append((e, "lag-doctor hit an error moving it; the details are in its log"))
+                continue
+            if os.path.lexists(folder):
+                self.log(f"moving {e.id} to the Recycle Bin: its folder is still there")
+                failed.append((e, "its folder is still there"))
+                continue
+            self.log(f"moved a recording to the Recycle Bin: {e.id}")
+            done.append(e)
+        gone = {e.id for e in done}
+        with self.lock:
+            if self.loaded is not None and self.loaded[0] in gone:
+                self.loaded = None
+        if not self.window.submit(lambda: self.deleted(trash.game, len(done), failed),
+                                  lambda result, error: self.answer(req, result, error)):
+            self.window.post(bridge.reply(req.id, views.deleted_view(len(done), failed, True)))
+
+    def deleted(self, game: str, done: int, failed: list) -> dict:
+        """What the page says once recordings were deleted, and whether their game is still in the Library."""
+        entries, games = self.scan(), self.scan_games()
+        listed = views.game_view(entries, game, None, games, added=self.scan_added(games)) is not None
+        return views.deleted_view(done, failed, listed)
 
     def _start(self, argv: Callable[[], list[str]], *, play: dict | None = None, link: str | None = None,
                folder: str | None = None) -> dict:
@@ -756,6 +860,14 @@ class Pick:
 
 
 @dataclass(frozen=True)
+class Trash:
+    """The recordings a request found to delete, under the game the page named: answer() moves them to the Recycle Bin
+    on the UI thread."""
+    game: str
+    entries: tuple
+
+
+@dataclass(frozen=True)
 class Draft:
     """The program the player chose in Add a game, before it is added: `token` is the page's name for this choice
     (never a path), `exe` and `folder` as added.check_program gave them, `forms` the folder's."""
@@ -806,9 +918,10 @@ def run() -> int:
             tell(f"lag-doctor's window could not start COM (HRESULT 0x{hr & 0xFFFFFFFF:08X}).")
             return 1
         from lagdoctor.stores import art
-        from lagdoctor.winapi import dialogs
+        from lagdoctor.winapi import dialogs, recycle
         app = App(home=home, runtime=runtime, create_fn=create_fn, log=log,
-                  installed=lambda: library.installed_games(log), covers=art.covers, picker=dialogs.pick_program)
+                  installed=lambda: library.installed_games(log), covers=art.covers, picker=dialogs.pick_program,
+                  trash=recycle.to_recycle_bin)
         try:
             app.run()
         finally:

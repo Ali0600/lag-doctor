@@ -40,6 +40,8 @@ MARKUP_NOTE = 'installed FrameFix <img src=x onerror="window.__pwned=1"> & <b>sh
 PLAIN_NOTE = "installed FrameFix, shadows to low"
 # The name the window test gives a game it adds by hand (screen 6), markup too.
 MARKUP_ADDED = 'Moss <b>Garden</b> <img src=x onerror="window.__pwned=1">'
+# The name it is renamed to, markup as well.
+MARKUP_RENAMED = 'Moss <i>Garden</i> II <img src=x onerror="window.__pwned=1">'
 
 
 @dataclass(frozen=True)

@@ -277,10 +277,11 @@ const SCREENS = {
   async library(args, live) {
     const data = await ask('library');
     if (!live()) return;
+    const said = saidNote(args);
     const r = data.readiness || {};
     const strip = el('div', {class: 'strip' + (r.ok ? '' : ' no'), title: r.detail || ''}, ...prose(r.text));
     if (!data.games.length) {
-      show(strip, el('h1', null, 'Your games'), el('div', {class: 'empty'},
+      show(said, strip, el('h1', null, 'Your games'), el('div', {class: 'empty'},
         el('p', null, 'No games yet.'),
         el('p', {class: 'muted'}, 'lag-doctor lists the games Steam and the Epic Games launcher have installed, and ' +
           'any game you add by its program. You can also start a game yourself, then press Record the game that\'s ' +
@@ -305,7 +306,7 @@ const SCREENS = {
       on: {input: (e) => { query = e.target.value; draw(); }}});
     const recent = data.games.filter((g) => data.recent.includes(g.id));
     draw();
-    show(strip,
+    show(said, strip,
       el('div', {class: 'row tools'}, search, ...chips, el('span', {class: 'spacer'}),
         el('span', {class: 'muted'}, `${data.games.length} game${data.games.length === 1 ? '' : 's'}, ` +
           `${data.recordings} recording${data.recordings === 1 ? '' : 's'}`), recordButton(), addButton()),
@@ -318,15 +319,18 @@ const SCREENS = {
   async game(args, live) {
     const g = await ask('game', {game: args.game});
     if (!live()) return;
+    const said = saidNote(args);
     const chosen = new Set();
     const compareBtn = el('button', {class: 'btn', type: 'button', disabled: true, id: 'compare',
       on: {click: () => { const [a, b] = [...chosen]; go('compare', {a, b}); }}}, 'Compare the two picked');
+    const deleteBtn = deleteButton(g.id, chosen);
     const rows = g.sessions.map((s) => {
-      const box = el('input', {type: 'checkbox', title: 'Pick for Compare', on: {click: (e) => {
+      const box = el('input', {type: 'checkbox', title: 'Pick it', on: {click: (e) => {
         e.stopPropagation();
         if (e.target.checked) chosen.add(s.id); else chosen.delete(s.id);
         tr.classList.toggle('chosen', e.target.checked);
         compareBtn.disabled = chosen.size !== 2;
+        deleteBtn.picked();
       }}});
       const tr = el('tr', {class: 'pick', 'data-session': s.id, on: {click: () => go('results', {session: s.id})}},
         el('td', null, box), el('td', null, s.when, s.is_last ? el('span', {class: 'last-tag'}, 'last') : null,
@@ -348,17 +352,18 @@ const SCREENS = {
         el('p', {class: 'muted'}, ...prose(g.wait.text)),
         el('p', {class: 'muted'}, 'Its folder: ', el('code', {id: 'wait-folder'}, g.wait.folder)))
       : el('div', {class: 'card'}, el('p', {class: 'muted'}, ...prose(g.play_note)));
-    const remove = g.added ? removeButton(g.id) : null;
+    const edits = g.added ? el('div', {class: 'row'}, renameButton(g), removeButton(g.id)) : null;
     const hero = el('div', {class: 'hero'}, tileCover(g.tile, true),
       el('div', null, el('h1', {id: 'game-name'}, g.name),
-        el('p', {class: 'muted'}, [g.exe_name, g.store].filter(Boolean).join(' · ')), play, remove));
+        el('p', {class: 'muted'}, [g.exe_name, g.store].filter(Boolean).join(' · ')), play, edits));
     if (!last) {
-      show(hero, el('p', {class: 'muted', id: 'no-recordings'}, 'No recordings of this game yet. ' +
+      show(said, hero, el('p', {class: 'muted', id: 'no-recordings'}, 'No recordings of this game yet. ' +
         (g.wait ? 'Press Record when it starts' : 'Press Play with lag-doctor') +
         ': once the recording is analysed, it appears here.'));
       return;
     }
     show(
+      said,
       hero,
       el('h2', null, 'Last recording'),
       el('div', {class: 'card'},
@@ -368,8 +373,9 @@ const SCREENS = {
             'Open its results')),
         el('p', {class: 'headline'}, ...prose(last.headline)),
         el('div', {class: 'tiles'}, ...last.tiles.map(tileOf))),
-      el('div', {class: 'row'}, el('h2', null, 'Recordings'), el('span', {class: 'spacer'}), compareBtn),
-      el('p', {class: 'muted'}, 'Click a recording for its results. Tick two to compare them.'),
+      el('div', {class: 'row'}, el('h2', null, 'Recordings'), el('span', {class: 'spacer'}), compareBtn, deleteBtn),
+      el('p', {class: 'muted'}, 'Click a recording for its results. Tick two to compare them, or tick any to delete ' +
+        'them: they go to the Recycle Bin.'),
       el('table', null, el('thead', null, el('tr', null, ...['', 'When', 'Length', 'Verdict', 'Avg FPS', '1% low',
         'Stutters / min', 'Top cause'].map((h) => el('th', null, h)))), el('tbody', null, ...rows)));
   },
@@ -642,6 +648,71 @@ function removeButton(game) {
     });
   }}}, 'Remove from the Library');
   return b;
+}
+
+// Rename, for a game added by hand: its name, changed in place of the heading; Enter saves it, Escape keeps the old.
+function renameButton(g) {
+  const b = el('button', {class: 'btn', type: 'button', id: 'rename-game', on: {click: () => {
+    const heading = $('game-name');
+    const name = el('input', {type: 'text', id: 'rename-name', maxlength: 200, value: g.name, spellcheck: 'false'});
+    const save = el('button', {class: 'btn primary', type: 'button', id: 'rename-save', on: {click: () => {
+      save.disabled = true;
+      ask('rename_game', {game: g.id, name: name.value}).then(() => go('game', {game: g.id}, false)).catch((err) => {
+        save.disabled = false;
+        recError(err);
+      });
+    }}}, 'Save the name');
+    const cancel = el('button', {class: 'btn', type: 'button', id: 'rename-cancel', on: {click: () => {
+      form.replaceWith(heading);
+      b.hidden = false;
+    }}}, 'Cancel');
+    const form = el('div', {class: 'row', id: 'rename-form'}, name, save, cancel);
+    name.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') save.click();
+      else if (e.key === 'Escape') cancel.click();
+    });
+    heading.replaceWith(form);
+    b.hidden = true;
+    name.focus();
+    name.select();
+  }}}, 'Rename');
+  return b;
+}
+
+// Delete, for the recordings picked on a game's page (`chosen`, at most bridge.MAX_DELETE of them): a second click
+// moves them to the Recycle Bin. The page is drawn again with what was said, or the Library when the game went with
+// its last recording.
+const MAX_DELETE = 100;
+function deleteButton(game, chosen) {
+  const b = el('button', {class: 'btn', type: 'button', disabled: true, id: 'delete-picked', on: {click: () => {
+    const n = chosen.size;
+    if (b.dataset.armed !== '1') {
+      b.dataset.armed = '1';
+      b.textContent = `Click again to move ${n === 1 ? 'it' : `these ${n}`} to the Recycle Bin`;
+      return;
+    }
+    b.disabled = true;
+    ask('delete_recordings', {game, sessions: [...chosen]}).then((r) => {
+      if (r.listed) go('game', {game, said: r.text}, false);
+      else { stack.length = 0; go('library', {said: r.text}, false); }
+    }).catch((err) => {
+      b.disabled = false;
+      recError(err);
+    });
+  }}}, 'Delete the picked');
+  b.picked = () => {                   // the picks changed: a click armed for the old ones is undone
+    delete b.dataset.armed;
+    b.disabled = chosen.size === 0 || chosen.size > MAX_DELETE;
+    b.textContent = chosen.size > MAX_DELETE ? `Pick at most ${MAX_DELETE} to delete` : 'Delete the picked';
+  };
+  return b;
+}
+
+// What a deletion said, shown once on the screen it led to (args.said): not again when Back returns to that screen.
+function saidNote(args) {
+  const text = args.said;
+  delete args.said;
+  return text ? el('p', {class: 'note', id: 'said'}, text) : null;
 }
 
 function recordButton(label) {

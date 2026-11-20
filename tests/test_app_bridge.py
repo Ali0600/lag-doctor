@@ -83,6 +83,8 @@ def test_each_request_kind_parses_with_exactly_its_fields():
              "play": {"game": "g-0123456789abcdef"}, "wait": {"game": "g-0123456789abcdef"}, "pick_game": {},
              "add_game": {"draft": "d-0123456789abcdef", "name": "Moss Garden"},
              "remove_game": {"game": "g-0123456789abcdef"},
+             "rename_game": {"game": "g-0123456789abcdef", "name": "Moss Garden"},
+             "delete_recordings": {"game": "g-0123456789abcdef", "sessions": [sid, "20261101-201500-demoracer"]},
              "stop_recording": {}, "cancel_recording": {}, "recording": {}}
     assert set(cases) == set(bridge.REQUESTS)
     for kind, args in cases.items():
@@ -113,6 +115,21 @@ def test_each_request_kind_parses_with_exactly_its_fields():
     msg(type="request", id=1, kind="game", game="g-0123456789ABCDEF"),
     msg(type="request", id=1, kind="moment", session="20261104-194500-a", event=-1),
     msg(type="request", id=1, kind="moment", session="20261104-194500-a", event="1"),
+    msg(type="request", id=1, kind="rename_game", game="g-0123456789abcdef"),                # no name
+    msg(type="request", id=1, kind="rename_game", game="g-0123456789abcdef", name=None),
+    msg(type="request", id=1, kind="rename_game", game="g-0123456789abcdef", name="x" * (bridge.MAX_NAME_CHARS + 1)),
+    msg(type="request", id=1, kind="rename_game", game="D:\\Games\\moss.exe", name="Moss"),
+    msg(type="request", id=1, kind="delete_recordings", game="g-0123456789abcdef", sessions=[]),   # none
+    msg(type="request", id=1, kind="delete_recordings", game="g-0123456789abcdef",
+        sessions=["20261104-194500-a", "20261104-194500-a"]),                                 # one twice
+    msg(type="request", id=1, kind="delete_recordings", game="g-0123456789abcdef",
+        sessions=[f"20261104-194500-a{i}" for i in range(bridge.MAX_DELETE + 1)]),            # past the cap
+    msg(type="request", id=1, kind="delete_recordings", game="g-0123456789abcdef", sessions="20261104-194500-a"),
+    msg(type="request", id=1, kind="delete_recordings", game="g-0123456789abcdef", sessions=["..\\..\\Windows"]),
+    msg(type="request", id=1, kind="delete_recordings", game="g-0123456789abcdef",
+        sessions=["20261104-194500-a", "C:\\lag-doctor\\sessions\\20261104-194500-a"]),
+    msg(type="request", id=1, kind="delete_recordings", sessions=["20261104-194500-a"]),      # no game
+    msg(type="request", id=1, kind="delete_recordings", game="demoracer", sessions=["20261104-194500-a"]),
     msg(type="frames_done"),                                               # a notice without its token
     msg(type="frames_done", token=1, extra=2),
     msg(type="ready", x=1),
@@ -122,6 +139,12 @@ def test_each_request_kind_parses_with_exactly_its_fields():
 ])
 def test_anything_else_is_refused(text):
     assert bridge.parse(text) is None
+
+
+def test_a_delete_names_as_many_recordings_as_its_cap_within_one_message():
+    most = [f"20261104-194500-{'a' * 60}{i:04d}" for i in range(bridge.MAX_DELETE)]      # the longest names there are
+    text = msg(type="request", id=bridge.MAX_ID, kind="delete_recordings", game="g-0123456789abcdef", sessions=most)
+    assert len(text) <= bridge.MAX_MESSAGE_CHARS and bridge.parse(text).args["sessions"] == most
 
 
 def test_the_two_notices_parse():

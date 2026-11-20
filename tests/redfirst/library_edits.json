@@ -1,0 +1,632 @@
+[
+ {
+  "name": "epic program: a launcher's program of any type taken",
+  "file": "lagdoctor/stores/epic.py",
+  "old": "    if not isinstance(launch, str) or len(launch) > MAX_LAUNCH_CHARS:",
+  "new": "    if launch is None or len(launch) > MAX_LAUNCH_CHARS:",
+  "tests": [
+   "tests/test_stores_epic.py::test_a_manifest_naming_no_program_in_its_folder_lists_its_game_with_none"
+  ]
+ },
+ {
+  "name": "epic program: a program path of any length kept",
+  "file": "lagdoctor/stores/epic.py",
+  "old": "    if not isinstance(launch, str) or len(launch) > MAX_LAUNCH_CHARS:",
+  "new": "    if not isinstance(launch, str):",
+  "tests": [
+   "tests/test_stores_epic.py::test_a_manifest_naming_no_program_in_its_folder_lists_its_game_with_none"
+  ]
+ },
+ {
+  "name": "epic program: forward slashes kept",
+  "file": "lagdoctor/stores/epic.py",
+  "old": "    rel = launch.replace(\"/\", \"\\\\\")",
+  "new": "    rel = launch",
+  "tests": [
+   "tests/test_stores_epic.py::test_the_program_a_manifest_names_is_kept_in_windows_own_form"
+  ]
+ },
+ {
+  "name": "epic program: a rooted path kept",
+  "file": "lagdoctor/stores/epic.py",
+  "old": "    if rel.startswith(\"\\\\\"):\n        return None",
+  "new": "    if False:\n        return None",
+  "tests": [
+   "tests/test_stores_epic.py::test_a_manifest_naming_no_program_in_its_folder_lists_its_game_with_none"
+  ]
+ },
+ {
+  "name": "epic program: a file of any type kept",
+  "file": "lagdoctor/stores/epic.py",
+  "old": "    if len(name) <= 4 or not name.casefold().endswith(\".exe\") or any(c in '<>:\"|?*' or ord(c) < 32 for c in name):",
+  "new": "    if len(name) <= 4 or any(c in '<>:\"|?*' or ord(c) < 32 for c in name):",
+  "tests": [
+   "tests/test_stores_epic.py::test_a_manifest_naming_no_program_in_its_folder_lists_its_game_with_none"
+  ]
+ },
+ {
+  "name": "epic program: a program named .exe alone kept",
+  "file": "lagdoctor/stores/epic.py",
+  "old": "    if len(name) <= 4 or not name.casefold().endswith(\".exe\") or any(c in '<>:\"|?*' or ord(c) < 32 for c in name):",
+  "new": "    if not name.casefold().endswith(\".exe\") or any(c in '<>:\"|?*' or ord(c) < 32 for c in name):",
+  "tests": [
+   "tests/test_stores_epic.py::test_a_manifest_naming_no_program_in_its_folder_lists_its_game_with_none"
+  ]
+ },
+ {
+  "name": "epic program: a name Windows refuses kept",
+  "file": "lagdoctor/stores/epic.py",
+  "old": "    if len(name) <= 4 or not name.casefold().endswith(\".exe\") or any(c in '<>:\"|?*' or ord(c) < 32 for c in name):",
+  "new": "    if len(name) <= 4 or not name.casefold().endswith(\".exe\") or any(ord(c) < 32 for c in name):",
+  "tests": [
+   "tests/test_stores_epic.py::test_a_manifest_naming_no_program_in_its_folder_lists_its_game_with_none"
+  ]
+ },
+ {
+  "name": "epic program: a control character kept",
+  "file": "lagdoctor/stores/epic.py",
+  "old": "    if len(name) <= 4 or not name.casefold().endswith(\".exe\") or any(c in '<>:\"|?*' or ord(c) < 32 for c in name):",
+  "new": "    if len(name) <= 4 or not name.casefold().endswith(\".exe\") or any(c in '<>:\"|?*' for c in name):",
+  "tests": [
+   "tests/test_stores_epic.py::test_a_manifest_naming_no_program_in_its_folder_lists_its_game_with_none"
+  ]
+ },
+ {
+  "name": "epic program: its folder left unchecked",
+  "file": "lagdoctor/stores/epic.py",
+  "old": "        inside = target.check_folder(folder + (\"\\\\\" + rel[:cut] if cut >= 0 else \"\"))",
+  "new": "        inside = folder + (\"\\\\\" + rel[:cut] if cut >= 0 else \"\")",
+  "tests": [
+   "tests/test_stores_epic.py::test_a_manifest_naming_no_program_in_its_folder_lists_its_game_with_none",
+   "tests/test_stores_epic.py::test_the_program_a_manifest_names_is_kept_in_windows_own_form"
+  ]
+ },
+ {
+  "name": "epic reader: no game's program kept",
+  "file": "lagdoctor/stores/epic.py",
+  "old": "link, program(folder, exe))",
+  "new": "link, None)",
+  "tests": [
+   "tests/test_stores_epic.py::test_the_program_a_manifest_names_is_kept_in_windows_own_form",
+   "tests/test_stores_epic.py::test_the_program_a_preview_record_names_is_kept_and_a_bad_one_is_none"
+  ]
+ },
+ {
+  "name": "epic reader: a manifest's program not read",
+  "file": "lagdoctor/stores/epic.py",
+  "old": "taken, obj.get(\"LaunchExecutable\"))",
+  "new": "taken)",
+  "tests": [
+   "tests/test_stores_epic.py::test_the_program_a_manifest_names_is_kept_in_windows_own_form"
+  ]
+ },
+ {
+  "name": "epic reader: a Preview record's program not read",
+  "file": "lagdoctor/stores/epic.py",
+  "old": "exe=rec.get(\"launchExecutable\"))",
+  "new": "exe=None)",
+  "tests": [
+   "tests/test_stores_epic.py::test_the_program_a_preview_record_names_is_kept_and_a_bad_one_is_none"
+  ]
+ },
+ {
+  "name": "icons: an added game's own program left out",
+  "file": "lagdoctor/app/views.py",
+  "old": "        own = g.added.exe if g.added is not None else getattr(g.installed.game, \"exe\", None) if g.installed else None",
+  "new": "        own = getattr(g.installed.game, \"exe\", None) if g.installed else None",
+  "tests": [
+   "tests/test_app_edits.py::test_the_programs_a_tile_may_take_its_icon_from_are_its_own_then_its_newest_recordings"
+  ]
+ },
+ {
+  "name": "icons: a launcher's program left out",
+  "file": "lagdoctor/app/views.py",
+  "old": "        own = g.added.exe if g.added is not None else getattr(g.installed.game, \"exe\", None) if g.installed else None",
+  "new": "        own = g.added.exe if g.added is not None else None",
+  "tests": [
+   "tests/test_app_edits.py::test_the_programs_a_tile_may_take_its_icon_from_are_its_own_then_its_newest_recordings",
+   "tests/test_app_edits.py::test_an_epic_games_tile_shows_the_icon_of_the_program_its_launcher_names"
+  ]
+ },
+ {
+  "name": "icons: the newest recording's program left out",
+  "file": "lagdoctor/app/views.py",
+  "old": "        for exe in (own, _newest_exe(g.recs)):",
+  "new": "        for exe in (own,):",
+  "tests": [
+   "tests/test_app_edits.py::test_the_programs_a_tile_may_take_its_icon_from_are_its_own_then_its_newest_recordings",
+   "tests/test_app_edits.py::test_a_recorded_game_no_store_lists_shows_its_newest_recordings_program_icon"
+  ]
+ },
+ {
+  "name": "icons: the newest recording's program before the game's own",
+  "file": "lagdoctor/app/views.py",
+  "old": "        for exe in (own, _newest_exe(g.recs)):",
+  "new": "        for exe in (_newest_exe(g.recs), own):",
+  "tests": [
+   "tests/test_app_edits.py::test_the_programs_a_tile_may_take_its_icon_from_are_its_own_then_its_newest_recordings"
+  ]
+ },
+ {
+  "name": "icons: one program listed twice",
+  "file": "lagdoctor/app/views.py",
+  "old": "            if isinstance(exe, str) and all(target.fold_path(exe) != target.fold_path(f) for f in found):",
+  "new": "            if isinstance(exe, str):",
+  "tests": [
+   "tests/test_app_edits.py::test_the_programs_a_tile_may_take_its_icon_from_are_its_own_then_its_newest_recordings"
+  ]
+ },
+ {
+  "name": "app: a program read past a cover",
+  "file": "lagdoctor/app/main.py",
+  "old": "                        if gid in self.art:\n                            break",
+  "new": "                        if False:\n                            break",
+  "tests": [
+   "tests/test_app_edits.py::test_a_store_cover_is_kept_and_no_program_is_read_for_it"
+  ]
+ },
+ {
+  "name": "app: a recording's program read unchecked",
+  "file": "lagdoctor/app/main.py",
+  "old": "                        program, _folder = added.check_program(path)",
+  "new": "                        program = path",
+  "tests": [
+   "tests/test_app_edits.py::test_a_recordings_program_that_is_no_game_program_is_never_read"
+  ]
+ },
+ {
+  "name": "app: no program after the first",
+  "file": "lagdoctor/app/main.py",
+  "old": "                for path in paths:",
+  "new": "                for path in paths[:1]:",
+  "tests": [
+   "tests/test_app_edits.py::test_the_newest_recordings_program_stands_in_when_the_launchers_has_no_icon"
+  ]
+ },
+ {
+  "name": "app: the Library reads no program icon",
+  "file": "lagdoctor/app/main.py",
+  "old": "        listed = self.scan_added(games)\n        self.read_icons(views.icon_programs(entries, games, listed))\n        return views.library_view(",
+  "new": "        listed = self.scan_added(games)\n        return views.library_view(",
+  "tests": [
+   "tests/test_app_edits.py::test_a_recorded_game_no_store_lists_shows_its_newest_recordings_program_icon",
+   "tests/test_app_edits.py::test_the_newest_recordings_program_stands_in_when_the_launchers_has_no_icon"
+  ]
+ },
+ {
+  "name": "app: a game's page reads no program icon",
+  "file": "lagdoctor/app/main.py",
+  "old": "        listed = self.scan_added(games)\n        self.read_icons(views.icon_programs(entries, games, listed))\n        view = views.game_view(",
+  "new": "        listed = self.scan_added(games)\n        view = views.game_view(",
+  "tests": [
+   "tests/test_app_edits.py::test_an_epic_games_tile_shows_the_icon_of_the_program_its_launcher_names"
+  ]
+ },
+ {
+  "name": "app: the program chosen read again at the listing",
+  "file": "lagdoctor/app/main.py",
+  "old": "            self.icons_tried.add((gid, target.fold_path(program)))",
+  "new": "            pass",
+  "tests": [
+   "tests/test_app_edits.py::test_the_program_chosen_in_add_a_game_is_not_read_again_at_the_listing"
+  ]
+ },
+ {
+  "name": "app: a rename with nothing to show kept",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if shown is None:\n            raise Gone(\"Give the game a name to show by.\")\n        with self.added_lock:",
+  "new": "        if False:\n            raise Gone(\"Give the game a name to show by.\")\n        with self.added_lock:",
+  "tests": [
+   "tests/test_app_edits.py::test_a_rename_with_nothing_to_show_or_of_a_game_not_added_is_refused_and_changes_nothing"
+  ]
+ },
+ {
+  "name": "app: a game never added renamed",
+  "file": "lagdoctor/app/main.py",
+  "old": "            if at is None:\n                raise Gone(",
+  "new": "            if False:\n                raise Gone(",
+  "tests": [
+   "tests/test_app_edits.py::test_a_rename_with_nothing_to_show_or_of_a_game_not_added_is_refused_and_changes_nothing"
+  ]
+ },
+ {
+  "name": "app: a rename kept as typed",
+  "file": "lagdoctor/app/main.py",
+  "old": "            kept[at] = added.Kept(exe=kept[at].exe, name=shown)",
+  "new": "            kept[at] = added.Kept(exe=kept[at].exe, name=name)",
+  "tests": [
+   "tests/test_app_edits.py::test_renaming_an_added_game_keeps_its_program_its_id_and_its_recordings"
+  ]
+ },
+ {
+  "name": "app: a rename over an unread list overwrites it",
+  "file": "lagdoctor/app/main.py",
+  "old": "                added.save(self.home, kept, unread=bool(problems))",
+  "new": "                added.save(self.home, kept, unread=False)",
+  "tests": [
+   "tests/test_app_edits.py::test_renaming_over_a_list_that_held_an_unread_entry_keeps_its_bytes_aside"
+  ]
+ },
+ {
+  "name": "page: a rename saves the old name",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "      ask('rename_game', {game: g.id, name: name.value})",
+  "new": "      ask('rename_game', {game: g.id, name: g.name})",
+  "tests": [
+   "tests/test_app_page.py::test_an_added_game_is_renamed_in_place_and_its_new_name_shows_as_text"
+  ]
+ },
+ {
+  "name": "page: Escape keeps the form open",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "      else if (e.key === 'Escape') cancel.click();",
+  "new": "      else if (false) cancel.click();",
+  "tests": [
+   "tests/test_app_page.py::test_an_added_game_is_renamed_in_place_and_its_new_name_shows_as_text"
+  ]
+ },
+ {
+  "name": "page: no Rename on an added game's page",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "    const edits = g.added ? el('div', {class: 'row'}, renameButton(g), removeButton(g.id)) : null;",
+  "new": "    const edits = g.added ? el('div', {class: 'row'}, removeButton(g.id)) : null;",
+  "tests": [
+   "tests/test_app_page.py::test_an_added_game_is_renamed_in_place_and_its_new_name_shows_as_text"
+  ]
+ },
+ {
+  "name": "bridge: a delete naming one recording twice",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "1 <= len(v) <= MAX_DELETE and all(_session(s) for s in v) and len(set(v)) == len(v)",
+  "new": "1 <= len(v) <= MAX_DELETE and all(_session(s) for s in v)",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_is_refused"
+  ]
+ },
+ {
+  "name": "bridge: a delete past its cap",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "1 <= len(v) <= MAX_DELETE and all(_session(s) for s in v) and len(set(v)) == len(v)",
+  "new": "1 <= len(v) and all(_session(s) for s in v) and len(set(v)) == len(v)",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_is_refused"
+  ]
+ },
+ {
+  "name": "bridge: a delete naming none",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "1 <= len(v) <= MAX_DELETE and all(_session(s) for s in v) and len(set(v)) == len(v)",
+  "new": "0 <= len(v) <= MAX_DELETE and all(_session(s) for s in v) and len(set(v)) == len(v)",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_is_refused"
+  ]
+ },
+ {
+  "name": "bridge: a delete naming something not a session",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "1 <= len(v) <= MAX_DELETE and all(_session(s) for s in v) and len(set(v)) == len(v)",
+  "new": "1 <= len(v) <= MAX_DELETE and all(isinstance(s, str) for s in v) and len(set(v)) == len(v)",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_is_refused"
+  ]
+ },
+ {
+  "name": "app: a recording of another game deleted",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if any(s not in mine for s in sessions):",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_edits.py::test_a_recording_not_listed_under_the_game_named_is_never_deleted"
+  ]
+ },
+ {
+  "name": "app: a delete with no Recycle Bin tried",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if self.trash is None:\n            self.window.post(bridge.reply(req.id, error=\"Deleting",
+  "new": "        if False:\n            self.window.post(bridge.reply(req.id, error=\"Deleting",
+  "tests": [
+   "tests/test_app_edits.py::test_an_app_given_no_recycle_bin_deletes_nothing"
+  ]
+ },
+ {
+  "name": "app: recordings deleted while one runs",
+  "file": "lagdoctor/app/main.py",
+  "old": "            if self.rec_state is not None and self.rec_state.active:\n                self.window.post(bridge.reply(req.id, error=\"A recording is running",
+  "new": "            if False:\n                self.window.post(bridge.reply(req.id, error=\"A recording is running",
+  "tests": [
+   "tests/test_app_edits.py::test_nothing_is_deleted_while_a_recording_runs"
+  ]
+ },
+ {
+  "name": "app: a folder handed over by a relative path",
+  "file": "lagdoctor/app/main.py",
+  "old": "            folder = os.path.abspath(e.folder)",
+  "new": "            folder = str(e.folder)",
+  "tests": [
+   "tests/test_app_edits.py::test_a_home_named_by_a_relative_path_hands_over_the_full_one"
+  ]
+ },
+ {
+  "name": "app: a folder off the local disks handed over",
+  "file": "lagdoctor/app/main.py",
+  "old": "            if why is not None:\n                failed.append((e, f\"lag-doctor deletes only",
+  "new": "            if False:\n                failed.append((e, f\"lag-doctor deletes only",
+  "tests": [
+   "tests/test_app_edits.py::test_a_folder_off_the_local_disks_is_never_handed_over"
+  ]
+ },
+ {
+  "name": "app: a move Windows refused ends the delete",
+  "file": "lagdoctor/app/main.py",
+  "old": "            except (OSError, ValueError) as exc:\n                self.log(f\"moving {e.id} to the Recycle Bin",
+  "new": "            except ValueError as exc:\n                self.log(f\"moving {e.id} to the Recycle Bin",
+  "tests": [
+   "tests/test_app_edits.py::test_a_move_windows_refused_or_that_left_the_folder_is_said_and_the_others_still_go"
+  ]
+ },
+ {
+  "name": "app: why a move failed said with its errno",
+  "file": "lagdoctor/app/main.py",
+  "old": "                failed.append((e, (exc.strerror if isinstance(exc, OSError) else None) or str(exc)))",
+  "new": "                failed.append((e, str(exc)))",
+  "tests": [
+   "tests/test_app_edits.py::test_a_move_windows_refused_or_that_left_the_folder_is_said_and_the_others_still_go"
+  ]
+ },
+ {
+  "name": "app: a folder still there said as deleted",
+  "file": "lagdoctor/app/main.py",
+  "old": "            if os.path.lexists(folder):",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_app_edits.py::test_a_move_windows_refused_or_that_left_the_folder_is_said_and_the_others_still_go"
+  ]
+ },
+ {
+  "name": "app: a deleted recording served from the one read last",
+  "file": "lagdoctor/app/main.py",
+  "old": "            if self.loaded is not None and self.loaded[0] in gone:\n                self.loaded = None",
+  "new": "            if self.loaded is not None and self.loaded[0] in gone:\n                pass",
+  "tests": [
+   "tests/test_app_edits.py::test_a_deleted_recording_is_never_served_from_the_one_read_last"
+  ]
+ },
+ {
+  "name": "app: a game said listed after its last recording went",
+  "file": "lagdoctor/app/main.py",
+  "old": "        listed = views.game_view(entries, game, None, games, added=self.scan_added(games)) is not None",
+  "new": "        listed = True",
+  "tests": [
+   "tests/test_app_edits.py::test_deleting_a_recorded_games_last_recordings_takes_it_out_of_the_library"
+  ]
+ },
+ {
+  "name": "views: one recording said as many",
+  "file": "lagdoctor/app/views.py",
+  "old": "    said = [DELETED_ONE if done == 1 else DELETED.format(n=done)] if done else []",
+  "new": "    said = [DELETED.format(n=done)] if done else []",
+  "tests": [
+   "tests/test_app_edits.py::test_deleting_picked_recordings_moves_each_folder_by_its_full_path_and_the_game_stays",
+   "tests/test_app_edits.py::test_the_words_a_deletion_says"
+  ]
+ },
+ {
+  "name": "views: what was not deleted left unsaid",
+  "file": "lagdoctor/app/views.py",
+  "old": "    said += [NOT_DELETED.format(when=when_text(e.started), why=why) for e, why in failed]",
+  "new": "    said += []",
+  "tests": [
+   "tests/test_app_edits.py::test_a_move_windows_refused_or_that_left_the_folder_is_said_and_the_others_still_go",
+   "tests/test_app_edits.py::test_the_words_a_deletion_says"
+  ]
+ },
+ {
+  "name": "page: Delete at the first click",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "    if (b.dataset.armed !== '1') {\n      b.dataset.armed = '1';\n      b.textContent = `Click again to move",
+  "new": "    if (false) {\n      b.dataset.armed = '1';\n      b.textContent = `Click again to move",
+  "tests": [
+   "tests/test_app_page.py::test_picked_recordings_are_deleted_with_a_second_click_into_the_recycle_bin"
+  ]
+ },
+ {
+  "name": "page: a pick never enables Delete",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "        deleteBtn.picked();\n",
+  "new": "",
+  "tests": [
+   "tests/test_app_page.py::test_picked_recordings_are_deleted_with_a_second_click_into_the_recycle_bin"
+  ]
+ },
+ {
+  "name": "page: Delete stays enabled with nothing picked",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "    b.disabled = chosen.size === 0 || chosen.size > MAX_DELETE;",
+  "new": "    b.disabled = chosen.size > MAX_DELETE;",
+  "tests": [
+   "tests/test_app_page.py::test_picked_recordings_are_deleted_with_a_second_click_into_the_recycle_bin"
+  ]
+ },
+ {
+  "name": "page: the Library shown though the game stays",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "      if (r.listed) go('game', {game, said: r.text}, false);",
+  "new": "      if (false) go('game', {game, said: r.text}, false);",
+  "tests": [
+   "tests/test_app_page.py::test_picked_recordings_are_deleted_with_a_second_click_into_the_recycle_bin"
+  ]
+ },
+ {
+  "name": "page: what a deletion said never shown",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "  return text ? el('p', {class: 'note', id: 'said'}, text) : null;",
+  "new": "  return null;",
+  "tests": [
+   "tests/test_app_page.py::test_picked_recordings_are_deleted_with_a_second_click_into_the_recycle_bin"
+  ]
+ },
+ {
+  "name": "recycle: FOF_ALLOWUNDO left out",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "FLAGS = FOF_ALLOWUNDO | FOF_WANTNUKEWARNING | FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI",
+  "new": "FLAGS = FOF_WANTNUKEWARNING | FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI",
+  "tests": [
+   "tests/test_recycle.py::test_a_folder_goes_to_the_recycle_bin_by_its_full_path_with_no_dialog_but_windows_warning"
+  ]
+ },
+ {
+  "name": "recycle: FOF_WANTNUKEWARNING left out",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "FLAGS = FOF_ALLOWUNDO | FOF_WANTNUKEWARNING | FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI",
+  "new": "FLAGS = FOF_ALLOWUNDO | FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI",
+  "tests": [
+   "tests/test_recycle.py::test_a_folder_goes_to_the_recycle_bin_by_its_full_path_with_no_dialog_but_windows_warning"
+  ]
+ },
+ {
+  "name": "recycle: FOF_SILENT left out",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "FLAGS = FOF_ALLOWUNDO | FOF_WANTNUKEWARNING | FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI",
+  "new": "FLAGS = FOF_ALLOWUNDO | FOF_WANTNUKEWARNING | FOF_NOCONFIRMATION | FOF_NOERRORUI",
+  "tests": [
+   "tests/test_recycle.py::test_a_folder_goes_to_the_recycle_bin_by_its_full_path_with_no_dialog_but_windows_warning"
+  ]
+ },
+ {
+  "name": "recycle: FOF_NOCONFIRMATION left out",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "FLAGS = FOF_ALLOWUNDO | FOF_WANTNUKEWARNING | FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI",
+  "new": "FLAGS = FOF_ALLOWUNDO | FOF_WANTNUKEWARNING | FOF_SILENT | FOF_NOERRORUI",
+  "tests": [
+   "tests/test_recycle.py::test_a_folder_goes_to_the_recycle_bin_by_its_full_path_with_no_dialog_but_windows_warning"
+  ]
+ },
+ {
+  "name": "recycle: FOF_NOERRORUI left out",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "FLAGS = FOF_ALLOWUNDO | FOF_WANTNUKEWARNING | FOF_SILENT | FOF_NOCONFIRMATION | FOF_NOERRORUI",
+  "new": "FLAGS = FOF_ALLOWUNDO | FOF_WANTNUKEWARNING | FOF_SILENT | FOF_NOCONFIRMATION",
+  "tests": [
+   "tests/test_recycle.py::test_a_folder_goes_to_the_recycle_bin_by_its_full_path_with_no_dialog_but_windows_warning"
+  ]
+ },
+ {
+  "name": "recycle: moved instead of deleted",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "    op.wFunc = FO_DELETE",
+  "new": "    op.wFunc = 0x0001",
+  "tests": [
+   "tests/test_recycle.py::test_a_folder_goes_to_the_recycle_bin_by_its_full_path_with_no_dialog_but_windows_warning"
+  ]
+ },
+ {
+  "name": "recycle: Windows' warning owned by no window",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "    op.hwnd = hwnd or None",
+  "new": "    op.hwnd = None",
+  "tests": [
+   "tests/test_recycle.py::test_a_folder_goes_to_the_recycle_bin_by_its_full_path_with_no_dialog_but_windows_warning"
+  ]
+ },
+ {
+  "name": "recycle: the list of names never ended",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "    return path + \"\\0\"",
+  "new": "    return path",
+  "tests": [
+   "tests/test_recycle.py::test_a_folder_goes_to_the_recycle_bin_by_its_full_path_with_no_dialog_but_windows_warning"
+  ]
+ },
+ {
+  "name": "recycle: a path holding a control character handed over",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "    if not isinstance(path, str) or not path or any(ord(c) < 32 for c in path):",
+  "new": "    if not isinstance(path, str) or not path:",
+  "tests": [
+   "tests/test_recycle.py::test_a_path_that_is_not_a_full_one_is_refused_before_windows_is_called"
+  ]
+ },
+ {
+  "name": "recycle: a path past MAX_PATH handed over",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "    if len(path) > MAX_PATH_CHARS:",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_recycle.py::test_a_path_that_is_not_a_full_one_is_refused_before_windows_is_called",
+   "tests/test_recycle.py::test_the_longest_path_windows_takes_is_handed_over"
+  ]
+ },
+ {
+  "name": "recycle: a path that is not a drive's full one handed over",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "    if not _FULL.fullmatch(path) or any(part != part.rstrip(\" .\") for part in path[3:].split(\"\\\\",
+  "new": "    if any(part != part.rstrip(\" .\") for part in path[3:].split(\"\\\\",
+  "tests": [
+   "tests/test_recycle.py::test_a_path_that_is_not_a_full_one_is_refused_before_windows_is_called"
+  ]
+ },
+ {
+  "name": "recycle: a dot part handed over",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "    if not _FULL.fullmatch(path) or any(part != part.rstrip(\" .\") for part in path[3:].split(\"\\\\",
+  "new": "    if not _FULL.fullmatch(path) or False and any(part != part.rstrip(\" .\") for part in path[3:].split(\"\\\\",
+  "tests": [
+   "tests/test_recycle.py::test_a_path_that_is_not_a_full_one_is_refused_before_windows_is_called"
+  ]
+ },
+ {
+  "name": "recycle: a cancel said as moved",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "    if op.fAnyOperationsAborted or code == DE_OPCANCELLED:",
+  "new": "    if code == DE_OPCANCELLED:",
+  "tests": [
+   "tests/test_recycle.py::test_a_move_windows_did_not_make_is_said"
+  ]
+ },
+ {
+  "name": "recycle: a cancel's code said as a failure",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "    if op.fAnyOperationsAborted or code == DE_OPCANCELLED:",
+  "new": "    if op.fAnyOperationsAborted:",
+  "tests": [
+   "tests/test_recycle.py::test_a_move_windows_did_not_make_is_said"
+  ]
+ },
+ {
+  "name": "recycle: a code Windows returned said as moved",
+  "file": "lagdoctor/winapi/recycle.py",
+  "old": "    if code != 0:\n        raise OSError(0, f\"Windows could not",
+  "new": "    if False:\n        raise OSError(0, f\"Windows could not",
+  "tests": [
+   "tests/test_recycle.py::test_a_move_windows_did_not_make_is_said"
+  ]
+ },
+ {
+  "name": "recycle guard: patches nothing",
+  "file": "tests/conftest.py",
+  "old": "    monkeypatch.setattr(recycle, \"_file_operation\", refuse)",
+  "new": "    pass",
+  "tests": [
+   "tests/test_recycle.py::test_the_recycle_bin_guard_fails_a_test_that_reached_the_real_call",
+   "tests/test_recycle.py::test_conftest_keeps_every_test_off_the_real_recycle_bin"
+  ]
+ },
+ {
+  "name": "recycle guard: never fails a test",
+  "file": "tests/conftest.py",
+  "old": "    monkeypatch.setattr(recycle, \"_file_operation\", refuse)\n    yield caught\n    assert caught == [], \" and \".join(caught)\n",
+  "new": "    monkeypatch.setattr(recycle, \"_file_operation\", refuse)\n    yield caught\n",
+  "tests": [
+   "tests/test_recycle.py::test_the_recycle_bin_guard_fails_a_test_that_reached_the_real_call"
+  ]
+ },
+ {
+  "name": "app: an error moving one recording leaves the page unanswered",
+  "file": "lagdoctor/app/main.py",
+  "old": "            except Exception as exc:  # noqa: BLE001 - said, the page answered, and the other recordings still go",
+  "new": "            except ZeroDivisionError as exc:  # noqa: BLE001 - said, the page answered, and the other recordings still go",
+  "tests": [
+   "tests/test_app_edits.py::test_an_error_moving_one_recording_is_said_and_the_page_still_answered"
+  ]
+ }
+]

@@ -122,8 +122,10 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
   game itself between them. **Play with lag-doctor**, on an installed game's page, has the game's store start it
   once Windows' prompt is answered (lag-doctor never starts or touches the game itself) and records it from its
   folder, as `watch --wait-folder` does, with its window out of the way. **Add a game** adds any other game by
-  its program (picked in Windows' Open dialog; its name and icon come from the file), and its page's **Record when
-  it starts** waits for you to start the game yourself and records it from its start, the same way. **Record the
+  its program (picked in Windows' Open dialog; its name and icon come from the file, and you can rename it), and its
+  page's **Record when it starts** waits for you to start the game yourself and records it from its start, the same
+  way; a game with no cover shows its program's icon. Tick recordings on a game's page to compare two or delete them
+  (to the Recycle Bin, where Windows can put them back). **Record the
   game that's running** records the busiest game with a window instead, a game you started yourself. Each asks one
   UAC prompt from the window for frame timing, and measures 10 minutes from your press of **Ctrl+Alt+S** once you
   are in the game, so its startup, menus and loading are left out (shaded on Results' charts); with no press within
