@@ -66,11 +66,16 @@ def test_conftest_keeps_every_test_off_the_real_dialog():
 def test_the_dialog_guard_fails_a_test_that_reached_the_dialog():
     from tests.conftest import dialog_guard
     mp = pytest.MonkeyPatch()
+    windows = []
+    # Below the guard's seam, Windows' own function is a stand-in too: a guard that patched nothing (the autouse one
+    # shares its code) then fails this test, and still shows no dialog.
+    mp.setattr(dialogs, "_GetOpenFileNameW", lambda ofn: windows.append("GetOpenFileNameW") or 0)
+    mp.setattr(dialogs, "_CommDlgExtendedError", lambda: 0)
     try:
         guard = dialog_guard(mp)
         caught = next(guard)
         assert dialogs.pick_program(None) is None              # read as closed, never shown
-        assert caught == ["a test opened Windows' real Open dialog"]
+        assert caught == ["a test opened Windows' real Open dialog"] and windows == []
         with pytest.raises(AssertionError, match="a test opened Windows' real Open dialog"):
             next(guard)
     finally:
