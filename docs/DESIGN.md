@@ -2283,7 +2283,8 @@ typed on the player's PC, and the game is never started, stopped or opened by la
   without display tracking the time between presents is the series), through `frames.frame_stats`, so a run's
   average FPS and 1 % low are the report's own. A run counts (else it is offered again, or skipped) only when
   frame timing ran, the recording lasted the window, the window holds 1,000 frames or more and its frames come within
-  1 s of both ends, the game was in front in every sample but those within 0.5 s of the ends, other programs took 10 %
+  1 s of both ends, the game was in front in every sample but those within 0.5 s of the ends, the key was not
+  pressed into the frozen screen of the game coming back to the front (DECISIONS 2026-11-20), other programs took 10 %
   or more of the game's GPU in at most 5 % of the samples, and the NVIDIA clock's 90th percentile was within 15 % of
   its 10th (a GPU that has not heated up yet runs about twice as fast on the owner's laptop); and only when the power
   plan, Windows' power mode, mains power and the refresh rate match the first good run's. The NVIDIA power limit is

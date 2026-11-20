@@ -6,7 +6,8 @@ out of the main swap chain and judged by the report's own frame statistics (anal
 after it, and the frame after the window's end counts its part up to it, so a freeze across either edge is seen.
 
 A run counts only when, over that window: frame timing ran and the recording lasted it; it holds 1,000 frames or more
-and they reach both its ends; the game was in front in every sample (half a second of grace at each end); other
+and they reach both its ends; the game was in front in every sample (half a second of grace at each end), and the
+key was not pressed into the frozen screen of it coming back to the front from the sweep's own window; other
 programs took 10 % or more of the game's GPU in at most 5 % of the samples (the report's own threshold for sharing it);
 and the NVIDIA GPU's clock held steady (its 90th percentile within 15 % of its 10th: on the owner's laptop a GPU that
 has not heated up yet runs at twice the speed it settles at). It also has to match the first good run on the power
@@ -20,7 +21,6 @@ is "no measurable difference", never a winner. The 1 % low gets the same compari
 """
 from __future__ import annotations
 
-import bisect
 import math
 import statistics
 from typing import Any, Sequence
@@ -90,9 +90,16 @@ def clipped_frames(cap: Capture, t0: float, t1: float) -> dict[str, list]:
     frame can judge it as a stall, it is its own row's frame, and the time behind another window before it none.
 
     At t1: the row after it becomes a row at t1 holding its present interval's part before t1 and, as a frame shown,
-    the time since the last frame shown (the screen showed nothing new until after t1), or, where the frame shown next
-    ends time behind another window, nothing but the frozen screen of that time (its FRONT, cut to the window). Without
-    display tracking it holds no display time: the time between presents is the series then, as in the report."""
+    the time since the last frame shown or the end of time behind another window (the screen showed nothing new until
+    after t1). Where the run across t1 ends time behind another window, the row ending it holds all of it in front
+    there is: its frozen screen (FRONT, cut to the window). Without display tracking the row holds no display time:
+    the time between presents is the series then, as in the report."""
+    return _cut(cap, t0, t1)[0]
+
+
+def _cut(cap: Capture, t0: float, t1: float) -> tuple[dict[str, list], float]:
+    """clipped_frames, and how many ms after t0 the screen stayed frozen as the game came back to the front: a FRONT
+    ending on the frame shown after time behind another window, which the cut made the window's first frame."""
     fr = fa.main_chain(cap)
     ts = fr.get(F.T) or []
     inside = [i for i, t in enumerate(ts) if (v := _finite(t)) is not None and t0 < v <= t1]
@@ -100,8 +107,8 @@ def clipped_frames(cap: Capture, t0: float, t1: float) -> dict[str, list]:
     keep = inside + ([after] if after is not None else [])
     out = {name: [col[i] if i < len(col) else None for i in keep] for name, col in fr.items() if isinstance(col, list)}
     if not keep:
-        return out
-    n = len(keep)
+        return out, 0.0
+    n, pressed = len(keep), 0.0
     times, frame, disp, shown, hid, front = (out.setdefault(name, [None] * n) for name in (
         F.T, F.FRAME_MS, F.DISPLAY_MS, F.DISPLAYED, fa.HIDDEN, fa.FRONT))
     for k in range(n):
@@ -119,25 +126,29 @@ def clipped_frames(cap: Capture, t0: float, t1: float) -> dict[str, list]:
             if front[r] is not None:                  # nothing before it to judge it by: a frame of its own
                 a, b = front[r]
                 hid[r], disp[r], front[r] = False, round((b - a) * 1000.0, 6), None
+                if not b < float(times[r]):           # frozen until this frame, after time behind: coming back
+                    pressed += (b - a) * 1000.0
     if after is not None:
         last = n - 1
         prev = float(ts[inside[-1]]) if inside else t0
         part = (t1 - prev) * 1000.0
         times[last], frame[last] = t1, round(part, 6) if part > 0 else None
-        every = _shown_rows(fr, behind=True)
-        k = bisect.bisect_left(every, after)
-        nxt = every[k] if k < len(every) else None     # the frame shown next: its display change spans t1
-        if hid[last] is True or (nxt is not None and _item(fr.get(fa.HIDDEN), nxt) is True):
-            hid[last] = True                           # behind another window at t1, or since the last frame shown
-            if nxt is not None:
-                front[last] = _clip(_item(fr.get(fa.FRONT), nxt), t0, t1)
-        elif every:                                    # without display tracking it makes up no display time
-            before = [r for r in _shown_rows(out, behind=True) if r < last]
-            part = (t1 - (float(times[before[-1]]) if before else t0)) * 1000.0
-            disp[last] = round(part, 6) if part > 0 else None
+        col = fr.get(F.DISPLAYED)          # the row ending the run across t1, where _hidden puts its HIDDEN and FRONT
+        end = next((j for j in range(after, len(ts)) if not _dropped(_item(col, j))), len(ts) - 1)
+        if _item(fr.get(fa.HIDDEN), end) is True:     # that run ends time behind another window: of it, only its
+            front[last] = _clip(_item(fr.get(fa.FRONT), end), t0, t1)       # frozen screen in front counts
+        elif _shown_rows(fr, behind=True):             # without display tracking it makes up no display time
+            marks = [r for r in _shown_rows(out, behind=True) if r < last] + [r for r in range(last) if hid[r] is True]
+            part = (t1 - (float(times[max(marks)]) if marks else t0)) * 1000.0    # since the last frame shown, or
+            disp[last] = round(part, 6) if part > 0 else None                   # the end of time behind
             if part > 0:
                 shown[last] = 1
-    return out
+    return out, pressed
+
+
+def _dropped(v: Any) -> bool:
+    """A frame PresentMon says was never shown (DISPLAYED 0), as frames._hidden reads it."""
+    return isinstance(v, (int, float)) and v == 0
 
 
 def _item(col: Any, i: int) -> Any:
@@ -150,7 +161,7 @@ def window_metrics(cap: Capture, t0: float, window_s: float) -> dict[str, Any]:
     the share of samples with another program on the game's GPU, and the GPU's clock and temperature."""
     t0, window_s = float(t0), float(window_s)
     t1 = t0 + window_s
-    fr = clipped_frames(cap, t0, t1)
+    fr, pressed = _cut(cap, t0, t1)
     stats = fa.frame_stats(fr, window_s)
     cut = window(cap, t0, t1, frames=fr)
     times = _numbers(fr.get(F.T) or [])
@@ -173,6 +184,7 @@ def window_metrics(cap: Capture, t0: float, window_s: float) -> dict[str, Any]:
         "last_gap_s": round(t1 - max(times), 3) if times else None,
         "focus_samples": len(focus),
         "behind_s": round(len(behind) * SAMPLE_S, 2),
+        "frozen_at_press_ms": round(pressed, 1),
         "gpu_other_share": round(sum(1 for x in other if x >= OTHER_GPU_MAX) / len(other), 4) if other else None,
         "gpu_other_pct": _round(_median(other)),
         "gpu_clock_mhz": _round(_median(clocks), 1),
@@ -217,6 +229,10 @@ def problems(cap: Capture, metrics: dict[str, Any], start_t: float, window_s: fl
         out.append("whether the game was in front could not be read")
     elif (_finite(metrics.get("behind_s")) or 0.0) > 0:
         out.append(f"the game was behind another window for about {max(1.0, metrics['behind_s']):.0f} s of the window")
+    frozen = _finite(metrics.get("frozen_at_press_ms")) or 0.0
+    if frozen > 0:      # the sweep's own window was just in front: Windows had shown the game nothing new yet
+        out.append(f"the game showed nothing new for {max(0.1, frozen / 1000.0):.1f} s after you pressed the start "
+                   "key, as it came back to the front: wait a moment at your spot before you press it")
     share = _finite(metrics.get("gpu_other_share"))
     if share is not None and share > OTHER_SHARE_MAX:
         out.append(f"another program used {OTHER_GPU_MAX:.0f} % or more of the game's GPU for about "

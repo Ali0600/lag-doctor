@@ -226,6 +226,33 @@
 
 ---
 
+## 2026-11-20: A sweep run pressed into the frozen screen of coming back to the front is kept out
+
+The owner asked to fix the sweep's frozen-screen clip (the 2026-11-19 entry's "Left open"). Each sweep run starts
+with the player pressing Enter in the sweep's own window, then going back to the game and pressing the start key. If
+Windows shows the game nothing new for a moment as it comes back (exclusive fullscreen can take a second or two), and
+the key is pressed then, the window starts inside a frozen screen in front (`FRONT`). On main that freeze was never
+counted: no frame before it in the window gives a stall its baseline. A review of the fix found that counting it
+would score the way back from the sweep's window as the setting's own stutter (one such run can halve its 1 % low),
+and so bias a sweep of exclusive fullscreen against borderless. The owner chose, asked:
+
+- **A: keep the run out and say why (chosen)**: `problems` says "the game showed nothing new for 0.8 s after you
+  pressed the start key, as it came back to the front: wait a moment at your spot before you press it", and the run
+  is offered again. The numbers saved with it still count the frozen part after the press as the window's first
+  frame (`frozen_at_press_ms` says how long). It costs a retry only when the key is pressed during the freeze.
+- **B: count it**: rejected. The sweep's "cut exactly" rule, but the return from the sweep's own window is no part of
+  the spot being measured.
+- **C: leave it out silently**, measuring from the first frame after it, as the report's own measured part does
+  (`crop`): rejected. No bias and no retry, but nothing tells the player a second or two of the window went
+  unmeasured.
+
+Only a frozen screen that ends on a frame shown after time behind another window counts as coming back. One that
+went behind another window after the press is counted, and the run is out for its time behind anyway. A freeze across
+the press with the game in front throughout is the game's own: counted, the run counts. Revisit hooks:
+`sweep/results._cut` (`pressed`) and `problems` (`frozen_at_press_ms`).
+
+---
+
 ## 2026-11-19: Time behind another window is judged at the ends and across a part's edge too, and never sets a usual level
 
 The owner asked for "the 2 analysis fixes": the headline naming the wrong GPU where it says it is not the limit, and
@@ -288,7 +315,8 @@ The lift test's quiet baseline (`attribute._quiet_grid`):
 
 Left open: `sweep/results.clipped_frames` cuts the whole recording's frames by row and does not clip a frozen screen
 that began before its window (its docstring says it does). Done 2026-11-20, by the sweep's own rule (the part inside
-the window counts), not dropped as `crop` drops it: a sweep's window is cut exactly (DESIGN, "The settings sweep").
+the window counts), not dropped as `crop` drops it: a sweep's window is cut exactly (DESIGN, "The settings sweep"). A
+run pressed into the frozen screen of coming back to the front is kept out (the 2026-11-20 entry above).
 Run, the gap was wider than read: such a freeze at the press was never counted (no frame before it to judge a stall
 by), one across the end counted past it or not at all, frames not shown at either edge counted whole or not at all,
 and a recording without display tracking read as one frame. Revisit hooks: `rules.costs_no_frames`, `frames._hidden`

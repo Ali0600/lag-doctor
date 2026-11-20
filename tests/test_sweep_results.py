@@ -204,21 +204,31 @@ def _window(cap, window=WINDOW):
     return m, results.problems(cap, m, PRESS_T, window)
 
 
-def test_a_frozen_screen_as_the_game_comes_back_to_the_front_counts_only_its_part_after_the_press():
+PRESSED_TOO_SOON = "after you pressed the start key, as it came back to the front: wait a moment at your spot"
+
+
+def test_a_frozen_screen_as_the_game_comes_back_to_the_front_keeps_the_run_out_and_counts_from_the_press():
     # The sweep covers the game just before the press (Enter in its own window). Back in front, Windows may show
-    # nothing new for a while: a frozen screen the player sees, of which only the part after the press is in the window.
-    # No frame before it in the window can judge it as a stall, so it is the window's first frame.
+    # nothing new for a while (exclusive fullscreen can take a second or two): pressed then, the window would score the
+    # way back from the sweep's window as the setting's own stutter, so the run is out, and the player told why. Its
+    # numbers still count the part after the press: no frame before it in the window can judge it as a stall, so it
+    # is the window's first frame (DECISIONS 2026-11-20).
     behind = lambda t: 0 if 15 <= t < 19 else 1
     for cap in (_frozen(gap=(15.0, 20.8), focused=behind), _frozen(unshown=(15.0, 20.8), focused=behind)):
         m, problems = _window(cap)
-        assert 780 <= m["worst_frame_ms"] <= 820 and problems == [], (m, problems)    # 20 s to 20.8 s, not from 19 s
+        assert 780 <= m["worst_frame_ms"] <= 820 and m["frozen_at_press_ms"] == pytest.approx(800, abs=20), m
+        assert len(problems) == 1 and "nothing new for 0.8 s " + PRESSED_TOO_SOON in problems[0], problems
     # Covered across the press itself, within the half second of grace: the time behind is no frame, the frozen
     # screen after it (from 20.5 s, the first reading in front, to the frame shown at 21.5 s) is.
     m, problems = _window(_frozen(unshown=(18.0, 21.5), focused=lambda t: 0 if 18 <= t < 20.4 else 1))
-    assert 980 <= m["worst_frame_ms"] <= 1020 and problems == [], (m, problems)
-    # Frozen across the press, then behind from 20.5 s: its part from 20 s, though the run is out.
+    assert 980 <= m["worst_frame_ms"] <= 1020 and len(problems) == 1 and PRESSED_TOO_SOON in problems[0], problems
+    # Frozen across the press, then behind from 20.5 s: its part from 20 s; the time behind keeps the run out, and the
+    # game did not come back to the front then.
     m, problems = _window(_frozen(unshown=(19.5, 22.0), focused=lambda t: 0 if 20.6 <= t < 22 else 1))
-    assert 480 <= m["worst_frame_ms"] <= 520 and problems, (m, problems)
+    assert 480 <= m["worst_frame_ms"] <= 520 and problems and m["frozen_at_press_ms"] == 0, (m, problems)
+    # Frozen across the press with nothing else in front: the game's own, counted, and the run counts.
+    m, problems = _window(_frozen(gap=(19.5, 20.5)))
+    assert 480 <= m["worst_frame_ms"] <= 540 and m["frozen_at_press_ms"] == 0 and problems == [], (m, problems)
 
 
 def test_a_frozen_screen_across_the_windows_end_counts_only_its_part_before_it():
@@ -231,6 +241,10 @@ def test_a_frozen_screen_across_the_windows_end_counts_only_its_part_before_it()
     # in front, though the frame that ended it came after the window.
     m, problems = _window(_frozen(unshown=(79.0, 83.0), focused=lambda t: 0 if 79.9 <= t < 83 else 1))
     assert 730 <= m["worst_frame_ms"] <= 770 and problems == [], (m, problems)
+    # ... also when no frame was shown after it at all: PresentMon loses the last frame shown and the frames after it,
+    # so the recording can end on frames never shown, and the last of them holds the frozen screen.
+    m, problems = _window(_frozen(unshown=(79.0, 101.0), focused=lambda t: 0 if t >= 79.9 else 1))
+    assert 730 <= m["worst_frame_ms"] <= 770 and problems == [], (m, problems)
 
 
 def test_time_behind_another_window_before_the_windows_end_is_never_a_frame_of_it():
@@ -239,6 +253,9 @@ def test_time_behind_another_window_before_the_windows_end_is_never_a_frame_of_i
     m, problems = _window(_frozen(unshown=(76.5, 81.0), focused=lambda t: 0 if 76.5 <= t < 79.6 else 1))
     assert 230 <= m["worst_frame_ms"] <= 270, m
     assert any("behind another window" in p for p in problems), problems
+    # Behind from 78 s to 79.5 s, then nothing shown until the recording ends: from the end of the time behind.
+    m, problems = _window(_frozen(unshown=(78.0, 101.0), focused=lambda t: 0 if 78 <= t < 79.5 else 1))
+    assert 480 <= m["worst_frame_ms"] <= 540 and problems, (m, problems)
 
 
 def test_frames_not_shown_across_either_edge_count_only_their_part_inside():
@@ -246,6 +263,11 @@ def test_frames_not_shown_across_either_edge_count_only_their_part_inside():
     # whole wait, and the frame across the window's end is the time since the last one shown.
     assert 480 <= _window(_frozen(unshown=(19.5, 20.5)))[0]["worst_frame_ms"] <= 540      # from 20 s, not 19.5 s
     assert 980 <= _window(_frozen(unshown=(79.0, 80.5)))[0]["worst_frame_ms"] <= 1020     # to 80 s, not missed
+    # The first frame shown 50 ms after the press, whose screen changed only 20 ms before it: its own 20 ms.
+    cap = _frozen(gap=(19.97, 20.04))
+    first = next(i for i, t in enumerate(cap.frames["t"]) if t > PRESS_T)
+    cap.frames["display_ms"][first] = 20.0
+    assert _window(cap)[0]["worst_frame_ms"] == pytest.approx(20.0, abs=0.01)
 
 
 def test_a_frozen_screen_outside_the_window_is_none_of_it_and_one_inside_is_judged_as_the_report_judges_it():
@@ -254,7 +276,8 @@ def test_a_frozen_screen_outside_the_window_is_none_of_it_and_one_inside_is_judg
     for cap in (_frozen(gap=(17.0, 20.6), focused=lambda t: 0 if 18 <= t < 20.6 else 1),
                 _frozen(gap=(79.0, 83.0), focused=lambda t: 0 if 79 <= t < 81.5 else 1)):
         assert len([iv for iv in fa.main_chain(cap)[fa.FRONT] if iv]) == 1      # the recording holds it
-        _window(cap)
+        m, _ = _window(cap)
+        assert m["worst_frame_ms"] == pytest.approx(1000 / 60, abs=0.5) and m["hitches"] == 0, m
     # Frozen 42 s to 43 s after a cover from 40 s, frames before it in the window: a stall, as in the report.
     cap = _frozen(unshown=(40.0, 43.0), focused=lambda t: 0 if 40 <= t < 42 else 1)
     whole, fr = fa.main_chain(cap), results.clipped_frames(cap, PRESS_T, PRESS_T + WINDOW)
@@ -268,8 +291,9 @@ def test_a_recording_without_display_tracking_is_judged_by_its_presents():
     # across its end never makes up a display time of its own (a series of one frame, which keeps every run out).
     m, problems = _window(_frozen(tracking=False), WINDOW + 0.008)
     assert m["frames"] >= 3600 and m["avg_fps"] == pytest.approx(60.0, rel=1e-3) and problems == [], (m, problems)
-    # A freeze across the press counts only its part after it there too.
+    # A freeze across the press counts only its part after it there too, and one across the end its part before it.
     assert 480 <= _window(_frozen(gap=(19.5, 20.5), tracking=False))[0]["worst_frame_ms"] <= 540
+    assert 480 <= _window(_frozen(gap=(79.5, 80.5), tracking=False))[0]["worst_frame_ms"] <= 540
 
 
 def _conditions(**knobs):
