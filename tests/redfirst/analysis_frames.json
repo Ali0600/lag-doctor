@@ -2322,10 +2322,37 @@
  {
   "name": "the frozen part counted as time behind",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "            a = min(float(iv[1]), float(t[j]))",
-  "new": "            pass",
+  "old": "                a = min(float(f1), end)",
+  "new": "                pass",
   "tests": [
    "tests/test_analysis_covered.py::test_the_time_in_front_at_a_covers_end_is_one_frozen_screen_and_the_rest_is_left_out"
+  ]
+ },
+ {
+  "name": "a frozen screen on a row inside a run counted as time behind",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        for f0, f1 in (iv for r in range(i, j + 1) if isinstance(iv := _at(front, r), tuple)):",
+  "new": "        for f0, f1 in (iv for r in range(j, j + 1) if isinstance(iv := _at(front, r), tuple)):",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_frozen_screen_beside_a_cover_is_never_time_behind_it_too"
+  ]
+ },
+ {
+  "name": "the time behind before a frozen screen at a run's end runs to the run's end",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "                out.append((a, min(float(f0), end)))",
+  "new": "                out.append((a, end))",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_frozen_screen_beside_a_cover_is_never_time_behind_it_too"
+  ]
+ },
+ {
+  "name": "a frozen screen at a run's end counted as time behind too",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "            if f1 > a:",
+  "new": "            if f0 <= a < f1:",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_frozen_screen_beside_a_cover_is_never_time_behind_it_too"
   ]
  },
  {

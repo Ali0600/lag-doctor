@@ -187,6 +187,36 @@ def test_the_time_in_front_at_a_covers_end_is_one_frozen_screen_and_the_rest_is_
     assert stutter_list(cap)[2] == [(11.5, 1500)]
 
 
+def overlap(spans, fronts):
+    """How long the time behind another window and the frozen screens FRONT judges share."""
+    return sum(max(0.0, min(b, f1) - max(a, f0)) for a, b in spans for f0, f1 in fronts)
+
+
+def test_a_frozen_screen_beside_a_cover_is_never_time_behind_it_too():
+    # A frozen screen FRONT judges is a stall, so the time behind leaves it out however the cover's rows lie. Back in
+    # front at 14.5 s, the next frame at 16 s: the time behind ends at 14.5 s whether the game drew nothing behind the
+    # window, drew until 14 s (the rows before the frame ending it all behind it, one run), or drew up to that frame
+    for segments in ([(10.0, 8.0, True), (16.0, 6000.0, True), (30.0, 8.0, True)],
+                     [(10.0, 8.0, True), (14.0, 8.0, False), (16.0, 2000.0, True), (30.0, 8.0, True)],
+                     [(10.0, 8.0, True), (16.0, 8.0, False), (30.0, 8.0, True)]):
+        cap = game(segments, focus=lambda t: 0 if 10.0 <= t < 14.5 else 1)
+        fr, hid, sts = stutter_list(cap)
+        fronts = [f for f in fr[fa.FRONT] if f is not None]
+        assert [round(f[0], 2) for f in fronts] == [14.5] and [s for _, s in sts] in ([1500], [1508]), (fronts, sts)
+        assert fa.frame_stats(fr, cap.duration_s)["hidden_s"] == pytest.approx(4.5, abs=0.01), segments
+        assert overlap(fa.hidden_spans(fr), fronts) == 0.0, (fa.hidden_spans(fr), fronts)
+    # frozen in front from 10.0 s to 10.5 s, then behind until 16 s, with a burst shown at 13 s: the burst joins the
+    # cover's two runs, so the frozen screen's FRONT sits on a row inside the run of rows behind the window
+    cap = game([(10.0, 8.0, True), (10.6, 600.0, False), (13.0, 8.0, False), (13.1, 8.0, True), (16.0, 8.0, False),
+                (30.0, 8.0, True)], focus=lambda t: 1 if t < 10.6 or t > 16.0 else 0)
+    fr, hid, sts = stutter_list(cap)
+    k = next(i for i, f in enumerate(fr[fa.FRONT]) if f is not None)
+    assert fr[fa.FRONT][k] == pytest.approx((10.0, 10.5), abs=0.01) and hid[k] and hid[k + 1], fr[fa.FRONT][k]
+    assert sts == [(10.5, 500)], sts
+    assert fa.frame_stats(fr, cap.duration_s)["hidden_s"] == pytest.approx(5.5, abs=0.01)
+    assert overlap(fa.hidden_spans(fr), [fr[fa.FRONT][k]]) == 0.0, fa.hidden_spans(fr)
+
+
 def unread(cap, lo, hi):
     """The sampler's rows in (lo, hi) taken out: a sampler that read nothing then."""
     keep = [i for i, x in enumerate(cap.system[S.T]) if not lo < x < hi]
