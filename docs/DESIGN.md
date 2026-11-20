@@ -2277,10 +2277,14 @@ typed on the player's PC, and the game is never started, stopped or opened by la
   again: a value the game put back, or a line it dropped, ends the sweep, since what the run used cannot be told.
   Sounds that cannot play are said after the run.
 - **What counts** (`sweep/results.py`): the window `[press, press + window]` of the main swap chain, cut exactly
-  (`clipped_frames`: the frame across each edge counts only its part inside), through `frames.frame_stats`, so a
-  run's average FPS and 1 % low are the report's own. A run counts (else it is offered again, or skipped) only when
+  (`clipped_frames`: the frame across each edge counts only its part inside, timed from the frame shown before it, and
+  so does a frozen screen in front, `FRONT`, which is the window's first frame where no frame before it in the window
+  can judge it as a stall; time behind another window, as the whole recording judged it, is never a frame of it, and
+  without display tracking the time between presents is the series), through `frames.frame_stats`, so a run's
+  average FPS and 1 % low are the report's own. A run counts (else it is offered again, or skipped) only when
   frame timing ran, the recording lasted the window, the window holds 1,000 frames or more and its frames come within
-  1 s of both ends, the game was in front in every sample but those within 0.5 s of the ends, other programs took 10 %
+  1 s of both ends, the game was in front in every sample but those within 0.5 s of the ends, the key was not
+  pressed into the frozen screen of the game coming back to the front (DECISIONS 2026-11-20), other programs took 10 %
   or more of the game's GPU in at most 5 % of the samples, and the NVIDIA clock's 90th percentile was within 15 % of
   its 10th (a GPU that has not heated up yet runs about twice as fast on the owner's laptop); and only when the power
   plan, Windows' power mode, mains power and the refresh rate match the first good run's. The NVIDIA power limit is
