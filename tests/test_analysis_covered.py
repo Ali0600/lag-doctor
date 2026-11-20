@@ -384,6 +384,79 @@ def test_the_bounds_one_second_windows_leave_time_behind_another_window_out():
     assert fa.bound(cap, fr, [])["busiest_thread"] < 0.5
 
 
+# ------------------------------------------------------------- before PresentMon's first row, after its last ---
+
+def drop_rows(cap, keep):
+    """The capture's frame rows whose time `keep` accepts: PresentMon writes none before a covered window's first shown
+    frame, and loses those after its last shown one (PM 2.4)."""
+    rows = [i for i, x in enumerate(cap.frames[F.T]) if keep(x)]
+    cap.frames = {k: [v[i] for i in rows] for k, v in cap.frames.items()}
+    return cap
+
+
+def test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too():
+    # The hitch capture covered from 20 s to its end read "6 stutters (12.0 a minute, ...)" with no time left out, and
+    # the same cover from its start likewise, while that cover in the middle read 18.0 a minute and 10 s left out
+    mid = diagnose(synth.laglab("hitch", covered=[(10.0, 20.0)]).cap)
+    end = diagnose(synth.laglab("hitch", covered=[(20.0, 30.0)]).cap)        # synth's rows stop at 19.99 s, as real ones
+    start = diagnose(drop_rows(synth.laglab("hitch", covered=[(0.0, 10.0)]).cap, lambda x: x >= 10.0))
+    for d, away in ((end, 10.0), (start, 9.75)):             # LagLab starts at 0.4 s: no reading says either way before
+        assert len(stutters(d)) == 6 and d.stats["hidden_s"] == pytest.approx(away, abs=0.05), d.stats
+        assert d.stats["stutters_per_min"] == pytest.approx(60.0 * 6 / (30.0 - d.stats["hidden_s"]))
+        assert d.headline.endswith(AWAY), d.headline
+    assert end.headline == mid.headline, (end.headline, mid.headline)
+    spans = fa.hidden_spans(fa.main_chain(drop_rows(synth.laglab("hitch", covered=[(0.0, 5.0), (12.0, 18.0)]).cap,
+                                                    lambda x: x >= 5.0)))
+    assert len(spans) == 2 and spans == sorted(spans) and spans[0][1] <= 5.01, spans     # in time order: bisected
+
+
+def test_an_edge_is_judged_by_the_stretchs_own_rule():
+    # the foreground says how much of an end had another window in front: never the time PresentMon was starting with
+    # the game in front, nor time it never read, nor less than a second
+    def ended(focus, upto=30.0, rows_from=0.0, secs=30.0):
+        cap = game([(20.0, 8.0, True), (secs, 8.0, False)], focus, secs=secs)
+        cap = drop_rows(cap, lambda x: rows_from <= x <= 20.0)        # nothing written after the last shown frame
+        if upto < secs:                                               # the sampler stopped before the recording did
+            keep = [i for i, t in enumerate(cap.system[S.T]) if t <= upto]
+            cap.system = {k: [v[i] for i in keep] if isinstance(v, list) else v for k, v in cap.system.items()}
+        return fa.frame_stats(fa.main_chain(cap), cap.duration_s)["hidden_s"]
+
+    assert ended(lambda t: 0 if t > 20.0 else 1) == pytest.approx(10.0, abs=0.05)
+    assert ended(lambda t: 0 if 20.0 < t < 27.0 else 1) == pytest.approx(7.0, abs=0.05)       # back in front at 27 s
+    assert ended(lambda t: 0 if t > 20.0 else 1, upto=27.0) == pytest.approx(7.0, abs=0.05)   # read until 27 s only
+    assert ended(lambda t: 0 if t > 29.3 else 1) == 0.0                                      # under a second
+    assert ended(lambda t: 1) == 0.0                                                         # in front: not behind
+    # before the first row: PresentMon still starting with the game in front is no time behind; behind it is
+    assert ended(lambda t: 1, rows_from=3.0) == 0.0
+    assert ended(lambda t: 0 if t < 3.0 else 1, rows_from=3.0) == pytest.approx(3.0, abs=0.05)    # from its start
+    # cut at the last reading in front (0.75 s), as a run is: the game went behind somewhere after it
+    assert ended(lambda t: 1 if t < 1.0 else (0 if t < 3.0 else 1), rows_from=3.0) == pytest.approx(2.25, abs=0.05)
+
+
+def test_a_part_ends_where_the_part_does():
+    # a part from 5 s to 25 s of a recording covered from 20 s on: 5 s of the part was behind, never 10 s of it
+    cap = synth.laglab("hitch", covered=[(20.0, 30.0)]).cap
+    part = crop.crop(cap, 5.0, 25.0)
+    last = max(t for t in part.system[S.T] if t is not None)          # its last foreground reading ends what is known
+    assert 24.5 < last <= 25.0
+    assert fa.frame_stats(fa.main_chain(part), part.duration_s)["hidden_s"] == pytest.approx(last - 20.0, abs=0.05)
+    assert diagnose(part).headline.endswith(AWAY)
+
+
+def test_the_bound_never_judges_a_cover_at_the_recordings_end():
+    # a game thread busy only while covered, from 20 s to the end, read "cpu_main" (busiest thread 100 %)
+    cap = synth.laglab("smooth", covered=[(20.0, 60.0)], duration_s=60.0).cap
+    for col in (S.GAME_TOP_THREAD_PCT, S.GAME_LEAD_THREAD_PCT):
+        cap.system[col] = [100.0 if t > 20.0 else v for t, v in zip(cap.system[S.T], cap.system[col])]
+    fr = fa.main_chain(cap)
+    assert fa.bound(cap, fr, [])["busiest_thread"] < 0.5
+
+
+def test_hidden_spans_read_only_well_formed_edges():
+    fr = {F.T: [], fa.HIDDEN: [], fa.FRONT: [], fa.EDGES: (("x", 2.0), (5.0, 4.0), (1.0,), (1.0, 2.0), None)}
+    assert fa.hidden_spans(fr) == [(1.0, 2.0)]
+
+
 def test_hidden_rows_need_display_tracking_and_a_foreground_reading():
     assert fa.hidden_rows([1.0, 2.0, 3.0], [None, None, None], [(1.5, 0), (2.0, 0), (2.5, 0)]) == ([], [])
     assert fa.hidden_rows([1.0, 2.0, 3.0], [1, 0, 1], [(1.5, None), (2.0, None)]) == ([], [])

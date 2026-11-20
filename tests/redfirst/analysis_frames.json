@@ -2132,8 +2132,8 @@
  {
   "name": "main_chain marks nothing",
   "file": "lagdoctor/analysis/frames.py",
-  "old": "    out[HIDDEN], out[FRONT] = hidden_rows(out[F.T], out[F.DISPLAYED], focus_readings(cap))",
-  "new": "    out[HIDDEN], out[FRONT] = [], []",
+  "old": "    out[HIDDEN], out[FRONT], out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap),",
+  "new": "    out[HIDDEN], out[FRONT] = [], []; _, _, out[EDGES] = _hidden(out[F.T], out[F.DISPLAYED], focus_readings(cap),",
   "tests": [
    "tests/test_analysis_covered.py::test_a_covered_window_is_never_judged_and_the_time_left_out_is_said"
   ]
@@ -2873,6 +2873,106 @@
   "new": "    if False:",
   "tests": [
    "tests/test_app_views.py::test_the_app_draws_the_swap_chain_its_diagnosis_analysed"
+  ]
+ },
+ {
+  "name": "no edge judged",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    if bounds is not None:            # the sampler stops",
+  "new": "    if False:            # the sampler stops",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too"
+  ]
+ },
+ {
+  "name": "the time before the first row never judged",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        ends = ((bounds[0], tf[0]), (tf[-1], min(bounds[1], rt[-1])))",
+  "new": "        ends = ((tf[-1], min(bounds[1], rt[-1])),)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too"
+  ]
+ },
+ {
+  "name": "the time after the last row never judged",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        ends = ((bounds[0], tf[0]), (tf[-1], min(bounds[1], rt[-1])))",
+  "new": "        ends = ((bounds[0], tf[0]),)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too"
+  ]
+ },
+ {
+  "name": "an edge runs past the last foreground reading",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        ends = ((bounds[0], tf[0]), (tf[-1], min(bounds[1], rt[-1])))",
+  "new": "        ends = ((bounds[0], tf[0]), (tf[-1], bounds[1]))",
+  "tests": [
+   "tests/test_analysis_covered.py::test_an_edge_is_judged_by_the_stretchs_own_rule"
+  ]
+ },
+ {
+  "name": "any edge counts as time behind",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        edges = tuple(s for a, b in ends if b > a and (s := stretch(a, b)) is not None)",
+  "new": "        edges = tuple((a, b) for a, b in ends if b > a)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_an_edge_is_judged_by_the_stretchs_own_rule"
+  ]
+ },
+ {
+  "name": "main_chain gives no bounds",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "                                                  capture_bounds(cap))",
+  "new": "                                                  None)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too"
+  ]
+ },
+ {
+  "name": "a part's edges counted from the recording's start",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    lo, dur = float(start) if start is not None else 0.0, _bounded(cap.duration_s)",
+  "new": "    lo, dur = 0.0, _bounded(cap.duration_s)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_a_part_ends_where_the_part_does"
+  ]
+ },
+ {
+  "name": "hidden_spans leaves the edges out",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    for e in fr.get(EDGES) or ():",
+  "new": "    for e in ():",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too",
+   "tests/test_analysis_covered.py::test_the_bound_never_judges_a_cover_at_the_recordings_end"
+  ]
+ },
+ {
+  "name": "hidden_spans out of time order",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "    spans.sort()\n    return spans",
+  "new": "    return spans",
+  "tests": [
+   "tests/test_analysis_covered.py::test_time_behind_another_window_at_either_end_of_presentmons_rows_is_left_out_too"
+  ]
+ },
+ {
+  "name": "an edge of no length read",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "        if a is not None and b is not None and b > a:\n            spans.append",
+  "new": "        if a is not None and b is not None:\n            spans.append",
+  "tests": [
+   "tests/test_analysis_covered.py::test_hidden_spans_read_only_well_formed_edges"
+  ]
+ },
+ {
+  "name": "an edge of one number read",
+  "file": "lagdoctor/analysis/frames.py",
+  "old": "if isinstance(e, (tuple, list)) and len(e) == 2 else (None, None)",
+  "new": "if isinstance(e, (tuple, list)) else (None, None)",
+  "tests": [
+   "tests/test_analysis_covered.py::test_hidden_spans_read_only_well_formed_edges"
   ]
  }
 ]
