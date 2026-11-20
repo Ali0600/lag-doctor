@@ -1438,3 +1438,15 @@ named by a relative path (`LAGDOCTOR_HOME`), so the app hands over `os.path.absp
 refuses anything but a drive letter's full path, with no wildcard and no `.` or `..` part, before Windows is called.
 **Takeaway**: before relying on an undoable delete, read what the API does with a path that is not a full one, and
 refuse such paths yourself.
+
+### A fix checked against the old code over random inputs: the difference must be exactly the defect
+
+A unit test pins the shapes someone thought of. A differential check runs the old and the new code over many random
+inputs and asserts the new result is the old one with exactly the defect taken out, nothing more and nothing less.
+**Why it came up**: the report's time behind another window counted a frozen screen as well (it was judged as a
+stall too). The known shape was a game that drew nothing while covered; reading `frames._row_spans` found two more,
+one where a shown burst joined two runs and put the freeze on a row inside the run, where the code never looked. A
+seeded run over 1,500 random covers asserted that the new spans equal the old ones less every frozen screen, and
+that none overlaps one: all held, and 469 of them changed, so the bug was common rather than a corner case.
+**Takeaway**: when a fix removes something, compute what should be removed independently and assert over random
+inputs that old minus new is exactly that; the share that changed tells you how often the bug struck.

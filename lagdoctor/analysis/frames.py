@@ -428,8 +428,8 @@ def _hidden(t: Sequence[Any], shown: Sequence[Any], readings: list[tuple[float, 
 def hidden_spans(fr: dict[str, list]) -> list[tuple[float, float]]:
     """(from, to) of each stretch behind another window, in time order (callers bisect their starts): those HIDDEN
     marks, from the last frame before it (the last one shown before the game went behind another window), or its
-    first row, to its last row, less a part of it FRONT judges as a frozen screen; and EDGES, before the first row and
-    after the last. A stretch's end may touch an edge's start: every reader sums or merges them."""
+    first row, to its last row, less every frozen screen FRONT judges in it (_row_spans); and EDGES, before the first
+    row and after the last. A stretch's end may touch an edge's start: every reader sums or merges them."""
     spans = _row_spans(fr)
     for e in fr.get(EDGES) or ():
         a, b = (_bounded(x) for x in e) if isinstance(e, (tuple, list)) and len(e) == 2 else (None, None)
