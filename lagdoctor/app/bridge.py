@@ -35,7 +35,7 @@ MAX_DELETE = 100                                   # recordings one Delete names
 
 
 def _session(v: Any) -> bool:
-    return isinstance(v, str) and SESSION_ID.fullmatch(v) is not None and ".." not in v
+    return isinstance(v, str) and SESSION_ID.fullmatch(v) is not None     # one part: no ".." can be one
 
 
 def _game(v: Any) -> bool:
