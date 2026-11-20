@@ -34,9 +34,8 @@ UNSHOWN = frozenset({"Cc", "Cf", "Cs", "Co", "Cn", "Zl", "Zp"})
 # Windows' reserved device names (Microsoft's "Naming Files, Paths, and Namespaces", read 2026-11-20: these, the
 # superscript digits included), which Windows 10 takes as the device whatever extension follows (COM1.exe is the
 # serial port), so opening or looking at such a file would reach a device: never a program's name.
-DEVICES = frozenset({"con", "prn", "aux", "nul"} | {f"{d}{n}" for d in ("com", "lpt")
-                                                     for n in ("1", "2", "3", "4", "5", "6", "7", "8", "9",
-                                                               "\u00b9", "\u00b2", "\u00b3")})
+DEVICES = frozenset({"con", "prn", "aux", "nul"} | {d + n for d in ("com", "lpt")
+                                                     for n in [*"123456789", chr(0xB9), chr(0xB2), chr(0xB3)]})
 
 
 @dataclass(frozen=True)

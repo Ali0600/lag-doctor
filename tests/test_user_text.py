@@ -136,7 +136,7 @@ def test_no_internal_citations_in_text_a_player_reads():
     modules = user_modules()
     names = {p.relative_to(ROOT).as_posix() for p in modules}
     assert MUST_SCAN <= names, sorted(MUST_SCAN - names)
-    assert not any(n.startswith("lagdoctor/winapi/") for n in names)
+    assert {n for n in names if n.startswith("lagdoctor/winapi/")} == {f"lagdoctor/winapi/{m}" for m in PAGE_WINAPI}
     hits = [f"{where}: {c}" for p in modules
             for where, c in citations(p.read_text(encoding="utf-8"), p.relative_to(ROOT).as_posix())]
     assert hits == [], "\n".join(hits)

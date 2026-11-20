@@ -124,7 +124,7 @@ def test_a_program_found_without_an_icon_is_not_read_again_but_a_new_one_is(tmp_
 
 
 @pytest.mark.parametrize("exe", ["D:\\Games\\Moss Garden\\moss.txt", "moss.exe", "C:\\Windows\\moss.exe",
-                                 "D:\\Games\\Moss Garden\\" + chr(0x202E) + "exe.moss.exe"])
+                                 "D:\\Games\\Moss Garden\\mo|ss.exe", "D:\\Games\\Moss Garden\\COM1.exe"])
 def test_a_recordings_program_that_is_no_game_program_is_never_read(tmp_path, monkeypatch, exe):
     app = make_app(tmp_path)
     recording_of(app.home, "20261110-100000-moss", exe)

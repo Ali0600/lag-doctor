@@ -732,8 +732,8 @@
  {
   "name": "added: the superscript ports kept",
   "file": "lagdoctor/app/added.py",
-  "old": "                                                               \"\\u00b9\", \"\\u00b2\", \"\\u00b3\")})",
-  "new": "                                                               )})",
+  "old": "                                                     for n in [*\"123456789\", chr(0xB9), chr(0xB2), chr(0xB3)]})",
+  "new": "                                                     for n in [*\"123456789\"]})",
   "tests": [
    "tests/test_app_added.py::test_a_path_that_is_no_game_program_in_a_folder_of_its_own_is_refused"
   ]
