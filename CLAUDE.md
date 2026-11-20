@@ -148,7 +148,7 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   1e7 as corrupt: an 81 MB exe read as "not read" until a demo used a real size. A DLL name joins `PROXY_DLLS` only
   from a primary source, and never one on KnownDLLs (`tests/test_gamefiles.py` reads both lists).
 - **The store readers (`lagdoctor/stores/`) reach files only through `stores`' own file access** (`scandir`, `stat`,
-  `is_folder`, `exists`, `read_text`, `read_bytes`), which asks `target.local_problem` first: it reads each junction and link on the
+  `is_folder`, `exists`, `read_text`, `read_bytes`, `open_file`), which asks `target.local_problem` first: it reads each junction and link on the
   way instead of following it, so nothing on a network share, or kept online only, is opened. `tests/test_stores.py`
   scans every module of `lagdoctor/stores` but `__init__.py` for any other way in (aliases, `ntpath`, the raw
   seams), and proves it on planted lines. Their tests never read this PC's own Steam or Epic files: the
@@ -305,7 +305,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   default to none, and only `run()` gives the stores' own (`library.installed_games`, `stores/art.covers`), so a test
   that builds an App never lists this PC's store library or reads its Steam cache: give it `tests/app_demo.py`'s
   made-up `INSTALLED` and `covers`, and an `open_link` and `play_recorder` of the test's own (the default opens a real
-  store link, which starts a game).
+  store link, which starts a game). `App(picker=)`, Add a game's Open dialog (screen 6), defaults to none as well: the
+  real one waits for a person, and `tests/conftest.py`'s `_no_real_dialog` fails a test that reaches it. A test that
+  adds a game picks a made-up program (`tests/pe_build.py`) under its own `tmp_path`, never a game's file.
 - **The overhead benchmark** (`scripts/overhead/bench.py`, `docs/research/overhead.md`) opens a LagLab window for
   about 6.5 minutes a suite and holds lag-doctor's capture lock for the whole run, so the owner's own `watch` refuses
   meanwhile (exit 4), and the benchmark refuses to start while a recording runs: run it when the owner is not

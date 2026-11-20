@@ -11,6 +11,7 @@ from __future__ import annotations
 import faulthandler
 import hashlib
 import os
+import secrets
 import sys
 import threading
 import time
@@ -20,7 +21,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from lagdoctor import __version__, paths
-from lagdoctor.app import APP_ID, ASSETS, ICON, bridge, library, recording, sounds, views
+from lagdoctor.app import APP_ID, ASSETS, ICON, added, bridge, library, recording, sounds, views
 from lagdoctor.app.window import AppWindow
 from lagdoctor.winapi import webview2 as wv
 
@@ -118,7 +119,10 @@ class App:
 
     `installed()` lists the store games Play can start (lagdoctor/stores: library.installed_games), and `covers(games)`
     reads their cover art ({(store, id): (type, bytes)}, stores/art.covers). Both default to none: only run() passes
-    the stores' own, so a test that builds an App never lists the PC's own library or reads its art."""
+    the stores' own, so a test that builds an App never lists the PC's own library or reads its art. `picker(hwnd)`,
+    Add a game's (screen 6), returns the program the player chose in Windows' Open dialog (winapi/dialogs.pick_program,
+    which only run() passes too: it waits for a person), or None. The games added by hand are the home's own
+    (app/added.py), and each one's icon is read from its program (stores/exe.py)."""
 
     def __init__(self, *, home: Path, runtime: dict, create_fn, log: Callable[[str], None],
                  tell: Callable[[str], None] = tell, activate: bool = True, on_ready: Callable[["App"], None] | None
@@ -129,7 +133,8 @@ class App:
                  play_recorder: Callable[[str], list[str]] | None = None,
                  open_link: Callable[[str], Any] | None = None,
                  forms_of: Callable[[str], tuple[str, ...]] | None = None,
-                 covers: Callable[[list], dict] | None = None) -> None:
+                 covers: Callable[[list], dict] | None = None,
+                 picker: Callable[[int | None], str | None] | None = None) -> None:
         self.home = Path(home)
         self.sessions = self.home / "sessions"
         self.sessions.mkdir(parents=True, exist_ok=True)
@@ -145,7 +150,8 @@ class App:
         self.loaded: tuple | None = None            # (session id, capture, diagnosis, main chain): the last one read
         self.readiness: dict | None = None
         self.covers = covers
-        self.art: dict[str, tuple[str, bytes]] = {}     # a game id's cover, as covers() read it
+        self.art: dict[str, tuple[str, bytes]] = {}     # a game id's cover, as covers() read it, or its program's icon
+        self.icons: set[str] = set()                    # the game ids whose art is a program's icon
         self.art_tried: set[str] = set()                # the game ids whose cover was looked for (once a run)
         self.art_bytes = 0
         self.art_lock = threading.Lock()                # one reading of covers at a time
@@ -160,6 +166,12 @@ class App:
         self.installed = installed or (lambda: [])
         self.forms_of = forms_of                    # library.installed's (target.folder_forms when None)
         self.games: list[library.Installed] = []    # the store games, as the last listing read them
+        self.added: list[library.AddedGame] = []    # the games added by hand the last listing showed
+        self.added_lock = threading.Lock()          # one change to added-games.json at a time
+        self.added_said: tuple[str, ...] = ()       # what reading it last found wrong, logged once
+        self.picker = picker
+        self.picking = False                        # Windows' Open dialog is up
+        self.draft: Draft | None = None             # the program the player chose last, before it is added
         self.open_link = open_link or _open_store_link
         self.rec_link: str | None = None            # the store link of the game the running Play opens
         self.launcher = launcher
@@ -194,6 +206,9 @@ class App:
                 return
             self.log(f"request {req.kind} failed:\n{''.join(traceback.format_exception(error))}")
             self.window.post(bridge.reply(req.id, error=self.generic_error))
+            return
+        if isinstance(result, Pick):                # the Open dialog is modal to the window: on the UI thread
+            self.pick(req)
             return
         if isinstance(result, Open):                # ShellExecute wants COM: on the UI thread, which is STA
             try:
@@ -276,6 +291,48 @@ class App:
                     self.art[g.game_id] = image
                 self.art_bytes += len(image[1])
 
+    def scan_added(self, games: list[library.Installed]) -> list[library.AddedGame]:
+        """The games added by hand the Library lists (added-games.json, less those a store in `games` lists:
+        library.listed_added), read again; what the file holds that could not be read is logged once."""
+        with self.added_lock:                       # never while an add or a remove replaces the file
+            kept, problems = added.load(self.home)
+        if tuple(problems) != self.added_said:
+            for problem in problems:
+                self.log(f"the games added by hand: {problem}")
+            self.added_said = tuple(problems)
+        listed = library.listed_added(library.added_games(kept, self.forms_of), games)
+        with self.lock:
+            self.added = listed
+        self.read_icons(listed)
+        return listed
+
+    def read_icons(self, games: list[library.AddedGame]) -> None:
+        """Look once a run for the icon of each added game's program not looked at yet (stores/exe.read), within the
+        art's budget, as read_art does for covers."""
+        from lagdoctor.stores import exe
+        with self.art_lock:
+            for g in games:
+                if g.game_id in self.art_tried:
+                    continue
+                self.art_tried.add(g.game_id)
+                found = exe.read(g.exe)
+                if found.icon is not None:
+                    self.keep_icon(g.game_id, found.icon)
+
+    def keep_icon(self, game_id: str, icon: tuple[str, bytes]) -> None:
+        """Hold a program's icon for the art host, within art.MAX_TOTAL_BYTES (art_lock held)."""
+        from lagdoctor.stores import art
+        with self.lock:
+            if game_id in self.art or self.art_bytes + len(icon[1]) > art.MAX_TOTAL_BYTES:
+                return
+            self.art[game_id] = icon
+            self.icons.add(game_id)
+        self.art_bytes += len(icon[1])
+
+    def icon_ids(self) -> frozenset[str]:
+        with self.lock:
+            return frozenset(self.icons)
+
     def art_for(self, game_id: str) -> tuple[str, bytes] | None:
         """The cover the window's art host answers with (AppWindow.on_web_resource, on the window's thread)."""
         with self.lock:
@@ -309,13 +366,17 @@ class App:
     def do_library(self) -> dict:
         entries = self.scan()
         games = self.scan_games()
-        return views.library_view(entries, self.readiness or self.get_readiness(), games, art=self.art_ids())
+        listed = self.scan_added(games)
+        return views.library_view(entries, self.readiness or self.get_readiness(), games, art=self.art_ids(),
+                                  added=listed, icons=self.icon_ids())
 
     def do_game(self, game: str) -> dict:
         entries = self.scan()
         games = self.scan_games()
+        listed = self.scan_added(games)
         view = views.game_view(entries, game, library.last_session(self.home, self.sessions), games,
-                               play=views.play_words(self.start_key, recording.WINDOW_S, LAG_KEY), art=self.art_ids())
+                               play=views.play_words(self.start_key, recording.WINDOW_S, LAG_KEY), art=self.art_ids(),
+                               added=listed, icons=self.icon_ids())
         if view is None:
             raise Gone("That game is not in the Library as it was: open it again from the Library.")
         return view
@@ -398,12 +459,155 @@ class App:
         for the game's folder, and once the prompt is answered and its checks have passed it says `launch`: only then
         does this window have Explorer open the game's store link (on_recorder), and the recorder waits for the game
         the store starts. lag-doctor never starts the game itself."""
-        found = views.installed_of(self.scan(), game, self.scan_games())
+        entries, games = self.scan(), self.scan_games()
+        found = views.installed_of(entries, game, games, self.scan_added(games))
         if found is None:
             raise Gone("That game is not installed any more, so lag-doctor cannot start it.")
         play = {"game": game, "title": found.game.title, "store": found.store_name}
         return self._start(lambda: self.play_recorder(found.game.folder), play=play, link=found.game.link,
                            folder=found.game.folder)
+
+    def do_wait(self, game: str) -> dict:
+        """Record when it starts (screen 6): record a game the player starts themselves, from its start. The recorder
+        waits on the game's folder (an added game's, or a recorded game's own) as Play's does, but no link is opened:
+        on "launch", the running screen asks the player to start the game now."""
+        from lagdoctor import stores
+        entries, games = self.scan(), self.scan_games()
+        found = views.wait_of(entries, game, games, self.scan_added(games))
+        if found is None:
+            raise Gone("lag-doctor knows no folder of that game to wait on: open it again from the Library.")
+        name, folder = found
+        try:
+            there = stores.is_folder(folder)
+        except OSError as exc:
+            raise Gone(f"lag-doctor cannot wait on that game's folder: {stores.failure(exc, folder)}.") from None
+        if not there:
+            raise Gone(f"That game's folder, {folder}, is not there any more, so lag-doctor cannot wait for it.")
+        play = {"game": game, "title": name, "store": "", "self": True}
+        return self._start(lambda: self.play_recorder(folder), play=play, folder=folder)
+
+    # ---------------------------------------------------------------- add a game (screen 6)
+
+    def do_pick_game(self) -> "Pick":
+        """Windows' Open dialog, for the program of a game to add: opened by answer(), on the UI thread."""
+        return Pick()
+
+    def pick(self, req: bridge.Request) -> None:
+        """On the UI thread: Windows' Open dialog, modal to the window (its own message loop answers the window's
+        posted calls meanwhile), then the program chosen, read on a worker (draft_of)."""
+        if self.picker is None:
+            self.window.post(bridge.reply(req.id, error="Adding a game is not available in this window."))
+            return
+        if self.picking:
+            self.window.post(bridge.reply(req.id, error="Windows' Open dialog is open already."))
+            return
+        self.picking = True
+        try:
+            path = self.picker(self.window.hwnd)
+        except Exception as exc:  # noqa: BLE001 - said on the page; the window goes on
+            self.log(f"the Open dialog:\n{''.join(traceback.format_exception(exc))}")
+            words = exc.strerror if isinstance(exc, OSError) and exc.strerror else "lag-doctor hit an error"
+            self.window.post(bridge.reply(req.id, error=f"Windows' Open dialog could not open ({words})."))
+            return
+        finally:
+            self.picking = False
+        if not path:
+            self.window.post(bridge.reply(req.id, {"cancelled": True}))
+            return
+        if not self.window.submit(lambda: self.draft_of(path), lambda result, error: self.answer(req, result, error)):
+            self.window.post(bridge.reply(req.id, error="lag-doctor is still busy with earlier requests."))
+
+    def draft_of(self, path: str) -> dict:
+        """The program the player chose, as screen 6 shows it before it is added (views.draft_view): its name from
+        its file (stores/exe.read), else its file's; or, when the Library has its game already, that game
+        (views.clash_view). Gone when it cannot be a game's: no .exe, a folder the wait cannot take (a drive, the
+        Windows folder, a Program Files folder itself, one off the local disks) or one holding another game's."""
+        from lagdoctor import stores
+        from lagdoctor.capture import target
+        from lagdoctor.stores import exe
+        try:
+            program, folder = added.check_program(path)
+        except ValueError as exc:
+            raise Gone(f"lag-doctor cannot add that program: {exc}.") from None
+        why = target.local_problem(program)
+        if why is not None:
+            raise Gone(f"lag-doctor adds only programs on this PC's own disks: {why}.")
+        try:
+            forms = tuple((self.forms_of or target.folder_forms)(folder))
+        except (OSError, ValueError) as exc:
+            raise Gone(f"lag-doctor cannot wait for a game in that folder: {exc}.") from None
+        shared = {target.fold_path(r) for r in library.shared_roots()}
+        if any(target.fold_path(f) in shared for f in forms):        # its real path too, behind a junction
+            raise Gone(f"That program sits in {folder} itself, not in a folder of its own, so lag-doctor could not "
+                       "tell it from the other programs there.")
+        entries, games = self.scan(), self.scan_games()
+        listed = self.scan_added(games)
+        found = library.clash(program, forms, games, listed, views.recorded_games(entries, games, listed))
+        if found is not None:
+            view = views.clash_view(*found)
+            if view["existing"] is None:
+                raise Gone(view["why"])
+            return view
+        read = exe.read(program)
+        for problem in read.problems:
+            self.log(f"adding a game: {problem}")
+        gid = library.added_id(program)
+        with self.art_lock:
+            self.art_tried.add(gid)                 # its icon is looked for now, not again at the next listing
+            if read.icon is not None:
+                self.keep_icon(gid, read.icon)
+        token = "d-" + secrets.token_hex(8)
+        with self.lock:
+            self.draft = Draft(token=token, exe=program, folder=folder, forms=forms)
+        return views.draft_view(token, read.name or stores.title(None, exe.stem(program)), program, folder, gid,
+                                read.name is None, art=self.art_ids(), icons=self.icon_ids())
+
+    def do_add_game(self, draft: str, name: str) -> dict:
+        """Add the program the player chose (the draft `draft` names) by the name they gave it."""
+        from lagdoctor import stores
+        with self.lock:
+            d = self.draft
+        if d is None or d.token != draft:
+            raise Gone("That program is no longer being added: choose it again with Add a game.")
+        shown = stores.name(name)
+        if shown is None:
+            raise Gone("Give the game a name to show by.")
+        entries, games = self.scan(), self.scan_games()
+        recorded = views.recorded_games(entries, games, self.scan_added(games))
+        with self.added_lock:
+            kept, problems = added.load(self.home)
+            found = library.clash(d.exe, d.forms, games,
+                                  library.listed_added(library.added_games(kept, self.forms_of), games), recorded)
+            if found is not None:
+                raise Gone(views.clash_view(*found)["why"])
+            if len(kept) >= added.MAX_GAMES:
+                raise Gone(f"The Library holds at most {added.MAX_GAMES} games added by hand: remove one first.")
+            try:
+                added.save(self.home, kept + [added.Kept(exe=d.exe, name=shown)], unread=bool(problems))
+            except OSError as exc:
+                self.log(f"saving the games added by hand: {exc}")
+                raise Gone(f"lag-doctor could not save its list of games ({exc.strerror or exc}).") from None
+        with self.lock:
+            if self.draft is d:
+                self.draft = None
+        self.log(f"added a game by hand: {d.exe}")
+        return {"game": library.added_id(d.exe)}
+
+    def do_remove_game(self, game: str) -> dict:
+        """Take a game added by hand out of the Library: its recordings stay, under their recorded game."""
+        with self.added_lock:
+            kept, problems = added.load(self.home)
+            rest = [k for k in kept if library.added_id(k.exe) != game]
+            if len(rest) == len(kept):
+                raise Gone("That game was not added by hand, so there is nothing to remove.")
+            try:
+                added.save(self.home, rest, unread=bool(problems))
+            except OSError as exc:
+                self.log(f"saving the games added by hand: {exc}")
+                raise Gone(f"lag-doctor could not save its list of games ({exc.strerror or exc}).") from None
+        with self.lock:
+            self.added = [a for a in self.added if a.game_id != game]
+        return {}
 
     def _start(self, argv: Callable[[], list[str]], *, play: dict | None = None, link: str | None = None,
                folder: str | None = None) -> dict:
@@ -546,6 +750,21 @@ class Open:
     path: Path
 
 
+@dataclass(frozen=True)
+class Pick:
+    """Add a game's Open dialog, which answer() opens on the UI thread."""
+
+
+@dataclass(frozen=True)
+class Draft:
+    """The program the player chose in Add a game, before it is added: `token` is the page's name for this choice
+    (never a path), `exe` and `folder` as added.check_program gave them, `forms` the folder's."""
+    token: str
+    exe: str
+    folder: str
+    forms: tuple[str, ...]
+
+
 def run() -> int:
     """`lagdoctor app`: the window, from start to close. 0 when it ran (or a first start's window was brought
     forward), 1 when it refused or could not open."""
@@ -587,8 +806,9 @@ def run() -> int:
             tell(f"lag-doctor's window could not start COM (HRESULT 0x{hr & 0xFFFFFFFF:08X}).")
             return 1
         from lagdoctor.stores import art
+        from lagdoctor.winapi import dialogs
         app = App(home=home, runtime=runtime, create_fn=create_fn, log=log,
-                  installed=lambda: library.installed_games(log), covers=art.covers)
+                  installed=lambda: library.installed_games(log), covers=art.covers, picker=dialogs.pick_program)
         try:
             app.run()
         finally:

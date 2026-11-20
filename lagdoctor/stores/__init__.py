@@ -8,8 +8,9 @@ checks every field against a grammar, and skips what fails, naming it in Library
 is never guessed at, and one bad entry never hides the others in its file. A file that cannot be read as a whole (a
 library list Steam would not write, a journal without its header) is named, and none of its entries is taken.
 
-Every file and folder the readers look at goes through this module's scandir, stat, is_folder, exists, read_text and
-read_bytes (the cover art's, art.py), which ask target.local_problem first: nothing is opened on a network drive, or
+Every file and folder the readers look at goes through this module's scandir, stat, is_folder, exists, read_text,
+read_bytes (the cover art's, art.py) and open_file (parts of a program the player picked, exe.py), which ask
+target.local_problem first: nothing is opened on a network drive, or
 through a junction or link that leads to one, and nothing kept online only (tests/test_stores.py holds every reader
 module to that).
 """
@@ -205,3 +206,58 @@ def read_bytes(path: Path, max_bytes: int) -> bytes:
     if len(data) > max_bytes:
         raise ValueError(f"{path} is larger than {max_bytes} bytes, so it was not read")
     return data
+
+
+class Reader:
+    """Parts of one file opened by open_file: `at(offset, n)` reads n bytes from `offset`, within the file's size as
+    its stat gave it and within one budget of bytes for the whole file, so a file whose own tables point anywhere is
+    read no further than the budget. ValueError, in plain words, for a part past the end or the budget, or one that
+    came back short (the file shrank)."""
+
+    def __init__(self, f, path: str, size: int, budget: int) -> None:
+        self._f, self.path, self.size, self.left = f, path, size, budget
+
+    def at(self, offset: int, n: int) -> bytes:
+        if not (isinstance(offset, int) and isinstance(n, int)) or offset < 0 or n < 0 or offset + n > self.size:
+            raise ValueError(f"{self.path} points past its own end")
+        if n > self.left:
+            raise ValueError(f"{self.path} would need more than its budget of bytes read, so it was not read further")
+        self.left -= n
+        try:
+            self._f.seek(offset)
+            data = self._f.read(n)
+        except OSError as exc:
+            raise ValueError(f"{self.path} could not be read ({exc.strerror or exc})") from exc
+        if len(data) != n:
+            raise ValueError(f"{self.path} changed while it was read")
+        return data
+
+
+class open_file:
+    """`with stores.open_file(path, budget) as r:` a Reader of a file on the local disks (any size: only what r.at
+    asks for is read, up to `budget` bytes in all). ValueError, in plain words, when its path leads off the local disks
+    or the file is kept online only (target.local_problem, as read_bytes asks), when it is no file, or cannot be
+    opened."""
+
+    def __init__(self, path: str, budget: int) -> None:
+        self.path, self.budget, self._f = path, budget, None
+
+    def __enter__(self) -> Reader:
+        try:
+            st = stat(self.path)
+        except NotLocal as exc:
+            raise ValueError(exc.strerror) from exc
+        except OSError as exc:
+            raise ValueError(f"{self.path} could not be read ({exc.strerror or exc})") from exc
+        if not _stat_mode.S_ISREG(st.st_mode):
+            raise ValueError(f"{self.path} is not a file")
+        try:
+            self._f = _open(self.path)
+        except OSError as exc:
+            raise ValueError(f"{self.path} could not be read ({exc.strerror or exc})") from exc
+        return Reader(self._f, os.fspath(self.path), st.st_size, self.budget)
+
+    def __exit__(self, *exc) -> None:
+        if self._f is not None:
+            self._f.close()
+            self._f = None

@@ -1,4 +1,4 @@
-"""What each screen shows (docs/LAUNCHER-PLAN.md, screens 1, 2, 4, 5 and 7), built from sessions on disk.
+"""What each screen shows (docs/LAUNCHER-PLAN.md, screens 1 to 7), built from sessions on disk.
 
 Each view is a plain dict of text and numbers, ready for JSON: the page only lays it out. Text from a capture or the
 PC (a game's window title, a process name, evidence) stays text here, and the page puts it on screen with
@@ -20,7 +20,10 @@ from typing import Any
 from lagdoctor.analysis import crop
 from lagdoctor.analysis.window import window as cut_window
 from lagdoctor.app import bridge
-from lagdoctor.app.library import STORE_NAMES, Entry, Installed, joined, read_diagnosis
+from lagdoctor.app.library import (ADDED_BY_YOU, STORE_NAMES, AddedGame, Entry, Installed, RecordedGame, joined,
+                                   read_diagnosis, shared_roots, wait_folders)
+from lagdoctor.app.library import _broad
+from lagdoctor.stores.exe import file_name as exe_file_name
 from lagdoctor.capture import session as sess
 from lagdoctor.model import C, Capture, Diagnosis, G, N, S, clean_note
 from lagdoctor.report import html, labels
@@ -82,15 +85,18 @@ def lag_text(key: Any) -> str:
     return labels.LAG_TYPES.get(key, "Not analysed") if isinstance(key, str) else "Not analysed"
 
 
-def tile(name: str, game_id: str | None = None, art: frozenset | set = frozenset()) -> dict[str, Any]:
-    """A cover tile: the game's initials on a colour from its name, and with "art" where its cover is (the art
-    host's URL for the game, when the app holds a cover from its store's cache: `art`, the ids it holds), which
-    the page shows over the initials once it has loaded. No art is downloaded."""
+def tile(name: str, game_id: str | None = None, art: frozenset | set = frozenset(),
+         icons: frozenset | set = frozenset()) -> dict[str, Any]:
+    """A cover tile: the game's initials on a colour from its name, and with "art" where its picture is (the art
+    host's URL for the game, when the app holds a cover from its store's cache or the icon of an added game's program:
+    `art`, the ids it holds), which the page shows over the initials once it has loaded: a cover fills the tile, an
+    icon (`icons`, the ids whose picture is one) sits in its middle on the colour. No art is downloaded."""
     words = [w for w in "".join(ch if ch.isalnum() else " " for ch in name).split() if w]
     initials = "".join(w[0] for w in words[:2]).upper() or "?"
     hue = sum(ord(ch) * (i + 1) for i, ch in enumerate(name)) % 360
-    return {"initials": initials, "hue": hue,
-            "art": bridge.art_url(game_id) if game_id is not None and game_id in art else None}
+    shown = game_id is not None and game_id in art
+    return {"initials": initials, "hue": hue, "art": bridge.art_url(game_id) if shown else None,
+            "icon": shown and game_id in icons}
 
 
 def numbers(entry: Entry) -> dict[str, Any]:
@@ -132,69 +138,156 @@ def _session_row(entry: Entry, last_id: str | None) -> dict[str, Any]:
 
 @dataclass
 class _Game:
-    """One tile of the Library: an installed store game (`installed`, with the recordings of it) or a recorded game
-    no store lists. Its recordings come newest first."""
+    """One tile of the Library: an installed store game (`installed`), a game added by hand (`added`), or a recorded
+    game neither lists, each with its recordings, newest first. `folder`: the folder Record when it starts waits on
+    (an added game's, or a recorded game's from library.wait_folders); None when there is none."""
     id: str
     name: str
     installed: Installed | None = None
+    added: AddedGame | None = None
     recs: list[Entry] = field(default_factory=list)
+    folder: str | None = None
+    broad: bool = False         # an added game whose folder holds another listed game's, or is a shared root
+
+    @property
+    def key(self) -> str:
+        holder = self.installed or self.added
+        return holder.key if holder is not None else self.id
+
+    @property
+    def store(self) -> str:
+        if self.installed is not None:
+            return self.installed.store_name
+        return ADDED_BY_YOU if self.added is not None else ""
 
 
-def _games(entries: list[Entry], games: list[Installed] | tuple = ()) -> list[_Game]:
-    """Every game the Library shows: those with recordings first, by their newest recording, then the installed ones
-    not recorded yet, by name. A recording that ran from an installed game's folder shows under that game
-    (library.joined); the others under their recorded game (their exe's stem)."""
-    joins = joined(entries, list(games))
+def _newest_exe(recs: list[Entry]) -> str | None:
+    """The program of the newest recording that names one (summary.json's exe)."""
+    for e in recs:
+        exe = (e.summary or {}).get("exe")
+        if isinstance(exe, str):
+            return exe
+    return None
+
+
+def _games(entries: list[Entry], games: list[Installed] | tuple = (), added: list[AddedGame] | tuple = (),
+           roots: list[str] | None = None) -> list[_Game]:
+    """Every game the Library shows: those with recordings first, by their newest recording, then the installed and
+    added ones not recorded yet, by name. A recording that ran from an installed or added game's folder shows under
+    that game (library.joined); the others under their recorded game (their exe's stem), which waits on its own
+    folder when it has one (library.wait_folders). `added`: the added games the Library lists (library.listed_added)."""
+    joins = joined(entries, list(games), roots, added=list(added))
+    broad = _broad(list(games) + list(added), shared_roots() if roots is None else roots)
     out: dict[str, _Game] = {}
     for e in entries:                                         # entries come newest first, and so do each game's
         if not e.is_recording:
             continue
         g = joins.get(e.id)
-        if g is not None:
+        if isinstance(g, AddedGame):
+            tile = out.setdefault(g.game_id, _Game(id=g.game_id, name=g.name, added=g, folder=g.folder))
+        elif g is not None:
             tile = out.setdefault(g.game_id, _Game(id=g.game_id, name=g.game.title, installed=g))
         else:
             tile = out.setdefault(e.game_id, _Game(id=e.game_id, name=e.game))
         tile.recs.append(e)
-    rest = sorted((g for g in games if g.game_id not in out), key=lambda g: (g.game.title.casefold(), g.key))
-    return list(out.values()) + [_Game(id=g.game_id, name=g.game.title, installed=g) for g in rest]
+    recorded = {}
+    for tile in out.values():
+        exe = _newest_exe(tile.recs) if tile.installed is None and tile.added is None else None
+        if exe is not None:
+            recorded[tile.id] = exe
+    for gid, folder in wait_folders(recorded, list(games) + list(added), roots).items():
+        out[gid].folder = folder
+    rest = [_Game(id=g.game_id, name=g.game.title, installed=g) for g in games if g.game_id not in out]
+    rest += [_Game(id=a.game_id, name=a.name, added=a, folder=a.folder) for a in added if a.game_id not in out]
+    rest.sort(key=lambda g: (g.name.casefold(), g.key))
+    for tile in list(out.values()) + rest:
+        if tile.added is not None and tile.added.key in broad:    # the wait could not tell its game from another
+            tile.folder, tile.broad = None, True
+    return list(out.values()) + rest
+
+
+def recorded_games(entries: list[Entry], games: list[Installed] | tuple = (),
+                   added: list[AddedGame] | tuple = ()) -> list[RecordedGame]:
+    """The recorded games no store lists and nobody added, each with the folder of its newest recording's program
+    (when it names one that added.check_program takes), for Add a game's clash."""
+    from lagdoctor.app import added as added_mod
+    out = []
+    for g in _games(entries, games, added):
+        exe = _newest_exe(g.recs) if g.installed is None and g.added is None else None
+        if exe is None:
+            continue
+        try:
+            _exe, folder = added_mod.check_program(exe)
+        except ValueError:
+            continue
+        out.append(RecordedGame(game_id=g.id, name=g.name, folder=folder))
+    return out
 
 
 def library_view(entries: list[Entry], readiness: dict[str, Any], games: list[Installed] | tuple = (),
-                 art: frozenset | set = frozenset()) -> dict[str, Any]:
-    """Screen 1: a tile per game (each installed store game, and each recorded game no store lists), those with
-    recordings first, newest recording first, and the readiness strip; `art`: the game ids whose cover the app
-    holds."""
+                 art: frozenset | set = frozenset(), added: list[AddedGame] | tuple = (),
+                 icons: frozenset | set = frozenset()) -> dict[str, Any]:
+    """Screen 1: a tile per game (each installed store game, each game added by hand, and each recorded game no store
+    lists), those with recordings first, newest recording first, and the readiness strip; `art`: the game ids whose
+    cover or icon the app holds, `icons` those of them that are a program's icon."""
     out = []
-    for g in _games(entries, games):
+    for g in _games(entries, games, added):
         latest = g.recs[0] if g.recs else None
         n = numbers(latest) if latest is not None else {"lag_type": None, "avg_fps": None}
-        out.append({"id": g.id, "name": g.name, "exe_name": latest.exe_name if latest is not None else None,
-                    "store": g.installed.store_name if g.installed is not None else "",
-                    "installed": g.installed is not None, "recordings": len(g.recs),
+        out.append({"id": g.id, "name": g.name, "exe_name": latest.exe_name if latest is not None else
+                    (exe_file_name(g.added.exe) if g.added is not None else None),
+                    "store": g.store, "installed": g.installed is not None or g.added is not None,
+                    "added": g.added is not None, "recordings": len(g.recs),
                     "last": when_text(latest.started) if latest is not None else "",
                     "lag_type": lag_text(n["lag_type"]) if latest is not None else "Not recorded yet",
                     "lag_key": n["lag_type"] or "unknown", "avg_fps": fmt(n["avg_fps"]),
-                    "tile": tile(g.name, g.id, art)})
+                    "tile": tile(g.name, g.id, art, icons)})
     return {"games": out, "recent": [g["id"] for g in out if g["recordings"]][:RECENT],
             "recordings": sum(g["recordings"] for g in out), "installed": sum(g["installed"] for g in out),
             "readiness": readiness}
 
 
-def game_entries(entries: list[Entry], game_id: str, games: list[Installed] | tuple = ()) -> list[Entry]:
+def _found(entries: list[Entry], game_id: str, games: list[Installed] | tuple = (),
+           added: list[AddedGame] | tuple = ()) -> _Game | None:
+    return next((g for g in _games(entries, games, added) if g.id == game_id), None)
+
+
+def game_entries(entries: list[Entry], game_id: str, games: list[Installed] | tuple = (),
+                 added: list[AddedGame] | tuple = ()) -> list[Entry]:
     """The recordings of the game the page names by `game_id`, newest first."""
-    found = next((g for g in _games(entries, games) if g.id == game_id), None)
+    found = _found(entries, game_id, games, added)
     return found.recs if found is not None else []
 
 
-def installed_of(entries: list[Entry], game_id: str, games: list[Installed] | tuple = ()) -> Installed | None:
-    """The installed store game the page names by `game_id`, or None (a recorded game no store lists, or no game)."""
-    found = next((g for g in _games(entries, games) if g.id == game_id), None)
+def installed_of(entries: list[Entry], game_id: str, games: list[Installed] | tuple = (),
+                 added: list[AddedGame] | tuple = ()) -> Installed | None:
+    """The installed store game the page names by `game_id`, or None (an added game, a recorded game no store lists,
+    or no game)."""
+    found = _found(entries, game_id, games, added)
     return found.installed if found is not None else None
 
 
-PLAY_NOTE = ("lag-doctor could not match this game to one Steam or the Epic Games launcher lists as installed, so it "
-             "cannot start it from here. To record it again, start the game, then press Record the game that's "
-             "running in the Library; the recording appears here once it is analysed.")
+def wait_of(entries: list[Entry], game_id: str, games: list[Installed] | tuple = (),
+            added: list[AddedGame] | tuple = ()) -> tuple[str, str] | None:
+    """(the name, the folder) Record when it starts waits on for the game the page names by `game_id`: an added game,
+    or a recorded game no store lists with a folder of its own; None for a store game (it has Play) or one with no
+    folder."""
+    found = _found(entries, game_id, games, added)
+    if found is None or found.folder is None:                # a store game's tile has none: it has Play
+        return None
+    return found.name, found.folder
+
+
+PLAY_NOTE = ("lag-doctor could not match this game to one Steam or the Epic Games launcher lists as installed, or to a "
+             "folder of its own, so it cannot record it from its start. To record it again, start the game, then "
+             "press Record the game that's running in the Library; or add its program there with Add a game, and "
+             "lag-doctor waits for it to start.")
+ADDED_BROAD_NOTE = ("lag-doctor cannot wait for this game by its folder, {folder}: that folder holds another game's "
+                    "folder too, or many programs, so the wait could not tell them apart. Remove it from the Library "
+                    "and add the game's own program, in a folder of its own.")
+WAIT_TEXT = ("Press it and answer Windows' prompt, then start the game yourself, the way you usually do: lag-doctor "
+             "waits for a program from its folder to start and draw, for up to {wait}, and records it from its start "
+             "without touching it.")
 
 
 def play_words(start_key: str | None, window_s: float, lag_key: str) -> str:
@@ -207,10 +300,13 @@ def play_words(start_key: str | None, window_s: float, lag_key: str) -> str:
 
 
 def game_view(entries: list[Entry], game_id: str, last_id: str | None, games: list[Installed] | tuple = (),
-              play: str = "", art: frozenset | set = frozenset()) -> dict[str, Any] | None:
+              play: str = "", art: frozenset | set = frozenset(), added: list[AddedGame] | tuple = (),
+              icons: frozenset | set = frozenset()) -> dict[str, Any] | None:
     """Screen 2: the game, its last recording's summary on top, every recording of it, and for an installed store game
-    its Play button with what it measures (`play`, play_words'). None for an id the listing does not have."""
-    found = next((g for g in _games(entries, games) if g.id == game_id), None)
+    its Play button with what it measures (`play`, play_words'); for an added game, or a recorded one no store lists
+    with a folder of its own, Record when it starts (the folder wait) instead, and for an added game the way to remove
+    it. None for an id the listing does not have."""
+    found = _found(entries, game_id, games, added)
     if found is None:
         return None
     latest = found.recs[0] if found.recs else None
@@ -222,13 +318,51 @@ def game_view(entries: list[Entry], game_id: str, last_id: str | None, games: li
                 "tiles": [["Average FPS", fmt(n["avg_fps"])], ["1% low FPS", fmt(n["low1_fps"])],
                           ["Stutters / min", fmt(n["stutters_per_min"], "{:.1f}")],
                           ["Top cause", labels.cause_text(n["top_cause"]) if n["top_cause"] else "-"]]}
-    store = found.installed.store_name if found.installed is not None else \
-        STORE_NAMES.get((latest.summary or {}).get("launcher") or "", "")
-    return {"id": game_id, "name": found.name, "exe_name": latest.exe_name if latest is not None else None,
-            "store": store, "tile": tile(found.name, game_id, art), "last": last,
+    store = found.store or STORE_NAMES.get((latest.summary or {}).get("launcher") or "", "")
+    wait = None
+    if found.folder is not None:                             # a store game's tile has none: it has Play
+        wait = {"folder": found.folder, "text": WAIT_TEXT.format(wait=_length_words(PLAY_WAIT_S)) + " " + play}
+    exe_name = latest.exe_name if latest is not None else (exe_file_name(found.added.exe) if found.added else None)
+    return {"id": game_id, "name": found.name, "exe_name": exe_name,
+            "store": store, "tile": tile(found.name, game_id, art, icons), "last": last,
             "sessions": [_session_row(e, last_id) for e in found.recs],
             "play": {"store": found.installed.store_name, "text": play} if found.installed is not None else None,
-            "play_note": "" if found.installed is not None else PLAY_NOTE}
+            "wait": wait, "added": found.added is not None,
+            "play_note": "" if found.installed is not None or wait is not None else
+            ADDED_BROAD_NOTE.format(folder=found.added.folder) if found.broad else PLAY_NOTE}
+
+
+# ------------------------------------------------------------------------------------------------ add a game --
+
+ADD_TEXT = ("lag-doctor never starts a program itself. On this game's page, Record when it starts waits for a program "
+            "from this folder to start and draw, and records it from its start; its recordings show there.")
+NAMED_BY_FILE = "This program names no game, so it shows by its file's name. Change it if you like."
+CLASH_WORDS = {
+    "same": "{name} is in the Library already.",
+    "store": "This program is {name}'s, which {store} lists: it is in the Library already, with Play.",
+    "added": ("This program's folder is {name}'s, which is in the Library already: lag-doctor tells games apart by "
+              "their folders."),
+    "holds": ("This program's folder holds {name}'s folder too, so lag-doctor could not tell the two games apart while "
+              "it waits. Choose the game's own program, in a folder of its own."),
+}
+
+
+def draft_view(token: str, name: str, exe: str, folder: str, game_id: str, named_by_file: bool,
+               art: frozenset | set = frozenset(), icons: frozenset | set = frozenset()) -> dict[str, Any]:
+    """Screen 6: the program the player chose, before it is added: the name it will show by (which the player may
+    change), its file, its folder, and its icon where it has one. `token` names this choice for add_game."""
+    return {"draft": token, "name": name, "exe": exe, "exe_name": exe_file_name(exe), "folder": folder,
+            "tile": tile(name, game_id, art, icons), "text": ADD_TEXT,
+            "note": NAMED_BY_FILE if named_by_file else ""}
+
+
+def clash_view(how: str, game: Any) -> dict[str, Any]:
+    """What the page says when the program the player chose is a game the Library has (`existing`: its id, whose page
+    it offers) or one it could not tell apart from another (existing None)."""
+    name = game.game.title if isinstance(game, Installed) else game.name
+    store = game.store_name if isinstance(game, Installed) else ""
+    return {"existing": game.game_id if how != "holds" else None,
+            "why": CLASH_WORDS[how].format(name=name, store=store or "its store")}
 
 
 # ------------------------------------------------------------------------------------------------ results --
@@ -673,6 +807,27 @@ PLAY_ENDS = {
                                           "something, let it finish, then press Play again."),
 }
 PLAY_WAIT_S = 300.0                   # recording.WAIT_S, which a test holds equal (views never imports recording)
+# Record when it starts (screen 6): the folder wait for a game the player starts themselves. "launch" says the moment:
+# Windows' prompt is answered and the checks have passed, so a game started now is one the wait can take.
+SELF_TITLES = {"launching": "Start the game now", "waiting": "Start the game now"}
+SELF_WAITING = ("Start {title} yourself, the way you usually do. lag-doctor is waiting for a program from its "
+                "folder to start and draw, for up to {wait}, and records it from its start without touching it.")
+SELF_DETAILS = {
+    "starting": "lag-doctor is starting its recorder. Do not start the game yet: lag-doctor says when.",
+    "asking": RECORDING_DETAILS["asking"] + " Start the game only once you have answered it.",
+    "preparing": "Windows answered: lag-doctor is getting ready. Do not start the game yet: lag-doctor says when.",
+    "launching": SELF_WAITING,
+    "waiting": SELF_WAITING,
+}
+SELF_ENDS = {
+    "no_game": ("The game did not start", "No program from the game's folder started and drew within {wait}, so "
+                                          "nothing was recorded. Press Record when it starts again, answer Windows' "
+                                          "prompt, then start the game."),
+    "game_running": ("Not recorded", "A program from the game's folder was already running, so lag-doctor could not "
+                                     "record the game from its start. Close the game, press Record when it starts "
+                                     "again and start the game once Windows' prompt is answered; or record it as it "
+                                     "runs, with Record the game that's running in the Library."),
+}
 LAUNCH_FAILED = ("Windows could not open {store} ({why}). Start the game yourself, from {store} or its own program: "
                  "lag-doctor is waiting for it.")
 # How a recording ended (control.REASONS): a title and a sentence.
@@ -782,8 +937,10 @@ def recording_view(state: Any, now: float, lag_key: str, log: Any = None,
     elif stage in ("setup", "startup"):
         length = None                               # no end to count to: the press starts the measured window
     play = getattr(state, "play", None)
+    by_hand = bool((play or {}).get("self"))            # Record when it starts: the player starts the game
     store = (play or {}).get("store") or "the game's store"
-    play_words_of = {"store": store, "wait": _length_words(PLAY_WAIT_S)}
+    play_words_of = {"store": store, "wait": _length_words(PLAY_WAIT_S), "title": (play or {}).get("title") or
+                     "the game"}
     notes = []
     if state.fault:
         notes.append(f"lag-doctor stopped this recording: {state.fault}.")
@@ -810,8 +967,9 @@ def recording_view(state: Any, now: float, lag_key: str, log: Any = None,
     keyed_end = getattr(state, "keyed", False) and state.stop_reason in KEY_ENDS
     if state.phase == "done":
         title, detail = RECORDING_ENDS.get(state.reason or "failed", RECORDING_ENDS["failed"])
-        if play is not None and state.reason in PLAY_ENDS:
-            title, detail = PLAY_ENDS[state.reason]
+        ends = SELF_ENDS if by_hand else PLAY_ENDS
+        if play is not None and state.reason in ends:
+            title, detail = ends[state.reason]
             detail = detail.format(**play_words_of)
         if keyed_end and state.reason == "completed":
             title, detail = KEY_ENDS[state.stop_reason]
@@ -824,7 +982,10 @@ def recording_view(state: Any, now: float, lag_key: str, log: Any = None,
             detail += f" The details are in {log}."
     else:
         title, detail = RECORDING_TITLES[state.phase], RECORDING_DETAILS[state.phase]
-        if play is not None and state.phase in PLAY_DETAILS:
+        if by_hand and state.phase in SELF_DETAILS:
+            title = SELF_TITLES.get(state.phase, title)
+            detail = SELF_DETAILS[state.phase].format(**play_words_of)
+        elif play is not None and state.phase in PLAY_DETAILS:
             title = PLAY_TITLES.get(state.phase, title)
             detail = PLAY_DETAILS[state.phase].format(**play_words_of)
         if state.phase == "preparing":
@@ -853,8 +1014,9 @@ def recording_view(state: Any, now: float, lag_key: str, log: Any = None,
                 detail += f" Press {lag_key.title()} the moment it lags."
     return {"active": state.active, "phase": state.phase, "stage": stage, "title": title, "detail": detail,
             "game": state.game or (play or {}).get("title"), "elapsed_s": elapsed, "length_s": length, "notes": notes,
-            # Play's game, by the page's id of it, so "Try again" plays it again (no link reaches the page)
-            "play": {"game": play["game"]} if play is not None else None,
+            # Play's game, by the page's id of it, so "Try again" plays it again (no link reaches the page), and
+            # whether it was Record when it starts, which "Try again" asks for again
+            "play": {"game": play["game"], "wait": by_hand} if play is not None else None,
             "action": ("cancel" if state.phase in ("starting", "waiting", "asking", "preparing", "launching") else
                        "stop" if state.phase == "recording" else None),
             "ok": state.phase == "done" and state.ok,

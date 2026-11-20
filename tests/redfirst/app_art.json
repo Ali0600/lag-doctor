@@ -92,8 +92,8 @@
  {
   "name": "read_bytes: the file's bytes changed on the way",
   "file": "lagdoctor/stores/__init__.py",
-  "old": "    return data",
-  "new": "    return data.lstrip(bytes([0xEF, 0xBB, 0xBF]))",
+  "old": "so it was not read\")\n    return data\n",
+  "new": "so it was not read\")\n    return data.lstrip(bytes([0xEF, 0xBB, 0xBF]))\n",
   "tests": [
    "tests/test_stores_art.py::test_read_bytes_gives_the_file_as_it_is_and_refuses_what_read_text_refuses"
   ]
@@ -155,8 +155,8 @@
  {
   "name": "art: every tile names a cover",
   "file": "lagdoctor/app/views.py",
-  "old": "            \"art\": bridge.art_url(game_id) if game_id is not None and game_id in art else None}",
-  "new": "            \"art\": bridge.art_url(game_id) if game_id is not None else None}",
+  "old": "    shown = game_id is not None and game_id in art",
+  "new": "    shown = game_id is not None",
   "tests": [
    "tests/test_app_views.py::test_a_tile_names_its_cover_only_when_the_app_holds_one"
   ]
@@ -200,7 +200,7 @@
  {
   "name": "art: a cover that loaded never drawn",
   "file": "lagdoctor/app/assets/app.js",
-  "old": "      c.style.background = `center / cover no-repeat url(\"${t.art}\")`;",
+  "old": "      c.style.background = t.icon === true ? `center / 50% no-repeat url(\"${t.art}\"), ${colour}`\n        : `center / cover no-repeat url(\"${t.art}\")`;",
   "new": "      c.dataset.drawn = 'no';",
   "tests": [
    "tests/test_app_page.py::test_a_cover_from_the_stores_cache_comes_from_the_windows_own_art_host"

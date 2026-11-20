@@ -38,7 +38,7 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   below), the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
   names), `watch --wait-folder` with the re-arm (M6e, PR #58), Play's order on the control channel (M6f, PR #61),
   and the app's Play with the art (M6g and M6h, PR #62, merged 2026-11-19 after the owner's own run of Play on a game
-  through Steam: "it seemed to work"). Screen 6 is not built yet.
+  through Steam: "it seemed to work"), then screen 6, Add a game, with Record when it starts (M6i).
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -651,7 +651,7 @@ labelled, as in the terminal.
   (`stores/art.py`, through `stores`' file access, the type told from the bytes), answered by the window itself on a
   second host (`art.lagdoctor.example`, WebResourceRequested) by game id only, and drawn over the generated tile once
   it has loaded. Not yet: GOG Galaxy's cache, and the exe's own icon (for Epic games and games recorded before), so
-  those keep the generated tile.
+  those keep the generated tile; games added by hand show their program's icon since M6i.
 - [x] The store launch: a policy module that builds each URI from its fixed template and refuses when elevated, over
   a thin `winapi/launch.py` that only hands the link to Explorer's `IShellDispatch2::ShellExecute` (DESIGN.md keeps
   policy out of `winapi/`). The `test_no_handles` extension ships with it. Built: `lagdoctor/stores/launch.py`
@@ -701,7 +701,19 @@ labelled, as in the terminal.
   game again. Not yet: the "ready" chime when the game is found (the start key's ready chime plays once the recording
   starts), the picker when two programs qualify, and a hint that a closed Steam starts first beyond the waiting
   words.
-- Screen 6, and the folder wait for games without Play. The CLI gets it too: `watch --wait-folder`.
+- [x] Screen 6, Add a game, and the folder wait for games without Play (M6i; DESIGN.md, The app, Add a game); the
+  CLI had it already (`watch --wait-folder`, M6e). Add a game in the Library opens Windows' Open dialog
+  (`winapi/dialogs.py`) for the game's program; its name (the version resource's ProductName, else FileDescription,
+  else the file's name) and its icon (the first group icon's largest image) are read from its own file
+  (`stores/exe.py`, a reader of the PE resources through `stores.open_file`, in parts within 4 MB, checked against
+  Windows' own reading of the same files in its tests), and the player may change the name before adding it. The
+  games added by hand are kept in `added-games.json` (`app/added.py`); each joins recordings by its program's folder,
+  as an installed game does, and its page offers **Record when it starts**: the same recorder as Play, waiting on the
+  program's folder, with no link opened ("Start the game now" once Windows' prompt is answered). A recorded game no
+  store lists has it too, on its newest recording's program's folder, when that folder is its own. A program the
+  Library has already is met as that game, and a folder holding another game's (or two recorded games') is refused,
+  since the wait could not tell them apart. Not yet: the exe's icon for Epic games and games recorded before (the
+  reader is there), renaming a game after it is added (Remove and add it again), and GOG Galaxy's cache.
 
 What a check against FINAL FANTASY VII REBIRTH found on 2026-11-09 (research note, section 14), as parts of the items
 above:

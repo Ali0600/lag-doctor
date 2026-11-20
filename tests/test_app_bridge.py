@@ -80,7 +80,9 @@ def test_each_request_kind_parses_with_exactly_its_fields():
     cases = {"library": {}, "game": {"game": "g-0123456789abcdef"}, "results": {"session": sid},
              "moment": {"session": sid, "event": 7}, "compare": {"a": sid, "b": "20261101-201500-demoracer"},
              "settings": {}, "open_report": {"session": sid}, "open_folder": {}, "test_sound": {}, "record": {},
-             "play": {"game": "g-0123456789abcdef"},
+             "play": {"game": "g-0123456789abcdef"}, "wait": {"game": "g-0123456789abcdef"}, "pick_game": {},
+             "add_game": {"draft": "d-0123456789abcdef", "name": "Moss Garden"},
+             "remove_game": {"game": "g-0123456789abcdef"},
              "stop_recording": {}, "cancel_recording": {}, "recording": {}}
     assert set(cases) == set(bridge.REQUESTS)
     for kind, args in cases.items():

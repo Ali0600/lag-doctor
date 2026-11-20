@@ -24,8 +24,9 @@ from pathlib import Path
 
 from lagdoctor.app import library, recording
 from lagdoctor.app.main import App
+from lagdoctor.stores import exe as exe_mod
 from lagdoctor.winapi import webview2 as wv
-from tests import app_demo, fake_recorder
+from tests import app_demo, fake_recorder, pe_build
 
 STEP_TIMEOUT_S = 30.0
 RUN_TIMEOUT_S = 150.0
@@ -94,6 +95,7 @@ def view_state(app: App) -> dict:
             "hidden": w.view_hidden, "recording": w.recording}
 
 
+BITMAP_ICON_ID = "g-00000000000000aa"      # a made-up game id the harness holds a bitmap-only icon under
 CLICK_GAME = ("[...document.querySelectorAll('#games .game')].find((b) => "
               "b.querySelector('.name').textContent.includes({name})).click(); true")
 MADE = "document.querySelectorAll('#view img, #view b, #view script, #view iframe').length"
@@ -410,6 +412,92 @@ def script(facts: dict, app: App):
     yield wait(lambda: rig.play_report.is_file())
     facts["play_report"] = json.loads(rig.play_report.read_text(encoding="utf-8"))
 
+    # Add a game (screen 6): Add a game opens Windows' Open dialog, here App's picker, which hands back a made-up
+    # program under this home (tests/pe_build.py): its name and its icon (a 256 x 256 PNG among its images) are read
+    # from its file and shown before it is added. The player names it like markup (shown as text) and adds it; its page
+    # offers Record when it starts, which waits on the program's folder with no link opened and the window left where
+    # it is; the player cancels, then removes the game, and the Library is as it was.
+    yield js("document.querySelector('[data-go=library]').click(); true")
+    yield until("!!document.getElementById('add-game')")
+    links_before = len(rig.links)
+    yield js("document.getElementById('add-game').click(); true")
+    yield until("!!document.getElementById('add-name')")
+    yield until("document.querySelector('#view .cover').dataset.art !== 'loading'")
+    facts["add_screen"] = yield js("""(() => {
+        const c = document.querySelector('#view .cover');
+        return {name: document.getElementById('add-name').value, exe: document.getElementById('add-exe').textContent,
+                folder: document.getElementById('add-folder').textContent, art: c.dataset.art || 'initials',
+                fit: c.dataset.fit || null, initials: c.textContent, size: getComputedStyle(c).backgroundSize,
+                note: !!document.getElementById('add-note'),
+                drawn: getComputedStyle(c).backgroundImage.includes('https://art.lagdoctor.example/g-')};
+    })()""")
+    facts["add_picks"] = list(rig.picks)
+    yield shot("add-game")
+    # An icon of bitmap images only (no PNG), as older programs hold: the page's engine decodes it from the art host.
+    app.keep_icon(BITMAP_ICON_ID, (exe_mod.ICO, exe_mod.ico(pe_build.icon_bitmap(48, 48))))
+    yield js(f"""(() => {{
+        window.__icoProbe = 'waiting';
+        const probe = new Image();
+        probe.addEventListener('load', () => {{ window.__icoProbe = [probe.naturalWidth, probe.naturalHeight]; }});
+        probe.addEventListener('error', () => {{ window.__icoProbe = 'refused'; }});
+        probe.src = 'https://art.lagdoctor.example/{BITMAP_ICON_ID}';
+        return true;
+    }})()""")
+    yield until("window.__icoProbe !== 'waiting'")
+    facts["bitmap_icon"] = yield js("window.__icoProbe")
+    yield js(f"document.getElementById('add-name').value = {json.dumps(app_demo.MARKUP_ADDED)}; "
+             "document.getElementById('add-confirm').click(); true")
+    yield until("!!document.getElementById('wait')")
+    facts["added_game"] = yield js(f"""(() => ({{name: document.getElementById('game-name').textContent,
+        folder: document.getElementById('wait-folder').textContent,
+        text: document.getElementById('wait-card').textContent, none: !!document.getElementById('no-recordings'),
+        remove: !!document.getElementById('remove-game'), play: !!document.getElementById('play'),
+        made: {MADE}, pwned: window.__pwned === 1}}))()""")
+    yield shot("game-added")
+    prompts_before = len(rig.prompts)
+    yield js("document.getElementById('wait').click(); true")
+    yield until("!!document.querySelector('#running[data-phase=waiting]') && !!document.getElementById('rec-cancel')")
+    facts["wait_waiting"] = yield js("""(() => ({title: document.getElementById('rec-title').textContent,
+        game: document.getElementById('rec-game') ? document.getElementById('rec-game').textContent : null,
+        detail: document.getElementById('rec-detail').textContent}))()""")
+    yield sleep(800)                                   # long enough for a minimize to have shown
+    facts["wait_minimized"] = bool(wv.IsIconic(app.window.hwnd))
+    facts["wait_links"] = list(rig.links[links_before:])
+    yield js("document.getElementById('rec-cancel').click(); true")
+    yield until("!!document.querySelector('#running[data-phase=done]')")
+    facts["wait_done"] = yield js("""(() => ({title: document.getElementById('rec-title').textContent,
+        again: document.getElementById('play-again') ? document.getElementById('play-again').textContent : null}))()""")
+    yield wait(lambda: rig.wait_report.is_file())
+    facts["wait_report"] = json.loads(rig.wait_report.read_text(encoding="utf-8"))
+    rig.wait_report.unlink()
+    # Try again waits on the same folder again (never Play's request), and is cancelled the same way.
+    yield js("document.getElementById('play-again').click(); true")
+    yield until("!!document.querySelector('#running[data-phase=waiting]') && !!document.getElementById('rec-cancel')")
+    facts["wait_again"] = yield js("document.getElementById('rec-title').textContent")
+    yield js("document.getElementById('rec-cancel').click(); true")
+    yield until("!!document.querySelector('#running[data-phase=done]')")
+    facts["wait_prompts"] = [c["argv"] for c in rig.prompts[prompts_before:]]
+    yield wait(lambda: rig.wait_report.is_file())
+    yield js("document.querySelector('[data-go=library]').click(); true")
+    yield until("document.querySelectorAll('#games .game').length > 0")
+    yield until("[...document.querySelectorAll('#games .cover')].every((c) => c.dataset.art !== 'loading')")
+    facts["library_with_added"] = yield js(f"""(() => {{
+        const tiles = [...document.querySelectorAll('#games .game')];
+        const mine = tiles.find((b) => b.querySelector('.name').textContent.includes('Moss'));
+        const c = mine.querySelector('.cover');
+        return {{names: tiles.map((b) => b.querySelector('.name').textContent),
+                 sub: mine.querySelector('.sub').textContent, art: c.dataset.art || 'initials',
+                 fit: c.dataset.fit || null, made: {MADE}, pwned: window.__pwned === 1}};
+    }})()""")
+    yield js(CLICK_GAME.format(name=json.dumps("Moss")))
+    yield until("!!document.getElementById('remove-game')")
+    yield js("document.getElementById('remove-game').click(); true")
+    facts["remove_armed"] = yield js("document.getElementById('remove-game').textContent")
+    yield js("document.getElementById('remove-game').click(); true")
+    yield until("document.querySelectorAll('#games .game').length > 0 && !document.getElementById('remove-game')")
+    facts["library_after_remove"] = yield js("[...document.querySelectorAll('#games .game .name')]"
+                                             ".map((n) => n.textContent)")
+
     # Recovery. The renderer crashes: the window loads its page again.
     yield ("crash_renderer",)
     yield until_ready(facts["readies"] + 1)
@@ -590,7 +678,13 @@ def main(argv: list[str]) -> int:
     # The recording's stand-ins: the recorder records nothing and saves no file, the prompt is a harmless process of
     # this harness's own, and the sounds and the taskbar flash are only noted.
     rig = types.SimpleNamespace(played=[], flashes=[], prompts=[], relays=[], report=home / "fake-recorder-report.json",
-                                library_asks=[], links=[], play_report=home / "fake-recorder-play-report.json")
+                                library_asks=[], links=[], play_report=home / "fake-recorder-play-report.json",
+                                wait_report=home / "fake-recorder-wait-report.json", picks=[])
+    # Add a game's program, made up: what App's picker hands back in place of Windows' Open dialog.
+    moss = home / "games" / "Moss Garden" / "mg.exe"             # its own name is not its file's: "Moss Garden"
+    moss.parent.mkdir(parents=True, exist_ok=True)
+    moss.write_bytes(pe_build.program({"ProductName": "Moss Garden"},
+                                      [pe_build.icon_bitmap(32, 32), pe_build.png(256, 256)]))
     recordings = [e for e in library.scan(home / "sessions") if e.is_recording]
     # The markup-named game the tests use, else (the README's pictures library) the newest recording's game.
     picked = next((e for e in recordings if e.game == app_demo.MARKUP_TITLE), recordings[0])
@@ -604,8 +698,9 @@ def main(argv: list[str]) -> int:
 
     def play_recorder(folder: str) -> list[str]:
         # watch --wait-folder's stand-in for the game the page chose: it waits for the game until the player cancels
+        mine = str(rig.wait_report if folder == str(moss.parent) else rig.play_report)     # Record when it starts
         play_plan.write_text(json.dumps({"elevate": True, "folder": folder, "game": "lanterndrift.exe", "pause_s": 60,
-                                         "report": str(rig.play_report)}), encoding="utf-8")
+                                         "report": mine}), encoding="utf-8")
         return [str(fake_recorder.BASE_PY), "-B", "-E", "-s", "-m", "tests.fake_recorder", str(play_plan)]
     app = App(home=home, runtime=runtime, create_fn=create, log=facts["log"].append, tell=facts["told"].append,
               activate=False, opener=facts["opened"].append,
@@ -613,7 +708,8 @@ def main(argv: list[str]) -> int:
               launcher=fake_recorder.stand_in_prompt(rig.prompts, rig.relays), play=rig.played.append,
               flash=rig.flashes.append, installed=lambda: list(app_demo.INSTALLED),
               forms_of=lambda folder: (folder,), open_link=lambda link, should_go: rig.links.append(link),
-              play_recorder=play_recorder, covers=app_demo.covers)
+              play_recorder=play_recorder, covers=app_demo.covers,
+              picker=lambda hwnd: (rig.picks.append(hwnd == app.window.hwnd), str(moss))[1])
     app.harness = rig
     real_library = app.do_library
     app.do_library = lambda: (rig.library_asks.append(1), real_library())[1]     # counts the page's asks

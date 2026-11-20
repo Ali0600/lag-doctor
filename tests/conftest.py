@@ -147,6 +147,29 @@ def _no_real_keys_or_sounds(monkeypatch):
     assert not world.caught, "; ".join(world.caught)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_dialog(monkeypatch):
+    """No test opens Windows' Open dialog (Add a game's, winapi/dialogs.py): it waits for a person, so a test that
+    reached it would hang until its timeout. One that does reads as closed without a choice, and fails at its end. A
+    test's own patch overrides this."""
+    yield from dialog_guard(monkeypatch)
+
+
+def dialog_guard(monkeypatch):
+    """_no_real_dialog's body: refuses the real dialog while it is suspended, yields the list of reaches, and raises
+    AssertionError at its end if anything reached (tests/test_dialogs.py drives it to prove that)."""
+    from lagdoctor.winapi import dialogs
+    caught = []
+
+    def refuse(ofn):
+        caught.append("a test opened Windows' real Open dialog")
+        return 0
+    monkeypatch.setattr(dialogs, "_get_open_file_name", refuse)
+    monkeypatch.setattr(dialogs, "_extended_error", lambda: 0)
+    yield caught
+    assert caught == [], " and ".join(caught)
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "needs(*names): what the test needs from the machine; it skips when "
                             f"{capabilities.ABSENT_ENV} lists one of them (tests/capabilities.py)")

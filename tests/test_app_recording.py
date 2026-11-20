@@ -966,7 +966,7 @@ def test_play_moves_through_the_prompt_the_launch_and_the_wait_in_its_own_words(
     assert "If Epic Games has to start first" in waiting["detail"]
     assert all(v["action"] == "cancel" for _, v in seen[:6]) and seen[6][1]["action"] == "stop"
     assert waiting["game"] == "Lantern Drift" and found["game"] == "lanterndrift.exe"   # the store's name, then Windows'
-    assert all(v["play"] == {"game": PLAY["game"]} for _, v in seen)
+    assert all(v["play"] == {"game": PLAY["game"], "wait": False} for _, v in seen)
     record = recording.RecordingState()
     record.apply({"t": "waiting"}, 1.0)
     assert views.recording_view(record, 1.0, "ctrl+alt+l")["title"] == "Looking for the game"    # Record's own
@@ -982,7 +982,7 @@ def test_how_a_play_ended_is_said_in_plays_words(reason, title, words):
     for i, m in enumerate(PLAY_RUN[:5] + [{"t": "done", "reason": reason, "code": 2, "session": None}]):
         state.apply(m, 100.0 + i)
     v = views.recording_view(state, 200.0, "ctrl+alt+l")
-    assert v["title"] == title and words in v["detail"] and v["play"] == {"game": PLAY["game"]}
+    assert v["title"] == title and words in v["detail"] and v["play"] == {"game": PLAY["game"], "wait": False}
 
 
 def test_a_store_link_windows_could_not_open_is_said_and_the_wait_goes_on():
@@ -1131,7 +1131,8 @@ def test_play_starts_the_recorder_for_the_installed_games_folder_and_keeps_its_l
     view = app.do_play(gid)
     assert asked == [lantern.folder] and app.rec.folder == lantern.folder and app.rec_link == lantern.link
     assert app.rec_state.play == {"game": gid, "title": "Lantern Drift", "store": "Epic Games"}
-    assert view["phase"] == "starting" and view["play"] == {"game": gid} and view["game"] == "Lantern Drift"
+    assert view["phase"] == "starting" and view["play"] == {"game": gid, "wait": False}
+    assert view["game"] == "Lantern Drift"
     assert lantern.link not in json.dumps(view)               # the page never sees a link
     app.rec.proc.wait(30)
     with pytest.raises(app_main.Gone, match="already running"):
