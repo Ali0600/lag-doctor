@@ -183,6 +183,24 @@ def test_undo_of_a_fix_this_version_does_not_know_is_reported(capsys):
     assert Journal().get(entry.id).state == "applied"
 
 
+def test_an_undo_whose_journal_failed_after_putting_it_back_is_not_called_left_alone(lasting, monkeypatch, capsys):
+    j = Journal()
+    entry = j.begin(LastingFix.id, "fake setting a", {"name": "a"}, 1, 5)
+    j.set_state(entry.id, "applied")
+    STORE["a"] = 5
+    real = Journal.set_state
+
+    def fails(self, entry_id, state, note=""):
+        if state == "undone":
+            raise TimeoutError("another lag-doctor took the journal's lock")
+        return real(self, entry_id, state, note)
+    monkeypatch.setattr(Journal, "set_state", fails)
+    assert cli.main(["undo", "--all"]) == 1
+    out = capsys.readouterr().out
+    assert "Not known whether it was put back: undo of fake setting a: the fix journal failed" in out
+    assert "Left alone" not in out and "Traceback" not in out and STORE["a"] == 1
+
+
 def test_undo_keeps_what_a_newer_lag_doctor_wrote_in_an_entry(lasting):
     j = Journal()
     entry = j.begin(LastingFix.id, "fake setting a", {"name": "a"}, 1, 5)

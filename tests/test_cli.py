@@ -204,6 +204,18 @@ def test_fix_and_undo_say_a_journal_another_lag_doctor_holds_and_change_nothing(
     assert "Traceback" not in out and STORE == {}
 
 
+def test_a_change_whose_journal_failed_midway_is_said_as_not_known(fake_fix, monkeypatch, capsys):
+    write_last_diagnosis([{"title": "Turn it up", "fix_id": "test_cli_fake", "params": {"name": "a"}}])
+
+    def fails(self, plan, journal):
+        raise TimeoutError("another lag-doctor took the journal's lock")
+    monkeypatch.setattr(FakeFix, "apply", fails)
+    assert cli.main(["fix", "test_cli_fake", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert "  Not known whether it changed: " in out and "checked at the next start" in out
+    assert "Not changed" not in out and "Traceback" not in out
+
+
 def test_fix_refuses_to_run_elevated(fake_fix, monkeypatch):
     write_last_diagnosis([{"title": "Turn it up", "fix_id": "test_cli_fake", "params": {"name": "a"}}])
     monkeypatch.setattr(cli, "_elevated", lambda: True)

@@ -1450,3 +1450,15 @@ seeded run over 1,500 random covers asserted that the new spans equal the old on
 that none overlaps one: all held, and 469 of them changed, so the bug was common rather than a corner case.
 **Takeaway**: when a fix removes something, compute what should be removed independently and assert over random
 inputs that old minus new is exactly that; the share that changed tells you how often the bug struck.
+
+### Confirm exactly what was shown: keep the plan, hand out a token
+
+A two-step action in a user interface ("show what will change, then do it") must not work the change out again on
+the confirming click: the app keeps the plan it showed, read at that moment, under a one-shot token; the page sends
+back only the token; and the confirm applies exactly that plan, with the action's own "has it moved since?" check
+refusing when the world changed in between.
+**Why it came up**: M7's Apply in lag-doctor's window. The page is untrusted territory, so it names neither the fix
+nor its params. A newer recording, a newer plan or a second click with the same token each finds the token gone or
+replaced, and a setting changed by hand in between is refused by the fix's own stale check (`fixes/base.apply`).
+**Takeaway**: for show-then-do, have the confirm carry a server-side token for what was shown, used once, never the
+values themselves.

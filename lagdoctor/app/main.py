@@ -686,12 +686,12 @@ class App:
             found = d.findings[finding].fixes[fix]
         if found is None or not flow.offerable(found.fix_id, found.params, fixes.known()):
             raise Gone("That is not a fix lag-doctor can apply from this recording: open its results again.")
-        why = self.change_refusal(fixes)
-        if why is not None:
-            raise Gone(why)
         if not self.fix_lock.acquire(blocking=False):
             raise Gone(BUSY)
         try:
+            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)
+            if why is not None:
+                raise Gone(why)
             self.journal_ready(fixes.journal())
             try:
                 plan = fixes.fix(found.fix_id).plan(dict(found.params))
@@ -719,12 +719,12 @@ class App:
             raise Gone(NO_LONGER_PLANNED)
         if library.last_session(self.home, self.sessions) != planned.session:
             raise Gone(views.NOT_LAST)
-        why = self.change_refusal(fixes)
-        if why is not None:
-            raise Gone(why)
         if not self.fix_lock.acquire(blocking=False):
             raise Gone(BUSY)
         try:
+            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)
+            if why is not None:
+                raise Gone(why)
             with self.lock:
                 if self.planned is not planned:     # applied, or replaced by a newer plan, meanwhile
                     raise Gone(NO_LONGER_PLANNED)
@@ -772,12 +772,12 @@ class App:
         from lagdoctor.fixes import flow
         from lagdoctor.fixes.journal import JournalCorrupt
         fixes = self.fixes_here()
-        why = self.change_refusal(fixes)
-        if why is not None:
-            raise Gone(why)
         if not self.fix_lock.acquire(blocking=False):
             raise Gone(BUSY)
         try:
+            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)
+            if why is not None:
+                raise Gone(why)
             journal = fixes.journal()
             try:
                 found = next((e for e in journal.outstanding() if e.id == entry), None)
@@ -810,7 +810,8 @@ class App:
         own or any other in this Windows session (the capture lock, other_recording): a change in its middle would mix
         two conditions into one recording, and a settings sweep changes settings itself. Never in a window that runs as
         administrator, or cannot tell: a fix changes the settings of whoever the process runs as, and `lagdoctor fix`
-        refuses there too."""
+        refuses there too. Called with fix_lock held, which _start looks at under the same self.lock: a recording either
+        started before this looked (and refuses the change) or waits the change out."""
         with self.lock:
             if self.rec_state is not None and self.rec_state.active:
                 return "A recording is running: apply or undo fixes once it has ended."

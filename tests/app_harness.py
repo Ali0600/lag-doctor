@@ -228,14 +228,14 @@ def script(facts: dict, app: App):
     yield shot("results-apply")
     yield js("document.getElementById('apply-cancel').click(); true")
     yield until("!document.getElementById('apply-confirm') && !!document.querySelector('.apply button')")
-    facts["apply_cancelled"] = list(rig.fix_store.get("writes", []))
+    facts["apply_cancelled"] = list(app.harness.fix_store.get("writes", []))
     yield js("document.querySelector('.apply button').click(); true")
     yield until("!!document.getElementById('apply-confirm')")
     yield js("document.getElementById('apply-confirm').click(); true")
     yield until("!!document.getElementById('applied')")
     facts["applied"] = yield js("""(() => ({said: document.getElementById('applied').textContent,
         undo: !!document.querySelector('.apply button[data-entry]')}))()""")
-    facts["apply_writes"] = list(rig.fix_store.get("writes", []))
+    facts["apply_writes"] = list(app.harness.fix_store.get("writes", []))
     yield js("document.querySelector('[data-go=settings]').click(); true")
     yield until("!!document.querySelector('#changes .change')")
     facts["changes"] = yield js("""[...document.querySelectorAll('#changes .change')].map((c) => ({
@@ -245,7 +245,7 @@ def script(facts: dict, app: App):
     yield js("document.querySelector('#changes .change button[data-entry]').click(); true")
     yield until("!!document.getElementById('said') && !!document.getElementById('changes-none')")
     facts["undone"] = yield js("document.getElementById('said').textContent")
-    facts["undo_writes"] = list(rig.fix_store.get("writes", []))
+    facts["undo_writes"] = list(app.harness.fix_store.get("writes", []))
 
     yield js("document.querySelector('[data-go=library]').click(); true")
     yield until("document.querySelectorAll('#games .game').length > 0")

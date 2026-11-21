@@ -539,7 +539,7 @@ const SCREENS = {
       el('h2', null, 'About'),
       el('table', null, el('tbody', null, ...s.about.map(([k, v]) => el('tr', null, el('td', null, k), el('td', null, v))))));
     // The list of changes comes in its own answer: a journal another window holds keeps the rest of Settings drawn.
-    ask('changes').then((c) => { if (live()) fillChanges(changes, c); }).catch((err) => {
+    ask('changes').then((c) => { if (live()) fillChanges(changes, c, live); }).catch((err) => {
       if (live()) fill(changes, el('p', {class: 'error'}, String(err && err.message || err)));
     });
   },
@@ -727,11 +727,17 @@ function deleteButton(game, chosen) {
 
 // Apply, for a fix the last recording offers: the first click shows what would change (the app's plan, read now, as
 // `lagdoctor fix` prints it), the second makes exactly that change, and its Undo puts it back. The page names the fix
-// only by its place on this page; the app reads the fix and its settings from the recording itself.
+// only by its place on this page; the app reads the fix and its settings from the recording itself. The app keeps one
+// plan at a time, so a box showing one goes back to its button when another box shows its own.
+let planShown = null;            // the box showing a plan: its way back to its button
 function applyBox(session, finding, fix) {
   const box = el('div', {class: 'apply', id: `apply-${finding}-${fix}`});
   const start = el('button', {class: 'btn', type: 'button', id: `plan-${finding}-${fix}`}, 'Apply this fix');
-  const again = (...said) => { start.disabled = false; fill(box, ...said, start); };
+  const again = (...said) => {
+    if (planShown === again) planShown = null;
+    start.disabled = false;
+    fill(box, ...said, start);
+  };
   start.addEventListener('click', () => {
     start.disabled = true;
     ask('plan_fix', {session, finding, fix}).then((p) => {
@@ -741,20 +747,24 @@ function applyBox(session, finding, fix) {
       const cancel = el('button', {class: 'btn', type: 'button', id: 'apply-cancel', on: {click: () => again()}},
         p.plan ? 'Cancel' : 'Close');
       if (!p.plan) { fill(box, shown, el('p', {class: 'note', id: 'applied'}, p.text), cancel); return; }
+      if (planShown && planShown !== again) planShown();     // the app keeps this plan now, not that box's
       const confirm = el('button', {class: 'btn primary', type: 'button', id: 'apply-confirm'}, 'Apply this change');
       confirm.addEventListener('click', () => {
         confirm.disabled = cancel.disabled = true;
         ask('apply_fix', {plan: p.plan}).then((r) => {
           const said = el('p', {class: 'note', id: 'applied'}, r.text);
           if (!r.entry) { again(said); return; }
+          if (planShown === again) planShown = null;
+          // An undo left alone because it was changed since offers to put it back anyway; one that failed, Undo again.
           const done = (u) => fill(box, el('p', {class: 'note', id: 'undone'}, u.text),
-            u.force ? undoButton(r.entry, done, true) : null);
-          fill(box, said, undoButton(r.entry, done));
-        }).catch((err) => {
-          confirm.disabled = cancel.disabled = false;
+            u.force ? undoButton(r.entry, done, true) : (u.done ? null : undoButton(r.entry, done)));
+          fill(box, said, undoButton(r.entry, done, r.force));
+        }).catch((err) => {           // that plan is gone (another box's replaced it, a newer recording): plan again
+          again();
           recError(err);
         });
       });
+      planShown = again;
       fill(box, shown, el('div', {class: 'row'}, confirm, cancel));
     }).catch((err) => {
       start.disabled = false;
@@ -790,11 +800,12 @@ function undoButton(entry, done, force = false) {
 // anyway for one that is neither how it was nor lag-doctor's), or a note saying why it has none. An undo draws the
 // list again with what was said, unless the change was left alone because it was changed since: then that change's
 // row offers to put it back anyway.
-function fillChanges(box, c) {
+function fillChanges(box, c, live) {
   if (!c.rows.length) { fill(box, el('p', {class: c.paused ? 'error' : 'muted', id: 'changes-none'}, ...prose(c.text))); return; }
   const rows = c.rows.map((r) => {
     const note = el('p', {class: 'muted'}, ...prose(r.note));
     const done = (u) => {
+      if (!live()) return;            // the player went on to another screen meanwhile
       if (!u.force) { go('settings', {said: u.text}, false); return; }
       fill(note, u.text);
       fill(buttons, undoButton(r.id, done, true));

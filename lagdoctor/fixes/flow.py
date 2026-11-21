@@ -33,8 +33,10 @@ def offers(diagnosis: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
     program of the player's can write, so an offer whose id is not text or whose params are not an object is none,
     and the sweep's own fix is never offered."""
     out, seen = [], set()
-    for f in diagnosis.get("findings") or []:
-        for fx in (f.get("fixes") or []) if isinstance(f, dict) else []:
+    findings = diagnosis.get("findings")
+    for f in findings if isinstance(findings, list) else []:
+        fixes = f.get("fixes") if isinstance(f, dict) else None
+        for fx in fixes if isinstance(fixes, list) else []:
             if not isinstance(fx, dict):
                 continue
             fid, params = fx.get("fix_id"), fx.get("params") or {}
@@ -86,8 +88,8 @@ def undo(entry: JournalEntry, fix_for: Callable[[str], Fix], journal: Journal, f
     try:
         return fix.undo(entry, journal, force=force)
     except (OSError, KeyError) as exc:
-        return FixResult(False, f"undo of {entry.target}: the fix journal failed ({exc})", entry.id, entry.state,
-                         why="unsure")
+        return FixResult(False, f"undo of {entry.target}: the fix journal failed ({exc}); undoing it again finds where "
+                                "it stands", entry.id, entry.state, why="unsure")
 
 
 def settle(say: Callable[[str], None], journal: Journal | None = None,

@@ -1368,7 +1368,10 @@ def cmd_undo(args: argparse.Namespace) -> int:
         except JournalCorrupt as exc:
             say(exc.plain())
             return 1
-        say(f"{'Restored' if res.ok else 'Left alone'}: {res.message}")
+        if res.why == "unsure":                  # the journal failed once the original may have been put back
+            say(f"Not known whether it was put back: {res.message}")
+        else:
+            say(f"{'Restored' if res.ok else 'Left alone'}: {res.message}")
         if not res.ok:
             status = 1
     return status

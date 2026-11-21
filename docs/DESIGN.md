@@ -340,6 +340,7 @@ lagdoctor/
             window.py                                   the samples around a moment (the app's Results)
   fixes/    base.py journal.py registry.py catalog.py (done) + power.py refresh_rate.py gpu_preference.py
             gamebar.py windowed.py priority.py game_setting.py (the settings sweep's edits; no report offers it)
+            flow.py                                     what `fix`, `undo` and the app's Apply and Undo share (M7)
   sweep/    inifile.py plan.py results.py runner.py command.py   `lagdoctor sweep`: settings tried run by run
   report/   charts.py labels.py console.py html.py (done) summary.py (summary.json, for the app's library)
   app/      main.py window.py bridge.py library.py views.py assets/ lag-doctor.ico     the desktop app (M1)
@@ -1687,6 +1688,16 @@ read back → `applied`, or `failed` with the original restored; `undo` restores
 it back; `heal` resolves `pending` entries left by a crash. Backends are injectable so tests never touch real
 settings (`reg_sandbox` for the registry, fakes for power/display/process).
 
+Two front ends apply them, both through `fixes/flow.py`: `lagdoctor fix` and `undo` in a terminal (CLI), and Apply
+and Undo in lag-doctor's window (The app, Apply and Undo). The flow holds what the two must agree on: which offers a
+report makes (`offers`: never `game_setting`, never one whose id is not text or whose params are not an object, since
+any program of the player's can write a report), the errors a plan raises for a refusal (`PLAN_ERRORS`), an apply
+or an undo whose journal another lag-doctor holds, or a disk refuses, said as an outcome rather than raised
+(`apply`'s `busy` and `unsure`, `undo`'s `unsure`, and `unknown` for a fix a newer lag-doctor journaled), and
+`settle`, the journal's settling at a start. `FixResult.why` names the case each undo met (`restored`, `already`,
+`ended`, `not_connected`, `changed`, `unreadable`, `write_failed`, `no_readback`), so that each front end words it
+itself: the fixes' own messages name internal values, which the terminal prints and the window keeps to its log.
+
 | fix id | params | what it changes | readback | needs restart |
 |---|---|---|---|---|
 | `power_plan` | `{"scheme": guid}` | active power scheme (`PowerSetActiveScheme`, allowed for standard users, WT 7.5) | `active_scheme()` | no |
@@ -1899,9 +1910,12 @@ lagdoctor sweep --resume [FOLDER]    go on with an unfinished sweep; a finished 
   a settings sweep's runs); `sound` plays the chimes, None (the default) being silent. `watch --control stdio` is all
   of these, driven by the app (The control channel).
 - `fix` applies only offered fixes, with the offered params, after showing the plan and its notes; it refuses
-  to run elevated. A plan-time refusal is reported, never a traceback. Every command except `setup` first
-  settles journal entries a crash left `pending`, and marks session-only changes whose process has ended as
-  undone (checked without opening the process).
+  to run elevated. A plan-time refusal is reported, never a traceback, and so are a journal another lag-doctor holds
+  (`fix` and `undo` change nothing then) and a report naming a fix this lag-doctor does not know. `watch`, `fix`,
+  `undo`, `check` and `sweep` first settle journal entries a crash left `pending` (`fixes/flow.settle`, through
+  `cli._settle_journal`), and mark session-only changes whose process has ended as undone (checked without opening
+  the process); `watch --control stdio` does the same with its lines sent to the window, and so does the window's
+  own list of changes (The app, Apply and Undo).
 
 ## Play's store launch (lagdoctor/stores/)
 
@@ -2030,8 +2044,11 @@ spike, which passed the owner's run.
 - **The bridge** (`bridge.py`): `origin_ok`, `navigation_allowed` and `parse` are pure. A request is
   `{type: "request", id, kind, ...}` with exactly its fields: `library`; `game` (a game id); `results` and
   `open_report` (a session id); `moment` (a session id and an event id); `compare` (`a`, `b`); `settings`,
-  `open_folder`, `test_sound`; `record`, `stop_recording`, `cancel_recording` and `recording` (M4, below); `play` (a
-  game id, M6, below). Notices:
+  `open_folder`, `test_sound`; `record`, `stop_recording`, `cancel_recording` and `recording` (M4, below); `play` and
+  `wait` (a game id, M6, below); `pick_game`, `add_game` (a draft's token and a name), `remove_game` and `rename_game`
+  (screen 6, below); `delete_recordings` (a game id and its sessions, below); `plan_fix` (a session id and a fix's
+  place on its Results), `apply_fix` (a plan's token), `changes` and `undo_change` (a journal entry's id and `force`,
+  a strict bool) (M7, below). Notices:
   `ready`, `frames_done` (`token`). The answer is `{type: "reply", id, ok, data | error}`; a failure the app did not
   expect is logged with its traceback and answered with one sentence naming the log. The one message the app sends
   unasked is `{type: "push", kind: "recording", data}`: the running screen's newest view.
@@ -2189,11 +2206,32 @@ spike, which passed the owner's run.
   under the seam), and `tests/test_recycle_live.py` moves a made-up folder for real on GitHub's runner only, finds it
   in that drive's Recycle Bin by the `$I` record naming its path, and takes it out again. `lagdoctor fix` says so when
   the recording it acts on is gone (`cli.remembered_report`), and the fix journal is kept apart (`fix-journal.json`).
+- **Apply and Undo** (M7: `plan_fix`, `apply_fix`, `changes`, `undo_change`; `App.do_plan_fix` and the rest, through
+  `fixes/flow.py`, and `views.plan_view`, `applied_view`, `undone_view` and `changes_view`): each fix Results lists for
+  the last recording made (`last-session.txt`, the one `lagdoctor fix` acts on) has **Apply this fix** when the window
+  applies it (`flow.offerable` over `App(fixes=)`'s `known()`: never `game_setting`, never a fix this lag-doctor does
+  not know, never params of another shape). An older recording's fixes show without it: its params may describe this
+  PC as it was then. The page names the fix only by its place on that page, and the app reads the fix and its params
+  from the recording's own diagnosis. The first click plans it, reading the PC then, and shows where, the change, its
+  notes and when it takes effect, as `lagdoctor fix` prints them; the app keeps that plan under a one-shot token
+  (`bridge.PLAN_ID`, one plan at a time, a newer one replacing it), and the second click makes exactly that change: a
+  setting that moved since is left alone (`base.apply`'s `stale`), and a newer recording made since stops it. Its Undo,
+  and Settings' list of the changes still in place (newest first, once the journal is settled as a start settles it,
+  `flow.settle`, its lines to the log), put each back as `lagdoctor undo` does; one changed since is left alone, and
+  **Put it back anyway** (`force`) takes a second click; a settings sweep's change is left to the terminal, and one a
+  newer lag-doctor made to that version. Nothing changes while a recording runs (this window's, or any other that
+  holds the capture lock, as for Delete), as administrator or when that cannot be told (`Fixes.elevated()` None), or
+  during another change (`App.fix_lock`, which a recording's start waits out too); an unreadable journal pauses all of
+  it (`JournalCorrupt.plain()`), and one another lag-doctor holds changes nothing. Every outcome is said in the
+  window's own words (`FixResult.state` and `why`): the fixes' own messages go to the log only. `App(fixes=)` is
+  `flow.Fixes(home)` (the catalogue's real fixes, the home's journal) only from `run()`; tests use
+  `tests/fake_fixes.py`'s stand-ins, and `tests/conftest.py`'s `_no_real_fixes` fails a test that reaches a real one.
 - **The library** (`library.py`): one Entry per session folder named as `session_dir` names them, from its
   `summary.json`, else from the folder's name (stamp and game stem). A recording is a `watch` folder holding its
   capture; check-ups and `analyze` folders are left out. A game's key is `paths.folder_stem` of its exe name, case
   folded; the page knows it only as `g-` and 16 hex digits of its SHA-256. A session id resolves only against the
-  listing. `last-session.txt` marks the recording `lagdoctor fix` acts on: fix commands show on that one only.
+  listing. `last-session.txt` marks the recording `lagdoctor fix` acts on: the window applies that one's fixes only
+  (Apply and Undo).
 - **summary.json** (`report/summary.py`, schema `lagdoctor.summary/1`, at most 64 KB), written by
   `cli.analyze_and_report`: `kind` (`watch` or `analyze`), `tool_version`, `capture_tool_version`, `game`, `exe`,
   `exe_name`, `started_at`, `duration_s`, `lag_type`, `headline`, `frames`, `avg_fps`, `low1_fps`, `stutters_per_min`,

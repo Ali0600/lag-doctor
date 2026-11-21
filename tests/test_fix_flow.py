@@ -27,6 +27,10 @@ def test_a_report_offers_only_fixes_of_a_known_shape_and_never_the_sweeps():
                    {"fix_id": "game_setting", "title": "A sweep's", "params": {"key": "x"}},
                    {"fix_id": "a", "title": "A", "params": {"x": 1}}, {"fix_id": "b"}]}]}
     assert flow.offers(diag) == [("a", "A", {"x": 1}), ("b", "b", {})]
+    for odd in ({"findings": 5}, {"findings": True}, {"findings": "abc"}, {"findings": {"fixes": []}},
+                {"findings": [{"fixes": True}]}, {"findings": [{"fixes": 7}]}, {"findings": [{"fixes": "ab"}]},
+                {"findings": [{"fixes": {"fix_id": "a"}}]}):
+        assert flow.offers(odd) == [], odd                # a report of another shape offers nothing, never a traceback
 
 
 def test_a_fix_is_applied_from_a_report_only_when_this_lag_doctor_knows_it_and_its_params_are_an_object():
@@ -193,6 +197,11 @@ def test_the_window_changes_nothing_when_it_cannot_tell_whether_it_runs_as_admin
         raise OSError("the token could not be read")
     monkeypatch.setattr(elevation, "is_elevated", fails)
     assert fixes.elevated() is None
+
+
+def test_conftest_keeps_every_test_off_the_windows_real_fixes():
+    # its guard is in place here too: a real fix asked for reads as one this lag-doctor does not know
+    assert flow.Fixes.fix.__name__ == "refuse"
 
 
 def test_no_test_reaches_the_windows_real_fixes(monkeypatch, tmp_path):

@@ -26,7 +26,7 @@ from lagdoctor.app.library import _broad
 from lagdoctor.stores.exe import file_name as exe_file_name
 from lagdoctor.capture import session as sess
 from lagdoctor.fixes import flow
-from lagdoctor.fixes.base import NOT_CONNECTED, is_gone
+from lagdoctor.fixes.base import is_gone
 from lagdoctor.model import C, Capture, Diagnosis, G, N, S, clean_note
 from lagdoctor.report import html, labels
 from lagdoctor.report.charts import fmt_elapsed, number
@@ -409,7 +409,7 @@ def deleted_view(done: int, failed: list[tuple[Entry, str]], listed: bool) -> di
 NOT_LAST = ("A newer recording was made since this one: fixes are applied from the last recording only, so open that "
             "one to apply its fixes.")
 SWEEP_CHANGE = ("A settings sweep's change, in a game's own settings file: in a terminal, `lagdoctor sweep --resume` "
-                "puts it back and goes on with the sweep, and so does `lagdoctor undo game_setting`.")
+                "puts it back (and goes on with the sweep), and so does `lagdoctor undo game_setting`.")
 NEWER_CHANGE = "A newer lag-doctor made this change: undo it with that version."
 CONFLICT_NOTE = ("It is now neither how it was nor lag-doctor's setting, so Undo leaves it alone. Put it back anyway "
                  "restores how it was before lag-doctor's change.")
@@ -441,11 +441,11 @@ UNDONE = {
     "changed": ("It was changed after lag-doctor set it, so it was left alone. Put it back anyway restores how it was "
                 "before lag-doctor's change."),
     "unreadable": "lag-doctor could not read it now, so it was left alone. " + FIX_LOG,
-    "write_failed": "Windows did not take the undo, so the change is still in place. " + FIX_LOG,
-    "no_readback": "The undo did not take, so the change is still in place. " + FIX_LOG,
+    "write_failed": "Windows did not take the undo, so it was not put back. " + FIX_LOG,
+    "no_readback": "The undo did not take: it was not put back. " + FIX_LOG,
     "unknown": NEWER_CHANGE,
-    "unsure": ("lag-doctor could not finish writing the undo down. Settings shows where it stands once lag-doctor has "
-               "checked it. " + FIX_LOG),
+    "unsure": ("lag-doctor could not finish writing the undo down, so it still lists the change: Undo it again to see "
+               "where it stands. " + FIX_LOG),
 }
 
 
@@ -461,15 +461,15 @@ def refused_text(exc: BaseException) -> str:
 
 def plan_view(token: str | None, plan: Any) -> dict[str, Any]:
     """What Apply shows before it changes anything, as `lagdoctor fix` prints its plan: where, the change, its notes and
-    when it takes effect. `plan` is the token the page's second click applies by; None, with `text` saying why, when
-    there is nothing to change (set that way already, or what it would change is gone)."""
+    when it takes effect. `plan` is the token the page's second click applies by: the App gives none when there is
+    nothing to change (set that way already, or what it would change is gone), and `text` then says which."""
     text = ""
     if plan.noop:
         text = "This is set that way already, so there is nothing to change."
     elif is_gone(plan.before):
         text = (f"{plan.summary}." if plan.session_only else
                 "What this fix would change is not connected now, so there is nothing to change.")
-    return {"plan": None if text else token, "where": str(plan.target), "change": str(plan.summary),
+    return {"plan": token, "where": str(plan.target), "change": str(plan.summary),
             "notes": [str(n) for n in plan.notes], "restart": RESTART.get(plan.needs_restart or "", ""), "text": text}
 
 
@@ -483,7 +483,9 @@ def applied_view(res: Any, plan: Any) -> dict[str, Any]:
     else:
         text = APPLIED.get(res.state, "lag-doctor could not apply it. " + FIX_LOG)
     kept = res.state in ("applied", "conflict") and isinstance(res.entry_id, str) and bridge.entry_ok(res.entry_id)
-    return {"text": text, "entry": res.entry_id if kept else None, "done": bool(res.ok)}
+    # A conflict is neither the original nor lag-doctor's value: only putting it back anyway can undo it, as in Settings.
+    return {"text": text, "entry": res.entry_id if kept else None, "done": bool(res.ok),
+            "force": kept and res.state == "conflict"}
 
 
 def undone_view(res: Any, change: str) -> dict[str, Any]:
@@ -500,12 +502,13 @@ def undone_view(res: Any, change: str) -> dict[str, Any]:
 
 
 def _journal_time(value: Any) -> str:
-    """When a journal entry was made, in this PC's time, as a session's start is shown; '-' when it is not a time."""
+    """When a journal entry was made, in this PC's time, as a session's start is shown; '-' when it is not a time
+    Windows can show (one before 1970, or past the year 9999 in this time zone, raises there)."""
     try:
         made = datetime.fromisoformat(str(value))
-    except ValueError:
+        return when_text(made.astimezone() if made.tzinfo is not None else made)
+    except (ValueError, OSError, OverflowError):
         return "-"
-    return when_text(made.astimezone() if made.tzinfo is not None else made)
 
 
 def changes_view(entries: list, about: Callable[[Any], tuple[str | None, str]] | None,
@@ -526,8 +529,6 @@ def changes_view(entries: list, about: Callable[[Any], tuple[str | None, str]] |
             note, undo = SWEEP_CHANGE, False
         elif e.state == "conflict":
             note, undo, force = CONFLICT_NOTE, False, True
-        elif e.note == NOT_CONNECTED:
-            note = "What it changed was not connected the last time it was undone."
         elif e.session_only:
             note = "It lasts until that program exits."
         named = isinstance(e.id, str) and bridge.entry_ok(e.id)

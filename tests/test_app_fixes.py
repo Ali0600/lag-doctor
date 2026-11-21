@@ -163,6 +163,32 @@ def test_each_plan_applies_once_and_only_the_newest_one(tmp_path):
     assert fx.store["writes"] == [("game_mode_on", AFTER)]
 
 
+def test_a_plan_another_request_applied_meanwhile_is_not_applied_again(tmp_path):
+    app, fx, sid = fixing(tmp_path)
+    token = planned(app, sid)["plan"]
+
+    class Meanwhile:
+        """The fix lock, got by this request just after another one with the same token applied it (two workers)."""
+
+        def __init__(self, real):
+            self.real = real
+
+        def acquire(self, *args, **kwargs):
+            got = self.real.acquire(*args, **kwargs)
+            with app.lock:
+                app.planned = None                 # what the other request's apply left
+            return got
+
+        def release(self):
+            self.real.release()
+
+        def locked(self):
+            return self.real.locked()
+    app.fix_lock = Meanwhile(app.fix_lock)
+    assert ask(app, "apply_fix", plan=token) == app_main.NO_LONGER_PLANNED
+    assert "writes" not in fx.store and journal_of(app).entries() == [] and not app.fix_lock.locked()
+
+
 def test_a_newer_recording_since_stops_the_plan_and_the_change(tmp_path):
     app, fx, sid = fixing(tmp_path)
     token = planned(app, sid)["plan"]
@@ -234,7 +260,10 @@ def test_nothing_is_changed_as_administrator_or_when_that_cannot_be_told(tmp_pat
 
 
 def test_one_change_at_a_time(tmp_path, monkeypatch):
+    from tests import fake_recorder
     app, fx, sid = fixing(tmp_path)
+    # A recorder that records nothing: were the refusal below to slip, the real one would raise Windows' UAC prompt.
+    app.recorder = lambda: [str(fake_recorder.BASE_PY), "-I", "-c", "pass"]
     token = planned(app, sid)["plan"]
     assert app.fix_lock.acquire(blocking=False)
     try:
@@ -332,6 +361,38 @@ def test_undo_leaves_a_value_changed_since_alone_until_it_is_put_back_anyway(tmp
     assert u["done"] and fx.store["power_plan"] == BEFORE and journal_of(app).get(entry).state == "undone"
 
 
+def test_a_recording_is_looked_for_with_the_change_lock_held(tmp_path):
+    """So that a recording that starts meanwhile waits the change out (App._start), and never starts in its middle."""
+    app, fx, sid = fixing(tmp_path)
+    held, real = [], app.change_refusal
+    app.change_refusal = lambda fixes: held.append(app.fix_lock.locked()) or real(fixes)
+    entry = ask(app, "apply_fix", plan=planned(app, sid)["plan"])["entry"]
+    assert ask(app, "undo_change", entry=entry, force=False)["done"]
+    assert held == [True, True, True]                     # the plan, the apply and the undo
+
+
+def test_a_change_that_left_neither_value_offers_only_to_put_it_back_anyway(tmp_path):
+    app, fx, sid = fixing(tmp_path)
+    token = planned(app, sid)["plan"]
+
+    class Stuck(type(fx.fix("power_plan"))):
+        """Its write lands a third value, and putting the original back fails too."""
+
+        def write(self, params, value):
+            if value == BEFORE:
+                raise OSError("the setting is locked")
+            self.store[self.id] = "a third value"
+    fx.fix = lambda fid: Stuck(fid, fx.store)
+    a = ask(app, "apply_fix", plan=token)
+    assert plain(a["text"]).startswith("The change did not take, and putting back how it was did not work either.")
+    assert a["entry"] and a["force"] and journal_of(app).get(a["entry"]).state == "conflict"
+    assert not views.applied_view(FixResult(True, "", "0123456789ab", "applied"), planned_plan())["force"]
+
+
+def planned_plan():
+    return type("Plan", (), {"summary": "Power plan: Silent -> Balanced", "needs_restart": None})()
+
+
 def test_an_undo_names_only_a_change_still_on_the_list_and_never_a_sweeps(tmp_path):
     app, fx, sid = fixing(tmp_path)
     entry = applied_once(app, sid)
@@ -363,22 +424,28 @@ def test_the_list_says_each_change_and_offers_undo_only_where_it_can(tmp_path):
     sweep = made("game_setting", "sg.X in GameUserSettings.ini")
     newer = made("from_a_newer_lag_doctor", "something newer")
     raw = json.loads(j.path.read_text(encoding="utf-8"))      # an id the page could not name back: a hand-edited file
-    raw["entries"].append(dict(raw["entries"][0], id="../../x", target="hand-edited"))
+    # Times Windows cannot show in this time zone (before 1970, past the year 9999): said as unknown, never an error.
+    for i, when in enumerate(("1960-01-01T00:00:00+00:00", "9999-12-31T23:59:59-12:00", "not a time", None)):
+        raw["entries"].insert(0, dict(raw["entries"][0], id=f"00000000000{i}", target=f"odd time {i}", created_at=when))
+    raw["entries"].append(dict(raw["entries"][-1], id="../../x", target="hand-edited"))
     j.path.write_text(json.dumps(raw), encoding="utf-8")
     rows = ask(app, "changes")["rows"]
     by = {r["where"]: r for r in rows}
-    assert [r["where"] for r in rows][0] == "hand-edited" and len(rows) == 7               # newest first
+    assert [r["where"] for r in rows][0] == "hand-edited" and len(rows) == 11              # newest first
+    assert [by[f"odd time {i}"]["when"] for i in range(4)] == ["-"] * 4
+    rows = [r for r in rows if not r["where"].startswith("odd time")]
     assert by['<img src=x onerror="window.__pwned=1"> the active power plan']["undo"]      # outside text, as text
     assert (by["Game Mode"]["undo"], by["Game Mode"]["force"]) == (False, True)
     assert by["Game Mode"]["note"] == views.CONFLICT_NOTE
-    assert by["the refresh rate of DISPLAY2"]["undo"] and "not connected" in by["the refresh rate of DISPLAY2"]["note"]
+    # Left alone at an undo while unplugged: listed with its Undo, and no note that a later undo would make untrue.
+    assert (by["the refresh rate of DISPLAY2"]["undo"], by["the refresh rate of DISPLAY2"]["note"]) == (True, "")
     assert by["priority of Discord.exe"]["note"] == "It lasts until that program exits."
     assert (by["sg.X in GameUserSettings.ini"]["undo"], by["sg.X in GameUserSettings.ini"]["note"]) == \
         (False, views.SWEEP_CHANGE)
     assert (by["something newer"]["undo"], by["something newer"]["title"], by["something newer"]["note"]) == \
         (False, "from_a_newer_lag_doctor", views.NEWER_CHANGE)
     assert (by["hand-edited"]["id"], by["hand-edited"]["undo"], by["hand-edited"]["force"]) == (None, False, False)
-    assert {by[w]["id"] for w in by if w != "hand-edited"} == {lasting, unplugged, session, conflict, sweep, newer}
+    assert {r["id"] for r in rows if r["where"] != "hand-edited"} == {lasting, unplugged, session, conflict, sweep, newer}
     assert all(re.fullmatch(r"\d{1,2} \w{3} \d{4}, \d\d:\d\d", r["when"]) for r in rows)
 
 
@@ -419,3 +486,19 @@ def test_every_answer_to_an_apply_or_an_undo_is_in_plain_words():
                  app_main.NO_JOURNAL, app_main.NO_LONGER_PLANNED):
         plain(text)
     assert views.refused_text(ValueError("")) == "lag-doctor will not make this change."
+
+
+def test_each_outcome_is_said_by_its_own_words():
+    plan = type("Plan", (), {"summary": "Power plan: Silent -> Balanced", "needs_restart": None})()
+    assert views.applied_view(FixResult(True, "", "0123456789ab", "applied"), plan)["text"] == \
+        "Done: Power plan: Silent -> Balanced."                                  # no restart sentence for it
+    assert views.applied_view(FixResult(False, "", "0123456789ab", "applied"), plan)["text"] == views.UNCONFIRMED
+    for state, text in views.APPLIED.items():
+        assert views.applied_view(FixResult(False, "", None, state), plan)["text"] == text, state
+    for why, text in views.UNDONE.items():
+        ok = why in ("already", "ended")
+        assert views.undone_view(FixResult(ok, "", "0123456789ab", "undone" if ok else "applied", why),
+                                 "Power plan: Silent -> Balanced")["text"] == text, why
+    assert views.undone_view(FixResult(True, "", "0123456789ab", "undone", "restored"),
+                             "Power plan: Silent -> Balanced")["text"] == \
+        "Undone: Power plan: Silent -> Balanced. It is back to how it was."

@@ -42,6 +42,7 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   2026-11-19 on the owner's "Merge without a try": nobody has run it in the app yet), then program icons for Epic and
   recorded games, Rename and Delete (M6j, PR #66, merged 2026-11-20 after the owner's own try in the app: "It
   works", which covered #64's Add a game too).
+- [ ] M7: Apply and Undo in the app (branch `m7-apply-undo`), held for the owner's own try in the app before it merges.
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -65,17 +66,19 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
    - a table of lag moments (click one to see the CPU, GPU, disk and network around it);
    - checked and fine; not measured.
 
-   Fixes are shown read-only, with their `lagdoctor fix` command, in the first versions. The command appears only on
-   the last recording made, of any game: `fix` takes its offers from that one and the last check-up, so on an older
-   recording it would act on another's. `report.html` stays the shareable page.
+   Each fix the last recording made offers (of any game: the one `lagdoctor fix` acts on) has **Apply this fix**
+   (M7): the first click shows where and what it would change, and its notes, read from the PC then, as `lagdoctor
+   fix` prints them; a second makes exactly that change, through the same journal and readback, and its Undo puts it
+   back. An older recording's fixes are shown without it: it may describe this PC as it was then. `report.html` stays
+   the shareable page.
 5. **Compare**: two recordings of a game side by side, with their conditions next to the numbers: power plan or mode,
    refresh rate, frames source and measured length, and what changed in the game itself (its exe, drop-in files and
    Unreal settings files, read from its folders when the recording started: DECISIONS 2026-11-08).
 6. **Add a game**: pick an exe; the name and icon come from the file. lag-doctor never starts an exe itself (see
    "Launching and finding the game"), so a game added by hand, or recorded before from another store, has no Play.
    Its page offers the folder wait instead ("start the game yourself; lag-doctor finds it"), as `watch --wait-folder`.
-7. **First run and settings**: readiness, the hotkeys, a sound test, the default length, the library sources and the
-   sessions folder.
+7. **First run and settings**: readiness, the hotkeys, a sound test, the default length, the library sources, the
+   sessions folder, and the changes lag-doctor made that are still in place, each with its Undo (M7).
 
 ## Play with lag-doctor, step by step
 
@@ -180,7 +183,7 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
 
 | process | runs as | does | never |
 |---|---|---|---|
-| **app**: the window (`pythonw.exe`) | the user | the library, Play, results, compare; asks for UAC with its own window | records, holds the capture lock, touches the game, draws anything that moves while a game records |
+| **app**: the window (`pythonw.exe`) | the user | the library, Play, results, compare, Apply and Undo (the user's own fix journal); asks for UAC with its own window | records, holds the capture lock, touches the game, draws anything that moves while a game records |
 | **recorder**: `lagdoctor watch` in a control mode, started by the app with no window | the user | the lock, readiness, the wait for the game, the inventory, the Session (system sampler, NVIDIA, pings, hotkeys), save, analysis, report; status to the app | elevates, opens the game |
 | **relay** | an administrator, through one UAC prompt, today; the LocalService capture service from Stage 4 | runs PresentMon on the game it accepts (the approved running game, or for Play the one the recorder names, from under the approved install folder) and the Kernel-Network session, and forwards only that game's frame rows and network events (plus the recorder's own, for the tracker's DNS self-test) and per-program byte totals of the recorder's session | writes a file, reads a folder, records a game its own check did not accept, takes any other PresentMon or ETW argument from the pipe, serves two recordings at once |
 
@@ -751,13 +754,28 @@ above:
   `%ProgramData%\Epic\EpicGamesLauncher`. Nothing reads or records a game's command line, where an Epic launch carries
   a sign-in code.
 
+### M7: Apply and Undo in the app
+
+- [x] The fix flow both front ends share moved out of `cli.py` into `lagdoctor/fixes/flow.py` (DESIGN.md, Fixes):
+  which offers a report makes (never the sweep's own `game_setting`, never one of another shape), the errors a plan
+  raises for a refusal, an apply or undo whose journal another lag-doctor holds said as an outcome, and the journal's
+  settling at a start. `lagdoctor fix` and `undo` keep their words, and no longer end in a traceback when another
+  lag-doctor holds the journal or a report names a fix this version does not know.
+- [x] Results (DESIGN.md, The app, Apply and Undo): Apply on each fix the last recording offers; the plan shown first
+  and kept by the app under a one-shot token, so that the second click makes exactly the change shown, and the fix
+  itself refuses (stale) if the setting moved since. Never while a recording runs (this window's, or any other that
+  holds the capture lock), never as administrator or when that cannot be told, one change at a time.
+- [x] Settings: the changes lag-doctor made that are still in place, newest first, once the journal is settled; Undo on
+  each, Put it back anyway (a second click) for one changed since, a settings sweep's change left to the terminal and
+  one a newer lag-doctor made left to that version.
+- [ ] The owner's own try in the app, before the merge.
+
 ### After that
 
 - **Stage 4** (INSTALLER-PLAN): the relay core becomes the LocalService service. The recorder tries the service first,
   and there is no prompt.
 - **Later**:
   - GOG, Xbox and other stores;
-  - Apply and Undo in the app, once the fix flow has moved out of `cli.py`;
   - a plain Play without recording;
   - a live view on a second monitor;
   - the backlog's host exe for the app's window, so Task Manager says lag-doctor.
