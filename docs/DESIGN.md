@@ -2298,7 +2298,8 @@ typed on the player's PC, and the game is never started, stopped or opened by la
   setting's values and read every one back; check the start key (Ctrl+Alt+S by default, `cli.DEFAULT_START_KEY`;
   `--start-key` needs Ctrl, Alt or Win: `runner.check_start_key` registers it), so a key another program holds is
   found before the player starts the game, and hold it while the game starts, so a program that registers it then
-  cannot have it; the player starts the game, goes to the spot and presses Enter; the sweep lets go of the key, and
+  cannot have it; the player starts the game, goes to the spot and presses Enter (and, back in the game, stays there 2
+  minutes before the start key: `runner.press_advice`); the sweep lets go of the key, and
   `watch` records (`--game`, `--no-network`, `--hotkey none`, `--start-key` with `--window` and `--start-by` 300,
   `--elevate` unless `can_trace`, `--out` the sweep's `runs` folder, a note naming the run; through `cmd_watch` with
   `remember`, `show_summary` and `start_advice` False and no sound of watch's own). watch's start key measures the
@@ -2321,11 +2322,14 @@ typed on the player's PC, and the game is never started, stopped or opened by la
   average FPS and 1 % low are the report's own. A run counts (else it is offered again, or skipped) only when
   frame timing ran, the recording lasted the window, the window holds 1,000 frames or more and its frames come within
   1 s of both ends, the game was in front in every sample but those within 0.5 s of the ends, the key was not
-  pressed into the frozen screen of the game coming back to the front (DECISIONS 2026-11-20), other programs took 10 %
-  or more of the game's GPU in at most 5 % of the samples, and the NVIDIA clock's 90th percentile was within 15 % of
-  its 10th (a GPU that has not heated up yet runs about twice as fast on the owner's laptop); and only when the power
-  plan, Windows' power mode, mains power and the refresh rate match the first good run's. The NVIDIA power limit is
-  recorded, not held: Dynamic Boost moves it by itself, and the laptop's own mode shows as a plan change. What could
+  pressed into the frozen screen of the game coming back to the front (DECISIONS 2026-11-20), the game had been in
+  front for 2 minutes before the press (`SETTLE_S`, `front_before`: counted back from the press over the samples that
+  read it in front, a sample behind starting it again; a GPU that has not heated up yet runs up to twice as fast on
+  the owner's laptop, DECISIONS 2026-11-21), and other programs took 10 % or more of the game's GPU in at most 5 % of
+  the samples; and only when the power plan, Windows' power mode, mains power and the refresh rate match the first
+  good run's. The NVIDIA clock and power limit are recorded, not held: at its heat limit the clock swings about 25 %
+  for good (a rule on its spread kept out nearly every run there), a lighter setting can run it faster, Dynamic Boost
+  moves the limit by itself, and the laptop's own mode shows as a plan change. What could
   not be read is listed as not checked. An exe of another size or date than that run's ends the sweep: an update.
 - **The comparison**: settings in order of average FPS, each with its counted good runs' average FPS and 1 % low and
   their 95 % t intervals; B onwards compared with A by Welch's interval in % of A's mean, widened for the number of

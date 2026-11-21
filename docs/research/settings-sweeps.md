@@ -391,11 +391,13 @@ Built on 2026-11-09 as `lagdoctor sweep`, the assisted sweep (DESIGN, The settin
   own spelling does not count, and the player decides about a real change;
 - item 3 with the player starting the game, and item 4 by the player pressing the start key at a spot;
 - item 5 without waiting for the GPU to level off: a warm-up round first, and a window whose GPU clock moved does not
-  count;
+  count (since 2026-11-21 a run counts once the game has been in front 2 minutes before the press instead: at the
+  owner's GPU's heat limit the clock swings for good, DECISIONS 2026-11-21);
 - item 6 with the counted rounds rotating one order (a Latin square), and A's repeats in every round as the A/A check
   instead of a block of its own;
 - item 7 with throttling judged by the clock's spread within the window (the owner's GPU is heat-held throughout, so
-  "throttled" alone would refuse every run);
+  "throttled" alone would refuse every run); since 2026-11-21 the clock is only recorded, since its spread at the
+  heat limit refused nearly every run too;
 - item 8 with the intervals widened for the number of settings compared.
 
 1. Refuse without a fixed power mode and mains power, and record the driver and game versions; a change in either

@@ -101,11 +101,11 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
   each (`--try sg.ShadowQuality=1`, or several values at once with commas between), against the file as it is. Close
   the game first, plug the laptop in, and pick a save and a spot you can reach the same way each time. For each run
   lag-doctor writes the setting into the file; you start the game, load the save, go to the spot and press Enter in
-  the terminal; then, back in the game, press **Ctrl+Alt+S** at the spot: a chime starts 60 s of measuring
-  (`--window`) and another ends it, and you quit the game. The runs come in rounds, every setting once a round, in
-  turns so each takes each place; the first round only warms up, then 3 rounds count (`--runs`). A run with the game
-  behind another window, another program on the GPU, a GPU still heating up or a changed power mode does not count and
-  is offered again; a value of the file the sweep does not try that changes between runs is said, and you decide. Each
+  the terminal; then, back in the game, stay at the spot for 2 minutes, so the GPU settles at its working heat, and
+  press **Ctrl+Alt+S**: a chime starts 60 s of measuring (`--window`) and another ends it, and you quit the game. The
+  runs come in rounds, every setting once a round, in turns so each takes each place; the first round only warms up,
+  then 3 rounds count (`--runs`). A run with the game behind another window, the key pressed before those 2 minutes,
+  another program on the GPU or a changed power mode does not count and is offered again; a value of the file the sweep does not try that changes between runs is said, and you decide. Each
   run asks for one UAC prompt. It changes only values the file already has; if the game puts its own value back when
   it closes, the sweep ends there and says so, because then the game does not take that setting from the file, and
   asks before it writes your original back over the game's. Ctrl+C stops it at any point, the file goes back as it was

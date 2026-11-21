@@ -226,6 +226,42 @@
 
 ---
 
+## 2026-11-21: A sweep run counts once the game has been in front 2 minutes, and the GPU clock is only recorded
+
+Planning the owner's first sweep found that its heat rule would keep out nearly every run on the owner's laptop. The
+rule kept a run out when the NVIDIA clock's 90th percentile in the window was over 1.15 times its 10th, taken for a
+GPU still heating up. At its heat limit, with its fans at full speed, that GPU never settles to one clock: it swings
+between about 780 and 1,000 MHz at a flat 86-87 °C. The sweep's own `window_metrics` and `problems`, slid over the
+owner's recordings minute by minute, kept out 53 of 55 and 32 of 34 minutes of the two newest on that rule alone
+(median spread 1.29 and 1.25), so every run would have been offered again, each costing a restart of the game. The
+owner chose, asked: "Fix it here", on a fix by a minimum time in front at the spot.
+
+- **A minimum time with the game in front before the press (chosen)**: `results.SETTLE_S` (120 s), counted back
+  from the press over the run's own samples (`front_before`; a sample behind starts it again, an unreadable one is
+  passed over as the window's own check passes it over). It does not depend on the setting tried, and it covers the
+  pause the sweep puts in every run (Enter and the UAC prompt in the terminal). In the owner's recordings, the clock's
+  median over a minute was within about 1.1 times its settled median from 2 minutes on (1.00 to 1.16; 0.94 to 1.25
+  at 3 minutes, where the swing dominates), against 1.0 to 2.2 in the first minute; one recording whose cooling was
+  failing kept falling for 9 minutes, which no rule within a run could tell from a swing. The player is told to stay
+  at the spot 2 minutes after the short chime (`runner.press_advice`), well inside watch's 5 minutes for the press
+  (`START_WAIT_S`; `tests/test_sweep_runner.py` holds the two apart).
+- **Keep the clock rule with a higher limit**: rejected. The swing at the heat limit reached 1.59, the first minute
+  of a GPU still heating 1.3 to 2.0: no limit keeps out the one and lets in the other.
+- **A fitted fall of the clock across the window**: rejected. At a 25 % fall it kept out 26 of 268 settled minutes
+  and let in 29 of 42 first minutes, and like any rule on the clock it leans on the setting: a lighter one may run
+  below the heat limit with a steady clock, so the heaviest setting's runs would be kept out more often.
+- **The game process's age at the press**: rejected. The recording knows the game's start, but the GPU follows the
+  load since it last rested, which includes the launch, menus and loading, not the time at the spot.
+- **The temperature's rise across the window or before the press**: rejected, as adding little to A. Temperature
+  does not swing at the limit, but on the newest recording it sat at 86-87 °C while the clock still slid for 2
+  minutes. If a warm-up ever gets past A, `window_metrics` holds the temperature (`G.TEMP_C`, today only its median).
+
+The clock's median, 10th and 90th percentiles stay in each run's numbers, and a run without NVIDIA readings no longer
+lists the clock as unchecked, since nothing checks it. Revisit hooks: `sweep/results.SETTLE_S`, `front_before` and
+`problems`.
+
+---
+
 ## 2026-11-20: A sweep run pressed into the frozen screen of coming back to the front is kept out
 
 The owner asked to fix the sweep's frozen-screen clip (the 2026-11-19 entry's "Left open"). Each sweep run starts

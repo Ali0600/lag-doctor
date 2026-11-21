@@ -9,8 +9,11 @@ A run counts only when, over that window: frame timing ran and the recording las
 and they reach both its ends; the game was in front in every sample (half a second of grace at each end), and the
 key was not pressed into the frozen screen of it coming back to the front from the sweep's own window; other
 programs took 10 % or more of the game's GPU in at most 5 % of the samples (the report's own threshold for sharing it);
-and the NVIDIA GPU's clock held steady (its 90th percentile within 15 % of its 10th: on the owner's laptop a GPU that
-has not heated up yet runs at twice the speed it settles at). It also has to match the first good run on the power
+and, before the press, the game had been in front for 2 minutes (SETTLE_S) without a break, so the GPU had settled
+(on the owner's laptop one that has not heated up yet runs at up to twice the speed it settles at; DECISIONS
+2026-11-21). The NVIDIA
+clock is recorded, not held: at its heat limit it swings about 25 % for good, and a lighter setting may run it faster,
+so a rule on it would keep out runs by the setting tried. A run also has to match the first good run on the power
 plan, Windows' power mode, mains power and the refresh rate (docs/research/settings-sweeps.md, section 7). The GPU's
 power limit is recorded, not held: Dynamic Boost moves it by itself, and the laptop's own mode shows as a plan change.
 
@@ -34,7 +37,7 @@ EDGE_S = 0.5             # a sample this near either end of the window may still
 OTHER_GPU_MAX = fa.SHARED_GPU_PCT      # another program at 10 % or more of the game's GPU shares it (the report's rule)
 OTHER_SHARE_MAX = 0.05   # ... in at most this share of the window's samples
 REACH_S = 1.0            # the game's frames must start and end this near the window's ends
-CLOCK_SPREAD_MAX = 1.15  # the GPU clock's 90th percentile over its 10th: more means it moved during the window
+SETTLE_S = 120.0         # the game in front this long before the press: the GPU has reached its heat limit by then
 REFRESH_TOL_HZ = 1.0
 CONFIDENCE = 0.95
 POWER = 0.80             # the chance a sweep has of seeing the difference it says it can see
@@ -155,10 +158,32 @@ def _item(col: Any, i: int) -> Any:
     return col[i] if isinstance(col, list) and 0 <= i < len(col) else None
 
 
+def _focus(system: Any) -> list[tuple[float, int]]:
+    """(t, 1 in front or 0 behind) for every sample of a system table that read whether the game was in front."""
+    system = system if isinstance(system, dict) else {}
+    return [(float(t), v) for t, v in zip(system.get(S.T) or [], system.get(S.GAME_FOCUSED) or [])
+            if _finite(t) is not None and v in (0, 1) and not isinstance(v, bool)]
+
+
+def front_before(cap: Capture, t0: float) -> float:
+    """How long the game had been in front, without a break, when the key was pressed at t0: from the first of the
+    samples before t0 that all read it in front, to t0. A sample that read it behind starts the count again; one that
+    could not read it is passed over, as the window's own check passes it over, so the count starts at the first
+    readable one. With no readable sample before t0, or the last one behind, 0."""
+    since = None
+    for t, v in sorted(s for s in _focus(cap.system) if s[0] < t0):
+        if v == 1:
+            since = t if since is None else since
+        else:
+            since = None
+    return round(t0 - since, 2) if since is not None else 0.0
+
+
 def window_metrics(cap: Capture, t0: float, window_s: float) -> dict[str, Any]:
     """The numbers of the window [t0, t0 + window_s] (the recording's seconds): the frame statistics of the main swap
-    chain cut exactly to it, how near its ends the frames reach, the seconds the game was behind another window,
-    the share of samples with another program on the game's GPU, and the GPU's clock and temperature."""
+    chain cut exactly to it, how near its ends the frames reach, the seconds the game was behind another window and
+    how long it had been in front before t0, the share of samples with another program on the game's GPU, and the
+    GPU's clock and temperature."""
     t0, window_s = float(t0), float(window_s)
     t1 = t0 + window_s
     fr, pressed = _cut(cap, t0, t1)
@@ -166,8 +191,7 @@ def window_metrics(cap: Capture, t0: float, window_s: float) -> dict[str, Any]:
     cut = window(cap, t0, t1, frames=fr)
     times = _numbers(fr.get(F.T) or [])
     system = cut["system"]
-    focus = [(t, v) for t, v in zip(system.get(S.T) or [], system.get(S.GAME_FOCUSED) or [])
-             if _finite(t) is not None and v in (0, 1) and not isinstance(v, bool)]
+    focus = _focus(system)
     behind = [t for t, v in focus if v == 0 and t0 + EDGE_S <= t <= t1 - EDGE_S]
     other = _numbers(system.get(S.GPU_OTHER_PCT) or [])
     gpu = cut["gpu"]
@@ -185,6 +209,7 @@ def window_metrics(cap: Capture, t0: float, window_s: float) -> dict[str, Any]:
         "focus_samples": len(focus),
         "behind_s": round(len(behind) * SAMPLE_S, 2),
         "frozen_at_press_ms": round(pressed, 1),
+        "front_before_s": front_before(cap, t0),
         "gpu_other_share": round(sum(1 for x in other if x >= OTHER_GPU_MAX) / len(other), 4) if other else None,
         "gpu_other_pct": _round(_median(other)),
         "gpu_clock_mhz": _round(_median(clocks), 1),
@@ -227,8 +252,15 @@ def problems(cap: Capture, metrics: dict[str, Any], start_t: float, window_s: fl
         out.append(f"the game drew no frame for the window's last {gap:.0f} s")
     if not metrics.get("focus_samples"):
         out.append("whether the game was in front could not be read")
-    elif (_finite(metrics.get("behind_s")) or 0.0) > 0:
-        out.append(f"the game was behind another window for about {max(1.0, metrics['behind_s']):.0f} s of the window")
+    else:
+        if (_finite(metrics.get("behind_s")) or 0.0) > 0:
+            out.append(f"the game was behind another window for about {max(1.0, metrics['behind_s']):.0f} s of the "
+                       "window")
+        front = _finite(metrics.get("front_before_s")) or 0.0
+        if front < SETTLE_S:        # the GPU may not have reached its heat limit yet: it would read faster than it is
+            since = f"only {front:.0f} s" if front >= 1.0 else "under a second"
+            out.append(f"the game had been in front for {since} when you pressed the start key: stay at your spot for "
+                       f"{wait_words(SETTLE_S)} before you press it, so the GPU has settled")
     frozen = _finite(metrics.get("frozen_at_press_ms")) or 0.0
     if frozen > 0:      # the sweep's own window was just in front: Windows had shown the game nothing new yet
         out.append(f"the game showed nothing new for {max(0.1, frozen / 1000.0):.1f} s after you pressed the start "
@@ -237,11 +269,15 @@ def problems(cap: Capture, metrics: dict[str, Any], start_t: float, window_s: fl
     if share is not None and share > OTHER_SHARE_MAX:
         out.append(f"another program used {OTHER_GPU_MAX:.0f} % or more of the game's GPU for about "
                    f"{share * window_s:.0f} s of the window")
-    lo, hi = _finite(metrics.get("gpu_clock_p10")), _finite(metrics.get("gpu_clock_p90"))
-    if lo and hi and hi > CLOCK_SPREAD_MAX * lo:
-        out.append(f"the GPU's clock moved between {lo:.0f} and {hi:.0f} MHz during the window, so it was still "
-                   "heating up: play a little longer at the spot before you press the start key")
     return out
+
+
+def wait_words(seconds: float) -> str:
+    """A wait the player is told, in whole minutes when it is some ("2 minutes"), else in seconds."""
+    minutes, rest = divmod(round(seconds), 60)
+    if minutes and not rest:
+        return f"{minutes} minute" + ("s" if minutes > 1 else "")
+    return f"{round(seconds)} s"
 
 
 def unchecked(metrics: dict[str, Any], conditions: dict[str, Any]) -> list[str]:
@@ -249,8 +285,6 @@ def unchecked(metrics: dict[str, Any], conditions: dict[str, Any]) -> list[str]:
     out = []
     if metrics.get("gpu_other_share") is None:
         out.append("other programs on the GPU")
-    if metrics.get("gpu_clock_p10") is None:
-        out.append("the GPU's clock (no NVIDIA readings)")
     if conditions.get("on_battery") is None:
         out.append("mains power")
     if conditions.get("refresh_hz") is None:
