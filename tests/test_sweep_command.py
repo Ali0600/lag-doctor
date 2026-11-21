@@ -16,7 +16,7 @@ from lagdoctor import cli, paths
 from lagdoctor.capture import session as sess
 from lagdoctor.capture import target as tgt
 from lagdoctor.capture.base import Collector
-from lagdoctor.fixes import game_setting
+from lagdoctor.fixes import flow, game_setting
 from lagdoctor.model import NOTE_MAX
 from lagdoctor.sweep import command, plan, runner
 from lagdoctor.winapi import elevation, power
@@ -256,7 +256,7 @@ def test_cli_main_runs_a_sweep_behind_the_private_copy_gate_and_settles_the_jour
     monkeypatch.setattr(cli, "_private_copy_gate", gate)
     monkeypatch.setattr(command, "_yes", lambda prompt, default=False: True)
     monkeypatch.setattr(command, "real_seams", lambda: None)
-    monkeypatch.setattr(cli, "PENDING_GRACE_S", 0.0)          # the entry below is old enough to settle
+    monkeypatch.setattr(flow, "PENDING_GRACE_S", 0.0)         # the entry below is old enough to settle
     # A sweep that died mid-write left its entry pending: the next sweep settles it before it plans anything.
     params = {"file": str(ini), "section": "ScalabilityGroups", "key": "sg.StaticMeshQuality", "value": "1",
               "game": "Game.exe"}

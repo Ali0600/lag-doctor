@@ -85,7 +85,9 @@ def test_each_request_kind_parses_with_exactly_its_fields():
              "remove_game": {"game": "g-0123456789abcdef"},
              "rename_game": {"game": "g-0123456789abcdef", "name": "Moss Garden"},
              "delete_recordings": {"game": "g-0123456789abcdef", "sessions": [sid, "20261101-201500-demoracer"]},
-             "stop_recording": {}, "cancel_recording": {}, "recording": {}}
+             "stop_recording": {}, "cancel_recording": {}, "recording": {},
+             "plan_fix": {"session": sid, "finding": 0, "fix": 1}, "apply_fix": {"plan": "p-0123456789abcdef"},
+             "changes": {}, "undo_change": {"entry": "0123456789ab", "force": False}}
     assert set(cases) == set(bridge.REQUESTS)
     for kind, args in cases.items():
         req = bridge.parse(msg(type="request", id=3, kind=kind, **args))
@@ -131,6 +133,24 @@ def test_each_request_kind_parses_with_exactly_its_fields():
         sessions=["20261104-194500-a", "C:\\lag-doctor\\sessions\\20261104-194500-a"]),
     msg(type="request", id=1, kind="delete_recordings", sessions=["20261104-194500-a"]),      # no game
     msg(type="request", id=1, kind="delete_recordings", game="demoracer", sessions=["20261104-194500-a"]),
+    msg(type="request", id=1, kind="plan_fix", session="20261104-194500-a", finding=0),          # no fix
+    msg(type="request", id=1, kind="plan_fix", session="20261104-194500-a", finding=-1, fix=0),
+    msg(type="request", id=1, kind="plan_fix", session="20261104-194500-a", finding=0, fix=True),
+    msg(type="request", id=1, kind="plan_fix", session="..\\x", finding=0, fix=0),
+    msg(type="request", id=1, kind="plan_fix", session="20261104-194500-a", finding=0, fix=0,    # never its params
+        fix_id="power_plan", params={"scheme": "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"}),
+    msg(type="request", id=1, kind="apply_fix", plan="d-0123456789abcdef"),        # another kind of token
+    msg(type="request", id=1, kind="apply_fix", plan="p-0123456789ABCDEF"),
+    msg(type="request", id=1, kind="apply_fix", plan="p-0123456789abcdef0"),
+    msg(type="request", id=1, kind="apply_fix"),
+    msg(type="request", id=1, kind="changes", entry="0123456789ab"),
+    msg(type="request", id=1, kind="undo_change", entry="0123456789ab"),           # force must be said
+    msg(type="request", id=1, kind="undo_change", entry="0123456789ab", force=1),  # a number is no yes
+    msg(type="request", id=1, kind="undo_change", entry="0123456789ab", force="true"),
+    msg(type="request", id=1, kind="undo_change", entry="0123456789AB", force=False),
+    msg(type="request", id=1, kind="undo_change", entry="0123456789a", force=False),
+    msg(type="request", id=1, kind="undo_change", entry="power_plan", force=False),   # a fix's id, not a change's
+    msg(type="request", id=1, kind="undo_change", entry=["0123456789ab"], force=False),
     msg(type="frames_done"),                                               # a notice without its token
     msg(type="frames_done", token=1, extra=2),
     msg(type="ready", x=1),
@@ -162,3 +182,13 @@ def test_every_request_kind_has_its_handler_and_every_handler_a_kind():
 def test_a_reply_carries_either_its_data_or_its_error():
     assert bridge.reply(4, {"x": 1}) == {"type": "reply", "id": 4, "ok": True, "data": {"x": 1}}
     assert bridge.reply(4, error="gone") == {"type": "reply", "id": 4, "ok": False, "error": "gone"}
+
+
+def test_a_journal_entrys_id_is_what_the_journal_gives_and_nothing_else(tmp_path):
+    from lagdoctor.fixes.journal import Journal
+    e = Journal(tmp_path / "j.json").begin("power_plan", "the active power plan", {}, "a", "b")
+    assert bridge.entry_ok(e.id)
+    back, newline = chr(92), chr(10)
+    for bad in (None, 12, "", "0123456789a", "0123456789abc", "0123456789aG", ".." + back + "0123456789",
+                "0123456789ab" + newline, ["0123456789ab"]):
+        assert not bridge.entry_ok(bad), bad

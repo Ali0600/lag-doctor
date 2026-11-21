@@ -32,6 +32,8 @@ GAME_ID = re.compile(r"g-[0-9a-f]{16}")
 DRAFT_ID = re.compile(r"d-[0-9a-f]{16}")          # a program the player chose, before it is added (screen 6)
 MAX_NAME_CHARS = 400                               # a name the player typed; the app keeps 200 of it (stores.name)
 MAX_DELETE = 100                                   # recordings one Delete names: a hundred ids are about 9,000 characters
+PLAN_ID = re.compile(r"p-[0-9a-f]{16}")            # a change Apply showed, before it is applied
+ENTRY_ID = re.compile(r"[0-9a-f]{12}")             # a change in the fix journal (fixes/journal.py's ids)
 
 
 def _session(v: Any) -> bool:
@@ -59,6 +61,19 @@ def _count(v: Any) -> bool:
     return isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= MAX_ID
 
 
+def _plan(v: Any) -> bool:
+    return isinstance(v, str) and PLAN_ID.fullmatch(v) is not None
+
+
+def entry_ok(v: Any) -> bool:
+    """A fix journal entry's id, as the page may name one: the app offers Undo only for an id of this shape."""
+    return isinstance(v, str) and ENTRY_ID.fullmatch(v) is not None
+
+
+def _flag(v: Any) -> bool:
+    return isinstance(v, bool)
+
+
 REQUESTS = {
     "library": {},
     "game": {"game": _game},
@@ -77,6 +92,10 @@ REQUESTS = {
     "remove_game": {"game": _game},                   # take a game added by hand out of the Library
     "rename_game": {"game": _game, "name": _name},    # change the name a game added by hand shows by
     "delete_recordings": {"game": _game, "sessions": _sessions},    # recordings of that game, to the Recycle Bin
+    "plan_fix": {"session": _session, "finding": _count, "fix": _count},   # what Apply would change, by its place
+    "apply_fix": {"plan": _plan},                     # make the change Apply showed
+    "changes": {},                                    # the changes lag-doctor made that are still in place
+    "undo_change": {"entry": entry_ok, "force": _flag},    # put one back (force: even if it was changed since)
     "stop_recording": {},
     "cancel_recording": {},
     "recording": {},               # where that recording has got to

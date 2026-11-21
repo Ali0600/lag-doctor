@@ -192,6 +192,29 @@ def recycle_guard(monkeypatch):
     assert caught == [], " and ".join(caught)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_fixes(monkeypatch):
+    """No test applies or undoes a real fix through lag-doctor's window (App(fixes=), fixes/flow.Fixes, which only the
+    app's run() passes): those change this PC's own settings. One that reaches a real fix gets none (a fix this
+    lag-doctor does not know: nothing is planned, applied or undone), and fails at its end. A test's own patch overrides
+    this; the terminal's `fix` and `undo` build their fixes through catalog.get, and their tests register stand-ins."""
+    yield from fixes_guard(monkeypatch)
+
+
+def fixes_guard(monkeypatch):
+    """_no_real_fixes' body: refuses the window's real fixes while it is suspended, yields the list of reaches, and
+    raises AssertionError at its end if anything reached (tests/test_fix_flow.py drives it to prove that)."""
+    from lagdoctor.fixes import flow
+    caught = []
+
+    def refuse(self, fix_id):
+        caught.append(f"a test reached the real fix {fix_id!r} through lag-doctor's window")
+        raise KeyError(fix_id)
+    monkeypatch.setattr(flow.Fixes, "fix", refuse)
+    yield caught
+    assert caught == [], " and ".join(caught)
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "needs(*names): what the test needs from the machine; it skips when "
                             f"{capabilities.ABSENT_ENV} lists one of them (tests/capabilities.py)")

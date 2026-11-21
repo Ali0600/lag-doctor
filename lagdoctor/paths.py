@@ -61,9 +61,12 @@ def folder_stem(name: object) -> str:
     return stem.rsplit(".", 1)[0].strip("._")[:40] or "game"
 
 
+JOURNAL_NAME = "fix-journal.json"
+
+
 def journal_path() -> Path:
     """The fix journal: every change lag-doctor made, with the value it replaced."""
-    return home() / "fix-journal.json"
+    return home() / JOURNAL_NAME
 
 
 def presentmon_dir(version: str) -> Path:

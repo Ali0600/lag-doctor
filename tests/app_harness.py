@@ -27,7 +27,7 @@ from lagdoctor.app import library, recording
 from lagdoctor.app.main import App
 from lagdoctor.stores import exe as exe_mod
 from lagdoctor.winapi import webview2 as wv
-from tests import app_demo, fake_recorder, pe_build
+from tests import app_demo, fake_fixes, fake_recorder, pe_build
 
 STEP_TIMEOUT_S = 30.0
 RUN_TIMEOUT_S = 150.0
@@ -190,6 +190,7 @@ def script(facts: dict, app: App):
         charts: document.querySelectorAll('#view canvas').length,
         events: document.querySelectorAll('tr[data-event]').length,
         commands: [...document.querySelectorAll('.fix code')].map((c) => c.textContent),
+        applies: document.querySelectorAll('.apply button').length,
         part: document.getElementById('part') ? document.getElementById('part').textContent : null,
         rest: document.querySelector('[data-chart=frames]').getAttribute('data-rest'),
         shaded: document.querySelectorAll('.chart[data-rest]').length,
@@ -217,6 +218,34 @@ def script(facts: dict, app: App):
         causes: document.querySelector('#moment p').textContent}))()""")
     yield sleep(300)
     yield shot("moment")
+
+    # Apply: the first fix the last recording offers shows its plan (Cancel puts the button back), a second click makes
+    # that change (App's fixes, here stand-ins whose values this harness keeps), and Settings lists it until the list's
+    # own Undo puts it back, drawing the list again with what was said.
+    yield js("document.querySelector('.apply button').click(); true")
+    yield until("!!document.getElementById('apply-confirm')")
+    facts["apply_plan"] = yield js("document.querySelector('.apply').textContent")
+    yield shot("results-apply")
+    yield js("document.getElementById('apply-cancel').click(); true")
+    yield until("!document.getElementById('apply-confirm') && !!document.querySelector('.apply button')")
+    facts["apply_cancelled"] = list(rig.fix_store.get("writes", []))
+    yield js("document.querySelector('.apply button').click(); true")
+    yield until("!!document.getElementById('apply-confirm')")
+    yield js("document.getElementById('apply-confirm').click(); true")
+    yield until("!!document.getElementById('applied')")
+    facts["applied"] = yield js("""(() => ({said: document.getElementById('applied').textContent,
+        undo: !!document.querySelector('.apply button[data-entry]')}))()""")
+    facts["apply_writes"] = list(rig.fix_store.get("writes", []))
+    yield js("document.querySelector('[data-go=settings]').click(); true")
+    yield until("!!document.querySelector('#changes .change')")
+    facts["changes"] = yield js("""[...document.querySelectorAll('#changes .change')].map((c) => ({
+        title: c.querySelector('strong').textContent, entry: c.dataset.entry,
+        undo: !!c.querySelector('button[data-entry]')}))""")
+    yield shot("settings-changes")
+    yield js("document.querySelector('#changes .change button[data-entry]').click(); true")
+    yield until("!!document.getElementById('said') && !!document.getElementById('changes-none')")
+    facts["undone"] = yield js("document.getElementById('said').textContent")
+    facts["undo_writes"] = list(rig.fix_store.get("writes", []))
 
     yield js("document.querySelector('[data-go=library]').click(); true")
     yield until("document.querySelectorAll('#games .game').length > 0")
@@ -737,7 +766,8 @@ def main(argv: list[str]) -> int:
     # this harness's own, and the sounds and the taskbar flash are only noted.
     rig = types.SimpleNamespace(played=[], flashes=[], prompts=[], relays=[], report=home / "fake-recorder-report.json",
                                 library_asks=[], links=[], play_report=home / "fake-recorder-play-report.json",
-                                wait_report=home / "fake-recorder-wait-report.json", picks=[], trashed=[])
+                                wait_report=home / "fake-recorder-wait-report.json", picks=[], trashed=[],
+                                fix_store={})
     # Add a game's program, made up: what App's picker hands back in place of Windows' Open dialog.
     moss = home / "games" / "Moss Garden" / "mg.exe"             # its own name is not its file's: "Moss Garden"
     moss.parent.mkdir(parents=True, exist_ok=True)
@@ -773,7 +803,8 @@ def main(argv: list[str]) -> int:
               flash=rig.flashes.append, installed=lambda: list(app_demo.INSTALLED),
               forms_of=lambda folder: (folder,), open_link=lambda link, should_go: rig.links.append(link),
               play_recorder=play_recorder, covers=app_demo.covers,
-              picker=lambda hwnd: (rig.picks.append(hwnd == app.window.hwnd), str(moss))[1], trash=trash)
+              picker=lambda hwnd: (rig.picks.append(hwnd == app.window.hwnd), str(moss))[1], trash=trash,
+              fixes=fake_fixes.StandInFixes(home, store=rig.fix_store))
     app.harness = rig
     real_library = app.do_library
     app.do_library = lambda: (rig.library_asks.append(1), real_library())[1]     # counts the page's asks

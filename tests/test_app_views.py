@@ -461,16 +461,21 @@ def _load(entry):
     return cap, Diagnosis.from_json(library.read_diagnosis(entry)), main_chain(cap)
 
 
-def test_results_show_fix_commands_only_on_the_last_recording(demo):
+def test_results_offer_apply_only_on_the_last_recording_and_only_for_fixes_the_window_applies(demo):
+    from lagdoctor.fixes import flow
     home, _ = demo
     entry = next(e for e in entries_of(home) if e.game == app_demo.MARKUP_TITLE)
     cap, d, main = _load(entry)
-    last = views.results_view(entry, d, cap, main, is_last=True, has_report=True)
-    other = views.results_view(entry, d, cap, main, is_last=False, has_report=True)
-    commands = [fx["command"] for f in last["findings"] for fx in f["fixes"] if fx["command"]]
-    assert commands and all(c.startswith("lagdoctor fix ") for c in commands) and last["fix_note"] == ""
-    assert not [fx["command"] for f in other["findings"] for fx in f["fixes"] if fx["command"]]
+    last = views.results_view(entry, d, cap, main, is_last=True, has_report=True, apply_ids=flow.known())
+    other = views.results_view(entry, d, cap, main, is_last=False, has_report=True, apply_ids=flow.known())
+    applied = [fx["title"] for f in last["findings"] for fx in f["fixes"] if fx["apply"]]
+    assert applied and last["fix_note"] == ""
+    assert all(fx["can_apply"] for f in last["findings"] for fx in f["fixes"] if fx["apply"])
+    assert not [fx for f in other["findings"] for fx in f["fixes"] if fx["apply"]]
     assert other["fix_note"] == views.NO_FIX_HERE
+    none = views.results_view(entry, d, cap, main, is_last=True, has_report=True)      # a window that applies none
+    assert not [fx for f in none["findings"] for fx in f["fixes"] if fx["apply"]]
+    assert not [fx for f in last["findings"] for fx in f["fixes"] if "command" in fx]      # no terminal command now
     assert last["game"] == app_demo.MARKUP_TITLE                # text, as it came: the page shows it as text
     assert last["note"] == ""                                     # recorded without a note
 

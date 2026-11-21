@@ -1236,9 +1236,8 @@ def cmd_check(args: argparse.Namespace) -> int:
 # -------------------------------------------------------------- fix / undo --
 
 def cmd_fix(args: argparse.Namespace) -> int:
-    from lagdoctor.fixes import catalog
+    from lagdoctor.fixes import catalog, flow
     from lagdoctor.fixes.journal import Journal, JournalCorrupt
-    from lagdoctor.fixes.priority import Refused
     sources, problems = fix_sources()
     for line in problems:
         say(line)
@@ -1274,11 +1273,16 @@ def cmd_fix(args: argparse.Namespace) -> int:
                 status = 2
                 continue
             for _, title, params, label in matching:
-                fix = catalog.get(fix_id)
                 say(f"{title}  (suggested by {label})")
                 try:
+                    fix = catalog.get(fix_id)
+                except KeyError:                    # a report a newer lag-doctor wrote
+                    say(f"  Not changed: this lag-doctor does not know the fix '{fix_id}'; a newer one suggested it")
+                    status = 1
+                    continue
+                try:
                     plan = fix.plan(params)
-                except (Refused, OSError, ValueError, LookupError, RuntimeError) as exc:   # e.g. a protected process
+                except flow.PLAN_ERRORS as exc:     # e.g. a protected process
                     say(f"  Not changed: {exc}")
                     status = 1
                     continue
@@ -1294,11 +1298,13 @@ def cmd_fix(args: argparse.Namespace) -> int:
                 if not (args.yes or _ask("Apply this change? [y/N] ", default=False)):
                     say("  Skipped.")
                     continue
-                res = fix.apply(plan, journal)
+                res = flow.apply(fix, plan, journal)
                 if res.ok:
                     say(f"  Done: {res.message}")
                 elif res.state == "applied":                # in place but not confirmed (e.g. after a restart)
                     say(f"  Applied, not yet confirmed: {res.message}")
+                elif res.state == "unsure":                 # the journal failed once the change may have begun
+                    say(f"  Not known whether it changed: {res.message}")
                 else:
                     say(f"  Not changed: {res.message}")
                 if res.state == "applied" and res.entry_id:
@@ -1312,36 +1318,29 @@ def cmd_fix(args: argparse.Namespace) -> int:
             "read, so no further change was made" + (f". Its contents were copied to {parked}" if parked else "")
             + f". The journal is {paths.journal_path()}." + (f" {plain}" if plain else ""))
         return 1
+    except OSError as exc:                       # TimeoutError included: another lag-doctor holds the journal
+        say(f"Fixes are paused: lag-doctor could not open its fix journal ({exc}), so no further change was made. "
+            "Try again in a moment.")
+        return 1
     return status
 
 
 def _fix_class(fix_id: str):
     from lagdoctor.fixes import catalog
-    catalog.ids()                                 # loads the built-in fix modules
-    return catalog._REGISTRY.get(fix_id)
-
-
-def fix_offers(diagnosis: dict[str, Any]) -> list[tuple[str, str, dict[str, Any]]]:
-    """(fix_id, title, params) for every automatic fix the report suggested, without duplicates."""
-    out, seen = [], set()
-    for f in diagnosis.get("findings") or []:
-        for fx in f.get("fixes") or []:
-            fid = fx.get("fix_id")
-            key = (fid, json.dumps(fx.get("params") or {}, sort_keys=True))
-            if fid and key not in seen:
-                seen.add(key)
-                out.append((fid, fx.get("title") or fid, dict(fx.get("params") or {})))
-    return out
+    return catalog.find(fix_id)
 
 
 def cmd_undo(args: argparse.Namespace) -> int:
-    from lagdoctor.fixes import catalog
+    from lagdoctor.fixes import catalog, flow
     from lagdoctor.fixes.journal import Journal, JournalCorrupt
     journal = Journal()
     try:
         entries = journal.outstanding()          # applied changes and conflicts, newest first
     except JournalCorrupt as exc:
         say(exc.plain())
+        return 1
+    except OSError as exc:                       # TimeoutError included: another lag-doctor holds the journal
+        say(f"lag-doctor could not open its fix journal ({exc}), so nothing was undone. Try again in a moment.")
         return 1
     if not entries:
         say("Nothing to undo: lag-doctor has no changes in place.")
@@ -1365,13 +1364,7 @@ def cmd_undo(args: argparse.Namespace) -> int:
     status = 0
     for e in chosen:
         try:
-            fix = catalog.get(e.fix_id)
-        except KeyError:                         # journaled by a lag-doctor that knows more fixes
-            say(f"Left alone: {e.target}: this lag-doctor does not know the fix '{e.fix_id}'")
-            status = 1
-            continue
-        try:
-            res = fix.undo(e, journal, force=args.force)
+            res = flow.undo(e, catalog.get, journal, force=args.force)
         except JournalCorrupt as exc:
             say(exc.plain())
             return 1
@@ -1382,63 +1375,10 @@ def cmd_undo(args: argparse.Namespace) -> int:
 
 
 def _settle_journal(say: Callable[[str], None] | None = None) -> None:
-    """Settle changes a crash left half-done, and session-only changes whose subject has ended. `say`: where its
-    lines go (default: printed here; lag-doctor's window for `watch --control`)."""
-    say = _teller(say)
-    try:
-        from lagdoctor.fixes import catalog
-        from lagdoctor.fixes.journal import Journal, JournalCorrupt
-        journal = Journal()
-        try:
-            entries = journal.entries()
-        except JournalCorrupt as exc:
-            say(f"The fix journal could not be read; it was copied to {exc.parked} and left in place. Fixes and "
-                f"undo are paused until it can be read again (`lagdoctor undo` says more).")
-            return
-        sweep_left = []
-        for e in entries:
-            try:
-                if e.state == "pending":
-                    if e.fix_id == "game_setting" and _just_begun(e.created_at):
-                        continue                  # a sweep in another window may be making this change right now
-                    res = catalog.get(e.fix_id).heal(e, journal)
-                    say(f"Settled a change that was interrupted last time: {res.message}")
-                    if e.fix_id == "game_setting" and res.state == "applied":
-                        sweep_left.append(e)
-                elif e.state in ("applied", "conflict") and e.fix_id == "game_setting":
-                    sweep_left.append(e)
-                elif e.state == "applied" and e.session_only:
-                    # Decided without read(): a journaled PID may belong to the game by now, and read() opens it.
-                    if catalog.get(e.fix_id).ended(e.params):
-                        journal.set_state(e.id, "undone", "it ended with its process")
-            except JournalCorrupt:
-                raise
-            except Exception as exc:  # noqa: BLE001 - one bad entry is left as it is, and the rest still settle
-                say(f"(Could not check the change {e.id} ({e.fix_id}) in the fix journal: {exc})")
-        if sweep_left:
-            # A sweep that ended without putting its setting back (its window was closed, the PC restarted): the
-            # player plays with that setting until something puts it back, so every start says so.
-            values = ", ".join(f"{e.params.get('key')}={e.after} (was {e.before})" for e in sweep_left
-                               if isinstance(e.params, dict))
-            say(f"A settings sweep left a change in a game's settings file: {values}. `lagdoctor sweep --resume` puts "
-                "it back (and goes on with the sweep), and so does `lagdoctor undo game_setting`.")
-    except Exception as exc:  # noqa: BLE001 - a journal problem must not block the tool
-        say(f"(Could not check the fix journal: {exc})")
-
-
-PENDING_GRACE_S = 60.0         # a pending entry younger than this may be a change another window is making now
-
-
-def _just_begun(created_at: object) -> bool:
-    """True for a journal entry created under PENDING_GRACE_S ago: healing it now could read the value before the other
-    window's write lands, and settle a change that then happens as one that never did."""
-    try:
-        made = datetime.fromisoformat(str(created_at))
-    except ValueError:
-        return False
-    if made.tzinfo is None:
-        return False
-    return (datetime.now(made.tzinfo) - made).total_seconds() < PENDING_GRACE_S
+    """Settle changes a crash left half-done, and session-only changes whose subject has ended (fixes/flow.settle).
+    `say`: where its lines go (default: printed here; lag-doctor's window for `watch --control`)."""
+    from lagdoctor.fixes import flow
+    flow.settle(_teller(say))
 
 
 # ------------------------------------------------------------------ setup --
@@ -1628,9 +1568,10 @@ def fix_sources() -> tuple[list[tuple[str, Path, dict[str, Any], float]], list[s
 def merged_offers(sources: list[tuple[str, Path, dict[str, Any], float]]) -> list[tuple[str, str, dict[str, Any], str]]:
     """(fix_id, title, params, label) for every automatic fix the reports suggested. Where two reports offer
     the same fix id, only the newer report's offers count: they describe this PC as it is now."""
+    from lagdoctor.fixes import flow
     newest: dict[str, tuple[str, list[tuple[str, str, dict[str, Any]]]]] = {}
     for label, _folder, diag, _when in sources:              # oldest first, so newer reports win
-        offers = fix_offers(diag)
+        offers = flow.offers(diag)
         for fid in dict.fromkeys(o[0] for o in offers):
             newest[fid] = (label, [o for o in offers if o[0] == fid])
     return [(fid, title, params, label) for fid, (label, offers) in newest.items() for _, title, params in offers]

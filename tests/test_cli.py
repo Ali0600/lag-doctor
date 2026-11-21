@@ -180,6 +180,30 @@ def test_fix_refuses_what_the_report_did_not_suggest(fake_fix):
     assert STORE == {}
 
 
+def test_a_fix_a_newer_lag_doctors_report_names_is_said_not_crashed_on(fake_fix, capsys):
+    write_last_diagnosis([{"title": "From the future", "fix_id": "fix_from_a_newer_lag_doctor", "params": {}},
+                          {"title": "Turn it up", "fix_id": "test_cli_fake", "params": {"name": "a"}}])
+    assert cli.main(["fix", "fix_from_a_newer_lag_doctor", "test_cli_fake", "--yes"]) == 1
+    out = capsys.readouterr().out
+    assert "Not changed: this lag-doctor does not know the fix 'fix_from_a_newer_lag_doctor'" in out
+    assert "Traceback" not in out and STORE["a"] == 5                    # the rest still ran
+
+
+def test_fix_and_undo_say_a_journal_another_lag_doctor_holds_and_change_nothing(fake_fix, monkeypatch, capsys):
+    write_last_diagnosis([{"title": "Turn it up", "fix_id": "test_cli_fake", "params": {"name": "a"}}])
+
+    def held(self):
+        raise TimeoutError("another lag-doctor holds the journal's lock")
+    monkeypatch.setattr(Journal, "entries", held)
+    monkeypatch.setattr(Journal, "outstanding", held)
+    assert cli.main(["fix", "test_cli_fake", "--yes"]) == 1
+    assert cli.main(["undo", "--all"]) == 1
+    out = capsys.readouterr().out
+    assert "Fixes are paused: lag-doctor could not open its fix journal" in out
+    assert "could not open its fix journal (another lag-doctor holds the journal's lock), so nothing was undone" in out
+    assert "Traceback" not in out and STORE == {}
+
+
 def test_fix_refuses_to_run_elevated(fake_fix, monkeypatch):
     write_last_diagnosis([{"title": "Turn it up", "fix_id": "test_cli_fake", "params": {"name": "a"}}])
     monkeypatch.setattr(cli, "_elevated", lambda: True)
@@ -228,7 +252,8 @@ def test_fix_offers_are_deduplicated():
     diag = {"findings": [{"fixes": [{"fix_id": "a", "title": "A", "params": {"x": 1}}, {"fix_id": None}]},
                          {"fixes": [{"fix_id": "a", "title": "A again", "params": {"x": 1}},
                                     {"fix_id": "a", "title": "A other", "params": {"x": 2}}]}]}
-    assert cli.fix_offers(diag) == [("a", "A", {"x": 1}), ("a", "A other", {"x": 2})]
+    from lagdoctor.fixes import flow
+    assert flow.offers(diag) == [("a", "A", {"x": 1}), ("a", "A other", {"x": 2})]
 
 
 def test_a_remembered_report_that_is_gone_is_said_and_not_replaced(tmp_path, fake_fix, capsys):
