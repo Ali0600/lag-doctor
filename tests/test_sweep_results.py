@@ -132,7 +132,7 @@ def _problems(cap):
     ({"focused": lambda t: 0 if PRESS_T + 20 <= t < PRESS_T + 30 else 1}, "behind another window for about 10 s"),
     ({"focused": lambda t: 0 if PRESS_T + 20 <= t < PRESS_T + 21 else 1}, "behind another window for about 1 s"),
     ({"focused": None}, "whether the game was in front could not be read"),
-    ({"focused": lambda t: 0 if t < PRESS_T - 30 else 1}, "in front for only 30 s when you pressed the start key"),
+    ({"focused": lambda t: 0 if t < PRESS_T - 30 else 1}, "saw the game in front for only 30 s before you pressed"),
     ({"other_pct": 35.0}, "another program used 10 % or more of the game's GPU for about 60 s"),
     ({"other_pct": lambda t: 35.0 if t < PRESS_T + 25 else 0.0}, "for about 25 s of the window"),
 ])
@@ -209,7 +209,7 @@ def _window(cap, window=WINDOW):
 
 
 PRESSED_TOO_SOON = "after you pressed the start key, as it came back to the front: wait a moment at your spot"
-NOT_SETTLED = "when you pressed the start key: stay at your spot for 2 minutes before you press it"
+NOT_SETTLED = "once the short chime has played, stay at your spot in the game for 2 minutes 30 s before you press it"
 
 
 def test_a_frozen_screen_as_the_game_comes_back_to_the_front_keeps_the_run_out_and_counts_from_the_press():
@@ -276,7 +276,7 @@ def test_frames_not_shown_across_either_edge_count_only_their_part_inside():
     # whole wait, and the frame across the window's end is the time since the last one shown.
     assert 480 <= _window(_frozen(unshown=(PRESS_T - 0.5, PRESS_T + 0.5)))[0]["worst_frame_ms"] <= 540   # from press
     assert 980 <= _window(_frozen(unshown=(END - 1, END + 0.5)))[0]["worst_frame_ms"] <= 1020    # to the end, not missed
-    # The first frame shown 40 ms after the press, whose screen changed only 20 ms before it: its own 20 ms.
+    # The first frame shown 50 ms after the press, whose screen changed only 20 ms before it: its own 20 ms.
     cap = _frozen(gap=(PRESS_T - 0.03, PRESS_T + 0.04))
     first = next(i for i, t in enumerate(cap.frames["t"]) if t > PRESS_T)
     cap.frames["display_ms"][first] = 20.0
@@ -325,15 +325,32 @@ def test_the_game_must_have_been_in_front_two_minutes_before_the_press():
                              (lambda t: 0 if t < PRESS_T - 119 else 1, 119.0),
                              (lambda t: 0 if PRESS_T - 60 <= t < PRESS_T - 59 else 1, 59.0),      # a cover restarts it
                              (lambda t: 0 if PRESS_T + 20 <= t < PRESS_T + 21 else 1, PRESS_T - 0.25),   # one after: no
-                             (lambda t: None if t < PRESS_T - 30 else 1, 30.0),     # unreadable is not in front
+                             (lambda t: None if t < PRESS_T - 30 else 1, 30.0),     # unreadable is not in front ...
+                             (lambda t: None if PRESS_T - 60 <= t < PRESS_T - 59 else 1, PRESS_T - 0.25),  # nor a break
                              (lambda t: 0 if t >= PRESS_T - 0.25 else 1, 0.0)):     # behind as the key was pressed
         got, problems = front(focused)
         assert got == pytest.approx(seconds, abs=0.25), (seconds, got)
         assert any(NOT_SETTLED in p for p in problems) == (seconds < 120), (seconds, problems)
     got, problems = front(1, t0=60.0)                       # in front all along, but the recording began 60 s before
-    assert got == pytest.approx(60.0, abs=0.25) and any("in front for only 60 s" in p for p in problems), problems
-    assert any("in front for under a second when you pressed" in p for p in front(lambda t: 0 if t >= PRESS_T - 0.25
-                                                                                     else 1)[1])
+    assert got == 59.75 and any("saw the game in front for only 59 s before" in p for p in problems), problems
+    # Just short of the 2 minutes is said as what it was, never rounded up to them.
+    got, problems = front(lambda t: 0 if t < PRESS_T - 119.75 else 1)
+    assert got == 119.75 and any("for only 119 s before" in p for p in problems), problems
+    assert any("in front for under a second before you pressed" in p
+               for p in front(lambda t: 0 if t >= PRESS_T - 0.25 else 1)[1])
+    # No reading before the press at all is not a time in front: it was not measured.
+    got, problems = front(lambda t: None if t < PRESS_T else 1)
+    assert got is None and "whether the game was in front before you pressed the start key could not be read" in problems
+
+
+def test_a_press_as_the_player_is_told_counts_though_the_first_reading_comes_a_second_after_the_chime():
+    # The short chime plays as the recording begins; the system sampler's first reading comes about a second later.
+    # A player who presses the wait they are told after the chime is past the 2 minutes checked.
+    cap = capture_at(60.0, focused=lambda t: None if t < 1.0 else 1)
+    m = results.window_metrics(cap, results.ADVISE_S, WINDOW)
+    assert results.problems(cap, m, results.ADVISE_S, WINDOW) == [] and m["front_before_s"] >= results.SETTLE_S, m
+    assert results.wait_words(results.ADVISE_S) == "2 minutes 30 s" and results.wait_words(results.SETTLE_S) == (
+        "2 minutes") and results.wait_words(45.0) == "45 s" and results.wait_words(60.0) == "1 minute"
 
 
 def test_a_clock_swinging_at_the_heat_limit_or_falling_within_the_window_is_recorded_not_held():

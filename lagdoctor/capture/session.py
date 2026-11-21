@@ -541,8 +541,10 @@ class Session:
                                      window_s=self.opts.window_s, start_by_s=self._press_by())
                 with self._marks_lock:
                     self._start_open = self._start_on    # from here on, the start key's first press counts
-                if self._start_on:            # only now: a press before Windows gave the key went to the game
+                if self._start_on and self.opts.start_advice:   # only now: a press before Windows gave the key went
                     self._print(f"\n{self.opts.start_key.title()} is ready: press it at the spot you want measured.\n")
+                elif self._start_on:          # a settings sweep's run, which says itself when to press (start_advice)
+                    self._print(f"\n{self.opts.start_key.title()} is ready.\n")
             said_start = False
             said_late = False
             while True:

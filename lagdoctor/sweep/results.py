@@ -10,8 +10,8 @@ and they reach both its ends; the game was in front in every sample (half a seco
 key was not pressed into the frozen screen of it coming back to the front from the sweep's own window; other
 programs took 10 % or more of the game's GPU in at most 5 % of the samples (the report's own threshold for sharing it);
 and, before the press, the game had been in front for 2 minutes (SETTLE_S) without a break, so the GPU had settled
-(on the owner's laptop one that has not heated up yet runs at up to twice the speed it settles at; DECISIONS
-2026-11-21). The NVIDIA
+(on the owner's laptop one that has not heated up yet runs at about twice the speed it settles at; DECISIONS
+2026-11-21). The player is told a longer wait from the short chime (ADVISE_S). The NVIDIA
 clock is recorded, not held: at its heat limit it swings about 25 % for good, and a lighter setting may run it faster,
 so a rule on it would keep out runs by the setting tried. A run also has to match the first good run on the power
 plan, Windows' power mode, mains power and the refresh rate (docs/research/settings-sweeps.md, section 7). The GPU's
@@ -38,6 +38,8 @@ OTHER_GPU_MAX = fa.SHARED_GPU_PCT      # another program at 10 % or more of the 
 OTHER_SHARE_MAX = 0.05   # ... in at most this share of the window's samples
 REACH_S = 1.0            # the game's frames must start and end this near the window's ends
 SETTLE_S = 120.0         # the game in front this long before the press: the GPU has reached its heat limit by then
+ADVISE_S = SETTLE_S + 30.0   # the wait the player is told, from the short chime: the count starts at the first reading
+                             # in front, about a second after the chime, and a player's 2 minutes by feel can run short
 REFRESH_TOL_HZ = 1.0
 CONFIDENCE = 0.95
 POWER = 0.80             # the chance a sweep has of seeing the difference it says it can see
@@ -165,17 +167,20 @@ def _focus(system: Any) -> list[tuple[float, int]]:
             if _finite(t) is not None and v in (0, 1) and not isinstance(v, bool)]
 
 
-def front_before(cap: Capture, t0: float) -> float:
+def front_before(cap: Capture, t0: float) -> float | None:
     """How long the game had been in front, without a break, when the key was pressed at t0: from the first of the
     samples before t0 that all read it in front, to t0. A sample that read it behind starts the count again; one that
     could not read it is passed over, as the window's own check passes it over, so the count starts at the first
-    readable one. With no readable sample before t0, or the last one behind, 0."""
-    since = None
+    readable one. 0 when the last one read it behind; None when no sample before t0 could read it."""
+    since, seen = None, False
     for t, v in sorted(s for s in _focus(cap.system) if s[0] < t0):
+        seen = True
         if v == 1:
             since = t if since is None else since
         else:
             since = None
+    if not seen:
+        return None
     return round(t0 - since, 2) if since is not None else 0.0
 
 
@@ -256,11 +261,14 @@ def problems(cap: Capture, metrics: dict[str, Any], start_t: float, window_s: fl
         if (_finite(metrics.get("behind_s")) or 0.0) > 0:
             out.append(f"the game was behind another window for about {max(1.0, metrics['behind_s']):.0f} s of the "
                        "window")
-        front = _finite(metrics.get("front_before_s")) or 0.0
-        if front < SETTLE_S:        # the GPU may not have reached its heat limit yet: it would read faster than it is
-            since = f"only {front:.0f} s" if front >= 1.0 else "under a second"
-            out.append(f"the game had been in front for {since} when you pressed the start key: stay at your spot for "
-                       f"{wait_words(SETTLE_S)} before you press it, so the GPU has settled")
+        front = _finite(metrics.get("front_before_s"))
+        if front is None:
+            out.append("whether the game was in front before you pressed the start key could not be read")
+        elif front < SETTLE_S:      # the GPU may not have reached its heat limit yet: it would read faster than it is
+            since = f"only {math.floor(front)} s" if front >= 1.0 else "under a second"
+            out.append(f"lag-doctor saw the game in front for {since} before you pressed the start key: once the short "
+                       f"chime has played, stay at your spot in the game for {wait_words(ADVISE_S)} before you press "
+                       "it, so the GPU has settled")
     frozen = _finite(metrics.get("frozen_at_press_ms")) or 0.0
     if frozen > 0:      # the sweep's own window was just in front: Windows had shown the game nothing new yet
         out.append(f"the game showed nothing new for {max(0.1, frozen / 1000.0):.1f} s after you pressed the start "
@@ -273,11 +281,12 @@ def problems(cap: Capture, metrics: dict[str, Any], start_t: float, window_s: fl
 
 
 def wait_words(seconds: float) -> str:
-    """A wait the player is told, in whole minutes when it is some ("2 minutes"), else in seconds."""
+    """A wait the player is told: "2 minutes", "2 minutes 30 s", or seconds alone under a minute."""
     minutes, rest = divmod(round(seconds), 60)
-    if minutes and not rest:
-        return f"{minutes} minute" + ("s" if minutes > 1 else "")
-    return f"{round(seconds)} s"
+    if not minutes:
+        return f"{rest} s"
+    words = f"{minutes} minute" + ("s" if minutes > 1 else "")
+    return words if not rest else f"{words} {rest} s"
 
 
 def unchecked(metrics: dict[str, Any], conditions: dict[str, Any]) -> list[str]:

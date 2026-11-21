@@ -291,9 +291,9 @@ def intro(sweep: plan.Sweep, folder: Path) -> list[str]:
     warm = (f"; the first {len(sweep.variants)} warm up and are not counted" if sweep.warm_up else "")
     lines.append(f"The order ({len(sweep.slots)} runs{warm}): {order}")
     lines.append(f"Each run: lag-doctor writes the setting into {sweep.settings_file} while the game is closed. You "
-                 "start the game, load your save, go to your spot and press Enter here; then, back in the game, stay at "
-                 f"the spot for {results.wait_words(results.SETTLE_S)} so the GPU settles, press "
-                 f"{sweep.start_key.title()}, play as in every other run until the three-note chime, and "
+                 "start the game, load your save, go to your spot and press Enter here; then, back in the game and once "
+                 f"a short chime has played, stay at the spot for {results.wait_words(results.ADVISE_S)} so the GPU "
+                 f"settles, press {sweep.start_key.title()}, play as in every other run until the three-note chime, and "
                  "quit the game. Each run asks Windows for permission once (UAC), unless your account records frame "
                  "timing without it.")
     lines.append("Keep everything else the same for the whole sweep: the laptop's power or fan mode, the charger, the "

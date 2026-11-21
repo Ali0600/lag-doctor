@@ -2298,8 +2298,11 @@ typed on the player's PC, and the game is never started, stopped or opened by la
   setting's values and read every one back; check the start key (Ctrl+Alt+S by default, `cli.DEFAULT_START_KEY`;
   `--start-key` needs Ctrl, Alt or Win: `runner.check_start_key` registers it), so a key another program holds is
   found before the player starts the game, and hold it while the game starts, so a program that registers it then
-  cannot have it; the player starts the game, goes to the spot and presses Enter (and, back in the game, stays there 2
-  minutes before the start key: `runner.press_advice`); the sweep lets go of the key, and
+  cannot have it; the player starts the game, goes to the spot and presses Enter (and, back in the game and after the
+  short chime, stays there 2 minutes 30 s before the start key, `results.ADVISE_S` through `runner.press_advice`:
+  past the 2 minutes checked, since the first reading comes about a second after the chime and a wait by feel runs
+  short; watch says only that the key is ready, its own "press it at the spot" being left to `start_advice`); the
+  sweep lets go of the key, and
   `watch` records (`--game`, `--no-network`, `--hotkey none`, `--start-key` with `--window` and `--start-by` 300,
   `--elevate` unless `can_trace`, `--out` the sweep's `runs` folder, a note naming the run; through `cmd_watch` with
   `remember`, `show_summary` and `start_advice` False and no sound of watch's own). watch's start key measures the
@@ -2324,8 +2327,9 @@ typed on the player's PC, and the game is never started, stopped or opened by la
   1 s of both ends, the game was in front in every sample but those within 0.5 s of the ends, the key was not
   pressed into the frozen screen of the game coming back to the front (DECISIONS 2026-11-20), the game had been in
   front for 2 minutes before the press (`SETTLE_S`, `front_before`: counted back from the press over the samples that
-  read it in front, a sample behind starting it again; a GPU that has not heated up yet runs up to twice as fast on
-  the owner's laptop, DECISIONS 2026-11-21), and other programs took 10 % or more of the game's GPU in at most 5 % of
+  read it in front, a sample behind starting it again, none read before the press said as not read; a GPU that has
+  not heated up yet runs about twice as fast on the owner's laptop, DECISIONS 2026-11-21), and other programs took
+  10 % or more of the game's GPU in at most 5 % of
   the samples; and only when the power plan, Windows' power mode, mains power and the refresh rate match the first
   good run's. The NVIDIA clock and power limit are recorded, not held: at its heat limit the clock swings about 25 %
   for good (a rule on its spread kept out nearly every run there), a lighter setting can run it faster, Dynamic Boost
