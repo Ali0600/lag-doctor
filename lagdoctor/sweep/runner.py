@@ -176,6 +176,16 @@ def _save_quietly(sweep: plan.Sweep, folder: Path, seams: Seams) -> None:
         seams.say(f"(The sweep's state could not be saved: {exc}.)")
 
 
+def press_advice(start_key: str, window_s: float) -> str:
+    """What the player does once Enter is pressed: back to the game, then wait there until the GPU has settled
+    (results.ADVISE_S from the short chime, past the SETTLE_S a run's own samples check) before the start key."""
+    wait = results.wait_words(results.ADVISE_S)
+    return (f"  After the UAC prompt (if Windows asks), go back to the game. Once you are back there and a short "
+            f"chime has said {start_key.title()} is ready, stay at your spot for {wait} (the GPU needs that long to "
+            f"settle), then press it. A rising chime starts {window_s:.0f} s of measuring, and a three-note chime ends "
+            "it. Play as you did in the other runs.")
+
+
 def _ask(seams: Seams, prompt: str) -> str:
     """A line the player typed; Stop when the terminal gives no more input (it closed, or input is not a terminal)."""
     answer = seams.ask(prompt)
@@ -203,10 +213,7 @@ def _one(sweep: plan.Sweep, slot: plan.Slot, folder: Path, seams: Seams) -> None
             if seams.running(sweep.game):
                 break
             seams.say(f"  {sweep.game} is not running yet.")
-        seams.say(f"  After the UAC prompt (if Windows asks), go back to the game, and once a short chime says "
-                  f"{sweep.start_key.title()} is ready, press it at your spot. A rising chime starts "
-                  f"{sweep.window_s:.0f} s of measuring, and a three-note chime ends it. Play as you did in the other "
-                  "runs.")
+        seams.say(press_advice(sweep.start_key, sweep.window_s))
         attempt, press, interrupted = _record(sweep, slot, folder, seams, key)
     finally:
         _let_go(key)                             # let go before the recording already; never kept past the run

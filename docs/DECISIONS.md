@@ -2,6 +2,10 @@
 
 ## Backlog: alternatives worth trying later
 
+- **A chime once a sweep run's game has been in front 2 minutes**, so the player presses on it instead of timing
+  2 minutes 30 s from the short chime (2026-11-21, the sweep's settling time). Worth it if runs are kept out for a
+  press too soon. Revisit hook: `runner._record`'s observers, whose live ticks carry `game_focused`, and
+  `command.SWEEP_SOUNDS` for the new sound.
 - **Fail a hold when another program from the folder draws more**, so a launcher that keeps drawing behind the game
   it started (an animated background that stays visible) is not what gets recorded: on the hold's last round, run
   `choose_auto` over the folder's other windowed programs not left out, and re-arm when one wins (2026-11-19, M6e).
@@ -223,6 +227,49 @@
   game's tree), for a launcher the re-arm's hold missed: worth trying if Play recordings show the hold delaying too
   much of a game's start. Revisit hook: `Relay._out_of_turn` ("a game after the start") and `_start_sources` in
   relay/server.py (DECISIONS 2026-11-17, M6d).
+
+---
+
+## 2026-11-21: A sweep run counts once the game has been in front 2 minutes, and the GPU clock is only recorded
+
+Planning the owner's first sweep found that its heat rule would keep out nearly every run on the owner's laptop. The
+rule kept a run out when the NVIDIA clock's 90th percentile in the window was over 1.15 times its 10th, taken for a
+GPU still heating up. At its heat limit, with its fans at full speed, that GPU never settles to one clock: it swings
+between about 780 and 1,000 MHz at a flat 86-87 °C. The sweep's own `window_metrics` and `problems`, slid over the
+owner's recordings minute by minute, kept out 53 of 55 and 32 of 34 minutes of the two newest on that rule alone
+(median spread 1.29 and 1.25), so every run would have been offered again, each costing a restart of the game. The
+owner chose, asked: "Fix it here", on a fix by a minimum time in front at the spot.
+
+- **A: a minimum time with the game in front before the press (chosen)**: `results.SETTLE_S` (120 s), counted back
+  from the press over the run's own samples (`front_before`; a sample behind starts it again, an unreadable one is
+  passed over as the window's own check passes it over, and none readable before the press is said as not read). It
+  does not depend on the setting tried, and it covers the pause the sweep puts in every run (Enter and the UAC prompt
+  in the terminal). In the owner's recordings, the clock's median over the minute from 2 minutes on was 1.00 to 1.16
+  times its settled median; later minutes vary as much (0.94 to 1.25 from 3 minutes on), which is the swing; the first
+  minute read 1.0 to 2.2. One recording whose cooling was failing kept falling for 9 minutes, which no rule within a
+  run could tell from a swing. The player is told a longer wait than is checked, 2 minutes 30 s from the short chime
+  (`results.ADVISE_S`, through `runner.press_advice`): the count starts at the sampler's first reading in front, about
+  a second after the chime, and a wait timed by feel runs short. That stays well inside watch's 5 minutes for the
+  press (`START_WAIT_S`; `tests/test_sweep_runner.py` holds the three apart). watch's own "press it at the spot you
+  want measured" would tell the opposite, so a run whose caller passes `start_advice=False` hears only that the key
+  is ready.
+- **B: keep the clock rule with a higher limit**: rejected. The swing at the heat limit reached 1.59, the first minute
+  of a GPU still heating 1.3 to 2.0: no limit keeps out the one and lets in the other.
+- **C: a fitted fall of the clock across the window**: rejected. At a 25 % fall it kept out 26 of 268 settled minutes
+  and let in 29 of 42 first minutes, and like any rule on the clock it leans on the setting: a lighter one may run
+  below the heat limit with a steady clock, so the heaviest setting's runs would be kept out more often.
+- **D: the game process's age at the press**: rejected. The recording knows the game's start, but the GPU follows the
+  load since it last rested, which includes the launch, menus and loading, not the time at the spot.
+- **E: the temperature's rise across the window or before the press**: rejected, as adding little to A. Temperature
+  does not swing at the limit, but on the newest recording it sat at 86-87 °C while the clock still slid for 2
+  minutes. If a warm-up ever gets past A, `window_metrics` holds the temperature (`G.TEMP_C`, today only its median).
+- **F: a chime once the game has been in front 2 minutes**, so the player presses on it instead of timing the wait:
+  deferred, worth trying (Backlog).
+
+The clock's median, 10th and 90th percentiles stay in each run's numbers, and a run without NVIDIA readings no longer
+lists the clock as unchecked, since nothing checks it. Left as it is: a sweep begun before this change and resumed
+after it keeps the runs it counted then, judged by the old rule; none had been begun on the owner's PC. Revisit hooks:
+`sweep/results.SETTLE_S`, `ADVISE_S`, `front_before` and `problems`.
 
 ---
 
