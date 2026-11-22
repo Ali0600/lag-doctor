@@ -24,10 +24,11 @@ from lagdoctor.sweep import inifile, plan, runner
 from tests import synth
 
 ORIGIN = 5000.0              # lag-doctor's clock at the recording's t = 0
-PRESS_T = 20.0               # the start key, in the recording's seconds
+PRESS_T = 140.0              # the start key, in the recording's seconds: past the 120 s the game must have been in
+                             # front before it (results.SETTLE_S), so a run counts
 
 
-def capture_at(fps: float, seconds: float = 100.0, *, origin: float = ORIGIN, focused: Any = 1,
+def capture_at(fps: float, seconds: float = PRESS_T + 80.0, *, origin: float = ORIGIN, focused: Any = 1,
                other_pct: Any = 0.0, power_limit_w: Any = 103.0, clock_mhz: Any = 780.0, plan_guid: str = "aaaa-plan",
                plan_name: str = "Turbo", on_battery: bool | None = False, hz: float = 144.0,
                exe_bytes: int | None = 81_000_000, frames_state: str = "ok", draws_until: float | None = None,
@@ -232,9 +233,9 @@ class World:
         if play.ends_by_itself:
             observers.event("stopping", reason="game exited")
             if play.press_raced:                         # pressed as the game closed: told after "stopping"
-                observers.event("measuring", at=24.9, until=24.9 + window)
-            capture.setdefault("duration", 25.0)
-            capture.setdefault("draws_until", 25.0)
+                observers.event("measuring", at=PRESS_T + 4.9, until=PRESS_T + 4.9 + window)
+            capture.setdefault("duration", PRESS_T + 5.0)
+            capture.setdefault("draws_until", PRESS_T + 5.0)
         elif stop.is_set():                              # the sweep stopped the run: frame timing off, the key taken
             observers.event("stopping", reason=getattr(stop, "reason", ""))
         elif play.press:

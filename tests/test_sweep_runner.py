@@ -167,7 +167,7 @@ def test_a_line_the_game_drops_is_put_back_when_the_player_says_so(tmp_path):
 def test_a_run_behind_another_window_is_offered_again_and_tried_again(tmp_path):
     sweep, folder, ini = new_sweep(tmp_path, runs=2, warm_up=False)
     plays = steady_plays(sweep)
-    plays.insert(1, Play(capture={"focused": lambda t: 0 if 30 <= t < 45 else 1}))
+    plays.insert(1, Play(capture={"focused": lambda t: 0 if PRESS_T + 10 <= t < PRESS_T + 25 else 1}))
     answers = [GO, GO, "", GO, GO, GO]                  # Enter at "Try this run again?"
     world = World(tmp_path, sweep, FPS, answers=answers, plays=plays)
     assert runner.run(sweep, folder, world.seams()) == 0
@@ -280,16 +280,31 @@ def test_the_file_is_never_changed_while_the_game_runs(tmp_path):
     assert world.sleeps >= 3 and writes and "Quit the game now" in "\n".join(world.said)
 
 
-def test_a_gpu_still_heating_up_keeps_the_run_out_but_a_moving_power_limit_does_not(tmp_path):
+def test_a_press_too_soon_after_coming_back_keeps_the_run_out_but_a_swinging_clock_or_power_limit_does_not(tmp_path):
+    # Pressed 30 s after the game came back to the front: the GPU had not settled, and the player is told to stay at
+    # the spot longer. A GPU held at its heat limit swings its clock (780 to 1,000 MHz on the owner's laptop, at a
+    # flat temperature) and Dynamic Boost moves its power limit: neither keeps a run out.
     sweep, folder, _ = new_sweep(tmp_path, runs=2, warm_up=False)
     plays = steady_plays(sweep)
-    plays.insert(1, Play(capture={"clock_mhz": lambda t: 1700.0 if t < 50 else 780.0}))
-    plays[2] = Play(fps=plays[2].fps, capture={"power_limit_w": 55.0})
+    plays.insert(1, Play(capture={"focused": lambda t: 0 if t < PRESS_T - 30 else 1}))
+    swing = lambda t: 780.0 if int(t) % 10 < 5 else 1000.0
+    plays[2] = Play(fps=plays[2].fps, capture={"power_limit_w": 55.0, "clock_mhz": swing})
     world = World(tmp_path, sweep, FPS, answers=[GO, GO, "", GO, GO, GO], plays=plays)
     assert runner.run(sweep, folder, world.seams()) == 0
     rejected = [r for r in sweep.runs if r.state == "rejected"]
-    assert len(rejected) == 1 and "still heating up" in rejected[0].why
-    assert any(r.conditions.get("gpu_power_limit_w") == 55.0 and r.state == "good" for r in sweep.runs)
+    assert len(rejected) == 1 and "stay at your spot in the game for 2 minutes 30 s" in rejected[0].why, rejected
+    good = [r for r in sweep.runs if r.state == "good" and r.conditions.get("gpu_power_limit_w") == 55.0]
+    assert len(good) == 1 and (good[0].metrics["gpu_clock_p10"], good[0].metrics["gpu_clock_p90"]) == (780.0, 1000.0)
+
+
+def test_the_time_a_run_must_wait_at_its_spot_fits_before_watch_gives_up_on_the_press():
+    # watch fails a run whose key comes later than START_WAIT_S after the recording began; the player also needs a
+    # moment for the way back to the game, and the wait they are told stays past the one checked (the first reading
+    # comes a second or so after the chime, and a wait by feel runs short).
+    assert results.ADVISE_S + 60.0 <= runner.START_WAIT_S and results.ADVISE_S >= results.SETTLE_S + 15.0
+    advice = runner.press_advice("ctrl+alt+s", 60.0)
+    assert "stay at your spot for 2 minutes 30 s" in advice and "Ctrl+Alt+S" in advice
+    assert "60 s of measuring" in advice and "Once you are back there and a short chime" in advice
 
 
 def test_an_updated_game_ends_the_sweep(tmp_path):

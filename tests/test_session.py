@@ -1551,6 +1551,21 @@ def test_the_key_is_said_ready_only_once_windows_gave_it_and_a_press_before_that
     assert lines.index(sess.STOPPING_MESSAGE + "\n") > ready and lines.count(lines[ready]) == 1
 
 
+def test_a_run_whose_caller_says_when_to_press_hears_only_that_the_key_is_ready():
+    # A settings sweep's run (start_advice False) tells the player to wait at the spot before the press, so watch's
+    # own "press it at the spot" would tell the opposite (DECISIONS 2026-11-21).
+    lines, keys, stop = [], Keys(), threading.Event()
+
+    def on_event(kind, data):
+        if kind == "start_key":
+            sess.request_stop(stop, "enough")
+    s = Session(TARGET, _with_start(duration_s=LONG_S, start_advice=False), collectors=full_set(),
+                inventory=INVENTORY, alive=lambda: True, hotkey_factory=keys, printer=lines.append,
+                observers=sess.Observers(on_event=on_event))
+    s.run(stop)
+    assert "\nCtrl+Alt+S is ready.\n" in lines and not any("press it at the spot" in x for x in lines), lines
+
+
 def test_a_window_to_the_recordings_end_waits_a_whole_tick_and_says_so(monkeypatch):
     monkeypatch.setattr(sess, "STATUS_PERIOD_S", 1.0)
     s = Session(TARGET, _with_start(duration_s=None, window_s=None), collectors=[], inventory=INVENTORY)
