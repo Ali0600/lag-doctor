@@ -70,7 +70,7 @@ of section 6 (read again at 8a4780a).
 
 | menu option | engine variable | in GameUserSettings.ini |
 |---|---|---|
-| Background Model Detail | `sg.StaticMeshQuality` | yes |
+| Background Model Detail | `sg.StaticMeshQuality` | yes (a higher number is less detail here: section 8, question 1) |
 | Character Model Detail | `sg.SkeletalMeshQuality` | yes |
 | Texture Resolution | `sg.TextureQuality` | yes |
 | Shadow Quality | `sg.ShadowQuality` (0-3; Best and Extreme only by editing the ini) | yes |
@@ -416,7 +416,11 @@ Built on 2026-11-09 as `lagdoctor sweep`, the assisted sweep (DESIGN, The settin
 ## 8. Open questions, to test on a real install
 
 1. With the game closed, does an edited `sg.StaticMeshQuality` in `GameUserSettings.ini` show in the menu and change
-   the frame rate at the next launch, and does the game keep it?
+   the frame rate at the next launch, and does the game keep it? Partly answered on the owner's install, by its first
+   sweep: an edited `sg.TextureQuality` (1 to 0) was kept, since the game wrote no other value back when
+   it closed. Lowering Background Model Detail in the menu wrote `sg.StaticMeshQuality` from 1 to 3, so in this game
+   a higher number is less detail, the other way round from Unreal's usual 0 (low) to 3 (epic), and a sweep that
+   means to lower it tries a higher value. Whether an edited value shows in the menu is still untested.
 2. Which save file holds the resolution scale, the anti-aliasing method and the frame cap, and does Steam Cloud bring
    them back?
 3. How far apart are two recordings of the same save, spot and settings on this laptop (A/A)? That number sets the
