@@ -129,6 +129,9 @@ td.differs { color: var(--warn); font-weight: 600; }
 .running h1 { margin-bottom: 2px; }
 .rec-game { font-size: 1.15rem; font-weight: 600; margin: 0 0 10px; overflow-wrap: anywhere; }
 .clock { font-size: 2.6rem; font-variant-numeric: tabular-nums; margin: 6px 0 10px; }
+.apply { margin: 6px 0 2px; }
+.apply p { margin: 4px 0; overflow-wrap: anywhere; }
+.change p { margin: 4px 0; overflow-wrap: anywhere; }
 .notes { padding-left: 20px; }
 .notes li { margin: 4px 0; }
 pre.said { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--panel); border: 1px solid var(--line);

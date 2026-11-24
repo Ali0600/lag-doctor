@@ -64,6 +64,10 @@ class FixResult:
     message: str
     entry_id: str | None = None
     state: str = ""
+    # For an undo, which case it met, for a front end that says each in its own words: "restored", "already" (back to
+    # the original by itself), "ended" (a session-only subject gone), "not_connected", "changed" (someone set it since),
+    # "unreadable", "write_failed", "no_readback"; fixes/flow.py adds "unknown" and "unsure".
+    why: str = ""
 
 
 class Fix(ABC):
@@ -145,34 +149,35 @@ class Fix(ABC):
         live = self._safe_read(entry.params)
         if live == entry.before:
             journal.set_state(entry.id, "undone", "it was already back to the original")
-            return FixResult(True, f"{entry.target} is already back to the original", entry.id, "undone")
+            return FixResult(True, f"{entry.target} is already back to the original", entry.id, "undone", "already")
         if is_gone(live):
             if self.session_only:                # the change went away with its subject (a process that exited)
                 journal.set_state(entry.id, "undone", "its subject no longer exists")
-                return FixResult(True, f"{entry.target} no longer exists; nothing to undo", entry.id, "undone")
+                return FixResult(True, f"{entry.target} no longer exists; nothing to undo", entry.id, "undone",
+                                 "ended")
             # Not there now (an unplugged display) but it may come back with lag-doctor's value: keep the entry.
             journal.set_state(entry.id, entry.state, NOT_CONNECTED)
             return FixResult(False, f"{entry.target} is not connected now, so it was left alone; run undo again "
-                                    f"when it is connected", entry.id, entry.state)
+                                    f"when it is connected", entry.id, entry.state, "not_connected")
         if not self._ours(live, entry.before, entry.after) and not force:
             why = _unreadable(live)
             if why is not None:
                 return FixResult(False, f"{entry.target} could not be read ({why}), so it was left alone",
-                                 entry.id, "conflict")
+                                 entry.id, "conflict", "unreadable")
             return FixResult(False, f"{entry.target} was changed after lag-doctor set it (now {live!r}), so it "
                                     f"was left alone. Undo with --force to restore {entry.before!r} anyway.",
-                             entry.id, "conflict")
+                             entry.id, "conflict", "changed")
         try:
             self.write(entry.params, entry.before)
         except Exception as exc:  # noqa: BLE001
-            return FixResult(False, f"undo of {entry.target} failed: {exc}", entry.id, entry.state)
+            return FixResult(False, f"undo of {entry.target} failed: {exc}", entry.id, entry.state, "write_failed")
         got = self._safe_read_back(entry.params)
         if got != entry.before:
             journal.set_state(entry.id, entry.state, f"undo did not take (read back {got!r})")
             return FixResult(False, f"undo of {entry.target} did not take (read back {got!r})", entry.id,
-                             entry.state)
+                             entry.state, "no_readback")
         journal.set_state(entry.id, "undone")
-        return FixResult(True, f"restored {entry.target} to {entry.before!r}", entry.id, "undone")
+        return FixResult(True, f"restored {entry.target} to {entry.before!r}", entry.id, "undone", "restored")
 
     def heal(self, entry: JournalEntry, journal: Journal) -> FixResult:
         """Settle an entry a crash left 'pending', by looking at the live value."""

@@ -650,10 +650,11 @@
  {
   "name": "app: a lock Windows cannot read ends the request",
   "file": "lagdoctor/app/main.py",
-  "old": "        except OSError as exc:\n            self.log(f\"looking for a recording before deleting: {exc}\")",
-  "new": "        except ZeroDivisionError as exc:\n            self.log(f\"looking for a recording before deleting: {exc}\")",
+  "old": "        except OSError as exc:\n            self.log(f\"looking for a recording before {doing}: {exc}\")",
+  "new": "        except ZeroDivisionError as exc:\n            self.log(f\"looking for a recording before {doing}: {exc}\")",
   "tests": [
-   "tests/test_app_edits.py::test_nothing_is_deleted_when_windows_cannot_say_whether_one_records"
+   "tests/test_app_edits.py::test_nothing_is_deleted_when_windows_cannot_say_whether_one_records",
+   "tests/test_app_fixes.py::test_nothing_is_changed_when_whether_a_recording_runs_cannot_be_told"
   ]
  },
  {

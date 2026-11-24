@@ -33,8 +33,9 @@ ones.*
 - **Fixes, only with your OK**: the power plan, the GPU a game runs on (hybrid laptops), the screen refresh
   rate, Game Mode, background recording, windowed-game optimisations, and the priority of your own
   background programs. Each change is journaled first, verified by reading it back, and undone with
-  `lagdoctor undo`. It never turns off a security feature, never kills or suspends a process, and never
-  touches the game.
+  `lagdoctor undo`, or from lag-doctor's window, which applies them from your last recording's Results and lists
+  every change still in place in Settings. It never turns off a security feature, never kills or suspends a process,
+  and never touches the game.
 - **Tries a game's settings for you, run by run** (`lagdoctor sweep`): it writes each setting into the game's
   settings file while the game is closed, you play each run from the same spot, and it compares the settings by
   average FPS and 1 % low against their own run-to-run spread, saying "no measurable difference" when that is the
@@ -126,7 +127,9 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
   its program (picked in Windows' Open dialog; its name and icon come from the file, and you can rename it), and its
   page's **Record when it starts** waits for you to start the game yourself and records it from its start, the same
   way; a game with no cover shows its program's icon. Tick recordings on a game's page to compare two or delete them
-  (to the Recycle Bin, where Windows can put them back). **Record the
+  (to the Recycle Bin, where Windows can put them back). On your last recording's Results, **Apply this fix** shows
+  what a fix would change, and where, before it changes anything, and a second click makes that change; its **Undo**,
+  like Settings' list of the changes lag-doctor made, puts it back. **Record the
   game that's running** records the busiest game with a window instead, a game you started yourself. Each asks one
   UAC prompt from the window for frame timing, and measures 10 minutes from your press of **Ctrl+Alt+S** once you
   are in the game, so its startup, menus and loading are left out (shaded on Results' charts); with no press within
@@ -241,7 +244,8 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
   36 rules score causes by evidence family, so no single signal is counted twice.
 - **Layout**: `lagdoctor/winapi` (thin ctypes wrappers), `capture` (one collector per source plus the
   session), `relay` (PresentMon and the network trace with admin rights, for a recording in your own window),
-  `analysis`, `fixes` (journal, readback, undo), `report` (console and HTML), `app` (lag-doctor's window), `stores`
+  `analysis`, `fixes` (journal, readback, undo, and the flow the terminal and the window share), `report` (console and
+  HTML), `app` (lag-doctor's window), `stores`
   (the games Steam and Epic have installed, read from their own files, and the links that start them).
   `laglab/` is a fake game that lags on purpose, used to test the whole chain. `docs/DESIGN.md` is the contract
   between them.
@@ -372,17 +376,19 @@ connection to Microsoft, as the runtime does on its own.
   says how far off the next limit is (the CPU, the GPU or the screen, and how
   many times faster the limiting part must get), from thread CPU time rather than PresentMon's CPU Busy, which
   read 16.55 ms of a 16.9 ms GPU-bound frame.
-- **Testing that proves itself**: 5,650 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 5,714 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 44 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 4,360 deliberate
-  sabotages in 68 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
-- **Safe automation of system changes**: 7 opt-in fixes, and a settings sweep that edits a game's settings file
-  between runs and puts it back byte for byte, all behind a write-ahead journal, readback verification, undo and
-  crash healing, with a handle-free identity check before touching any process; the sweep compares settings by
+  there, failing rather than skipping if they go missing; plus a mutation harness of 4,436 deliberate
+  sabotages in 69 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+- **Safe automation of system changes**: 7 opt-in fixes, applied from the terminal or the app's window through one
+  shared flow (the change shown first, then exactly that change, never while any recording runs), and a settings
+  sweep that edits a game's settings file between runs and puts it back byte for byte, all behind a write-ahead
+  journal, readback verification, undo and crash healing, with a handle-free identity check before touching any
+  process; the sweep compares settings by
   Welch's t interval over warmed-up, interleaved runs, and its 38 whole-sweep tests stop, resume and fail it
   on purpose.
 - **Supply chain and least privilege**: a per-machine WiX MSI of 179 files built in CI from pinned inputs (Python

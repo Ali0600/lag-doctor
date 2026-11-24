@@ -2,6 +2,12 @@
 
 ## Backlog: alternatives worth trying later
 
+- **Apply from any recording's Results**, not only the last one made, once a fix's params name what they meant on
+  their own (a refresh rate's monitor by its device path, not by the display name Windows gives whichever monitor it
+  lists first) (2026-11-21, M7). Revisit hook: `App.do_plan_fix`'s last-session check and `views._fixes`' `is_last`.
+- **Undo all in the window**, as `lagdoctor undo --all` does: worth it if the list of changes ever grows long; an undo
+  out of order reads as a conflict, so it would go newest first (2026-11-21, M7). Revisit hook: `fillChanges` in
+  `app.js` and `App.do_undo_change`.
 - **A chime once a sweep run's game has been in front 2 minutes**, so the player presses on it instead of timing
   2 minutes 30 s from the short chime (2026-11-21, the sweep's settling time). Worth it if runs are kept out for a
   press too soon. Revisit hook: `runner._record`'s observers, whose live ticks carry `game_focused`, and
@@ -227,6 +233,44 @@
   game's tree), for a launcher the re-arm's hold missed: worth trying if Play recordings show the hold delaying too
   much of a game's start. Revisit hook: `Relay._out_of_turn` ("a game after the start") and `_start_sources` in
   relay/server.py (DECISIONS 2026-11-17, M6d).
+
+---
+
+## 2026-11-21: Apply and Undo in the app (M7)
+
+The owner chose Apply and Undo in the app as the next piece ("do A", the recommended one of four), described as a
+button in Results that applies a fix with the same journal and readback as today, and a list of fixes to undo. The
+forks inside it were settled while building it; the owner's own try in the app before the merge is their check.
+
+- **Which offers the window applies**
+  - **The recording's own offers, from the last recording made only (chosen)**: the page names a fix by its place on
+    Results, and the app reads the fix and its params from that recording's diagnosis, so what the player sees is
+    what is applied. An older recording's fixes show without Apply, as they showed without the command: its params may
+    describe this PC as it was then (a refresh rate's display name belongs to whichever monitor Windows lists first,
+    and a background program's process has usually exited).
+  - **`lagdoctor fix`'s merged offers** (the last watch and the last check-up, the newer report per fix id): rejected
+    for the window. A check-up newer than the recording on screen would apply other params than those shown, and the
+    window has no screen for check-ups.
+  - **Any recording's offers**: deferred, worth trying (Backlog). Revisit hook: `App.do_plan_fix`'s last-session
+    check.
+- **The confirm step**
+  - **Plan on the first click, keep the plan under a one-shot token, apply exactly it on the second (chosen)**: as
+    `lagdoctor fix` shows its plan before it asks; the fix's own stale check refuses a setting that moved in between.
+  - **One click that plans and applies at once**: rejected. The 2026-11-04 entry chose plan, then ask, then apply, and
+    a click is no yes to a change the player has not seen.
+- **Where Undo lives**
+  - **Right after Apply, on Results, and in Settings' list of the changes still in place (chosen)**: the list is the
+    journal's own (`outstanding()`), settled first as a start settles it.
+  - **A screen of its own**: rejected for now. A list of a few changes needs no place of its own in the bar.
+  - **Undo all**: deferred, worth trying (Backlog). Revisit hook: `fillChanges` in `app.js`.
+- **When nothing changes**: never while any recording runs (this window's, or another that holds the capture lock,
+  as Delete waits), since a change in its middle would mix two conditions in one recording, and a sweep changes
+  settings itself; never as administrator, and never when that cannot be told (`lagdoctor fix` refuses elevated but
+  reads "cannot tell" as not); one change at a time. A settings sweep's change is left to the terminal (`lagdoctor
+  sweep --resume`, or `undo game_setting`), since its sweep may be between two runs.
+- **Words**: the window says every outcome in its own words, from `FixResult.state` and the new `FixResult.why`. The
+  fixes' own messages name internal values (`{'__absent__': True}`, a mode's fields, `--force`) and go to its log
+  only; the terminal prints them as before.
 
 ---
 

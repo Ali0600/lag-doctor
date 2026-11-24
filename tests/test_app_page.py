@@ -208,10 +208,18 @@ def test_results_draw_every_frame_handed_over_in_the_shared_buffer(run):
 
 
 @pytest.mark.needs("webview2")
-def test_the_fix_command_shows_on_the_last_recording_only(run):
+def test_apply_shows_its_plan_then_makes_that_change_and_settings_undoes_it(run):
+    from tests.fake_fixes import AFTER, BEFORE
     _ok(run)
-    assert run["results"]["commands"] and all(c.startswith("lagdoctor fix ") for c in run["results"]["commands"])
+    assert run["results"]["applies"] >= 1 and run["results"]["commands"] == []     # a button, no terminal command
     assert run["game"]["last"] == 1 and run["racer_results_commands"] == 0
+    assert "Where: " in run["apply_plan"] and "Change: " in run["apply_plan"] and "Apply this change" in run["apply_plan"]
+    assert run["apply_cancelled"] == []                       # showing the plan, and Cancel, changed nothing
+    assert run["applied"]["said"].startswith("Done: ") and run["applied"]["undo"]
+    ((fix_id, value),) = run["apply_writes"]
+    assert value == AFTER
+    assert [(c["title"], c["undo"]) for c in run["changes"]] == [(f"The stand-in for {fix_id}", True)]
+    assert run["undone"].startswith("Undone: ") and run["undo_writes"] == [[fix_id, AFTER], [fix_id, BEFORE]]
 
 
 @pytest.mark.needs("webview2")

@@ -26,6 +26,12 @@ def get(fix_id: str, **backends: Any) -> Fix:
         raise KeyError(f"unknown fix {fix_id!r}; known: {sorted(_REGISTRY)}") from None
 
 
+def find(fix_id: str) -> type[Fix] | None:
+    """The class of the fix of this id, without building it; None for one this lag-doctor does not know."""
+    _load_builtin()
+    return _REGISTRY.get(fix_id)
+
+
 def ids() -> list[str]:
     _load_builtin()
     return sorted(_REGISTRY)
@@ -42,7 +48,7 @@ def _load_builtin() -> None:
     import pkgutil
 
     import lagdoctor.fixes as pkg
-    skip = {"base", "catalog", "journal", "registry"}
+    skip = {"base", "catalog", "flow", "journal", "registry"}
     for mod in pkgutil.iter_modules(pkg.__path__):
         if mod.name not in skip:
             importlib.import_module(f"lagdoctor.fixes.{mod.name}")

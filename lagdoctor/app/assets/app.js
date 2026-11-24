@@ -39,6 +39,11 @@ function show(...nodes) {
   view().scrollTop = 0;
 }
 
+// A part of a screen drawn again in place: its children, leaving out the empty ones (as el() does).
+function fill(node, ...nodes) {
+  node.replaceChildren(...nodes.flat().filter((n) => n !== null && n !== undefined && n !== false));
+}
+
 function css(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
@@ -424,11 +429,11 @@ const SCREENS = {
       el('h3', null, `${i + 1}. `, ...prose(f.title), el('span', {class: 'conf'}, f.confidence_text)),
       el('p', null, ...prose(f.summary)),
       f.evidence.length ? el('ul', null, ...f.evidence.map((x) => el('li', null, ...prose(x)))) : null,
-      ...f.fixes.map((fx) => el('div', {class: 'fix'},
+      ...f.fixes.map((fx, j) => el('div', {class: 'fix'},
         el('strong', null, fx.can_apply ? 'Fix: ' : 'Try: '), ...prose(fx.title),
         fx.detail ? [': ', ...prose(fx.detail)] : null, fx.restart ? ' ' + fx.restart : null,
         fx.admin ? ' Needs admin rights.' : null,
-        fx.command ? el('div', null, 'In a terminal: ', el('code', null, fx.command)) : null))))
+        fx.apply ? applyBox(args.session, i, j) : null))))
       : [el('p', {class: 'muted'}, 'Nothing stood out. If the game felt laggy, record again and press the lag key ' +
         'the moment it happens.')];
     const lateCharts = [];
@@ -511,6 +516,8 @@ const SCREENS = {
     if (!live()) return;
     const r = s.readiness || {};
     const sound = el('button', {class: 'btn', type: 'button', on: {click: () => ask('test_sound')}}, 'Play a test sound');
+    const changes = el('div', {id: 'changes'}, el('p', {class: 'muted loading'}, 'Loading'));
+    const said = saidNote(args);
     show(el('h1', null, 'Settings'),
       el('h2', null, 'Ready to record'),
       el('div', {class: 'strip' + (r.ok ? '' : ' no')}, ...prose(r.text)),
@@ -524,12 +531,17 @@ const SCREENS = {
         'you press it and measuring starts, a blip when it hears the lag key, a falling chime when the measured time ' +
         'is over, a chime when the results are ready, and a low tone when something stops working. Check that you ' +
         'can hear this one, the rising chime.'), sound,
+      el('h2', null, 'Changes lag-doctor made'), said, changes,
       el('h2', null, 'Library'), el('p', null, s.library_sources),
       el('h2', null, 'Where recordings are kept'),
       el('div', {class: 'row'}, el('code', null, s.sessions_folder),
         el('button', {class: 'btn', type: 'button', on: {click: () => ask('open_folder')}}, 'Open the folder')),
       el('h2', null, 'About'),
       el('table', null, el('tbody', null, ...s.about.map(([k, v]) => el('tr', null, el('td', null, k), el('td', null, v))))));
+    // The list of changes comes in its own answer: a journal another window holds keeps the rest of Settings drawn.
+    ask('changes').then((c) => { if (live()) fillChanges(changes, c, live); }).catch((err) => {
+      if (live()) fill(changes, el('p', {class: 'error'}, String(err && err.message || err)));
+    });
   },
 
   async recording(args, live) {
@@ -711,6 +723,101 @@ function deleteButton(game, chosen) {
     b.textContent = chosen.size > MAX_DELETE ? `Pick at most ${MAX_DELETE} to delete` : 'Delete the picked';
   };
   return b;
+}
+
+// Apply, for a fix the last recording offers: the first click shows what would change (the app's plan, read now, as
+// `lagdoctor fix` prints it), the second makes exactly that change, and its Undo puts it back. The page names the fix
+// only by its place on this page; the app reads the fix and its settings from the recording itself. The app keeps one
+// plan at a time, so a box showing one goes back to its button when another box shows its own.
+let planShown = null;            // the box showing a plan: its way back to its button
+function applyBox(session, finding, fix) {
+  const box = el('div', {class: 'apply', id: `apply-${finding}-${fix}`});
+  const start = el('button', {class: 'btn', type: 'button', id: `plan-${finding}-${fix}`}, 'Apply this fix');
+  const again = (...said) => {
+    if (planShown === again) planShown = null;
+    start.disabled = false;
+    fill(box, ...said, start);
+  };
+  start.addEventListener('click', () => {
+    start.disabled = true;
+    ask('plan_fix', {session, finding, fix}).then((p) => {
+      const shown = [el('p', null, el('strong', null, 'Where: '), p.where),
+        el('p', null, el('strong', null, 'Change: '), p.change),
+        ...p.notes.map((n) => el('p', {class: 'muted'}, ...prose(n))), p.restart ? el('p', {class: 'muted'}, p.restart) : null];
+      const cancel = el('button', {class: 'btn', type: 'button', id: 'apply-cancel', on: {click: () => again()}},
+        p.plan ? 'Cancel' : 'Close');
+      if (!p.plan) { fill(box, shown, el('p', {class: 'note', id: 'applied'}, p.text), cancel); return; }
+      if (planShown && planShown !== again) planShown();     // the app keeps this plan now, not that box's
+      const confirm = el('button', {class: 'btn primary', type: 'button', id: 'apply-confirm'}, 'Apply this change');
+      confirm.addEventListener('click', () => {
+        confirm.disabled = cancel.disabled = true;
+        ask('apply_fix', {plan: p.plan}).then((r) => {
+          const said = el('p', {class: 'note', id: 'applied'}, r.text);
+          if (!r.entry) { again(said); return; }
+          if (planShown === again) planShown = null;
+          // An undo left alone because it was changed since offers to put it back anyway; one that failed, Undo again.
+          const done = (u) => fill(box, el('p', {class: 'note', id: 'undone'}, u.text),
+            u.force ? undoButton(r.entry, done, true) : (u.done ? null : undoButton(r.entry, done)));
+          fill(box, said, undoButton(r.entry, done, r.force));
+        }).catch((err) => {           // that plan is gone (another box's replaced it, a newer recording): plan again
+          again();
+          recError(err);
+        });
+      });
+      planShown = again;
+      fill(box, shown, el('div', {class: 'row'}, confirm, cancel));
+    }).catch((err) => {
+      start.disabled = false;
+      recError(err);
+    });
+  });
+  box.append(start);
+  return box;
+}
+
+// Undo, for a change lag-doctor made (its journal entry's id, from the app): a click puts back how it was. When it was
+// changed since, the app leaves it alone and says so, and Put it back anyway (`force`) then takes a second click.
+// done(answer) shows what the app said.
+function undoButton(entry, done, force = false) {
+  const b = el('button', {class: 'btn', type: 'button', 'data-entry': entry, 'data-force': force ? '1' : null},
+    force ? 'Put it back anyway' : 'Undo');
+  b.addEventListener('click', () => {
+    if (force && b.dataset.armed !== '1') {
+      b.dataset.armed = '1';
+      b.textContent = 'Click again to put back how it was';
+      return;
+    }
+    b.disabled = true;
+    ask('undo_change', {entry, force}).then((u) => done(u)).catch((err) => {
+      b.disabled = false;
+      recError(err);
+    });
+  });
+  return b;
+}
+
+// Settings' list of the changes lag-doctor made that are still in place, newest first: each with its Undo (Put it back
+// anyway for one that is neither how it was nor lag-doctor's), or a note saying why it has none. An undo draws the
+// list again with what was said, unless the change was left alone because it was changed since: then that change's
+// row offers to put it back anyway.
+function fillChanges(box, c, live) {
+  if (!c.rows.length) { fill(box, el('p', {class: c.paused ? 'error' : 'muted', id: 'changes-none'}, ...prose(c.text))); return; }
+  const rows = c.rows.map((r) => {
+    const note = el('p', {class: 'muted'}, ...prose(r.note));
+    const done = (u) => {
+      if (!live()) return;            // the player went on to another screen meanwhile
+      if (!u.force) { go('settings', {said: u.text}, false); return; }
+      fill(note, u.text);
+      fill(buttons, undoButton(r.id, done, true));
+    };
+    const buttons = el('div', {class: 'row'}, r.undo ? undoButton(r.id, done) : null,
+      r.force ? undoButton(r.id, done, true) : null);
+    return el('div', {class: 'card change', 'data-entry': r.id},
+      el('strong', null, r.title), r.change ? el('p', null, r.change) : null,
+      el('p', {class: 'muted'}, r.where), el('p', {class: 'muted'}, `Made ${r.when}`), note, buttons);
+  });
+  fill(box, el('p', {class: 'muted'}, 'Newest first. Undo puts back how each setting was before lag-doctor changed it.'),
+    rows);
 }
 
 // What a deletion said, shown once on the screen it led to (args.said): not again when Back returns to that screen.

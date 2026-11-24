@@ -330,7 +330,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   one puts the test's folder in the owner's own Recycle Bin, so `tests/conftest.py`'s `_no_real_recycle_bin` fails a
   test that reaches it, its own test (`tests/test_recycle.py`) stubs `recycle._SHFileOperationW` under the guard's
   seam, and only `tests/test_recycle_live.py`, on GitHub's runner (`scripts/stage2/guard.py`), moves a folder for
-  real. A program icon is read for any game with a program and no cover (an Epic launcher's, a recording's
+  real. `App(fixes=)`, Apply and Undo's fixes and journal (`fixes/flow.Fixes`), defaults to none too: the real ones
+  change this PC's own settings, so an App a test builds takes `tests/fake_fixes.py`'s stand-ins, whose values live
+  in a dict, and `tests/conftest.py`'s `_no_real_fixes` fails a test that reaches `Fixes.fix` (its own test stubs
+  `flow.catalog.get` under the guard's seam). A test whose sabotage could let a refusal slip must not let that reach
+  anything real either: `test_app_fixes.py`'s one-change-at-a-time test asks to record while a fix runs, so it gives
+  the App a stand-in recorder first. A program icon is read for any game with a program and no cover (an Epic launcher's, a recording's
   `summary.json` `exe`): a test that needs an icon makes its program under its own `tmp_path` (`tests/pe_build.py`).
   `tests/app_demo.py`'s recordings name made-up programs under `C:\Games`, which an App with no covers then looks for
   there, read-only (`stores.open_file`'s stat first); keep them names no real game has.

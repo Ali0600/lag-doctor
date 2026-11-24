@@ -32,6 +32,11 @@ OLD_LOG_NAME = "app-previous.log"
 MIN_BUILD = 1661                          # CreateSharedBuffer, the newest call the app needs (SDK 1.0.1661.34)
 LAG_KEY = "ctrl+alt+l"                    # cli.DEFAULT_HOTKEY; the app never imports cli
 LAUNCH_SLOW_S = 15.0                      # Play: a store link Explorer has not opened by then is said as not opened
+LIST_WAIT_S = 20.0                        # the list of changes waits this long for a change being made to end
+BUSY = "lag-doctor is still changing a setting: try again once it is done."
+NO_JOURNAL = ("lag-doctor could not open its fix journal (another lag-doctor window may be using it), so it changed "
+              "nothing. Try again in a moment.")
+NO_LONGER_PLANNED = "That change is no longer waiting to be applied: click Apply this fix again."
 
 
 def tell(text: str) -> None:
@@ -127,7 +132,10 @@ class App:
     (winapi/recycle.to_recycle_bin, which only run() passes as well: no test puts anything in the PC's own Recycle
     Bin); without it, Delete answers that it is not available. `capture_lock` names the lock every recording holds
     until its analysis ends (capture.session.CAPTURE_LOCK_NAME, which only run() passes, so a test never meets the
-    owner's own recording): Delete deletes nothing while another process holds it."""
+    owner's own recording): Delete deletes nothing while another process holds it, and Apply and Undo change nothing.
+    `fixes` applies and undoes the fixes Results offers (fixes/flow.Fixes: the catalogue's fixes with their real
+    backends, the home's fix journal), which only run() passes as well: an App a test builds applies stand-ins, and
+    without it Apply and Undo answer that they are not available."""
 
     def __init__(self, *, home: Path, runtime: dict, create_fn, log: Callable[[str], None],
                  tell: Callable[[str], None] = tell, activate: bool = True, on_ready: Callable[["App"], None] | None
@@ -140,7 +148,8 @@ class App:
                  forms_of: Callable[[str], tuple[str, ...]] | None = None,
                  covers: Callable[[list], dict] | None = None,
                  picker: Callable[[int | None], str | None] | None = None,
-                 trash: Callable[[str, int | None], Any] | None = None, capture_lock: str | None = None) -> None:
+                 trash: Callable[[str, int | None], Any] | None = None, capture_lock: str | None = None,
+                 fixes: Any | None = None) -> None:
         self.home = Path(home)
         self.sessions = self.home / "sessions"
         self.sessions.mkdir(parents=True, exist_ok=True)
@@ -182,6 +191,9 @@ class App:
         self.trash = trash
         self.capture_lock = capture_lock
         self.deleting = False                       # a delete is moving folders (Windows' question may be up)
+        self.fixes = fixes
+        self.fix_lock = threading.Lock()            # one change of a setting at a time: a plan, an apply, an undo, the list
+        self.planned: Planned | None = None         # the change Apply showed last, before it is applied
         self.open_link = open_link or _open_store_link
         self.rec_link: str | None = None            # the store link of the game the running Play opens
         self.launcher = launcher
@@ -440,7 +452,8 @@ class App:
     def do_results(self, session: str) -> tuple:
         entry, cap, d, main = self.load(session)
         is_last = library.last_session(self.home, self.sessions) == session
-        view = views.results_view(entry, d, cap, main, is_last, (entry.folder / library.REPORT_NAME).is_file())
+        view = views.results_view(entry, d, cap, main, is_last, (entry.folder / library.REPORT_NAME).is_file(),
+                                  apply_ids=self.fixes.known() if self.fixes is not None else frozenset())
         payload, count = views.frame_bytes(main)
         return view, ((payload, {"kind": "frames", "session": session, "count": count}) if count else None)
 
@@ -654,6 +667,189 @@ class App:
                 raise Gone(f"lag-doctor could not save its list of games ({exc.strerror or exc}).") from None
         return {"game": game, "name": shown}
 
+    # ---------------------------------------------------------------- Apply and Undo (fixes)
+
+    def do_plan_fix(self, session: str, finding: int, fix: int) -> dict:
+        """What Apply would change, for the fix the page names by its place on a recording's Results (finding, fix):
+        the plan `lagdoctor fix` prints, read now and kept here under a token the page applies by (do_apply_fix). The
+        fix and its params are this app's own reading of the recording's diagnosis, never the page's, and only the last
+        recording made offers them: an older one may describe this PC as it was then. Never while a recording runs, or
+        in a window that runs as administrator (change_refusal); an unreadable journal pauses it, as it pauses `fix`."""
+        from lagdoctor.fixes import flow
+        from lagdoctor.fixes.base import is_gone
+        fixes = self.fixes_here()
+        _entry, _cap, d, _main = self.load(session)
+        if library.last_session(self.home, self.sessions) != session:
+            raise Gone(views.NOT_LAST)
+        found = None
+        if finding < len(d.findings) and fix < len(d.findings[finding].fixes):
+            found = d.findings[finding].fixes[fix]
+        if found is None or not flow.offerable(found.fix_id, found.params, fixes.known()):
+            raise Gone("That is not a fix lag-doctor can apply from this recording: open its results again.")
+        if not self.fix_lock.acquire(blocking=False):
+            raise Gone(BUSY)
+        try:
+            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)
+            if why is not None:
+                raise Gone(why)
+            self.journal_ready(fixes.journal())
+            try:
+                plan = fixes.fix(found.fix_id).plan(dict(found.params))
+            except (*flow.PLAN_ERRORS, KeyError) as exc:
+                self.log(f"planning {found.fix_id}: {exc!r}")
+                raise Gone(views.refused_text(exc)) from None
+        finally:
+            self.fix_lock.release()
+        if plan.noop or is_gone(plan.before):
+            return views.plan_view(None, plan)
+        token = "p-" + secrets.token_hex(8)
+        with self.lock:
+            self.planned = Planned(token=token, session=session, fix_id=found.fix_id, plan=plan)
+        return views.plan_view(token, plan)
+
+    def do_apply_fix(self, plan: str) -> dict:
+        """Make the change Apply showed (do_plan_fix's token), exactly as planned: when the setting moved since, the
+        fix itself changes nothing (fixes/base.apply's "stale") and the page plans again. Each token applies once."""
+        from lagdoctor.fixes import flow
+        from lagdoctor.fixes.journal import JournalCorrupt
+        fixes = self.fixes_here()
+        with self.lock:
+            planned = self.planned
+        if planned is None or planned.token != plan:
+            raise Gone(NO_LONGER_PLANNED)
+        if library.last_session(self.home, self.sessions) != planned.session:
+            raise Gone(views.NOT_LAST)
+        if not self.fix_lock.acquire(blocking=False):
+            raise Gone(BUSY)
+        try:
+            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)
+            if why is not None:
+                raise Gone(why)
+            with self.lock:
+                if self.planned is not planned:     # applied, or replaced by a newer plan, meanwhile
+                    raise Gone(NO_LONGER_PLANNED)
+                self.planned = None
+            try:
+                res = flow.apply(fixes.fix(planned.fix_id), planned.plan, fixes.journal())
+            except JournalCorrupt as exc:
+                raise Gone(exc.plain()) from None
+        finally:
+            self.fix_lock.release()
+        self.log(f"apply {planned.fix_id}: {res.state}: {res.message}")
+        return views.applied_view(res, planned.plan)
+
+    def do_changes(self) -> dict:
+        """The changes lag-doctor made that are still in place, newest first (the list `lagdoctor undo` prints), once
+        the journal is settled as every start settles it (fixes/flow.settle: a change a crash left half-done, a
+        session-only one whose program has exited); what settling says goes to the log."""
+        from lagdoctor.fixes import flow
+        from lagdoctor.fixes.journal import JournalCorrupt
+        if self.fixes is None:
+            return views.changes_view([], None, "Undoing changes is not available in this window.")
+        fixes = self.fixes
+        if not self.fix_lock.acquire(timeout=LIST_WAIT_S):
+            raise Gone("lag-doctor is still changing a setting: open Settings again in a moment.")
+        try:
+            journal = fixes.journal()
+            flow.settle(lambda line: self.log(f"the fix journal: {line}"), journal=journal, fix_for=fixes.fix)
+            try:
+                entries = journal.outstanding()
+            except JournalCorrupt as exc:
+                return views.changes_view([], None, exc.plain())
+            except OSError as exc:
+                self.log(f"listing the changes: {exc}")
+                return views.changes_view([], None, "lag-doctor could not open its fix journal (another lag-doctor "
+                                                    "window may be using it). Open Settings again in a moment.")
+            return views.changes_view(entries, lambda e: self.about_change(fixes, e))
+        finally:
+            self.fix_lock.release()
+
+    def do_undo_change(self, entry: str, force: bool) -> dict:
+        """Undo one change the journal holds (its id, from the list or from Apply's answer), as `lagdoctor undo` does: a
+        value someone changed since is left alone unless `force` (the page asks for that only after saying so). A
+        settings sweep's change is the sweep's own, put back in a terminal; never while a recording runs, or in a window
+        that runs as administrator (change_refusal)."""
+        from lagdoctor.fixes import flow
+        from lagdoctor.fixes.journal import JournalCorrupt
+        fixes = self.fixes_here()
+        if not self.fix_lock.acquire(blocking=False):
+            raise Gone(BUSY)
+        try:
+            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)
+            if why is not None:
+                raise Gone(why)
+            journal = fixes.journal()
+            try:
+                found = next((e for e in journal.outstanding() if e.id == entry), None)
+            except JournalCorrupt as exc:
+                raise Gone(exc.plain()) from None
+            except OSError as exc:
+                self.log(f"reading the fix journal: {exc}")
+                raise Gone(NO_JOURNAL) from None
+            if found is None:
+                raise Gone("That change is not on the list any more: it was undone already.")
+            if found.fix_id in flow.NEVER_OFFERED:
+                raise Gone(views.SWEEP_CHANGE)
+            try:
+                res = flow.undo(found, fixes.fix, journal, force=force)
+            except JournalCorrupt as exc:
+                raise Gone(exc.plain()) from None
+            change = self.about_change(fixes, found)[1] if res.ok else ""
+        finally:
+            self.fix_lock.release()
+        self.log(f"undo {found.fix_id} ({found.id}): {res.why or res.state}: {res.message}")
+        return views.undone_view(res, change)
+
+    def fixes_here(self) -> Any:
+        if self.fixes is None:
+            raise Gone("Applying and undoing fixes is not available in this window.")
+        return self.fixes
+
+    def change_refusal(self, fixes: Any) -> str | None:
+        """Why Apply and Undo change nothing now, in plain words, or None. Never while a recording runs, this window's
+        own or any other in this Windows session (the capture lock, other_recording): a change in its middle would mix
+        two conditions into one recording, and a settings sweep changes settings itself. Never in a window that runs as
+        administrator, or cannot tell: a fix changes the settings of whoever the process runs as, and `lagdoctor fix`
+        refuses there too. Called with fix_lock held, which _start looks at under the same self.lock: a recording either
+        started before this looked (and refuses the change) or waits the change out."""
+        with self.lock:
+            if self.rec_state is not None and self.rec_state.active:
+                return "A recording is running: apply or undo fixes once it has ended."
+        why = self.other_recording("apply or undo fixes", "changed nothing", "changing a setting")
+        if why is not None:
+            return why
+        elevated = fixes.elevated()
+        if elevated is None:
+            return "lag-doctor could not tell whether it runs as administrator, so it changed nothing."
+        if elevated:
+            return ("lag-doctor is running as administrator, so it changed nothing: fixes change your own user's "
+                    "settings. Start lag-doctor normally to apply or undo them.")
+        return None
+
+    def journal_ready(self, journal: Any) -> None:
+        """Gone, in plain words, unless the fix journal can be read: an unreadable one pauses every change (its bytes
+        copied aside, as for `lagdoctor fix`), and one another lag-doctor holds, or a disk refuses, changes nothing."""
+        from lagdoctor.fixes.journal import JournalCorrupt
+        try:
+            journal.entries()
+        except JournalCorrupt as exc:
+            raise Gone(exc.plain()) from None
+        except OSError as exc:
+            self.log(f"reading the fix journal: {exc}")
+            raise Gone(NO_JOURNAL) from None
+
+    def about_change(self, fixes: Any, e: Any) -> tuple[str | None, str]:
+        """A journaled change's fix title (None: a fix this lag-doctor does not know) and the change in the fix's own
+        words (its describe, from the original to lag-doctor's value; '' when it cannot say)."""
+        title = fixes.title(e.fix_id) if isinstance(e.fix_id, str) else None
+        if title is None:
+            return None, ""
+        try:
+            return title, str(fixes.fix(e.fix_id).describe(e.before, e.after))
+        except Exception as exc:  # noqa: BLE001 - the change is listed by its title and place alone
+            self.log(f"describing the change {e.id!r}: {exc!r}")
+            return title, ""
+
     # ---------------------------------------------------------------- deleting recordings
 
     def do_delete_recordings(self, game: str, sessions: list[str]) -> "Trash":
@@ -736,9 +932,11 @@ class App:
             done.append(e)
         return done, failed
 
-    def other_recording(self) -> str | None:
-        """Why Delete must wait for another process's recording, in plain words, or None: the capture lock, held by
-        whatever records in this Windows session, looked at and let go at once (`capture_lock`; None: not looked at)."""
+    def other_recording(self, then: str = "delete recordings", nothing: str = "deleted nothing",
+                        doing: str = "deleting") -> str | None:
+        """Why Delete (or Apply and Undo: `then`, `nothing`, `doing` word it) must wait for another process's recording,
+        in plain words, or None: the capture lock, held by whatever records in this Windows session, looked at and let
+        go at once (`capture_lock`; None: not looked at)."""
         from lagdoctor.capture import session as sess
         if self.capture_lock is None:
             return None
@@ -746,12 +944,12 @@ class App:
         try:
             free = lock.acquire()
         except OSError as exc:
-            self.log(f"looking for a recording before deleting: {exc}")
-            return "lag-doctor could not tell whether a recording is running, so it deleted nothing."
+            self.log(f"looking for a recording before {doing}: {exc}")
+            return f"lag-doctor could not tell whether a recording is running, so it {nothing}."
         finally:
             lock.release()
         return None if free else ("Another lag-doctor recording is running, in a terminal or from an earlier window: "
-                                  "delete recordings once it has ended.")
+                                  f"{then} once it has ended.")
 
     def deleted(self, game: str, done: int, failed: list) -> dict:
         """What the page says once recordings were deleted, and whether their game is still in the Library (said as
@@ -769,6 +967,8 @@ class App:
         with self.lock:
             if self.rec_state is not None and self.rec_state.active:
                 raise Gone("A recording is already running.")
+            if self.fix_lock.locked():              # what it records first (the PC's settings) is being changed
+                raise Gone("lag-doctor is changing a setting: record once it is done.")
             rec = recording.Recorder(home=self.home, log=self.log, hwnd=lambda: self.window.hwnd,
                                      argv=argv(), launcher=self.launcher, folder=folder,
                                      post=lambda msg: self.window.call_soon(lambda: self.on_recorder(rec, msg)))
@@ -919,6 +1119,16 @@ class Trash:
 
 
 @dataclass(frozen=True)
+class Planned:
+    """The change Apply showed, before it is applied: `token` is the page's name for it (never the fix or its params),
+    `session` the recording that offered it, `plan` the fix's own (fixes/base.FixPlan, read when it was shown)."""
+    token: str
+    session: str
+    fix_id: str
+    plan: Any
+
+
+@dataclass(frozen=True)
 class Draft:
     """The program the player chose in Add a game, before it is added: `token` is the page's name for this choice
     (never a path), `exe` and `folder` as added.check_program gave them, `forms` the folder's."""
@@ -969,11 +1179,12 @@ def run() -> int:
             tell(f"lag-doctor's window could not start COM (HRESULT 0x{hr & 0xFFFFFFFF:08X}).")
             return 1
         from lagdoctor.capture import session as sess
+        from lagdoctor.fixes import flow
         from lagdoctor.stores import art
         from lagdoctor.winapi import dialogs, recycle
         app = App(home=home, runtime=runtime, create_fn=create_fn, log=log,
                   installed=lambda: library.installed_games(log), covers=art.covers, picker=dialogs.pick_program,
-                  trash=recycle.to_recycle_bin, capture_lock=sess.CAPTURE_LOCK_NAME)
+                  trash=recycle.to_recycle_bin, capture_lock=sess.CAPTURE_LOCK_NAME, fixes=flow.Fixes(home))
         try:
             app.run()
         finally:

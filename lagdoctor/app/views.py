@@ -15,7 +15,7 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from lagdoctor.analysis import crop
 from lagdoctor.analysis.window import window as cut_window
@@ -25,6 +25,8 @@ from lagdoctor.app.library import (ADDED_BY_YOU, STORE_NAMES, AddedGame, Entry, 
 from lagdoctor.app.library import _broad
 from lagdoctor.stores.exe import file_name as exe_file_name
 from lagdoctor.capture import session as sess
+from lagdoctor.fixes import flow
+from lagdoctor.fixes.base import is_gone
 from lagdoctor.model import C, Capture, Diagnosis, G, N, S, clean_note
 from lagdoctor.report import html, labels
 from lagdoctor.report.charts import fmt_elapsed, number
@@ -37,8 +39,8 @@ MOMENT_MAX_S = 120.0                  # longest span a moment shows
 TOP_PROGRAMS = 5
 RECENT = 6
 
-NO_FIX_HERE = ("Fix commands appear on your last recording only: `lagdoctor fix` takes its offers from that one and "
-               "the last check-up, so on this one it would act on another recording's findings.")
+NO_FIX_HERE = ("Fixes are applied from your last recording only: an older recording may describe this PC as it was "
+               "then, not as it is now.")
 
 # Charts on Results besides frame times: (id, title, unit, [columns], source the columns come from).
 CHARTS = (
@@ -402,6 +404,141 @@ def deleted_view(done: int, failed: list[tuple[Entry, str]], listed: bool) -> di
     return {"text": " ".join(said), "deleted": done, "listed": listed}
 
 
+# ------------------------------------------------------------------------------------- Apply and Undo (fixes) --
+
+NOT_LAST = ("A newer recording was made since this one: fixes are applied from the last recording only, so open that "
+            "one to apply its fixes.")
+SWEEP_CHANGE = ("A settings sweep's change, in a game's own settings file: in a terminal, `lagdoctor sweep --resume` "
+                "puts it back (and goes on with the sweep), and so does `lagdoctor undo game_setting`.")
+NEWER_CHANGE = "A newer lag-doctor made this change: undo it with that version."
+CONFLICT_NOTE = ("It is now neither how it was nor lag-doctor's setting, so Undo leaves it alone. Put it back anyway "
+                 "restores how it was before lag-doctor's change.")
+FIX_LOG = "The details are in lag-doctor's log."
+RESTART = {"game": "It takes effect the next time the game starts."}
+# What Apply says for each outcome of fixes/flow.apply but a confirmed change: the fix's own message names internal
+# values (a registry type, a mode's fields), so it goes to the log only.
+APPLIED = {
+    "noop": "This is set that way already, so nothing was changed.",
+    "gone": "What this fix would change is not there any more, so nothing was changed.",
+    "stale": ("It changed since lag-doctor looked at it, so nothing was changed. Click Apply this fix again to see it "
+              "as it is now."),
+    "failed": "Windows did not take the change, so nothing was changed. " + FIX_LOG,
+    "reverted": "The change did not take, so lag-doctor put back how it was. " + FIX_LOG,
+    "conflict": ("The change did not take, and putting back how it was did not work either. Settings lists it under "
+                 "the changes lag-doctor made, where you can put back how it was. " + FIX_LOG),
+    "busy": ("lag-doctor could not open its fix journal (another lag-doctor window may be using it), so nothing was "
+             "changed. Try again in a moment."),
+    "unsure": ("lag-doctor could not finish writing this change down. If it was made, Settings lists it under the "
+               "changes lag-doctor made, where Undo puts it back. " + FIX_LOG),
+}
+UNCONFIRMED = ("The change is in place, but lag-doctor could not confirm it took. Settings lists it under the changes "
+               "lag-doctor made, where Undo puts it back. " + FIX_LOG)
+# What Undo says for each case fixes/base.undo met (FixResult.why) but a change put back.
+UNDONE = {
+    "already": "It was back to how it was already, so there was nothing to undo.",
+    "ended": "That program has exited, so its change ended with it.",
+    "not_connected": "What it changed is not connected now, so it was left alone. Undo it again once it is connected.",
+    "changed": ("It was changed after lag-doctor set it, so it was left alone. Put it back anyway restores how it was "
+                "before lag-doctor's change."),
+    "unreadable": "lag-doctor could not read it now, so it was left alone. " + FIX_LOG,
+    "write_failed": "Windows did not take the undo, so it was not put back. " + FIX_LOG,
+    "no_readback": "The undo did not take: it was not put back. " + FIX_LOG,
+    "unknown": NEWER_CHANGE,
+    "unsure": ("lag-doctor could not finish writing the undo down, so it still lists the change: Undo it again to see "
+               "where it stands. " + FIX_LOG),
+}
+
+
+def refused_text(exc: BaseException) -> str:
+    """Why a fix will not make its change (its plan refused: fixes/flow.PLAN_ERRORS), in a sentence: the fix's own
+    words for a refusal it made (a protected process, a display that is not connected), Windows' for a read it could not
+    make."""
+    if isinstance(exc, OSError):
+        return f"lag-doctor could not read the setting this fix would change ({exc.strerror or exc})."
+    text = str(exc).strip().rstrip(".")
+    return f"lag-doctor will not make this change: {text}." if text else "lag-doctor will not make this change."
+
+
+def plan_view(token: str | None, plan: Any) -> dict[str, Any]:
+    """What Apply shows before it changes anything, as `lagdoctor fix` prints its plan: where, the change, its notes and
+    when it takes effect. `plan` is the token the page's second click applies by: the App gives none when there is
+    nothing to change (set that way already, or what it would change is gone), and `text` then says which."""
+    text = ""
+    if plan.noop:
+        text = "This is set that way already, so there is nothing to change."
+    elif is_gone(plan.before):
+        text = (f"{plan.summary}." if plan.session_only else
+                "What this fix would change is not connected now, so there is nothing to change.")
+    return {"plan": token, "where": str(plan.target), "change": str(plan.summary),
+            "notes": [str(n) for n in plan.notes], "restart": RESTART.get(plan.needs_restart or "", ""), "text": text}
+
+
+def applied_view(res: Any, plan: Any) -> dict[str, Any]:
+    """What the page says once Apply ran (fixes/flow.apply's outcome), in lag-doctor's own words. `entry` is the change's
+    journal id when it is in place, for its Undo."""
+    if res.state == "applied" and res.ok:
+        text = f"Done: {plan.summary}." + (f" {RESTART[plan.needs_restart]}" if plan.needs_restart in RESTART else "")
+    elif res.state == "applied":                 # in place, not confirmed (a refresh rate stored for after a restart)
+        text = UNCONFIRMED
+    else:
+        text = APPLIED.get(res.state, "lag-doctor could not apply it. " + FIX_LOG)
+    kept = res.state in ("applied", "conflict") and isinstance(res.entry_id, str) and bridge.entry_ok(res.entry_id)
+    # A conflict is neither the original nor lag-doctor's value: only putting it back anyway can undo it, as in Settings.
+    return {"text": text, "entry": res.entry_id if kept else None, "done": bool(res.ok),
+            "force": kept and res.state == "conflict"}
+
+
+def undone_view(res: Any, change: str) -> dict[str, Any]:
+    """What the page says once Undo ran (fixes/flow.undo's outcome), in lag-doctor's own words: `change` is the change
+    put back, in its fix's own words. `force` when it was left alone because it was changed since, so that the page
+    may offer to put it back anyway."""
+    if res.ok and res.why in ("already", "ended"):
+        text = UNDONE[res.why]
+    elif res.ok:
+        text = f"Undone: {change}. It is back to how it was." if change else "Undone: it is back to how it was."
+    else:
+        text = UNDONE.get(res.why, "lag-doctor could not undo it. " + FIX_LOG)
+    return {"text": text, "done": bool(res.ok), "force": res.why == "changed"}
+
+
+def _journal_time(value: Any) -> str:
+    """When a journal entry was made, in this PC's time, as a session's start is shown; '-' when it is not a time
+    Windows can show (one before 1970, or past the year 9999 in this time zone, raises there)."""
+    try:
+        made = datetime.fromisoformat(str(value))
+        return when_text(made.astimezone() if made.tzinfo is not None else made)
+    except (ValueError, OSError, OverflowError):
+        return "-"
+
+
+def changes_view(entries: list, about: Callable[[Any], tuple[str | None, str]] | None,
+                 paused: str = "") -> dict[str, Any]:
+    """The list of the changes lag-doctor made that are still in place, newest first, as `lagdoctor undo` lists them,
+    in Settings: each by its fix's title, the change and where it happened, with what Undo may do for it. `about(entry)`
+    gives the fix's title (None: a fix this lag-doctor does not know) and the change in the fix's own words. Every field
+    the journal holds is outside text: any program of the player's can write that file. `paused` says why there is no
+    list (an unreadable journal, or none here)."""
+    rows = []
+    for e in entries if about is not None else []:
+        title, change = about(e)
+        fid = e.fix_id if isinstance(e.fix_id, str) else ""
+        note, undo, force = "", True, False
+        if title is None:
+            note, undo = NEWER_CHANGE, False
+        elif fid in flow.NEVER_OFFERED:
+            note, undo = SWEEP_CHANGE, False
+        elif e.state == "conflict":
+            note, undo, force = CONFLICT_NOTE, False, True
+        elif e.session_only:
+            note = "It lasts until that program exits."
+        named = isinstance(e.id, str) and bridge.entry_ok(e.id)
+        rows.append({"id": e.id if named else None, "title": title or fid or "A change", "change": change,
+                     "where": str(e.target), "when": _journal_time(e.created_at), "note": note,
+                     "undo": undo and named, "force": force and named})
+    text = paused or ("" if rows else "lag-doctor has no changes of yours in place: none were made, or each was undone.")
+    return {"rows": rows, "text": text, "paused": bool(paused)}
+
+
 # ------------------------------------------------------------------------------------------------ results --
 
 def _series(table: Any, columns: tuple[str, ...]) -> tuple[list[float], list[dict[str, Any]]]:
@@ -454,20 +591,23 @@ def frame_bytes(main: dict[str, list]) -> tuple[bytes, int]:
     return data.tobytes(), len(ts)
 
 
-def _fixes(f, is_last: bool) -> list[dict[str, Any]]:
+def _fixes(f, is_last: bool, apply_ids: frozenset[str]) -> list[dict[str, Any]]:
+    """A finding's fixes as Results lists them: `apply` when the window can apply it here (an offer of the last
+    recording whose fix is among `apply_ids`, fixes/flow.offerable), `can_apply` when it is an automatic fix at all."""
     out = []
     for fx in f.fixes:
         restart = {"game": "Restart the game afterwards.", "reboot": "Restart the PC afterwards."}.get(
             fx.needs_restart or "", "")
         out.append({"title": fx.title, "detail": fx.detail or "", "restart": restart, "admin": bool(fx.needs_admin),
-                    "command": f"lagdoctor fix {fx.fix_id}" if fx.fix_id and is_last else None,
+                    "apply": is_last and flow.offerable(fx.fix_id, fx.params, apply_ids),
                     "can_apply": bool(fx.fix_id)})
     return out
 
 
 def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list], is_last: bool,
-                 has_report: bool) -> dict[str, Any]:
-    """Screen 4, without the frame times themselves (frame_bytes hands those over in a shared buffer)."""
+                 has_report: bool, apply_ids: frozenset[str] = frozenset()) -> dict[str, Any]:
+    """Screen 4, without the frame times themselves (frame_bytes hands those over in a shared buffer). `apply_ids`: the
+    fixes the window applies (App.fixes' known(); none where it applies none), offered on the last recording only."""
     stats = _dict(d.stats)
     target = _dict(cap.target)
     started = None
@@ -497,7 +637,7 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
     findings = [{"title": f.title, "confidence": f.confidence,
                  "confidence_text": labels.CONFIDENCE.get(f.confidence, str(f.confidence)),
                  "summary": f.summary, "evidence": [x.text for x in f.evidence if isinstance(x.text, str)],
-                 "fixes": _fixes(f, is_last)} for f in d.findings]
+                 "fixes": _fixes(f, is_last, apply_ids)} for f in d.findings]
     any_fix = any(fx["can_apply"] for f in findings for fx in f["fixes"])
     charts = [_chart(cap, spec) for spec in CHARTS]
     # The charts' right edge: the recording's length, or the last sample when that is later (report/html._x1).
