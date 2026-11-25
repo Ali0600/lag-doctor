@@ -42,7 +42,8 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   2026-11-19 on the owner's "Merge without a try": nobody has run it in the app yet), then program icons for Epic and
   recorded games, Rename and Delete (M6j, PR #66, merged 2026-11-20 after the owner's own try in the app: "It
   works", which covered #64's Add a game too).
-- [ ] M7: Apply and Undo in the app (branch `m7-apply-undo`), held for the owner's own try in the app before it merges.
+- [x] M7: Apply and Undo in the app (PR #70, merged 2026-11-24 after the owner's own try in the app, which applied a fix
+  and undid it).
 - [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away.
 
 ## What it looks like
@@ -768,7 +769,8 @@ above:
 - [x] Settings: the changes lag-doctor made that are still in place, newest first, once the journal is settled; Undo on
   each, Put it back anyway (a second click) for one changed since, a settings sweep's change left to the terminal and
   one a newer lag-doctor made left to that version.
-- [ ] The owner's own try in the app, before the merge.
+- [x] The owner's own try in the app (2026-11-24, on a demo library whose last recording offered a GPU preference for a
+  made-up program): the fix applied and undone; merged as PR #70.
 
 ### After that
 
