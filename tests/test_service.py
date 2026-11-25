@@ -23,6 +23,7 @@ import pytest
 
 from lagdoctor import clock
 from lagdoctor.capture import target as tgt
+from lagdoctor.capture import tracelock
 from lagdoctor import service as svc
 from lagdoctor.relay import protocol, server
 from lagdoctor.winapi import elevation, ntquery, pipe
@@ -40,6 +41,7 @@ def running_host(**kw):
     name = "lagdoctor-test-" + secrets.token_hex(8)
     stop, out = threading.Event(), {}
     kw.setdefault("presentmon_exe", PRESENTMON)
+    kw.setdefault("trace_lock", tr.own_trace_lock)       # the service's own SID exists only in the service
     host = svc.Host(kw.pop("parts", None) or tr.parts(), pipe_name=name, owner="", **kw)
     t = threading.Thread(target=lambda: out.setdefault("code", host.serve(stop)), name="host-under-test", daemon=True)
     t.start()
@@ -551,3 +553,92 @@ def test_a_hold_that_ends_after_the_recording_changes_nothing(game, monkeypatch)
             got = messages(c, "end", timeout=15.0)
         assert got == [{"t": "error", "why": "no game the relay could record started in time"}, {"t": "end"}], got
     assert codes == [protocol.EXIT_OK, protocol.EXIT_NO_CLIENT]
+
+
+# ---------------------------------------------------------------------------- the machine-wide trace lock ---
+
+MINE = {elevation.token_user_sid()}         # trusted: this account's own locks read as lag-doctor recordings here
+
+
+def test_a_caller_is_refused_while_another_recording_holds_the_trace_lock_and_served_once_it_is_free(game):  # noqa: F811
+    other = tr.own_trace_lock(MINE)              # an elevated relay's recording in another Windows session, say
+    assert other.acquire() == tracelock.HELD
+    stops: list[str] = []
+    parts = tr.parts(frames=lambda cfg, forward, alive: tr.FakeFrames(cfg, forward, alive, stops=stops),
+                     etw=lambda on_event: tr.FakeEtw(on_event, [], stops=stops))
+    try:
+        with running_host(parts=parts, trace_lock=lambda: tr.own_trace_lock(MINE)) as (host, name, _stop, _out):
+            why = refusal(name, ask_bytes(game, frames=True))
+            assert "another lag-doctor recording on this PC" in why and "would stop it" in why, why
+            assert host.served == 0 and stops == []
+            other.release()
+            with pipe.connect(name, 10.0) as c:
+                c.write(ask_bytes(game, frames=True), 5.0)
+                messages(c, "hello")
+                assert tracelock.check(trusted=MINE) == tracelock.BUSY      # this caller's recording holds it
+                c.write(protocol.start(clock.now()), 5.0)
+                messages(c, "rows")
+                c.write(protocol.stop(), 5.0)
+                messages(c, "end")
+            tr._until(lambda: tracelock.check(trusted=MINE) == tracelock.FREE, 15, "the lock to be let go")
+            assert host.served == 1 and sorted(stops) == ["frames", "net"]
+    finally:
+        other.release()
+
+
+def test_the_trace_lock_is_the_last_check_and_let_go_when_the_recording_fails(game, monkeypatch):  # noqa: F811
+    made: list = []
+
+    def lock():
+        made.append(tr.own_trace_lock(MINE))
+        return made[-1]
+
+    with running_host(presentmon_exe=None, trace_lock=lock) as (host, name, _stop, _out):
+        assert "no PresentMon" in refusal(name, ask_bytes(game, frames=True))
+        assert made == []                         # refused before it: never taken for that caller
+
+    def broken(self):
+        assert tracelock.check(trusted=MINE) == tracelock.BUSY
+        raise RuntimeError("the core broke")
+
+    monkeypatch.setattr(server.Relay, "serve", broken)
+    with running_host(trace_lock=lock) as (host, name, _stop, _out):
+        assert "the core broke" in refusal(name, ask_bytes(game), read_after_s=0.5)
+        tr._until(lambda: tracelock.check(trusted=MINE) == tracelock.FREE, 15, "the lock to be let go")
+    assert len(made) == 1
+
+
+def test_a_trace_lock_windows_cannot_answer_about_refuses_the_caller_with_why(game):  # noqa: F811
+    calls: list[str] = []
+    broken = OSError(None, "a device attached to the system is not functioning", None, 31)
+    with running_host(trace_lock=lambda: tr.StandInTraceLock(broken, calls)) as (host, name, _stop, _out):
+        why = refusal(name, ask_bytes(game))
+        assert "could not check whether another recording runs on this PC" in why and "not functioning" in why, why
+        assert host.served == 0 and calls == ["acquire"]
+
+
+def test_another_programs_hold_on_the_lock_name_does_not_stop_the_service_recording(game):  # noqa: F811
+    calls: list[str] = []
+    with running_host(trace_lock=lambda: tr.StandInTraceLock(tracelock.TAKEN, calls)) as (host, name, _stop, _out):
+        with pipe.connect(name, 10.0) as c:
+            c.write(ask_bytes(game), 5.0)
+            assert messages(c, "hello")[-1]["t"] == "hello"
+            c.write(protocol.stop(), 5.0)
+            messages(c, "end")
+        tr._until(lambda: calls == ["acquire", "release"], 15, "the lock to be let go")
+        assert host.served == 1
+
+
+def test_the_services_trace_lock_is_owned_by_its_own_service_sid_by_default():
+    assert svc.Host(tr.parts()).trace_lock().owner == scm.service_sid(protocol.SERVICE_NAME)
+
+
+def test_a_relay_core_that_cannot_be_made_once_the_lock_is_held_lets_it_go(game, monkeypatch):  # noqa: F811
+    def broken(self, *a, **k):
+        assert tracelock.check(trusted=MINE) == tracelock.BUSY          # taken just before
+        raise RuntimeError("no relay core")
+
+    monkeypatch.setattr(server.Relay, "__init__", broken)
+    with running_host(trace_lock=lambda: tr.own_trace_lock(MINE)) as (host, name, _stop, _out):
+        assert "could not judge what was asked" in refusal(name, ask_bytes(game))
+        assert tracelock.check(trusted=MINE) == tracelock.FREE and host.served == 0

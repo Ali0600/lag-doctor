@@ -10,20 +10,23 @@ origin and, for Play, the processes the recorder found, which the relay judges f
 1. Its own handle-free snapshot must show the recorder running as exactly that process in the relay's own Windows
    session, and with --game the game too (target.accept_target, which the recorder called before the prompt).
 2. PresentMon must pass its check again here (setup.verify).
-3. It creates the pipe: first instance only, remote clients refused, a DACL for the recorder's account, a medium
+3. It takes the machine-wide trace lock (capture/tracelock.py) and holds it until it ends: while another lag-doctor
+   recording on this PC holds it, the relay ends at once (EXIT_BUSY), since starting its trace sessions would stop
+   that recording's.
+4. It creates the pipe: first instance only, remote clients refused, a DACL for the recorder's account, a medium
    label, and Administrators as its owner, which only an elevated token may set (the recorder checks it).
-4. Only the recorder may stay connected: its pid and session are checked; anyone else is let go.
-5. For Play, each process the recorder names (`game`, up to protocol.MAX_GAMES) is judged by the folder rule on the
+5. Only the recorder may stay connected: its pid and session are checked; anyone else is let go.
+6. For Play, each process the recorder names (`game`, up to protocol.MAX_GAMES) is judged by the folder rule on the
    relay's own snapshots and its own read of the program's path (target.check_proposed): started after the relay, in
    its session, a program under one of the forms, none of lag-doctor's own, and the recorder still running. It
    answers `game` (that one is recorded) or `refused` with why, and waits on; it gives up when none is accepted by the
    recorder's wait plus GAME_SLACK_S, and whenever the recorder is gone.
-6. On `start` it runs PresentMon on the game (rows forwarded, not kept: PresentMonSource's `forward`) and the
+7. On `start` it runs PresentMon on the game (rows forwarded, not kept: PresentMonSource's `forward`) and the
    Kernel-Network session. It forwards the game's frame rows, the events of the game's processes (the game and what
    it started, from its own snapshot once a second) and of the recorder (its DNS self-test), whole; for every other
    program it counts bytes received and sent and passes on the totals only for programs in the recorder's session
    (DECISIONS 2026-11-08). Events of other programs never leave it.
-7. On `stop`, or when the recorder hangs up, it stops both, sends what is left and the final statuses, then `end`.
+8. On `stop`, or when the recorder hangs up, it stops both, sends what is left and the final statuses, then `end`.
    In the capture service it does so too when its caller's hold ends (Relay's `until`), and says why before `end`.
 
 It writes no file and prints nothing (pythonw has nowhere to print): before the pipe is up its exit code says what
@@ -194,6 +197,13 @@ def _image_path(pid: int) -> str | None:
     return ntquery.image_path(pid)
 
 
+def _trace_lock():
+    """The machine-wide trace lock (capture/tracelock.py), owned by Administrators as the relay's pipe is: only an
+    elevated token may set that owner."""
+    from lagdoctor.capture import tracelock
+    return tracelock.TraceLock(tracelock.ADMINISTRATORS)
+
+
 @dataclass
 class Parts:
     """What the relay runs, made replaceable for tests; the defaults are the real ones."""
@@ -203,6 +213,7 @@ class Parts:
     etw: Callable[..., Any] = _etw_session                  # (on_event) -> an ETW session
     me: int = field(default_factory=os.getpid)
     image: Callable[[int], str | None] = _image_path        # Play: a process's program path, read without a handle
+    trace_lock: Callable[[], Any] = _trace_lock             # () -> a tracelock.TraceLock, not yet acquired
 
 
 # ---------------------------------------------------------------------------------------- the process ---
@@ -234,6 +245,24 @@ def main(argv: list[str] | None = None, *, owner: str | None = None, parts: Part
             parts.verify(cfg.presentmon_exe)
         except Exception:  # noqa: BLE001 - SetupError, or anything that stops the check: never run it unchecked
             return protocol.EXIT_NOT_READY
+    # The machine-wide trace lock, before the pipe and until this process ends: the trace sessions' names are fixed, so
+    # PresentMon or the network trace started here would stop another lag-doctor recording's on this PC.
+    from lagdoctor.capture import tracelock
+    lock = parts.trace_lock()
+    try:
+        held = lock.acquire()
+    except OSError:
+        return protocol.EXIT_CRASH                # Windows could not say: never trace beside another recording
+    try:
+        if held == tracelock.BUSY:
+            return protocol.EXIT_BUSY
+        return _serve(cfg, parts, owner, me)      # TAKEN goes on: the recorder, which checked first, has said so
+    finally:
+        lock.release()
+
+
+def _serve(cfg: Config, parts: Parts, owner: str, me) -> int:
+    """main's part once the trace lock is taken: the pipe, the recorder on it, and the recording."""
     from lagdoctor.winapi import pipe
     try:
         server = pipe.PipeServer(cfg.pipe, owner + pipe.client_dacl([cfg.sid]), max_message=protocol.MAX_MESSAGE)

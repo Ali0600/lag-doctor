@@ -25,7 +25,10 @@ prompt approved, the service takes it from its caller, and so judges the caller 
    before the recording starts and the recording itself end by then (server.Relay's `until`), said in words, so a
    forgotten or hostile hold cannot keep every other window from the service. The recorder stops itself before that
    (relay/client.HOLD_MARGIN_S), so an honest recording ends cleanly with its frames.
-7. When the recording ends the service waits for the next caller, and stops itself after IDLE_S without one; the next
+7. Last of its checks, it takes the machine-wide trace lock (capture/tracelock.py) as its own SID, and lets it go once
+   the recording has ended: while another lag-doctor recording on this PC holds it (an elevated relay or watch in
+   another Windows session), the caller is refused, since starting the trace sessions would stop that recording's.
+8. When the recording ends the service waits for the next caller, and stops itself after IDLE_S without one; the next
    recording starts it again.
 
 It writes no file and prints nothing: a service has nowhere to print, and what a caller is refused is said on the
@@ -135,11 +138,15 @@ class Host:
     PresentMon (None: frame timing is refused). `owner`: the pipe's owner in SDDL ("O:<SID>"); the default is this
     service's own SID, which only its process holds, and "" leaves Windows' default (tests). `caller`: who the
     connected client is (default: from its token, pipe.PipeServer.caller). `hold_s`: how long one caller may hold the
-    service, from its ask to its recording's end (protocol.SERVICE_HOLD_S)."""
+    service, from its ask to its recording's end (protocol.SERVICE_HOLD_S). `trace_lock`: () -> the machine-wide trace
+    lock for one recording, not yet acquired (default a tracelock.TraceLock owned by this service's SID, as its pipe
+    is)."""
 
     def __init__(self, parts: server.Parts | None = None, *, presentmon_exe=None, pipe_name: str = protocol.SERVICE_PIPE,
                  owner: str | None = None, idle_s: float = IDLE_S, first_ask_s: float = FIRST_ASK_S,
-                 caller: Callable[[Any], Any] | None = None, hold_s: float = protocol.SERVICE_HOLD_S) -> None:
+                 caller: Callable[[Any], Any] | None = None, hold_s: float = protocol.SERVICE_HOLD_S,
+                 trace_lock: Callable[[], Any] | None = None) -> None:
+        from lagdoctor.capture import tracelock
         from lagdoctor.winapi import service
         self.parts = parts or server.Parts()
         if self.parts.snapshot is None:
@@ -147,6 +154,8 @@ class Host:
         self.presentmon_exe = presentmon_exe
         self.pipe_name = pipe_name
         self.owner = f"O:{service.service_sid(protocol.SERVICE_NAME)}" if owner is None else owner
+        self.trace_lock = trace_lock or (lambda: tracelock.TraceLock(service.service_sid(protocol.SERVICE_NAME)))
+        self._trace = None                     # the trace lock the caller now recorded for holds
         self.idle_s, self.first_ask_s, self.hold_s = idle_s, first_ask_s, hold_s
         self.caller = caller or (lambda srv: srv.caller())
         self.served = 0                        # callers recorded for (tests read it)
@@ -217,9 +226,10 @@ class Host:
         try:
             relay = self._judge(srv, data, until)
         except Refused as no:
-            self._say_no(srv, str(no))
+            self._say_no(srv, str(no))                 # the trace lock is _judge's last check: never held here
             return True
         except Exception as exc:  # noqa: BLE001 - one caller's surprise must not end the service for the next
+            self._let_go_of_the_trace()                # the relay core could not be made once it was held
             self._say_no(srv, f"the capture service could not judge what was asked ({type(exc).__name__}: {exc})")
             return True
         self.served += 1
@@ -231,7 +241,29 @@ class Host:
             relay._goodbye()                           # so the words are read before the pipe is disconnected
         finally:
             left = relay.close(READER_GONE_S)
+            self._let_go_of_the_trace()                # its sources stopped in serve(): another may trace now
         return left
+
+    def _hold_the_trace(self) -> None:
+        """The machine-wide trace lock for the caller's recording, as the last of _judge's checks: Refused while another
+        lag-doctor recording on this PC holds it, or when Windows cannot say; held otherwise until the recording ends
+        (TAKEN, which another program holds, goes on: there is nothing to hold)."""
+        from lagdoctor.capture import tracelock
+        lock = self.trace_lock()
+        try:
+            got = lock.acquire()
+        except OSError as exc:
+            raise Refused(f"the capture service could not check whether another recording runs on this PC ({exc})"
+                          ) from None
+        if got == tracelock.BUSY:
+            raise Refused("another lag-doctor recording on this PC, in another Windows session, is timing frames or "
+                          "tracing the network, and recording now would stop it")
+        self._trace = lock
+
+    def _let_go_of_the_trace(self) -> None:
+        lock, self._trace = self._trace, None
+        if lock is not None:
+            lock.release()
 
     def _judge(self, srv, data: bytes, until: float) -> server.Relay:
         """The caller and what it asks for, judged; the relay that will record it, which ends at `until` (its hold's
@@ -301,5 +333,6 @@ class Host:
         cfg = server.Config(pipe=self.pipe_name, recorder=(pid, rec.create_time), sid=who.sid, game=ask["game"],
                             frames=ask["frames"], network=ask["network"], presentmon_exe=exe,
                             folders=folders, wait_s=ask["wait_s"])
+        self._hold_the_trace()                         # last: no check after it may refuse the caller
         return server.Relay(cfg, srv, who.session, self.parts, since=since, me=(me.pid, me.create_time), tree=tree,
                             until=until)

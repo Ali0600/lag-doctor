@@ -30,6 +30,7 @@ from lagdoctor.capture import netflows as nf
 from lagdoctor.capture import presentmon as pm
 from lagdoctor.capture import session as sess
 from lagdoctor.capture import target as tgt
+from lagdoctor.capture import tracelock
 from lagdoctor.capture.base import Collector
 from lagdoctor.model import F
 from lagdoctor.relay import client, protocol, server
@@ -192,10 +193,17 @@ class FakeEtw:
                 "pump_alive": self.running and self.alive, "process_trace_rc": None}
 
 
-def parts(*, snapshot=None, frames=None, etw=None, verify=None) -> server.Parts:
+def own_trace_lock(trusted=None) -> tracelock.TraceLock:
+    """The machine-wide trace lock as this token may hold it: owned by its own account, where the relay's is owned by
+    Administrators (only an elevated token may set that), under the test's own name (tests/conftest.py). Trusted
+    only when `trusted` names this account, so by default a second one reads TAKEN, never BUSY."""
+    return tracelock.TraceLock(elevation.token_user_sid(), trusted=trusted)
+
+
+def parts(*, snapshot=None, frames=None, etw=None, verify=None, trace_lock=None) -> server.Parts:
     return server.Parts(snapshot=snapshot or snapshot_with(), verify=verify or (lambda exe: None),
                         frames=frames or (lambda cfg, forward, alive: FakeFrames(cfg, forward, alive)),
-                        etw=etw or (lambda on_event: FakeEtw(on_event, [])))
+                        etw=etw or (lambda on_event: FakeEtw(on_event, [])), trace_lock=trace_lock or own_trace_lock)
 
 
 @pytest.fixture
@@ -441,6 +449,75 @@ def test_a_recorder_that_never_connects_ends_the_relay(game, monkeypatch):
     t0 = time.monotonic()
     assert server.main(_argv(game), owner="", parts=parts()) == protocol.EXIT_NO_CLIENT
     assert time.monotonic() - t0 < 5
+
+
+class StandInTraceLock:
+    """The relay's trace lock with a set answer: acquire() returns it, or raises it; each call is noted in `calls`."""
+
+    def __init__(self, answer, calls: list) -> None:
+        self.answer, self.calls = answer, calls
+
+    def acquire(self):
+        self.calls.append("acquire")
+        if isinstance(self.answer, BaseException):
+            raise self.answer
+        return self.answer
+
+    def release(self) -> None:
+        self.calls.append("release")
+
+
+def test_a_relay_that_finds_another_recording_tracing_ends_before_its_pipe_exists(game, monkeypatch):
+    mine = {elevation.token_user_sid()}
+    other = own_trace_lock(mine)                    # another Windows session's recording holds the lock
+    assert other.acquire() == tracelock.HELD
+    try:
+        monkeypatch.setattr(pipe, "PipeServer", lambda *a, **k: pytest.fail("a pipe was made"))
+        assert server.main(_argv(game), owner="", parts=parts(trace_lock=lambda: own_trace_lock(mine))) == \
+            protocol.EXIT_BUSY
+    finally:
+        other.release()
+    calls: list[str] = []
+    broken = OSError(None, "a device attached to the system is not functioning", None, 31)
+    assert server.main(_argv(game), owner="", parts=parts(trace_lock=lambda: StandInTraceLock(broken, calls))) == \
+        protocol.EXIT_CRASH                         # Windows could not say: nothing traced beside it
+    assert calls == ["acquire"]
+
+
+def test_the_relay_holds_the_trace_lock_from_before_its_pipe_until_it_ends(game, monkeypatch):
+    mine = {elevation.token_user_sid()}
+    seen: list[str] = []
+    real_init = pipe.PipeServer.__init__
+
+    def made(self, *a, **k):
+        seen.append(tracelock.check(trusted=mine))   # the pipe comes once the lock is held
+        real_init(self, *a, **k)
+    monkeypatch.setattr(pipe.PipeServer, "__init__", made)
+    monkeypatch.setattr(server, "CLIENT_WAIT_S", 0.5)
+    assert server.main(_argv(game), owner="", parts=parts(trace_lock=lambda: own_trace_lock(mine))) == \
+        protocol.EXIT_NO_CLIENT
+    assert seen == [tracelock.BUSY] and tracelock.check(trusted=mine) == tracelock.FREE   # let go as it ended
+
+
+def test_the_relay_takes_the_trace_lock_only_once_presentmon_passed_and_goes_on_when_another_program_holds_it(
+        game, monkeypatch):
+    from lagdoctor import setup
+    calls: list[str] = []
+
+    def bad(exe):
+        raise setup.VerifyError("its SHA-256 does not match")
+    argv = _argv(game) + ["--frames", "--presentmon-exe", str(Path(sys.executable).resolve())]
+    assert server.main(argv, owner="", parts=parts(verify=bad, trace_lock=lambda: StandInTraceLock(
+        tracelock.HELD, calls))) == protocol.EXIT_NOT_READY
+    assert calls == []
+    monkeypatch.setattr(server, "CLIENT_WAIT_S", 0.5)
+    assert server.main(_argv(game), owner="", parts=parts(trace_lock=lambda: StandInTraceLock(
+        tracelock.TAKEN, calls))) == protocol.EXIT_NO_CLIENT          # its pipe was made and waited on
+    assert calls == ["acquire", "release"]
+
+
+def test_the_relays_trace_lock_is_owned_by_administrators_as_its_pipe_is():
+    assert server.Parts().trace_lock().owner == tracelock.ADMINISTRATORS == client.ADMINISTRATORS
 
 
 def test_only_an_elevated_relay_can_own_its_pipe(game):

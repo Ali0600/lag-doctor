@@ -24,7 +24,7 @@ from lagdoctor.capture import session as sess
 from lagdoctor.capture import target as tgt
 from lagdoctor.relay import client, protocol
 from lagdoctor.winapi import elevation, windows
-from tests.test_cli import FakeLink, P, _session_now, fake_world  # noqa: F401 - fake_world is a fixture
+from tests.test_cli import FakeLink, P, _session_now, _this_tokens_trace_lock, fake_world  # noqa: F401 - a fixture
 from tests import test_control as tc
 from tests import test_folder_wait as fw
 
@@ -495,6 +495,7 @@ def test_without_the_relay_the_wait_looks_from_the_pre_flight_and_names_no_game(
 def test_an_administrator_window_never_writes_a_short_name_out_long(play, monkeypatch, tmp_path, elevated):
     monkeypatch.setattr(elevation, "can_trace", lambda: True)
     monkeypatch.setattr(elevation, "is_elevated", elevated)
+    _this_tokens_trace_lock(monkeypatch)          # it records here, holding the trace lock as this token may
     assert _watch(play, tmp_path) == 0
     # the pre-flight's too, and the look before the wait
     assert play["waits"][0]["resolve"] is False and play["resolves"] == [False, False]

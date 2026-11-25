@@ -69,6 +69,13 @@ PRIVATE_COPY_POLICY = {"setup": "refuse", "watch": "refuse", "fix": "refuse", "u
 # (measured with scripts/etw_access.py on 2026-11-06; docs/research/install-and-rights.md, E1).
 TRACKER_NOT_IN_GROUP = ("The game-server tracker still needs one UAC prompt: Windows does not let the Performance "
                         "Log Users group start it, so add `--elevate` to a recording to include it.")
+# The machine-wide trace lock (capture/tracelock.py): the trace sessions of frame timing and the network trace have
+# fixed names, so starting them stops another recording's, in any Windows session on this PC.
+TRACE_BUSY = ("Not recorded: another lag-doctor recording on this PC, in another Windows session, is timing frames or "
+              "tracing the network, and starting this one would stop it. Try again once it has ended.")
+TRACE_TAKEN = ("(Another program holds the name lag-doctor uses to keep two recordings on this PC apart, so a "
+               "lag-doctor recording in another Windows session could stop this one's frame timing and network "
+               "trace.)")
 
 # Console control events (wincon.h). Windows ends the process 5 s after CTRL_CLOSE_EVENT.
 CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT = 0, 1, 2, 5, 6
@@ -493,6 +500,7 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
     # session names, so a second one would silently end the first one's tracing). This window holds the lock
     # for the whole recording, the relay's part included.
     lock = sess.CaptureLock()
+    trace = _TraceGuard(say)          # the machine-wide lock, for another Windows session's recordings
     if not _take_lock(lock, say):
         return EXIT_BUSY
     relay = None
@@ -529,6 +537,7 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
             frames = exe is not None
             if frames:
                 relay, frames, frames_why, code = _elevation(args, target, exe, frames_why, interactive, say=say,
+                                                             trace=trace,
                                                              launcher=launcher, folders=forms, wait_s=wait_s)
                 if code is not None:
                     return code
@@ -540,8 +549,13 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
                     return code
                 _watching(target, observers, say)
             _check_cancel(cancel)
+            # PresentMon or the network trace started in this window: held with the capture lock while it records (an
+            # elevated window), or only honoured (a Performance Log Users member may set no owner the lock trusts). A
+            # cancel that lands meanwhile is the session's to see (SessionOptions.cancel).
+            if _traces_here(args, frames, relay) and (trace.hold() if _elevated() else trace.busy()):
+                return EXIT_BUSY
             return _record(args, target, exe, frames, frames_why, relay, stop=stop, say=say,
-                           interactive=interactive is not False, observers=observers,
+                           interactive=interactive is not False, observers=observers, trace=trace,
                            tool_alone=tool_alone, tool_roots=tool_roots, cancel=cancel, remember=remember,
                            show_summary=show_summary, sound=sound, start_advice=start_advice)
     except Cancelled:
@@ -550,6 +564,7 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
     finally:
         if relay is not None:
             relay.close()
+        trace.release()
 
 
 def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, frames: bool, frames_why: str,
@@ -557,12 +572,12 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
             interactive: bool = True, observers: Any = None, tool_alone: tuple[tuple[int, int], ...] = (),
             tool_roots: Callable[[dict[int, Any]], Any] | None = None, cancel: threading.Event | None = None,
             remember: bool = True, show_summary: bool = True, sound: Callable[[str], bool] | None = None,
-            start_advice: bool = True) -> int:
+            start_advice: bool = True, trace: "_TraceGuard | None" = None) -> int:
     """Record, save and analyse. Ctrl+C, Ctrl+Break and closing the window all stop the recording; none of them can
     lose it once it is being stopped and saved. With a relay (relay/client.RelayLink), frame timing and the
-    game-server tracker come through it, and it is let go as soon as the recording stops. `stop`, `say`, `observers`,
-    the tool processes, `remember`, `show_summary` and `sound` as in cmd_watch; `interactive` False: no status line
-    and no console handling (nobody is there)."""
+    game-server tracker come through it, and it is let go as soon as the recording stops; so is the trace lock this
+    window holds (`trace`). `stop`, `say`, `observers`, the tool processes, `remember`, `show_summary` and `sound` as in
+    cmd_watch; `interactive` False: no status line and no console handling (nobody is there)."""
     from lagdoctor.capture import session as sess
     from lagdoctor.model import SourceStatus, clean_note
     say = _teller(say)
@@ -621,6 +636,8 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
             try:
                 cap = sess.Session(target, opts, printer=printer, observers=observers).run(stop, ctrl_c=guard)
             finally:
+                if trace is not None:
+                    trace.release()                   # its trace sessions have stopped: another recording may start
                 if relay is not None:
                     relay.close()
             if cap.target.get("stop_reason") == sess.CANCELLED:
@@ -722,6 +739,82 @@ def _take_lock(lock, say: Callable[[str], None] | None = None) -> bool:
     return False
 
 
+def _trace_lock():
+    """The machine-wide trace lock an elevated window holds while it records PresentMon or the network trace itself
+    (capture/tracelock.py), owned by Administrators: only an elevated token may set that owner."""
+    from lagdoctor.capture import tracelock
+    return tracelock.TraceLock(tracelock.ADMINISTRATORS)
+
+
+def _traces_here(args: argparse.Namespace, frames: bool, relay: Any) -> bool:
+    """Does this window start a trace session itself? PresentMon, for frame timing with no relay link; the network
+    trace, with no link and the network on, for a token that may start or stop trace sessions (one that may not could
+    not stop another recording's either)."""
+    if relay is not None:
+        return False
+    if frames:
+        return True
+    if args.no_network:
+        return False
+    try:
+        from lagdoctor.winapi import elevation
+        return elevation.can_trace()
+    except OSError:
+        return True                                   # cannot tell: honour the lock
+
+
+class _TraceGuard:
+    """One watch's side of the machine-wide trace lock (capture/tracelock.py), for another Windows session's lag-doctor
+    recording, which starting this one's trace sessions would stop. busy() checks it before the capture service is
+    asked and before the UAC prompt; hold() takes it (an elevated window) for a recording that starts them here. Each
+    says why watch must not go on; that another program holds the lock's name is said once."""
+
+    def __init__(self, say: Callable[[str], None]) -> None:
+        self.say = say
+        self.told = False                             # TAKEN was said
+        self.lock = None                              # the tracelock.TraceLock this window holds
+
+    def _judged(self, state: str) -> bool:
+        from lagdoctor.capture import tracelock
+        if state == tracelock.BUSY:
+            self.say(TRACE_BUSY)
+            return True
+        if state == tracelock.TAKEN and not self.told:
+            self.told = True
+            self.say(TRACE_TAKEN)
+        return False
+
+    def _unknown(self, exc: OSError) -> bool:
+        self.say(f"lag-doctor could not check whether another recording runs on this PC ({exc}), so it did not "
+                 "start one.")
+        return True
+
+    def busy(self) -> bool:
+        """True (said) when watch must not go on: another recording holds the lock, or Windows could not say."""
+        from lagdoctor.capture import tracelock
+        try:
+            return self._judged(tracelock.check())
+        except OSError as exc:
+            return self._unknown(exc)
+
+    def hold(self) -> bool:
+        """Take the lock for this window's recording (release() lets it go); True (said) as busy() is."""
+        from lagdoctor.capture import tracelock
+        lock = _trace_lock()
+        try:
+            state = lock.acquire()
+        except OSError as exc:
+            return self._unknown(exc)
+        if state == tracelock.HELD:
+            self.lock = lock
+        return self._judged(state)
+
+    def release(self) -> None:
+        lock, self.lock = self.lock, None
+        if lock is not None:
+            lock.release()
+
+
 class _ConsoleControl:
     """While recording and saving: Ctrl+Break stops the recording instead of killing the process, and closing
     the console window stops it, ends the network trace session at once (it would outlive us otherwise) and
@@ -800,17 +893,21 @@ def _watching(target: dict[str, Any], observers: Any, say: Callable[[str], None]
 def _elevation(args: argparse.Namespace, target: dict[str, Any] | None, exe: Path, frames_why: str,
                interactive: bool | None, *, say: Callable[[str], None], launcher: Callable[..., Any] | None,
                folders: tuple[str, ...] | None = None, wait_s: float | None = None,
-               ) -> tuple[Any, bool, str, int | None]:
+               trace: _TraceGuard | None = None) -> tuple[Any, bool, str, int | None]:
     """Frame timing's rights, once PresentMon is there: (relay link or None, whether frames are recorded, why not,
     watch's exit code or None to go on). For the running game `target`, or for --wait-folder its folder's `folders`
-    and `wait_s` (target None: the prompt comes before the game exists)."""
+    and `wait_s` (target None: the prompt comes before the game exists). `trace`: the watch's _TraceGuard, which the
+    capture service and the UAC prompt are asked only past (default: one of its own)."""
     from lagdoctor.winapi import elevation
     relay, frames = None, True
+    trace = trace if trace is not None else _TraceGuard(say)
     may_trace = elevation.can_trace()
     # An explicit --elevate also elevates an account that may trace only through Performance Log
     # Users: Windows lets that group start frame timing but not the game-server tracker (E1, 2026-11-06).
     if not may_trace or (args.elevate and not _elevated()):
         if not args.no_elevate:               # the capture service, when installed: the same, with no prompt
+            if trace.busy():                  # it would stop another Windows session's recording, as a relay would
+                return None, frames, frames_why, EXIT_BUSY
             relay, code = _via_service(args, target, say=say, folders=folders, wait_s=wait_s)
             if code is not None:
                 return None, frames, frames_why, code
@@ -818,6 +915,8 @@ def _elevation(args: argparse.Namespace, target: dict[str, Any] | None, exe: Pat
                 return relay, frames, frames_why, None
         choice = elevation_choice(args.elevate, args.no_elevate, _interactive(interactive), _ask, say=say)
         if choice == "elevate":
+            if trace.busy():                  # again: the answer may have taken a while, and no prompt is in vain
+                return None, frames, frames_why, EXIT_BUSY
             relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher, folders=folders,
                                        wait_s=wait_s)
             if code is not None:
@@ -1123,6 +1222,8 @@ def _relay_failure(exc, play: bool = False) -> tuple[int, str]:
     if exc.code == protocol.EXIT_NOT_READY:
         return EXIT_NOT_READY, ("PresentMon failed its check in the administrator part of the recording, so nothing "
                                 "was recorded. Run `lagdoctor setup` here, then start the recording again.")
+    if exc.code == protocol.EXIT_BUSY:          # the relay found another recording holding the trace lock
+        return EXIT_BUSY, TRACE_BUSY
     if exc.code == protocol.EXIT_TARGET:
         return EXIT_TARGET_CHANGED, ("When the relay checked, the game or this window was no longer running as "
                                      "approved (the game may have exited while the UAC prompt was up), so nothing "

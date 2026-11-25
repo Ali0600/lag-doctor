@@ -86,6 +86,8 @@ EXIT_PIPE = 4              # its pipe could not be made: the name was taken, or 
 EXIT_NO_CLIENT = 5         # the recorder did not connect, name the game (Play) or start the recording in time
 EXIT_NOT_READY = 6         # PresentMon is missing or failed its check (watch's own EXIT_NOT_READY is 6 too)
 EXIT_PROTOCOL = 7          # the recorder sent something the protocol does not allow
+EXIT_BUSY = 8              # another lag-doctor recording on this PC, in another Windows session, runs frame timing or
+                           # the network trace (capture/tracelock.py): a relay that started them would stop it
 EXIT_HELD = 9              # the capture service's relay core only: the caller held the service for SERVICE_HOLD_S
 
 # The PresentMon columns the recorder reads (presentmon.frame_row and PresentMonSource._add), with the type each
