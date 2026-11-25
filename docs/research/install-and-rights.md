@@ -181,7 +181,7 @@ Estimates from the designs, unsourced: B about 1.5 to 2.5 weeks, A about 2 to 4 
 | E6 | Smart App Control enforcing VM: the MSI layout runs, inventory's PowerShell child returns JSON in Constrained Language Mode, Defender scan clean | the public release |
 | E7 | winget install, upgrade, uninstall from elevated, unelevated and standard-account shells, and on Windows 10; uninstall removes the service. **MSI part done 2026-11-08 (section 9): the MSI installs, runs from a fresh shell and uninstalls with nothing left, from an elevated shell that never prompts, on Windows Server 2025; winget, unelevated and standard-account shells, an upgrade, and Windows 10 not yet** | the public release |
 | E8 | Red-first tests of each service guard: another session refused, a squatted pipe fails loudly, a PID in another session refused, no other process's network events relayed, nothing loaded from a user-writable path | shipping the service |
-| E9 | Stage 4's caller checks under the service's own token (`drive.py e9`): a throwaway standard account may start the service once its descriptor grants interactive users SERVICE_START, and may not stop or reconfigure it; the service reads each caller's account, session and elevation through the pipe (ImpersonateNamedPipeClient at identification level, with SeImpersonatePrivilege trimmed away); which owners it may give its pipe (its service SID, LocalService); what WTSEnumerateProcessesExW tells it. **Not run yet.** Measured here first (build 26200, unelevated, 2026-11-25): a pipe server read its same-account client's token at identification level, before any message as well as after, and its thread was back to the process's own token after RevertToSelf; WTSEnumerateProcessesExW listed all 285 processes of both sessions but gave a SID for only 111, the ones this account may query, so it reads each token with the caller's own access and would open a game | the service's start mode, its caller checks, the pipe's owner, how the game's tree is judged |
+| E9 | Stage 4's caller checks under the service's own token (`drive.py e9`): a throwaway standard account may start the service once its descriptor grants interactive users SERVICE_START, and may not stop or reconfigure it; the service reads each caller's account, session and elevation through the pipe (ImpersonateNamedPipeClient at identification level, with SeImpersonatePrivilege trimmed away); which owners it may give its pipe (its service SID, LocalService); what WTSEnumerateProcessesExW tells it. **Done 2026-11-25 on a GitHub runner (section 12): the standard account started the service once interactive users had SERVICE_START and was refused stop and change-config; the service read each caller's account, session and elevation through the pipe at identification level without SeImpersonatePrivilege; it may own its pipe as its service SID, and by default LocalService owns it; WTSEnumerateProcessesExW gave it no SID but its own.** Measured here first (build 26200, unelevated, 2026-11-25): a pipe server read its same-account client's token at identification level, before any message as well as after, and its thread was back to the process's own token after RevertToSelf; WTSEnumerateProcessesExW listed all 285 processes of both sessions but gave a SID for only 111, the ones this account may query, so it reads each token with the caller's own access and would open a game | the service's start mode, its caller checks, the pipe's owner, how the game's tree is judged |
 
 ## 7. Going public
 
@@ -404,6 +404,45 @@ run, here and on CI, whose suite runs elevated at High integrity (section 8):
   a pipe made at High integrity without a label, so the recorder of `docs/LAUNCHER-PLAN.md` M3 never needed the
   label to get in; the label keeps lower processes out. The `\\localhost` control opened its pipe on the runner,
   and the exact-DACL test passed with the runner's account written `LA` [verified: both runs' logs].
+
+## 12. The caller as the service sees it (E9, 2026-11-25)
+
+Run by `.github/workflows/experiments.yml` on `windows-2025` (`drive.py e9`, about 20 s; run 45608542271, its
+`stage2-results` artifact's `e9.json` and `e9/`). The first two runs (45606820643, 45607765432) made no account:
+`net.exe user <name> <password> /add` asks "Do you want to continue this operation?" for a password over 14
+characters, from the console rather than stdin, and answers itself "No valid response was provided", so E9's password is
+14 random characters (`logon.PASSWORD_LENGTH`). The service was E3's unrestricted one: LocalService, its one privilege
+SeChangeNotifyPrivilege, System integrity, session 0, the experiment layout's `python.exe service_host.py e9`
+[verified: its token, read inside it]. The callers: a throwaway local account made by the job's administrator
+(`BUILTIN\Users`, `INTERACTIVE`, `CONSOLE LOGON`, medium integrity, not elevated), run through
+CreateProcessWithLogonW in the job's session 2, and the job's own elevated administrator, each running E9's client from
+the layout's runtime.
+
+- **Who may start it.** With the descriptor `sc.exe` gives a new service
+  (`D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)`), the
+  standard account's OpenServiceW was refused SERVICE_START, SERVICE_STOP and SERVICE_CHANGE_CONFIG with
+  ERROR_ACCESS_DENIED and given SERVICE_QUERY_STATUS. Once `sc.exe sdset` had added `RP` to the interactive users'
+  entry (`(A;;CCLCSWRPLOCRRC;;;IU)`, read back with `sdshow`), it opened the service for SERVICE_START, StartServiceW
+  started it, and stop and change-config were still refused. The service was running when the client next read its
+  status, and the client's pipe connected 0.05 s later [verified: `e9.json`, `e9/client-before.json`,
+  `e9/client-after.json`].
+- **Who is calling.** After each caller's first message the service called ImpersonateNamedPipeClient, OpenThreadToken
+  with OpenAsSelf and RevertToSelf: an impersonation token at identification level (the level lag-doctor's pipe client
+  allows) naming the caller's own account, its session (2, as GetNamedPipeClientSessionId said) and its elevation
+  (false for the standard account, true for the administrator), with every group the caller's own token lists, under
+  a token without SeImpersonatePrivilege. The service's thread was back on its own token each time (OpenThreadToken:
+  ERROR_NO_TOKEN) [verified: `e9/e9-<pid>.json`, against each client's own token]. On this PC (build 26200,
+  unelevated) the same read also worked before the client had sent anything [measured 2026-11-25, same account].
+- **Who owns its pipe.** CreateNamedPipeW under the service's token accepted the owner `O:<service SID>` and `O:LS`;
+  named none, the owner is LocalService (`S-1-5-19`), which every LocalService service may set too, so the service names
+  its own service SID and a client checks for that SID: both clients read it back with GetSecurityInfo, and each read
+  GetNamedPipeServerProcessId equal to the PID the SCM reports for the service [verified: `e9.json`].
+- **The accounts of the game's tree.** As the service, WTSEnumerateProcessesExW at level 1 listed 148 processes in
+  sessions 0 and 2 and gave a SID for one, its own: both callers' entries had none [verified: `e9.json`]. On this PC it
+  gave one only for the processes the caller may query (section 6, E9's row), so it reads each token with the caller's
+  access. Neither way can the service learn a game's account without a handle.
+
+What a runner cannot show: a client edition (Windows 11 Home), and an account made the way a player's is.
 
 ## Decided (2026-11-06) and still open
 

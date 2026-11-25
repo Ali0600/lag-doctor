@@ -239,6 +239,25 @@
 
 ---
 
+## 2026-11-25: The capture service starts on demand, by its caller, not by a named-pipe trigger
+
+Stage 4's plan had the service start when a recorder opens its pipe (the trigger E3b measured), and stop itself when
+idle. Settled by this session while building it, before the MSI's part: the player sees no difference, since either
+way a recording starts the service in a fraction of a second and no prompt appears.
+
+- **Demand start, with SERVICE_START for interactive users in the service's own descriptor, and the recorder calls
+  StartServiceW before it connects (chosen)**: declarative in the MSI (`PermissionEx` under `ServiceInstall`, Windows
+  Installer's MsiLockPermissionsEx table), and measured in E9: a standard account started the service this way, and
+  was still refused stop and change-config.
+- **The named-pipe trigger**: rejected. Windows Installer's MsiServiceConfig table sets delayed auto-start, required
+  privileges, the service SID type, the preshutdown timeout and the failure-actions flag, and no trigger, so it would
+  take a custom action (`sc.exe triggerinfo`, or ChangeServiceConfig2 from code) in an MSI that has none.
+- **Automatic start**: rejected. A LocalService process would run on every PC from boot, holding its pipe while
+  nobody records.
+
+Revisit hook: the start goes through `StartServiceW` in the recorder's service client; if the install's descriptor is
+ever not what the check reads back, a trigger would plug in there, set by a custom action next to `ServiceInstall`.
+
 ## 2026-11-21: Apply and Undo in the app (M7)
 
 The owner chose Apply and Undo in the app as the next piece ("do A", the recommended one of four), described as a
