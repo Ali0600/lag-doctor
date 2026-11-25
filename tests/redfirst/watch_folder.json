@@ -351,7 +351,7 @@
  {
   "name": "play: the wait looks from before the relay",
   "file": "lagdoctor/cli.py",
-  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
+  "old": "        kw = {\"since\": relay.since, \"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
   "new": "        kw = {\"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
   "tests": [
    "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it"
@@ -360,8 +360,8 @@
  {
   "name": "play: lag-doctor's own not passed over",
   "file": "lagdoctor/cli.py",
-  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
-  "new": "        kw = {\"since\": relay.create_time, \"resolve\": False, \"expand_short\": _unelevated(),",
+  "old": "        kw = {\"since\": relay.since, \"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
+  "new": "        kw = {\"since\": relay.since, \"resolve\": False, \"expand_short\": _unelevated(),",
   "tests": [
    "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it",
    "tests/test_watch_folder.py::test_through_the_real_wait_watch_names_only_the_game_the_relays_check_takes"
@@ -370,8 +370,8 @@
  {
   "name": "play: short names written out long with the relay",
   "file": "lagdoctor/cli.py",
-  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
-  "new": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": True, \"expand_short\": _unelevated(),",
+  "old": "        kw = {\"since\": relay.since, \"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
+  "new": "        kw = {\"since\": relay.since, \"own\": relay.own(), \"resolve\": True, \"expand_short\": _unelevated(),",
   "tests": [
    "tests/test_watch_folder.py::test_the_prompt_comes_first_then_the_wait_judges_as_the_relay_does_and_names_the_game_to_it"
   ]
@@ -379,8 +379,8 @@
  {
   "name": "play: short names written out long in an administrator window, to tell",
   "file": "lagdoctor/cli.py",
-  "old": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
-  "new": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False, \"expand_short\": True,",
+  "old": "        kw = {\"since\": relay.since, \"own\": relay.own(), \"resolve\": False, \"expand_short\": _unelevated(),",
+  "new": "        kw = {\"since\": relay.since, \"own\": relay.own(), \"resolve\": False, \"expand_short\": True,",
   "tests": [
    "tests/test_watch_folder.py::test_with_the_relay_in_an_administrator_window_nothing_is_written_out_long"
   ]
@@ -763,8 +763,8 @@
  {
   "name": "play: without the relay, a game from before the pre-flight is waited for",
   "file": "lagdoctor/cli.py",
-  "old": "    since = relay.create_time if relay is not None else looked",
-  "new": "    since = relay.create_time if relay is not None else 0",
+  "old": "    since = relay.since if relay is not None else looked",
+  "new": "    since = relay.since if relay is not None else 0",
   "tests": [
    "tests/test_watch_folder.py::test_a_game_from_before_the_pre_flight_that_has_a_window_now_is_already_running"
   ]

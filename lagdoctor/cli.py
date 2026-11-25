@@ -776,6 +776,12 @@ def _elevation(args: argparse.Namespace, target: dict[str, Any] | None, exe: Pat
     # An explicit --elevate also elevates an account that may trace only through Performance Log
     # Users: Windows lets that group start frame timing but not the game-server tracker (E1, 2026-11-06).
     if not may_trace or (args.elevate and not _elevated()):
+        if not args.no_elevate:               # the capture service, when installed: the same, with no prompt
+            relay, code = _via_service(args, target, say=say, folders=folders, wait_s=wait_s)
+            if code is not None:
+                return None, frames, frames_why, code
+            if relay is not None:
+                return relay, frames, frames_why, None
         choice = elevation_choice(args.elevate, args.no_elevate, _interactive(interactive), _ask, say=say)
         if choice == "elevate":
             relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher, folders=folders,
@@ -887,7 +893,7 @@ def _play_wait(folder: str, forms: tuple[str, ...], looked: int, wait_s: float, 
     stop: Any = cancel
     # What the wait could never take: a program from the folder that started before it looks (the relay's start with
     # the relay, the pre-flight without), which has a window now. A store starts nothing for a game that runs.
-    since = relay.create_time if relay is not None else looked
+    since = relay.since if relay is not None else looked
     try:
         before = [p for p in tgt.running_from(forms, resolve=_unelevated())["running"] if p["create_time"] <= since]
         shown = tgt.windows_by_pid(windows.top_windows()) if before else {}
@@ -901,7 +907,7 @@ def _play_wait(folder: str, forms: tuple[str, ...], looked: int, wait_s: float, 
         observers.event("already_running", name=named[0]["name"], pid=named[0]["pid"])
         names = ", ".join(sorted({p["name"] or "a program" for p in named}))
         if during:
-            say(f"Not recorded: {names} started from the game's folder while the UAC prompt was up, and a recording "
+            say(f"Not recorded: {names} started from the game's folder {_while_ready(relay)}, and a recording "
                 f"started this way takes only a game that starts after it. Record it as it runs: lagdoctor watch "
                 f"--pid {named[0]['pid']}.")
         else:
@@ -911,7 +917,7 @@ def _play_wait(folder: str, forms: tuple[str, ...], looked: int, wait_s: float, 
     if relay is not None:
         for p in before:        # no window yet: a stub or a launcher, whose game may still start after the relay
             if p["create_time"] > looked:
-                say(f"({p['name']}, pid {p['pid']}, started from the game's folder while the UAC prompt was up, so "
+                say(f"({p['name']}, pid {p['pid']}, started from the game's folder {_while_ready(relay)}, so "
                     "this recording cannot take it. If it is the game itself, record it as it runs once it shows its "
                     f"window: lagdoctor watch --pid {p['pid']}.)")
 
@@ -930,7 +936,7 @@ def _play_wait(folder: str, forms: tuple[str, ...], looked: int, wait_s: float, 
             say("Not recorded: the relay's wait for the game was over before this one began. Run the same "
                 "`lagdoctor watch` again.")
             return None, 1
-        kw = {"since": relay.create_time, "own": relay.own(), "resolve": False, "expand_short": _unelevated(),
+        kw = {"since": relay.since, "own": relay.own(), "resolve": False, "expand_short": _unelevated(),
               "aim": aim}
         stop = _EitherSet(cancel, relay.ended)    # a relay that ends ends the wait, not five minutes later
     observers.event("launch")                     # the app opens the store link now (Play's step 3)
@@ -1034,6 +1040,41 @@ def _start_relay(args: argparse.Namespace, target: dict[str, Any] | None, exe: P
     except OSError as exc:
         say(f"The UAC prompt could not be shown ({exc}), so {goes_on}.")
         return None, None
+    return link, None
+
+
+def _while_ready(relay: Any) -> str:
+    """When a program that started before the wait looks started: during the prompt, or the capture service's start."""
+    if relay is not None and getattr(relay, "service", False):
+        return "while lag-doctor's capture service started"
+    return "while the UAC prompt was up"
+
+
+def _via_service(args: argparse.Namespace, target: dict[str, Any] | None, *, say: Callable[[str], None],
+                 folders: tuple[str, ...] | None = None, wait_s: float | None = None) -> tuple[Any, int | None]:
+    """Frame timing and the game-server tracker through lag-doctor's capture service (Stage 4), with no prompt:
+    (link, None) when it records; (None, None) when it cannot here, so the UAC prompt comes as before (said, unless it
+    is simply not installed); (None, EXIT_BUSY) when it records for another window, which a relay would stop."""
+    from lagdoctor.capture import session as sess
+    from lagdoctor.relay import client
+    say = _teller(say)
+    try:
+        me = sess._snapshot().get(os.getpid())
+        if me is None:
+            raise OSError("this window's own process is not in Windows' process list")
+        link = client.via_service(target, frames=True, network=not args.no_network, recorder=(me.pid, me.create_time),
+                                  folders=folders, wait_s=wait_s)
+    except client.ServiceBusy as exc:
+        say(f"Not recorded: {exc.why}. Try again once it has ended.")
+        return None, EXIT_BUSY
+    except client.ServiceUnavailable as exc:
+        if exc.installed:
+            say(f"The capture service did not record ({exc.why}), so the UAC prompt comes instead.")
+        return None, None
+    except (OSError, ValueError) as exc:
+        say(f"The capture service was not asked ({exc}).")
+        return None, None
+    say("Recording through lag-doctor's capture service: no UAC prompt. The recording stays in this window.")
     return link, None
 
 

@@ -35,8 +35,8 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   own pull request: the service host and its caller policy over the relay core (`lagdoctor/service/`, DESIGN.md "The
   capture service", tested on a thread here, never installed; PR #72); the MSI's ServiceInstall with its check on the
   runner (PR #73: a standard account started it and recorded a stand-in game through it, research note section 13);
-  the recorder and the app trying the service first; and the owner's own install and recording, frame timing's first
-  check under the service.
+  the recorder and the app trying the service first (PR #74: `watch` asks it before the prompt, the app through its
+  recorder); and the owner's own install and recording, frame timing's first check under the service.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.
 
 ## E2: the group fallback
@@ -176,11 +176,13 @@ but a GitHub-hosted runner. Measured (research note section 8):
   - **One recording machine-wide.** The ETW session names (`lagdoctor`, `lag-doctor-net`) are global, and starting
     either stops another Windows session's recording; the capture lock is per session. An elevated relay in another
     session can already do this; the service must refuse a second caller instead. The service host (2026-11-25)
-    takes one caller at a time on its one pipe instance; a lock that the service and an elevated `watch` in any
-    session both honour, refusing rather than stopping the other, is the client's pull request's.
+    takes one caller at a time on its one pipe instance, and a recorder that finds it busy records nothing rather
+    than start a relay that would stop that recording (PR #74). Still open: a lock that the service and an elevated
+    `watch` in any session both honour, so that a relay elsewhere refuses rather than stops a service recording.
   - **How long one caller may hold it.** Nothing caps a recording through the service yet: a caller that keeps
-    reading holds the one instance (watch's own caps bound an honest recorder). A cap, and the recorder falling back
-    to `--elevate` when the service is busy or its pipe is not the service's, belong with the client.
+    reading holds the one instance (watch's own caps bound an honest recorder), and another account's process that
+    holds it keeps everyone else from the service and its prompt alike. Still open: a cap on the hold. The recorder
+    falls back to the prompt when the service's pipe is not the service's, never when it is busy (PR #74).
   - **The caller's session, from the caller.** The relay filters per-program totals by its own session, which equals
     the recorder's only because it checks that at start; the service runs in session 0 and must use the client's.
   - **The caller's account, from its token**, never a command line, for the pipe's DACL and the checks.

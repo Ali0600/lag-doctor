@@ -60,6 +60,7 @@ class PlayLink(FakeLink):
     def __init__(self, folders, events, fails, wait_s):
         super().__init__(True, events)
         self.create_time, self.folders, self.recorder = RELAY_CT, folders, (os.getpid(), 555)
+        self.since = RELAY_CT                   # a relay's games start after its own start
         self.aim_by = time.monotonic() + wait_s + client._game_slack() - client.AIM_S      # as launch works it out
         self.ended = threading.Event()
         self.fails, self.aimed = list(fails), []
@@ -571,6 +572,7 @@ def _on_world(monkeypatch, play) -> tuple:
     def on_the_world(self, *a):
         real_init(self, *a)
         self.recorder, self.pid, self.create_time = (fw.ME, fw.SINCE - 100 * SECOND), relay, fw.SINCE
+        self.since = fw.SINCE                  # a relay's games start after its own start
         world.sleep(1.0)                               # the prompt takes a while: the game starts after the relay
     monkeypatch.setattr(PlayLink, "__init__", on_the_world)
     return world, relay, before
@@ -612,3 +614,34 @@ def test_a_relay_that_ends_while_watch_waits_ends_the_wait_as_the_relay_failing(
     assert time.monotonic() - began < 4.0
     assert ("Frame timing could not be started: the relay ended: it stopped on an error it did not expect. Nothing "
             "was recorded.") in play["said"]
+
+
+def test_the_wait_counts_from_the_links_since_which_for_the_capture_service_is_its_ask(play, fake_world, tmp_path,
+                                                                                        monkeypatch):
+    real = PlayLink.__init__
+
+    def asked_later(self, *args, **kwargs):              # the capture service: it ran before the ask
+        real(self, *args, **kwargs)
+        self.since = RELAY_CT + 7
+
+    monkeypatch.setattr(PlayLink, "__init__", asked_later)
+    assert _watch(play, tmp_path, "--elevate") == 0
+    (kw,) = play["waits"]
+    assert kw["since"] == RELAY_CT + 7 and play["link"].create_time == RELAY_CT
+
+
+def test_through_the_service_a_program_from_the_folder_older_than_the_ask_is_already_running(play, monkeypatch,
+                                                                                             tmp_path):
+    real = PlayLink.__init__
+
+    def service_link(self, *args, **kwargs):             # the capture service ran before this recording asked it
+        real(self, *args, **kwargs)
+        self.since, self.service = RELAY_CT + 10 * SECOND, True
+
+    monkeypatch.setattr(PlayLink, "__init__", service_link)
+    started = {"pid": 4301, "create_time": RELAY_CT + 1, "name": "lantern.exe", "exe": GAME_DIR + "\lantern.exe"}
+    play["running"] = [[], [started]]
+    play["windows"] = [_window_of(4301)]                 # after the service's start, before the ask: never the wait's
+    assert _watch(play, tmp_path, "--elevate") == cli.EXIT_BAD_ARGS and play["waits"] == []
+    assert any("started from the game's folder while lag-doctor's capture service started" in line
+               for line in play["said"]), play["said"]

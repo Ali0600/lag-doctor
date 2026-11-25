@@ -15,6 +15,13 @@ thread and hands them on:
   health, and the per-program byte totals for this Windows session.
 A link that breaks (the relay ended, a message the protocol does not allow) ends both with the reason; the rest of the
 recording goes on.
+
+`via_service()` is the same link through lag-doctor's capture service instead (Stage 4; DESIGN.md "The capture
+service"), with no prompt: StartServiceW (interactive users may call it), then the service's fixed pipe, checked as
+the relay's is (its server must be the process the SCM names, its owner the service's own SID, which nothing else can
+set), then an `ask` saying what to record, which the service judges for itself. Where the service is not installed or
+cannot record for this window, ServiceUnavailable says why and the caller raises the prompt instead; ServiceBusy when
+another recording holds it, which a relay started now would stop (their trace sessions share names).
 """
 from __future__ import annotations
 
@@ -38,6 +45,8 @@ MAX_EARLY_EVENTS = 50_000     # network events that come before the tracker has 
 AIM_S = 10.0                  # Play: for the relay's answer about a game (two snapshots and a read on its side)
 GOODBYE_WAIT_S = 6.0          # past the relay's GOODBYE_S: once the link is over, how long its exit code is awaited
 ADMINISTRATORS = "S-1-5-32-544"
+SERVICE_START_S = 15.0        # StartServiceW to the service running, and its pipe answering
+SERVICE_OFF_ENV = "LAGDOCTOR_NO_SERVICE"   # set (tests/conftest.py does): never use the capture service
 
 
 class RelayFailed(Exception):
@@ -46,6 +55,20 @@ class RelayFailed(Exception):
     def __init__(self, why: str, code: int | None = None) -> None:
         super().__init__(why)
         self.why, self.code = why, code
+
+
+class ServiceUnavailable(RelayFailed):
+    """The capture service cannot record for this window, so the caller raises the UAC prompt instead: `installed`
+    False when it is not on this PC (then nothing is worth saying), else `why` in plain words."""
+
+    def __init__(self, why: str, installed: bool = True) -> None:
+        super().__init__(why)
+        self.installed = installed
+
+
+class ServiceBusy(RelayFailed):
+    """The capture service is recording for another window on this PC: a relay started now would stop that recording,
+    so nothing is recorded."""
 
 
 class GameRefused(Exception):
@@ -160,6 +183,105 @@ def launch(target: dict[str, Any] | None = None, *, presentmon_exe: Path | None,
             child.close()
 
 
+def via_service(target: dict[str, Any] | None = None, *, frames: bool, network: bool, recorder: tuple[int, int],
+                folders: tuple[str, ...] | None = None, wait_s: float | None = None, scm=None,
+                connect: Callable[..., Any] | None = None, snapshot: Callable[[], dict] | None = None,
+                start_s: float = SERVICE_START_S) -> "RelayLink":
+    """The capture service's link for this recording, as launch() gives the relay's, with no prompt: for the running
+    game `target`, or for Play the forms of its install folder (`folders`) with how long the recorder waits for it
+    (`wait_s`). `scm`: the service control manager's side (lagdoctor.winapi.service), `connect`: the pipe's
+    (pipe.connect), `snapshot`: this process's own (ntquery). ServiceUnavailable when it cannot record here (the caller
+    raises the prompt instead), ServiceBusy when it records for another window."""
+    import os
+    from lagdoctor.winapi import pipe
+    if scm is None:
+        from lagdoctor.winapi import service as scm
+    connect = connect or pipe.connect
+    if os.environ.get(SERVICE_OFF_ENV):
+        raise ServiceUnavailable("the capture service is turned off here", installed=False)
+    game = None if target is None else (int(target["pid"]), int(target["create_time"]))
+    if folders is not None:
+        from lagdoctor.capture.target import check_forms
+        folders = check_forms(folders)
+    name = protocol.SERVICE_NAME
+    deadline = time.monotonic() + start_s
+    pid, client = 0, None
+    for attempt in range(2):          # a service that stopped itself as this one asked (its idle end) is asked again
+        _start_service(scm, name)
+        state, pid = scm.query(name)
+        while state != "running" and state != "stopped" and time.monotonic() < deadline:
+            time.sleep(0.05)
+            state, pid = scm.query(name)
+        if state != "running" or not pid:
+            if state == "stopped" and attempt == 0:
+                continue
+            raise ServiceUnavailable(f"the capture service did not start (it is {state})")
+        try:
+            client = connect(protocol.SERVICE_PIPE, max(0.5, deadline - time.monotonic()),
+                             max_message=protocol.MAX_MESSAGE)
+            break
+        except TimeoutError as exc:
+            errors = getattr(exc, "errors", {}) or {}
+            if errors.get(pipe.ERROR_PIPE_BUSY):        # its one instance answers another window
+                raise ServiceBusy("lag-doctor's capture service is recording for another window on this PC, and a "
+                                  "recording started now would stop that one") from None
+            if attempt == 0 and scm.query(name)[0] == "stopped":
+                continue
+            raise ServiceUnavailable("the capture service runs, but its pipe never appeared") from None
+        except OSError as exc:
+            raise ServiceUnavailable(f"the capture service's pipe could not be opened ({exc})") from None
+    if client is None:
+        raise ServiceUnavailable("the capture service stopped again as it was started")
+    try:
+        if client.server_pid() != pid:
+            raise ServiceUnavailable(f"another program (process {client.server_pid()}) answered on the capture "
+                                     f"service's pipe, not the service (process {pid})")
+        if client.owner_sid() != scm.service_sid(name):
+            raise ServiceUnavailable("the capture service's pipe is not owned by the service, so it was not used")
+        since = _filetime_now()
+        client.write(protocol.ask(game, folders, wait_s, frames, network), HELLO_S)
+        hello = protocol.from_relay(client.read(HELLO_S))
+        if hello["t"] == "error":
+            raise ServiceUnavailable(f"the capture service did not record for this window: {hello['why']}")
+        if (hello["t"] != "hello" or hello["v"] != protocol.VERSION or hello["pid"] != pid or hello["game"] != game
+                or hello["folders"] != folders or hello["frames"] != frames or hello["network"] != network):
+            raise ServiceUnavailable("the capture service did not greet the recording window as asked")
+        try:
+            service_proc = (snapshot or _snapshot_now)().get(pid)
+            session = (snapshot or _snapshot_now)().get(recorder[0])
+        except OSError as exc:
+            raise ServiceUnavailable(f"the capture service's start time could not be read ({exc})") from None
+        if service_proc is None or session is None:
+            raise ServiceUnavailable("the capture service, or this window, is not in Windows' process list")
+        aim_by = time.monotonic() + wait_s + _game_slack() - AIM_S if folders is not None else None
+        link = RelayLink(client, None, hello, create_time=service_proc.create_time, since=since, recorder=recorder,
+                         session=session.session_id, aim_by=aim_by)
+        client = None
+        return link
+    except (TimeoutError, protocol.ProtocolError) as exc:
+        raise ServiceUnavailable(f"the capture service did not answer as it must ({exc})") from None
+    except OSError as exc:
+        raise ServiceUnavailable(f"the connection to the capture service failed ({exc})") from None
+    finally:
+        if client is not None:
+            client.close()
+
+
+def _start_service(scm, name: str) -> None:
+    """StartServiceW: ServiceUnavailable when it is not installed (installed False) or may not be started here."""
+    try:
+        scm.start(name)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1060:     # ERROR_SERVICE_DOES_NOT_EXIST: no MSI install here
+            raise ServiceUnavailable("the capture service is not installed", installed=False) from None
+        raise ServiceUnavailable(f"the capture service could not be started ({exc})") from None
+
+
+def _filetime_now() -> int:
+    """Now in a process create time's units (FILETIME): Play's game must start after the ask, as the service judges."""
+    return time.time_ns() // 100 + 116_444_736_000_000_000
+
+
 def _game_slack() -> float:
     """The relay's own GAME_SLACK_S, looked up when called: how long past the recorder's wait it waits for a game."""
     from lagdoctor.relay.server import GAME_SLACK_S
@@ -213,7 +335,7 @@ class RelayLink:
 
     def __init__(self, client, child, hello: dict[str, Any], *, create_time: Any = _UNREAD,
                  recorder: tuple[int, int] | None = None, session: int | None = None,
-                 aim_by: float | None = None) -> None:
+                 aim_by: float | None = None, since: Any = _UNREAD) -> None:
         self.pid: int = hello["pid"]
         self.frames: bool = hello["frames"]
         self.network: bool = hello["network"]
@@ -239,6 +361,10 @@ class RelayLink:
         self.why: str | None = None             # why it broke; None after a clean end
         self.relay_error: str | None = None     # what the relay said when it stopped on a problem
         self.create_time = _create_time(self.pid) if create_time is _UNREAD else create_time
+        # Play: after which its game must have started: the relay's start, or the capture service's ask (the service
+        # ran before this recording asked it anything).
+        self.since = self.create_time if since is _UNREAD else since
+        self.service = child is None                # the capture service's link: no prompt was raised for it
         self._reader = threading.Thread(target=self._read_loop, name="lagdoctor-relay", daemon=True)
         self._reader.start()
 
@@ -315,7 +441,7 @@ class RelayLink:
         if self.aim_by is not None and time.monotonic() > self.aim_by:
             raise RelayFailed("the relay's wait for the game is over")
         why, retry = check_proposed(snapshot or _snapshot_now, image or _image_path, *proposed, session=self.session,
-                                    folders=self.folders, since=self.create_time, own=self.own())
+                                    folders=self.folders, since=self.since, own=self.own())
         if why is not None:
             raise GameRefused(why, retry, sent=False)
         with self._state_lock:
@@ -430,6 +556,8 @@ class RelayLink:
         self._client.close()
         if self._reader is not threading.current_thread():
             self._reader.join(3.0)
+        if self._child is None:                     # the capture service: no process of this recording's to wait for
+            return None
         code = _exit_code(self._child, wait_s)
         self._child.close()
         return code
@@ -445,7 +573,7 @@ class RelayLink:
                 if self._closed:
                     self._broke("the recording window hung up")
                     return
-                code = _exit_code(self._child, 1.0)
+                code = _exit_code(self._child, 1.0) if self._child is not None else None
                 self._broke("the relay ended" + (f" (exit code {code})" if code is not None else ""))
                 return
             try:

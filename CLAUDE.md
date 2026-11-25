@@ -401,7 +401,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   relay tests' stand-ins, on a pipe of the test's own name with `owner=""` (the service's own SID exists only in the
   service), and ask the SCM about services by name, read-only; `python -m lagdoctor.service` started any other way
   runs nothing (exit 1063). A caller is judged by its own token through the pipe (`PipeServer.caller`), never by what
-  it sends; a change to what the service records needs the same judgement on the service's own reads.
+  it sends; a change to what the service records needs the same judgement on the service's own reads. `watch` asks
+  the service before the UAC prompt (`relay/client.via_service`), so `tests/conftest.py` sets `LAGDOCTOR_NO_SERVICE`
+  for the whole run (a `watch` a test starts in a child inherits it) and `_no_real_capture_service` fails a test that
+  calls `winapi/service.start` or `query` on `protocol.SERVICE_NAME`; once the MSI is installed here the real service
+  would answer. `tests/test_service_client.py` lifts the variable for itself and talks to an in-process host.
 - **The relay and the capture service talk only through `lagdoctor/winapi/pipe.py`.** Name a pipe through
   `pipe.path` (Windows folds `..` in a `\\.\` path, so a name holding one opened an ordinary file), build its
   descriptor with `pipe.client_dacl` (a SID string can carry entries of its own), and check who answered: a server

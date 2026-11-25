@@ -14,6 +14,10 @@ import pytest
 from lagdoctor.fixes.registry import RegistryBackend
 from tests import capabilities, downloads
 
+# No test, and no process a test starts (a `watch` in a child inherits this), ever records through the capture service:
+# once lag-doctor's MSI is installed on this PC, its real service would answer (relay/client.via_service).
+os.environ["LAGDOCTOR_NO_SERVICE"] = "1"
+
 SANDBOX_PARENT = r"Software\LagDoctorTest"
 
 
@@ -188,6 +192,36 @@ def recycle_guard(monkeypatch):
         caught.append("a test reached this PC's real Recycle Bin")
         return 0x78                                  # the page's DE_ACCESSDENIEDSRC: nothing was moved
     monkeypatch.setattr(recycle, "_file_operation", refuse)
+    yield caught
+    assert caught == [], " and ".join(caught)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_capture_service(monkeypatch):
+    """No test starts or asks about this PC's own capture service (winapi/service.start and query on
+    protocol.SERVICE_NAME): once the MSI is installed it would answer, and a test would record through it. One that
+    reaches it reads as a service that is not installed, and fails at its end. Other names pass (they ask about a
+    service that does not exist, read-only). A test's own patch overrides this."""
+    yield from capture_service_guard(monkeypatch)
+
+
+def capture_service_guard(monkeypatch):
+    """_no_real_capture_service's body: refuses the real calls while it is suspended, yields the list of reaches, and
+    raises AssertionError at its end if anything reached (tests/test_service_client.py drives it to prove that)."""
+    from lagdoctor.relay import protocol
+    from lagdoctor.winapi import service
+    caught = []
+    real = {"start": service.start, "query": service.query}
+
+    def guarded(what):
+        def call(name, *args, **kwargs):
+            if name == protocol.SERVICE_NAME:
+                caught.append(f"a test reached this PC's capture service ({what})")
+                raise OSError(None, "not installed", None, service.ERROR_SERVICE_DOES_NOT_EXIST)
+            return real[what](name, *args, **kwargs)
+        return call
+    monkeypatch.setattr(service, "start", guarded("start"))
+    monkeypatch.setattr(service, "query", guarded("query"))
     yield caught
     assert caught == [], " and ".join(caught)
 
