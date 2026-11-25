@@ -1213,7 +1213,8 @@ def test_a_relay_that_dies_as_the_window_closes_keeps_its_handle_until_the_reade
         def wait(self, timeout_s=None):
             self.waits.append(timeout_s)
             self.in_wait.set()
-            time.sleep(0.5)
+            if timeout_s:                    # the reader's wait on the relay's exit; close()'s own poll (0) returns
+                time.sleep(0.5)              # at once, so only the join can outlast the reader (a race otherwise)
             return 7
 
         def close(self):
