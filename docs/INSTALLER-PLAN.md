@@ -178,12 +178,16 @@ but a GitHub-hosted runner. Measured (research note section 8):
     either stops another Windows session's recording; the capture lock is per session. An elevated relay in another
     session can already do this; the service must refuse a second caller instead. The service host (2026-11-25)
     takes one caller at a time on its one pipe instance, and a recorder that finds it busy records nothing rather
-    than start a relay that would stop that recording (PR #74). Still open: a lock that the service and an elevated
-    `watch` in any session both honour, so that a relay elsewhere refuses rather than stops a service recording.
+    than start a relay that would stop that recording (PR #74). Done 2026-11-25: the machine-wide trace lock
+    (`capture/tracelock.py`), which the service, the elevated relay and an elevated `watch` in any session hold
+    while they trace, and which the recorder checks before it asks the service or raises the prompt (DESIGN.md,
+    Privileges and elevation; DECISIONS 2026-11-25).
   - **How long one caller may hold it.** Nothing caps a recording through the service yet: a caller that keeps
     reading holds the one instance (watch's own caps bound an honest recorder), and another account's process that
-    holds it keeps everyone else from the service and its prompt alike. Still open: a cap on the hold. The recorder
-    falls back to the prompt when the service's pipe is not the service's, never when it is busy (PR #74).
+    holds it keeps everyone else from the service and its prompt alike. Done 2026-11-25: one ask holds it for at
+    most `protocol.SERVICE_HOLD_S` (2 hours), and `watch` stops itself 3 minutes before that. An account that asks
+    again at once can still keep it busy: accepted (DECISIONS 2026-11-25). The recorder falls back to the prompt when
+    the service's pipe is not the service's, never when it is busy (PR #74).
   - **The caller's session, from the caller.** The relay filters per-program totals by its own session, which equals
     the recorder's only because it checks that at start; the service runs in session 0 and must use the client's.
   - **The caller's account, from its token**, never a command line, for the pipe's DACL and the checks.

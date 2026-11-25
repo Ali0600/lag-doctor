@@ -2,6 +2,12 @@
 
 ## Backlog: alternatives worth trying later
 
+- **A budget of hold time per account for the capture service**, so an account that asks again the moment its 2-hour
+  hold ends cannot keep the service, and the trace lock, from everyone else; it must outlive the service's idle stop,
+  which writes no file today (2026-11-25, Stage 4). Revisit hook: `service.Host._one`, keyed by the caller's SID.
+- **An elevated `watch` that may record over the capture service's lock after asking**, for the PC's administrator
+  when another account holds the service: it would stop that recording, so only with a question first (2026-11-25,
+  Stage 4). Revisit hook: `cli._TraceGuard.here`.
 - **Apply from any recording's Results**, not only the last one made, once a fix's params name what they meant on
   their own (a refresh rate's monitor by its device path, not by the display name Windows gives whichever monitor it
   lists first) (2026-11-21, M7). Revisit hook: `App.do_plan_fix`'s last-session check and `views._fixes`' `is_last`.
@@ -238,6 +244,66 @@
   relay/server.py (DECISIONS 2026-11-17, M6d).
 
 ---
+
+## 2026-11-25: How long one caller may hold the capture service
+
+The service takes one caller at a time on its one pipe instance, and before this nothing bounded a recording: a
+`watch` left running in another Windows session, or another account's process that kept reading, kept everyone else
+from the service, and a recorder that finds it busy records nothing rather than start a relay that would stop that
+recording. Settled by this session, which built Stage 4.
+
+- **A cap on each ask, `protocol.SERVICE_HOLD_S` (2 hours), counted from the ask (chosen)**: the waits before `start`
+  and the recording itself end by then, with the cap said on the pipe. `watch` stops itself `client.HOLD_MARGIN_S`
+  (3 minutes) before it, so an honest recording ends with its frames; every recording `watch` and the app make with
+  their default start-by fits, even with the longest window and Play's default wait (a test holds the sums under it).
+- **The cap and a hold budget per account (deferred, worth trying)**: an account that asks again the moment it is let
+  go would get the service back only after others had their turn. The budget must outlive the service's stop after 2
+  idle minutes, and the service writes no file; and a caller that connects and never asks holds the instance 5 s each
+  time, before any account is read.
+- **An elevated `watch` that may record over the service's lock after asking (deferred, worth trying)**: an
+  administrator's way past a held service, at the price of stopping that recording.
+- **No cap; the PC's administrator stops the service (rejected)**: a standard account has no way out at all.
+
+Accepted: an account that asks again at once can keep the service busy, and with it the trace lock (next entry),
+which then also holds off an elevated `watch` in another session; before the lock that `watch` would have recorded and
+stopped the service's recording. The PC's administrator can stop the service. The 2-hour figure is a feel number for
+the owner (LAUNCHER-PLAN, open questions).
+
+Revisit hook: `service.Host(hold_s=)` and `server.Relay(until=)`; a budget would go in `Host._one`, keyed by the
+caller's SID from `PipeServer.caller`.
+
+## 2026-11-25: One trace on the whole PC: a lock held by a trusted owner's thread
+
+PresentMon's session and the network trace's have fixed names, and starting either stops a running one of that name,
+which is how an orphan a crash left is replaced. So the capture service recording for one Windows session and an
+elevated relay or `watch` in another stopped each other's frame timing and network trace; the capture lock is per
+session. Settled by this session; the first design was the name's existence as the lock, as the capture lock is, and
+the check of Microsoft's documentation before building showed why that fails here.
+
+- **`Global\lag-doctor-trace`, a mutex held by ownership on a thread of its own, created with an owner only a trusted
+  token can set (chosen)**: SYSTEM, Administrators or the capture service's SID, each of which Windows lets only a token
+  holding it set; everyone else may read its owner and state (READ_CONTROL and MUTANT_QUERY_STATE, through
+  NtQueryMutant) and never take it (no SYNCHRONIZE). BUSY refuses; a name something else holds (TAKEN) lets an
+  elevated recording go on, said once, and makes the capture service refuse, since any account may make the name and
+  the service records for any account. `capture/tracelock.py`.
+- **The name's existence as the lock, as `session.CaptureLock` (rejected)**: an object lives while any handle to it is
+  open, so a standard account that opens the name and keeps the handle would make every later recording read busy.
+- **Refuse when a trace session of that name runs (ControlTrace QUERY), instead of stopping it (rejected)**: a
+  session a crash left looks the same as a live one, so one crash would block every recording until a reboot.
+- **The capture lock made machine-wide, `Global\lag-doctor-capture` (rejected)**: any account could hold the name and
+  refuse every recording on the PC, and it would refuse recordings that run no trace.
+- **Trust any owner, so a Performance Log Users member's unelevated recording is guarded too (rejected)**: a squatter's
+  mutex would then read as a recording and block every one. Such a member only checks the lock.
+- **Fail closed on a squatted name everywhere (rejected)**: any account could then stop every elevated recording on the
+  PC by making the name; the service alone refuses, and its recorder then raises the prompt.
+
+Limits, accepted: trusting Administrators trusts every elevated program, which could stop the trace sessions directly
+anyway. Between `watch`'s check and the service's own, another recording may take the lock; `watch` then says the
+service did not record before it refuses, with no prompt.
+
+Revisit hook: `tracelock.trusted_owners` and `TraceLock._take`; a live check on GitHub's runner (a second real relay
+exiting 8 while one records, `tests/test_relay_live.py`; the lock's owner read as the service's SID while the MSI's
+standard account records, `scripts/msi_service_client.py`) is not built yet.
 
 ## 2026-11-25: The MSI's build lets WiX's warning 1149 through, by its id
 

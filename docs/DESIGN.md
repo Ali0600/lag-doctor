@@ -110,6 +110,18 @@ verification log; trust a note's *Corrected* entries over its body.
 - One recording at a time: the window that records holds the named mutex `Local\lag-doctor-capture`
   (`session.CaptureLock`) for the whole recording, the relay's part included; a second `watch` refuses before
   starting PresentMon or any ETW session.
+- One trace on the whole PC: PresentMon's session and the network trace's have fixed names, and starting either stops
+  a running one of that name (so an orphan a crash left is replaced), in any Windows session. So whatever starts them
+  itself (the elevated relay, the capture service for each caller, an elevated `watch` recording in its own window)
+  holds the machine-wide trace lock `Global\lag-doctor-trace` (`capture/tracelock.py`) from before the first starts
+  until both have stopped. The lock is a mutex's ownership, held by a thread of its own, never the name's existence (a
+  handle anyone keeps open locks nothing; a holder that crashed leaves it abandoned, which reads free). It is created
+  with an owner only a trusted token can set (SYSTEM, Administrators, the capture service's own SID) and a DACL that
+  lets everyone else read its owner and state but never take it. Held by a trusted owner it is BUSY: `watch` refuses
+  with exit 4 (the relay exits 8), before the capture service is asked and before the UAC prompt, both of which it
+  checks first. A name something else holds is TAKEN: an elevated recording, approved at the prompt, goes on and says
+  so once; the capture service, which records for any interactive account, refuses. An unelevated member of
+  Performance Log Users may set no trusted owner, so it only checks the lock (DECISIONS 2026-11-25).
 - `lagdoctor setup` explains the alternative: join Performance Log Users once (an admin command the user
   runs, then sign out and in), after which frame timing needs no prompt. The tool never changes group
   membership.
@@ -207,7 +219,8 @@ capture service. `client.py` is the recorder's side, `server.py` the relay proce
   (`protocol.EXIT_*`): 2 a command line lag-doctor does not build, 3 the game or the recorder not running as
   approved or in another session (also the recorder gone while the relay waited), 4 its pipe could not be made, 5
   the recorder did not connect within 30 s, name a game it accepted in time (Play) or start in time, 6 PresentMon
-  failed its check, 7 the recorder broke the protocol, 1 anything else. A refused game is no exit: the relay answers
+  failed its check, 7 the recorder broke the protocol, 8 another lag-doctor recording on this PC holds the
+  machine-wide trace lock (above), 1 anything else. A refused game is no exit: the relay answers
   and waits on.
 - **In the recorder**, `session.SessionOptions(relay=link)` makes the session's "frames" collector
   `client.RelayedFrames` (PresentMonSource fed from the pipe: the same storage, live frame rate and result, with
@@ -271,16 +284,29 @@ starts (anything else starting it runs nothing and exits 1063).
   installed); `ServiceBusy`, a service recording for another window (its pipe answered busy), ends it with
   `EXIT_BUSY`, since a relay would stop that recording (their trace sessions share names). A running service whose
   pipe never appeared is unavailable, not busy, and one that stopped itself as it was asked (its idle end) is started
-  once more. The app needs nothing of its own: its recorder asks the window
+  once more. Before the service is asked, and again before the UAC prompt, `watch` checks the trace lock
+  (`cli._TraceGuard`): BUSY ends the recording with `EXIT_BUSY` before either. The app
+  needs nothing of its own: its recorder asks the window
   for the prompt only when it starts the relay. `LAGDOCTOR_NO_SERVICE` turns it off (every test run sets it).
 - **It writes no file and prints nothing.** What a caller is refused is said on the pipe (`error`, then `end`), in
   printable text; another `protocol.VERSION` is told so whatever its ask holds. A recording whose pipe reader would not
   leave ends the service (the SCM's next start gives a fresh one).
-- **Not yet**: one recording on the whole PC. The service takes one caller at a time, but its ETW session and
-  PresentMon's take the names an elevated `watch` in another Windows session uses, and starting either stops the
-  other's (INSTALLER-PLAN, Stage 4); nor is there a cap on how long one caller may hold it, so another account that
-  holds its pipe keeps this one from it, prompt and all (the review of 2026-11-25). The app titles a Play recording
-  that fails through the service as "failed", not as the relay failing: its recorder sends no `elevate` then.
+- **One caller's hold** is at most `protocol.SERVICE_HOLD_S` (2 hours), counted from its ask (`Host(hold_s=)`,
+  `Relay(until=)`): every wait before `start`, and the recording itself, end by then, with the cap's words
+  (`protocol.hold_text`) on the pipe, and the relay core returns `EXIT_HELD` (9). Every recording `watch` and the app
+  make with their default start-by fits, with the longest window and Play's default wait (a test holds the sums under
+  it). A recorder through the service stops itself `client.HOLD_MARGIN_S` (3 minutes) before the hold ends
+  (`client.hold_left`, `cli._held_duration`), and says so when that comes before its own end ("at the latest" with a
+  start key, whose own ends count only once Windows gives the key), so it ends with its frames. The hold bounds one
+  ask, not an account: an account that asks again the moment it is let go keeps the service busy, and with it the
+  trace lock, which also holds off an elevated `watch` in another session (accepted, DECISIONS 2026-11-25; the PC's
+  administrator can stop the service).
+- **The trace lock** (`capture/tracelock.py`; Privileges and elevation, above): taken as `_judge`'s last check, owned
+  by the service's own SID, and let go once the recording's pipe reader has left, on every path. BUSY, TAKEN and a
+  Windows error each refuse the caller in words; the recorder then checks the lock itself, so BUSY ends the recording
+  with exit 4 and anything else raises the UAC prompt.
+- **Not yet**: the app titles a Play recording that fails through the service as "failed", not as the relay failing:
+  its recorder sends no `elevate` then.
 
 ### The control channel (lagdoctor/control.py)
 
@@ -385,7 +411,7 @@ lagdoctor/
             atkacpi.py                                  an ASUS laptop's fans, read only (capture/fanmon)
             icmp.py iphlp.py wlan.py                    network probes       (capture/netmon)
             etw.py                                      ETW sessions         (capture/netflows)
-            elevation.py                                rights + UAC relaunch
+            elevation.py                                rights + UAC relaunch, the locks' named mutexes
             pipe.py                                     the locked named pipe (the relay, the capture service)
             webview2.py                                 WebView2 from ctypes, through the runtime's own export (the app)
             launch.py                                   Explorer opens a link, as from a click (Play's store launch)
@@ -398,6 +424,7 @@ lagdoctor/
             process.py                                  priority of other processes (fixes/priority)
   capture/  base.py (done) target.py sysmon.py gpumon.py fanmon.py netmon.py netflows.py presentmon.py inventory.py
             gamefiles.py (what lay beside the game, for the inventory) session.py
+            tracelock.py (the machine-wide trace lock)
   analysis/ stats.py (done) frames.py events.py attribute.py rules.py diagnose.py
             window.py                                   the samples around a moment (the app's Results)
   fixes/    base.py journal.py registry.py catalog.py (done) + power.py refresh_rate.py gpu_preference.py
@@ -610,6 +637,19 @@ class ElevatedChild:
 def relaunch_elevated(argv: list[str], cwd: str) -> int   # launch + wait + close (scripts/e2e.py)
 def hold_named_mutex(name: str)                   # handle, or None when another process holds it
 def release_named_mutex(handle) -> None
+# The trace lock's (capture/tracelock.py): a mutex's ownership, not its existence.
+def create_mutex(name: str, sddl: str, *, own: bool) -> tuple[int, bool]   # CreateMutexExW under sddl
+                                                  # (pipe.security_attributes): (handle, made by this call); OSError
+                                                  # 5 access denied, 6 another kind of object, 1307 an owner this
+                                                  # token may not set
+def open_mutex(name: str, access: int) -> int | None   # None when no object has that name
+def mutex_owner(handle) -> str                    # its owner's SID (GetSecurityInfo; READ_CONTROL)
+def take_mutex(handle) -> bool                    # WaitForSingleObject 0: True when this thread holds it now
+                                                  # (abandoned counts as free)
+def release_mutex(handle) -> None                 # ReleaseMutex, on the holding thread
+def mutex_state(handle) -> tuple[int, bool, bool]  # NtQueryMutant (MUTANT_QUERY_STATE, undocumented, measured by
+                                                  # tests/test_tracelock.py): (count, held here, abandoned);
+                                                  # count 1 while free, 0 or below while held
 
 # winapi/pipe.py (the relay's and the capture service's channel; install-and-rights.md section 11) --------
 def path(name: str) -> str                        # \\.\pipe\<name>; ValueError unless 1-100 of [A-Za-z0-9._-], not

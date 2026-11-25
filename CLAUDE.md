@@ -405,7 +405,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   the service before the UAC prompt (`relay/client.via_service`), so `tests/conftest.py` sets `LAGDOCTOR_NO_SERVICE`
   for the whole run (a `watch` a test starts in a child inherits it) and `_no_real_capture_service` fails a test that
   calls `winapi/service.start` or `query` on `protocol.SERVICE_NAME`; once the MSI is installed here the real service
-  would answer. `tests/test_service_client.py` lifts the variable for itself and talks to an in-process host. The owner installed the
+  would answer. `tests/test_service_client.py` lifts the variable for itself and talks to an in-process host. The
+  machine-wide trace lock (`capture/tracelock.py`, `Global\lag-doctor-trace`) is real across every Windows session
+  here: `tests/conftest.py`'s `_no_real_trace_lock` moves `tracelock.NAME` to a name of the test's own and fails a test
+  that reaches the real one, and a test that starts `watch` in a child sets `tracelock.NAME` there too, as it sets
+  `session.CAPTURE_LOCK_NAME`. The real relay and service on GitHub's runner take the real name, which that guard
+  cannot reach. The owner installed the
   MSI on this PC on 2026-11-25, so its capture service is real here: an agent may read it (`sc.exe query`, `qc`, `qprivs`,
   `qsidtype`, `sdshow`) and the recordings it made, and never starts, stops or reconfigures it.
 - **The relay and the capture service talk only through `lagdoctor/winapi/pipe.py`.** Name a pipe through
