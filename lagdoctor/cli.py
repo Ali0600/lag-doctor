@@ -893,7 +893,7 @@ def _play_wait(folder: str, forms: tuple[str, ...], looked: int, wait_s: float, 
     stop: Any = cancel
     # What the wait could never take: a program from the folder that started before it looks (the relay's start with
     # the relay, the pre-flight without), which has a window now. A store starts nothing for a game that runs.
-    since = relay.create_time if relay is not None else looked
+    since = relay.since if relay is not None else looked
     try:
         before = [p for p in tgt.running_from(forms, resolve=_unelevated())["running"] if p["create_time"] <= since]
         shown = tgt.windows_by_pid(windows.top_windows()) if before else {}
@@ -936,7 +936,7 @@ def _play_wait(folder: str, forms: tuple[str, ...], looked: int, wait_s: float, 
             say("Not recorded: the relay's wait for the game was over before this one began. Run the same "
                 "`lagdoctor watch` again.")
             return None, 1
-        kw = {"since": relay.create_time, "own": relay.own(), "resolve": False, "expand_short": _unelevated(),
+        kw = {"since": relay.since, "own": relay.own(), "resolve": False, "expand_short": _unelevated(),
               "aim": aim}
         stop = _EitherSet(cancel, relay.ended)    # a relay that ends ends the wait, not five minutes later
     observers.event("launch")                     # the app opens the store link now (Play's step 3)

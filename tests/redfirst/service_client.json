@@ -68,5 +68,10 @@
    "file": "tests/conftest.py",
    "old": "            if name == protocol.SERVICE_NAME:",
    "new": "            if False:",
-   "tests": ["tests/test_service_client.py::test_the_guard_keeps_tests_from_starting_this_pcs_capture_service"]}
+   "tests": ["tests/test_service_client.py::test_the_guard_keeps_tests_from_starting_this_pcs_capture_service"]},
+  {"name": "the folder wait counts from the service's start, not the ask",
+   "file": "lagdoctor/cli.py",
+   "old": "        kw = {\"since\": relay.since, \"own\": relay.own(), \"resolve\": False,",
+   "new": "        kw = {\"since\": relay.create_time, \"own\": relay.own(), \"resolve\": False,",
+   "tests": ["tests/test_watch_folder.py::test_the_wait_counts_from_the_links_since_which_for_the_capture_service_is_its_ask"]}
 ]
