@@ -27,7 +27,13 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   from a fresh shell and uninstalled on a throwaway runner with nothing left; nothing published or signed yet.
 - [ ] Stage 4: the capture service. Begun 2026-11-08 with its channel, the locked pipe (`lagdoctor/winapi/pipe.py`, PR
   #19; research note section 11), and the relay core it will host (`lagdoctor/relay/`, `docs/LAUNCHER-PLAN.md` M3,
-  PR #23, merged 2026-11-08): its protocol, its checks and its client.
+  PR #23, merged 2026-11-08): its protocol, its checks and its client. Resumed 2026-11-25 with E9 (research note,
+  sections 6 and 12), the questions only a runner can answer before the service is built, answered there: it reads
+  its caller's account and session through the pipe, a standard account may start it once its descriptor grants
+  interactive users SERVICE_START (and nothing more), it owns its pipe as its service SID, and nothing tells it a
+  game's account without a handle (so the game's tree is judged another way, decided with the service host). Then, each its own pull request: the service host and its caller policy over the relay core; the
+  MSI's ServiceInstall with its check on the runner; the recorder and the app trying the service first; and the
+  owner's own install and recording, frame timing's first check under the service.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.
 
 ## E2: the group fallback
@@ -127,10 +133,16 @@ but a GitHub-hosted runner. Measured (research note section 8):
 
 - WiX `ServiceInstall` with `Account="NT AUTHORITY\LocalService"`, a quoted Program Files path, required privileges
   trimmed to SeChangeNotifyPrivilege, an unrestricted service SID (E3: a restricted one cannot start an ETW session
-  or PresentMon's window), the named-pipe trigger and idle self-stop; users never get change-config or stop.
+  or PresentMon's window), demand start with SERVICE_START for interactive users in the service's own descriptor
+  (`PermissionEx` under `ServiceInstall`, Windows Installer's MsiLockPermissionsEx table; the client calls
+  StartServiceW, E9) instead of the named-pipe trigger, which Windows Installer's tables cannot set (DECISIONS
+  2026-11-25), and idle self-stop; users never get change-config or stop. Windows Installer's page for
+  MsiServiceConfig says its settings take effect "the next time the system is started": the MSI's check reads
+  them back right after the install.
 - The pipe: explicit DACL, PIPE_REJECT_REMOTE_CLIENTS, FILE_FLAG_FIRST_PIPE_INSTANCE; the CLI connects at
-  identification level and retries its first open, which fails with ERROR_PIPE_BUSY while the trigger starts the
-  service (E3b); one recording at a time; a protocol version handshake. Done 2026-11-08 for the pipe itself:
+  identification level and retries its first open, which fails with ERROR_PIPE_BUSY while the service starts (E3b);
+  the service names its own service SID as the pipe's owner (by default LocalService owns it, E9) and reads its
+  caller's account and session from the caller's token through the pipe (E9); one recording at a time; a protocol version handshake. Done 2026-11-08 for the pipe itself:
   `lagdoctor/winapi/pipe.py` makes the first and only instance under a DACL that grants each named SID exactly what a
   client asks for (read, write data, write attributes) plus a medium label that denies anything below medium every
   right (`NWNRNX`: a write-only label still let a low process open the pipe to read and take its one instance); the

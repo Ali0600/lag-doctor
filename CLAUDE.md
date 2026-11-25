@@ -280,11 +280,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `results.window_metrics` and `problems` over the owner's own recordings in memory: the clock-spread rule PR #69
   replaced would have kept out nearly every run on this laptop, and only that replay showed it.
 - **`scripts/stage2` creates throwaway Windows services** (the capture-service experiments, `docs/INSTALLER-PLAN.md`
-  Stage 2). It runs only on GitHub's hosted runners, from `.github/workflows/experiments.yml` (started by hand, or by
+  Stage 2), and E9 a throwaway local account, which it deletes at the end. It runs only on GitHub's hosted runners, from `.github/workflows/experiments.yml` (started by hand, or by
   a pull request that changes it, `scripts/stage2` or a module the experiments import, which its `paths:` lists and
   `tests/test_side_workflows.py` keeps whole, and then on every push to that pull request, about 4 minutes a run);
   `scripts/stage2/guard.py` refuses anywhere else (exit 2). Never run it on this PC. Its instruments are
-  checked by `tests/test_stage2.py` without any service; its results are read from the run's `stage2-results`
+  checked by `tests/test_stage2.py` without any service (E9's
+  WTSEnumerateProcessesExW opens every process it can, so its test stubs it out: never call it here); its results are read from the run's `stage2-results`
   artifact and the job summary (`docs/research/install-and-rights.md`, section 8, has the measured ones).
 - **The MSI installs only on CI's runner.** `scripts/msi_check.py` installs and uninstalls a per-machine product
   (Program Files, the system PATH, Windows Installer's registry) and refuses anywhere but a GitHub-hosted runner

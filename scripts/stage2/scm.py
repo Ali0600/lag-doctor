@@ -4,7 +4,7 @@ The experiments configure their services with sc.exe (create, privs, sidtype, tr
 sc.exe's own read-back commands (qc, qprivs, qsidtype, qtriggerinfo, showsid) then give an independent record of
 what was set. Only what sc.exe cannot do cleanly is here: polling the state with a deadline, and StartServiceW
 with arguments (they reach the service's ServiceMain, not its command line). Layouts from winsvc.h (Windows SDK
-10.0.19041), x64. status() only reads; start() is used on the throwaway runner only (drive.py).
+10.0.19041), x64. status() and open_error() only read; start() is used on the throwaway runner only (drive.py and E9's client).
 """
 from __future__ import annotations
 
@@ -16,7 +16,8 @@ import time
 from ctypes import wintypes
 
 SC_MANAGER_CONNECT = 0x0001
-SERVICE_QUERY_STATUS, SERVICE_START = 0x0004, 0x0010
+SERVICE_CHANGE_CONFIG, SERVICE_QUERY_STATUS, SERVICE_START, SERVICE_STOP = 0x0002, 0x0004, 0x0010, 0x0020
+ERROR_SERVICE_ALREADY_RUNNING = 1056
 SC_STATUS_PROCESS_INFO = 0
 STATES = {1: "stopped", 2: "start_pending", 3: "stop_pending", 4: "running", 5: "continue_pending",
           6: "pause_pending", 7: "paused"}
@@ -90,6 +91,16 @@ def start(name: str, args: list[str]) -> None:
     with _Service(name, SERVICE_START | SERVICE_QUERY_STATUS) as handle:
         if not _advapi32.StartServiceW(handle, len(args), array if args else None):
             raise ctypes.WinError(ctypes.get_last_error())
+
+
+def open_error(name: str, access: int) -> int | None:
+    """Whether this process may open the service with `access`: None when it may (the handle is closed at once), else
+    Windows' error (ERROR_ACCESS_DENIED when the service's descriptor does not grant it). Nothing is done with it."""
+    try:
+        with _Service(name, access):
+            return None
+    except OSError as exc:
+        return exc.winerror
 
 
 def wait_for(name: str, states: set[str], timeout: float) -> dict:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -20,9 +21,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from stage2 import drive, guard, pipes, scm, service_host, tokeninfo  # noqa: E402
+from stage2 import drive, e9_client, guard, logon, pipes, scm, service_host, tokeninfo, wts  # noqa: E402
 
 from lagdoctor.winapi import elevation  # noqa: E402
+from lagdoctor.winapi import pipe as lagpipe  # noqa: E402
 
 STANDIN = Path(__file__).resolve().parents[1] / "scripts" / "stage2" / "standin.py"
 RUNNER = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted"}
@@ -242,3 +244,158 @@ def test_the_stand_in_presents_frames_on_warp(tmp_path):
     assert data["adapter"]["vendor_id"] == "0x1414"           # Microsoft Basic Render Driver: WARP, not a GPU
     assert isinstance(data["pid"], int) and data["pid"] > 0
     assert data["first_present_qpc_s"] < data["ended_qpc_s"]
+
+
+# ------------------------------------------------------------------------------------------ E9 ---
+
+def _serve_one_on_a_thread(server, work):
+    """Wait for a client and run work(server) on a thread of its own, so an impersonation that a broken reader left
+    in place dies with that thread instead of staying on pytest's."""
+    out: dict = {}
+
+    def run() -> None:
+        try:
+            assert server.wait_client(10.0)
+            out["value"] = work(server)
+        except BaseException as exc:  # noqa: BLE001 - handed to the test
+            out["error"] = exc
+
+    t = threading.Thread(target=run)
+    t.start()
+    return t, out
+
+
+def test_a_pipe_server_reads_its_clients_account_at_identification_level_and_stops_acting_as_it():
+    own = tokeninfo.snapshot()
+    name = "lagdoctor-test-" + uuid.uuid4().hex
+
+    def work(server) -> dict:
+        assert server.read(5.0) == b"hello"
+        with server._using() as handle:
+            seen = tokeninfo.client_token(handle)
+        seen["after"] = tokeninfo.thread_token_error()
+        server.write(b"bye", 5.0)
+        return seen
+
+    with lagpipe.PipeServer(name, lagpipe.client_dacl([own["user"]["sid"]])) as server:
+        t, out = _serve_one_on_a_thread(server, work)
+        with lagpipe.connect(name, 5.0) as client:
+            client.write(b"hello", 5.0)
+            assert client.read(5.0) == b"bye"
+        t.join(10.0)
+    assert not t.is_alive() and "error" not in out, out
+    seen = out["value"]
+    assert seen["user"]["sid"] == own["user"]["sid"] and seen["session_id"] == own["session_id"]
+    assert seen["type"] == "impersonation" and seen["level"] == "identification"   # what connect() allows
+    assert seen["elevated"] == own["elevated"] and own["type"] == "primary" and own["level"] is None
+    assert seen["after"] == drive.ERROR_NO_TOKEN                # the thread acts as the process again
+
+
+def test_the_e9_mode_tells_its_client_who_it_was_and_never_asks_windows_about_this_pcs_processes(tmp_path,
+                                                                                                monkeypatch):
+    own = tokeninfo.snapshot()
+    asked: list[list[int]] = []
+
+    def fake_processes(pids: list[int], session: int = 0) -> dict:   # the real call opens every process it can
+        asked.append(list(pids))
+        return {"count": 1, "sessions": [own["session_id"]], "null_sids": 0,
+                "by_pid": {p: {"session": own["session_id"], "name": "python.exe", "sid": own["user"]["sid"]}
+                           for p in pids}}
+
+    monkeypatch.setattr(wts, "processes", fake_processes)
+    name = "lagdoctor-test-" + uuid.uuid4().hex
+    stop, result = threading.Event(), {}
+    host = threading.Thread(target=lambda: result.setdefault(
+        "code", service_host.run_mode("e9", "svc", [], [str(tmp_path), name, "20", "1"], stop)))
+    host.start()
+    try:
+        with lagpipe.connect(name, 15.0, max_message=service_host.E9_MAX_MESSAGE) as client:
+            owner = client.owner_sid()
+            client.write(b'{"phase": "test"}', 5.0)
+            reply = json.loads(client.read(10.0))
+    finally:
+        stop.set()
+        host.join(30.0)
+    assert result.get("code") == service_host.FINISHED
+    assert reply["pid"] == os.getpid() and reply["session"] == own["session_id"]
+    assert reply["token"]["user"]["sid"] == own["user"]["sid"] and reply["token"]["level"] == "identification"
+    assert reply["thread_token_error_after"] == drive.ERROR_NO_TOKEN
+    assert reply["wts"]["by_pid"][str(os.getpid())]["sid"] == own["user"]["sid"] and asked
+    record = json.loads(next(tmp_path.glob("e9-*.json")).read_text(encoding="utf-8"))
+    assert record["stopped_by"] == "served every client" and len(record["clients"]) == 1
+    probes = record["owner_probes"]
+    assert probes["service-sid"] == {"created": False, "why": "no service SID in this token"}
+    assert probes["local-service"]["created"] is False and probes["local-service"]["winerror"] == 1307
+    assert probes["default"]["created"] is True and record["owner_used"] == "default"
+    assert owner == record["pipe_owner"] == probes["default"]["owner"]
+
+
+def test_the_services_descriptor_gains_start_for_interactive_users_and_nothing_else():
+    default = ("D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)"
+               "(A;;CCLCSWLOCRRC;;;SU)S:(AU;FA;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;WD)")
+    got = drive.with_interactive_start(default)
+    assert got == default.replace("(A;;CCLCSWLOCRRC;;;IU)", "(A;;CCLCSWLOCRRCRP;;;IU)")
+    assert drive.with_interactive_start(got) == got            # asked twice, granted once
+    sy = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)"
+    assert drive.with_interactive_start(sy) == sy + "(A;;LCRP;;;IU)"
+    with pytest.raises(ValueError):
+        drive.with_interactive_start("O:BAG:SY")
+
+
+def test_e9_judges_each_caller_by_what_it_says_of_itself_against_what_the_service_read():
+    user, admin = "S-1-5-21-1-2-3-1001", "S-1-5-21-1-2-3-500"
+
+    def client(pid: int, sid: str, elevated: bool, **extra) -> dict:
+        return {"pid": pid, "own": {"user": {"sid": sid, "name": f"runner-{pid}"}, "session_id": 2,
+                                    "elevated": elevated, "groups": [{"sid": "S-1-5-4", "enabled": True}]},
+                "server_pid": 900, "scm_pid": 900, "owner_sid": "S-1-5-80-1", **extra}
+
+    def served(pid: int, sid: str, elevated: bool, level: str = "identification") -> dict:
+        return {"pid": pid, "session": 2, "thread_token_error_after": drive.ERROR_NO_TOKEN,
+                "token": {"user": {"sid": sid}, "session_id": 2, "level": level, "elevated": elevated},
+                "wts": {"by_pid": {str(pid): {"sid": None}}}}
+
+    rec = {"before": {"result": {"rights": {"start": 5, "stop": 5, "change_config": 5, "query_status": None}}},
+           "after": {"result": client(11, user, False, start_error=None,
+                                      rights={"start": None, "stop": 5, "change_config": 5, "query_status": None})},
+           "admin": {"result": client(12, admin, True, server_pid=901)}}
+    starts = [{"owner_probes": {"service-sid": {"created": True},
+                                "local-service": {"created": False, "winerror": 1307}},
+               "owner_used": "service-sid", "pipe_owner": "S-1-5-80-1", "stopped_by": "served every client",
+               "clients": [served(11, user, False), served(12, user, True, "anonymous")]}]
+    v = drive.judge_e9(rec, starts)
+    assert v["user_start_refused_by_default"] and v["user_started_it_after_grant"]
+    assert v["user_stop_and_reconfigure_refused"] and v["service_starts"] == 1
+    assert v["owner_probes"] == {"service-sid": True, "local-service": 1307}
+    u, a = v["standard_user"], v["administrator"]
+    assert u["same_user"] and u["same_session"] and u["level"] == "identification" and u["same_elevation"]
+    assert u["server_pid_is_the_service"] and u["interactive_group"] and u["service_back_to_itself"]
+    assert u["wts"] == {"listed": True, "same_user": False, "sid_null": True}
+    assert not a["same_user"] and a["level"] == "anonymous"   # the service read someone else, at another level
+    assert not a["server_pid_is_the_service"]                 # another process answered on the pipe
+    rec["after"]["result"]["rights"]["stop"] = None
+    assert not drive.judge_e9(rec, starts)["user_stop_and_reconfigure_refused"]
+    assert drive.judge_e9({}, [])["standard_user"] == {"ran": False, "why": "no result"}
+
+
+def test_the_throwaway_accounts_password_never_reaches_the_record(monkeypatch):
+    password = logon.new_password()
+    # net.exe asks whether to go on with a password over 14 characters, from the console, and makes no account
+    # unanswered; 14 is the most it takes without asking.
+    assert len(password) == 14 and any(c.isupper() for c in password) and any(c.isdigit() for c in password)
+    assert logon.new_password() != password
+    monkeypatch.setattr(logon, "_net", lambda *args: {"exit_code": 0, "output": " ".join(args)})
+    assert password not in json.dumps(logon.add_user("someone", password))
+    with pytest.raises(ValueError):
+        logon.add_user("someone", password + "x")
+
+
+def test_e9s_client_refuses_other_arguments_and_records_a_service_it_may_not_open(tmp_path):
+    assert e9_client.main(["only", "three", "args"]) == 2
+    assert e9_client.main([str(tmp_path / "x.json"), "s", "p", "sideways"]) == 2
+    out = tmp_path / "before.json"
+    missing = "lagdoctor-test-" + uuid.uuid4().hex                 # no such service: nothing is opened or started
+    assert e9_client.main([str(out), missing, "unused", "before"]) == 0
+    data = json.loads(out.read_text(encoding="utf-8"))
+    assert data["rights"] == {k: 1060 for k in e9_client.RIGHTS}  # ERROR_SERVICE_DOES_NOT_EXIST
+    assert data["own"]["user"]["sid"] == tokeninfo.snapshot()["user"]["sid"] and "reply" not in data
