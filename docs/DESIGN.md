@@ -230,7 +230,8 @@ starts (anything else starting it runs nothing and exits 1063).
 - **Installed by the MSI** (`installer/lag-doctor.wxs`, component `CaptureService`): the runtime's `python.exe` on
   `protocol.SERVICE_ARGUMENTS`, LocalService, demand start, an unrestricted service SID and SeChangeNotifyPrivilege alone
   (`ServiceConfig`), its descriptor `protocol.SERVICE_SDDL` (`PermissionEx`), stopped on install and uninstall and
-  deleted on uninstall; CI's install check reads all of it back and records through it as a standard account
+  deleted on uninstall, in an install folder whose DACL is protected (SYSTEM and Administrators alone may write it,
+  wherever an administrator puts it); CI's install check reads all of it back and records through it as a standard account
   (research note, section 13).
 - **Started by its caller**: on demand, by StartServiceW, which interactive users may call because the install grants
   them SERVICE_START on the service and nothing more (E9; DECISIONS 2026-11-25). It stops itself after `IDLE_S` (120 s)

@@ -466,7 +466,12 @@ with WiX v7.0.1: the service in a component of its own keyed by the runtime's `p
   service SID among its groups [verified: the run's verdicts]. So MsiServiceConfig's SID type and privilege trim were
   in the token at the first start after the install, with no reboot, although its Microsoft page says such a change
   "takes effect the next time the system is started".
-- **The uninstall** left the service unknown to the SCM [verified: the gone verdict].
+- **The install folder**, given a protected DACL by the MSI (`msi_build.INSTALL_FOLDER_SDDL`: SYSTEM and Administrators
+  full, Users read and execute; the review of 2026-11-25 found that a folder an administrator puts at a drive's root
+  would otherwise let every account write the service's program), read back with GetNamedSecurityInfoW: protected,
+  and it and `python.exe` writable by SYSTEM and Administrators alone [verified: run 45644769891's service verdict].
+- **The uninstall** left the service unknown to the SCM [verified: the gone verdict], and the check's own leftovers
+  (the stand-in, the throwaway account, its folder) were gone after it [verified: the cleanup verdict].
 - **The sabotage run** built the MSI with interactive users' start right taken out of both the `.wxs` and the constant
   the build reads it back against: `service` still passed (it compared the two), `recording` failed (OpenServiceW and
   StartServiceW refused with error 5) and `token` failed (no running service). Since then the service verdict also
