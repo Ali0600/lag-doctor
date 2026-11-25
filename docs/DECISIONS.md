@@ -239,6 +239,35 @@
 
 ---
 
+## 2026-11-25: Which of the game's processes the capture service counts as the game's
+
+The elevated relay counts the game's whole tree in the recorder's session as the game's (its processes' network events
+leave it whole), since the administrator approved the recording at the UAC prompt. The service has no prompt, any
+interactive user may ask it, and the plan required each such process to run as the caller's account. E9 found nothing
+that tells the service a process's account without opening it: WTSEnumerateProcessesExW gives a LocalService service
+no SID for the user's processes, and on a PC it opens each process it can. Settled by this session with the service
+host; the player sees no difference for a game that does its networking in its own process.
+
+- **The game, and its descendants whose program lies under the game's own program folder (chosen)**: read without a
+  handle (ntquery.image_path), so a game's own helpers count and an administrator's program started from the player's
+  (an elevation typed in on the player's desktop) does not; everything else in the session counts only in the
+  per-program byte totals, as the relay's other programs do. `GameFolderTree` in `lagdoctor/service`. The game's folder
+  must pass Play's folder rule (`target.check_folder`), so a caller naming Explorer, or a program at a drive's root,
+  is refused: either would make the Windows folder or the whole drive "the game's" (the review of 2026-11-25 found
+  it). What stays open: the game itself, named by the caller, could be another account's process in the caller's own
+  session, and nothing tells the service so without a handle; its TCP endpoints are visible to any account already
+  (GetExtendedTcpTable), its UDP destinations and per-packet timing are not. Accepted for now, as the cost of
+  recording with no prompt.
+- **The game alone**: rejected. Safe too, but a game whose helpers carry its traffic would lose them for nothing gained
+  over the folder rule.
+- **The whole tree, as the relay does**: rejected. Another account's process started from the player's own would leave
+  the service with its whole network events, and no prompt approved that.
+- **Each process's account, read through a handle**: rejected. The service would open the game's processes, which
+  lag-doctor never does.
+
+Revisit hook: `GameFolderTree.__call__`; for Play, the install folder's forms (`Config.folders`) could stand in for the
+program's folder if a game's helpers live elsewhere in its install.
+
 ## 2026-11-25: The capture service starts on demand, by its caller, not by a named-pipe trigger
 
 Stage 4's plan had the service start when a recorder opens its pipe (the trigger E3b measured), and stop itself when

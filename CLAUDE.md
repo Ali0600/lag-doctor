@@ -388,6 +388,13 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   through `protocol.from_relay` or `from_recorder` with its checks, and changes `protocol.VERSION`.
   `tests/test_relay_live.py` starts the real relay elevated and runs only on GitHub's runner
   (`scripts/stage2/guard.py`); the other relay tests run its code on a thread here, unelevated. An agent never starts `python -m lagdoctor.relay` itself: only `watch` does.
+- **The capture service (`lagdoctor/service/`, DESIGN.md "The capture service") runs only as the SCM starts it.**
+  An agent never installs, starts, stops or reconfigures a service on this PC (`sc.exe`, StartServiceW): only the
+  MSI installs it, and only on CI's runner. Its tests (`tests/test_service.py`) run its `Host` on a thread with the
+  relay tests' stand-ins, on a pipe of the test's own name with `owner=""` (the service's own SID exists only in the
+  service), and ask the SCM about services by name, read-only; `python -m lagdoctor.service` started any other way
+  runs nothing (exit 1063). A caller is judged by its own token through the pipe (`PipeServer.caller`), never by what
+  it sends; a change to what the service records needs the same judgement on the service's own reads.
 - **The relay and the capture service talk only through `lagdoctor/winapi/pipe.py`.** Name a pipe through
   `pipe.path` (Windows folds `..` in a `\\.\` path, so a name holding one opened an ordinary file), build its
   descriptor with `pipe.client_dacl` (a SID string can carry entries of its own), and check who answered: a server

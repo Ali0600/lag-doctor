@@ -134,7 +134,7 @@ verification log; trust a note's *Corrected* entries over its body.
 
 The recording's administrator part (LAUNCHER-PLAN M3, and Play's folder mode, M6), and the protocol of Stage 4's
 capture service. `client.py` is the recorder's side, `server.py` the relay process, `protocol.py` the messages
-(`protocol.VERSION` 2 since M6d).
+(`protocol.VERSION` 2 since M6d, 3 since the capture service's `ask`).
 
 - **What the prompt approves** is the whole command line (`client.relay_argv`): `--pipe` a fresh random name
   (`lagdoctor-relay-` and 32 hex digits), `--recorder pid:create_time` (the process running `watch`, never a venv
@@ -219,6 +219,50 @@ capture service. `client.py` is the recorder's side, `server.py` the relay proce
   (`netflows.expect_external_stop`), so the relay's consumer ending is never read as dying by itself. Network
   messages that come before the tracker has made its session (the frames may start the relay first) are kept for
   it, up to 50,000 events, and the rest counted (`health.early_dropped`).
+
+### The capture service (lagdoctor/service/)
+
+Stage 4 (`docs/INSTALLER-PLAN.md`): the relay core run as a LocalService Windows service, so a recording raises no UAC
+prompt. `lagdoctor/winapi/service.py` holds the service control manager's two sides (the service's `run`, a caller's
+`query` and `start`), `lagdoctor/service/__init__.py` the host, and `python.exe -B -m lagdoctor.service` is what the SCM
+starts (anything else starting it runs nothing and exits 1063).
+
+- **Started by its caller**: on demand, by StartServiceW, which interactive users may call because the install grants
+  them SERVICE_START on the service and nothing more (E9; DECISIONS 2026-11-25). It stops itself after `IDLE_S` (120 s)
+  without a caller.
+- **Its pipe** is `protocol.SERVICE_PIPE`, fixed, one instance (one recording on the PC at a time), owned by the
+  service's own SID (`service.service_sid("lagdoctor")`: by default LocalService would own it, which any LocalService
+  service can set), and open to interactive users alone (`client_dacl(["S-1-5-4"])`, with the medium label). A
+  client checks the owner and that the pipe's server is the process the SCM names.
+- **What it records comes from its caller**, where the relay's comes from the prompt: the caller's first message is
+  `ask` (`protocol.from_caller`: the running game, or Play's install folder with the recorder's wait, and frames and
+  network), within `FIRST_ASK_S` (5 s) or it is let go. `protocol.VERSION` is 3 since then; another version is refused
+  in words.
+- **Who the caller is comes from its own token** through the pipe (`pipe.PipeServer.caller`: ImpersonateNamedPipeClient,
+  OpenThreadToken as itself, RevertToSelf before anything is read; a failed revert ends the process), never from what
+  it says. Its session there, the pipe's client session and its process's session in the service's snapshot must
+  agree, the caller's process must have started before it connected (a pid reused since is refused), and the game is
+  judged in that session: the running one by `target.accept_target` and its program's folder by Play's folder rule
+  (`target.check_folder`: never the Windows folder or a drive's root, read without a handle and checked again on a
+  fresh snapshot), Play's by the folder rule on each process named, started after the ask (`Relay(since=)`, with the
+  service's own process in `me=`), its folder's forms checked at the ask (`target.check_forms`).
+- **Only the installed PresentMon** (`setup.BUNDLED`), after `setup.verify`; none installed, and frame timing is
+  refused.
+- **The game's tree**: only the game and the processes under its own program's folder count as the game's
+  (`GameFolderTree`, `Relay(tree=)`), read without a handle; a path that cannot be read counts as elsewhere. A refresh
+  that cannot run ends the recording with its reason (`Relay._refresh_loop`, the elevated relay's too), since a game
+  pid Windows gives away would otherwise keep the game's standing. Nothing tells the service another process's account
+  without opening it (E9), so a descendant from elsewhere, which may be another account's, counts only in the
+  per-program totals of the caller's session (DECISIONS 2026-11-25).
+- **Between callers** the recording's pipe reader is stopped and waited out (`Relay.close`) before the next caller is
+  taken, and a refusal waits for the caller to hang up before the pipe is disconnected (a disconnect drops what the
+  caller has not read). A stop from the SCM closes the pipe, which ends a recording in progress.
+- **It writes no file and prints nothing.** What a caller is refused is said on the pipe (`error`, then `end`), in
+  printable text; another `protocol.VERSION` is told so whatever its ask holds. A recording whose pipe reader would not
+  leave ends the service (the SCM's next start gives a fresh one).
+- **Not yet**: one recording on the whole PC. The service takes one caller at a time, but its ETW session and
+  PresentMon's take the names an elevated `watch` in another Windows session uses, and starting either stops the
+  other's (INSTALLER-PLAN, Stage 4); nor is there a cap on how long one caller may hold it.
 
 ### The control channel (lagdoctor/control.py)
 

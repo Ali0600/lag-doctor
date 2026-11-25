@@ -26,6 +26,9 @@ section 11):
   left pending past the function that issued it.
 - close() is safe from any thread, and from a signal handler that interrupted one of this pipe's calls: it cancels
   what runs, and the handle is closed as the last running call leaves.
+- A server reads who its client is from the client's own token (PipeServer.caller: ImpersonateNamedPipeClient,
+  OpenThreadToken as itself, RevertToSelf at once), which the capture service needs since any interactive user may
+  connect to it; measured under LocalService with no SeImpersonatePrivilege (research note, section 12).
 
 Layouts from minwinbase.h, winbase.h and ntifs.h (Windows SDK 10.0.19041), x64.
 """
@@ -38,6 +41,7 @@ import re
 import threading
 import time
 from ctypes import wintypes
+from dataclasses import dataclass
 
 PIPE_ACCESS_DUPLEX = 0x00000003              # winbase.h: open mode
 FILE_FLAG_OVERLAPPED = 0x40000000
@@ -68,6 +72,12 @@ ERROR_OPERATION_ABORTED = 995
 ERROR_IO_INCOMPLETE = 996
 ERROR_IO_PENDING = 997
 ERROR_NOT_FOUND = 1168                       # CancelIoEx: no call of that OVERLAPPED is running
+ERROR_BAD_LENGTH, ERROR_INSUFFICIENT_BUFFER = 24, 122
+TOKEN_QUERY = 0x0008                         # winnt.h
+# TOKEN_INFORMATION_CLASS (winnt.h, SDK 10.0.26100): TokenUser = 1, then in order
+TOKEN_USER_CLASS, TOKEN_SESSION_ID_CLASS, TOKEN_ELEVATION_CLASS = 1, 12, 20
+TOKEN_IMPERSONATION_LEVEL_CLASS = 9
+LEVELS = ("anonymous", "identification", "impersonation", "delegation")   # SECURITY_IMPERSONATION_LEVEL, from 0
 PEER_GONE = (ERROR_BROKEN_PIPE, ERROR_NO_DATA, ERROR_PIPE_NOT_CONNECTED)   # the other end closed or disconnected
 STATUS_PENDING = 0x103                       # ntstatus.h: OVERLAPPED.Internal while a call runs
 NOT_ISSUED = 1 << 40                         # set before each call; an NTSTATUS has 32 bits, so Windows overwrites
@@ -114,7 +124,27 @@ class FILE_PIPE_LOCAL_INFORMATION(ctypes.Structure):
         "ReadDataAvailable", "OutboundQuota", "WriteQuotaAvailable", "NamedPipeState", "NamedPipeEnd")]
 
 
+class SID_AND_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [("Sid", ctypes.c_void_p), ("Attributes", wintypes.DWORD)]     # TOKEN_USER is one of these
+
+
+@dataclass(frozen=True)
+class Caller:
+    """A pipe client as its own token names it: its account, Windows session and elevation, and the impersonation
+    level it allowed the server (connect() allows "identification")."""
+    sid: str
+    session: int
+    elevated: bool
+    level: str
+
+
+class StillImpersonating(BaseException):
+    """RevertToSelf failed: the thread still acts as the pipe's client. A BaseException, so no `except Exception`
+    carries on as the client; the process should end."""
+
+
 assert ctypes.sizeof(OVERLAPPED) == 32
+assert ctypes.sizeof(SID_AND_ATTRIBUTES) == 16
 assert ctypes.sizeof(SECURITY_ATTRIBUTES) == 24
 assert ctypes.sizeof(IO_STATUS_BLOCK) == 16
 assert ctypes.sizeof(FILE_PIPE_LOCAL_INFORMATION) == 40
@@ -170,6 +200,17 @@ _adv.ConvertSidToStringSidW.restype = wintypes.BOOL
 _adv.GetSecurityInfo.argtypes = [wintypes.HANDLE, ctypes.c_int, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p),
                                  ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p)]
 _adv.GetSecurityInfo.restype = wintypes.DWORD
+_adv.ImpersonateNamedPipeClient.argtypes = [wintypes.HANDLE]
+_adv.ImpersonateNamedPipeClient.restype = wintypes.BOOL
+_adv.OpenThreadToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL, ctypes.POINTER(wintypes.HANDLE)]
+_adv.OpenThreadToken.restype = wintypes.BOOL
+_adv.RevertToSelf.argtypes = []
+_adv.RevertToSelf.restype = wintypes.BOOL
+_adv.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
+                                     ctypes.POINTER(wintypes.DWORD)]
+_adv.GetTokenInformation.restype = wintypes.BOOL
+_k32.GetCurrentThread.argtypes = []
+_k32.GetCurrentThread.restype = wintypes.HANDLE
 _ntdll.NtQueryInformationFile.argtypes = [wintypes.HANDLE, ctypes.POINTER(IO_STATUS_BLOCK), ctypes.c_void_p,
                                           wintypes.ULONG, ctypes.c_int]
 _ntdll.NtQueryInformationFile.restype = ctypes.c_long      # NTSTATUS
@@ -199,6 +240,35 @@ def client_dacl(sids: list[str] | tuple[str, ...]) -> str:
         if not isinstance(sid, str) or not _SID.fullmatch(sid):
             raise ValueError(f"not a SID: {sid!r}")
     return "D:P" + "".join(f"(A;;0x{CLIENT_GRANT:x};;;{sid})" for sid in sids) + MEDIUM_LABEL
+
+
+def _token_info(token: wintypes.HANDLE, cls: int) -> ctypes.Array:
+    """GetTokenInformation's answer for one class, in a buffer of the size Windows asks for. A DWORD-sized class
+    (session, elevation, impersonation level) takes a buffer of exactly 4 bytes: 8 answered ERROR_BAD_LENGTH."""
+    size = wintypes.DWORD(0)
+    for _attempt in range(4):                    # the answer could grow between two calls
+        buf = ctypes.create_string_buffer(max(size.value, 4))
+        if _adv.GetTokenInformation(token, cls, buf, len(buf), ctypes.byref(size)):
+            return buf
+        err = ctypes.get_last_error()
+        if err not in (ERROR_INSUFFICIENT_BUFFER, ERROR_BAD_LENGTH) or size.value <= len(buf):
+            raise _error(err)
+    raise OSError(f"token information class {cls} kept growing")
+
+
+def _token_caller(token: wintypes.HANDLE) -> Caller:
+    user = SID_AND_ATTRIBUTES.from_buffer(_token_info(token, TOKEN_USER_CLASS), 0)
+    text = wintypes.LPWSTR()
+    if not _adv.ConvertSidToStringSidW(user.Sid, ctypes.byref(text)):
+        raise _error()
+    try:
+        sid = text.value
+    finally:
+        _k32.LocalFree(ctypes.cast(text, ctypes.c_void_p))
+    level = wintypes.DWORD.from_buffer(_token_info(token, TOKEN_IMPERSONATION_LEVEL_CLASS), 0).value
+    return Caller(sid=sid, session=wintypes.DWORD.from_buffer(_token_info(token, TOKEN_SESSION_ID_CLASS), 0).value,
+                  elevated=bool(wintypes.DWORD.from_buffer(_token_info(token, TOKEN_ELEVATION_CLASS), 0).value),
+                  level=LEVELS[level] if 0 <= level < len(LEVELS) else str(level))
 
 
 def _error(code: int | None = None, text: str | None = None) -> OSError:
@@ -595,6 +665,30 @@ class PipeServer(_Pipe):
     def client_session(self) -> int:
         """The connected client's Windows session (GetNamedPipeClientSessionId)."""
         return self._query("GetNamedPipeClientSessionId")
+
+    def caller(self) -> Caller:
+        """Who the connected client is, from its own token: ImpersonateNamedPipeClient (Windows hands over the token
+        of the sender of the last message read), OpenThreadToken with OpenAsSelf (checked against this process, so an
+        identification-level token opens), and RevertToSelf before anything is read. OSError when Windows refused a
+        step; StillImpersonating when the thread could not stop acting as the client."""
+        with self._using() as handle:
+            if not _adv.ImpersonateNamedPipeClient(handle):
+                raise _error()
+            token, err = wintypes.HANDLE(), None
+            try:
+                if not _adv.OpenThreadToken(_k32.GetCurrentThread(), TOKEN_QUERY, True, ctypes.byref(token)):
+                    err = ctypes.get_last_error()
+            finally:
+                if not _adv.RevertToSelf():
+                    if token:
+                        _k32.CloseHandle(token)
+                    raise StillImpersonating(f"RevertToSelf failed (error {ctypes.get_last_error()})")
+        if err is not None:
+            raise _error(err)
+        try:
+            return _token_caller(token)
+        finally:
+            _k32.CloseHandle(token)
 
     def disconnect(self) -> None:
         """Drop the client, so wait_client can take the next. What it has not read yet is lost, so the protocol ends a

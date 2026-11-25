@@ -264,11 +264,21 @@ def wait_for_recorder(server, cfg: Config, session: int, wait_s: float | None = 
 
 
 class Relay:
-    """One recording: started by `start`, ended by `stop` or by the recorder hanging up. `since`: the relay's own
-    create time, after which Play's game must have started."""
+    """One recording: started by `start`, ended by `stop` or by the recorder hanging up. `session`: the recorder's
+    Windows session, where the game must run. `since`: after which Play's game must have started (the relay's own
+    create time; the capture service's, when the caller asked). `me`: this process as (pid, create time), one of
+    lag-doctor's own that is never a game (default: parts.me started at `since`). `tree`: for the capture service,
+    which processes of the game's tree may count as the game's (tree(procs, game, pids) -> pids); the relay, which
+    the UAC prompt approved, counts the whole tree in the session."""
 
-    def __init__(self, cfg: Config, server, session: int, parts: Parts, since: int | None = None) -> None:
+    def __init__(self, cfg: Config, server, session: int, parts: Parts, since: int | None = None,
+                 me: tuple[int, int] | None = None,
+                 tree: Callable[[dict, tuple[int, int], set[int]], set[int]] | None = None) -> None:
         self.cfg, self.server, self.session, self.parts, self.since = cfg, server, session, parts, since
+        self.me = me if me is not None else (parts.me, since)
+        self.tree = tree
+        self._reader: threading.Thread | None = None
+        self._failed = ""                       # why the recording stopped on its own (the refresh could not run)
         # Play's games (at most protocol.MAX_GAMES), then start, then stop: the reader queues nothing else.
         self._commands: queue.Queue = queue.Queue()
         self._took: set[str] = set()                # the commands the reader has queued (start, stop)
@@ -338,6 +348,17 @@ class Relay:
                 self._took.add(msg["t"])
             self._commands.put(msg)
 
+    def close(self, wait_s: float = 5.0) -> bool:
+        """After serve(): stop reading the pipe and wait for the reader to leave, so a server that takes another
+        client next never hands that client's messages to this recording. True once it has left (its reads wait at
+        most 1 s each)."""
+        self._gone.set()
+        reader = self._reader
+        if reader is not None:
+            reader.join(wait_s)
+            return not reader.is_alive()
+        return True
+
     def _out_of_turn(self, t: str) -> str | None:
         """Why the recorder may not send this now, or None. `game` only for Play (the prompt approved a folder), only
         before `start`, at most protocol.MAX_GAMES times; `start` and `stop` once each, and for Play `start` only once
@@ -373,7 +394,8 @@ class Relay:
         if not self._write(protocol.hello(self.parts.me, self.cfg.game, self.cfg.folders, self.cfg.frames,
                                           self.cfg.network)):
             return protocol.EXIT_OK
-        threading.Thread(target=self._read_loop, name="relay-read", daemon=True).start()
+        self._reader = threading.Thread(target=self._read_loop, name="relay-read", daemon=True)
+        self._reader.start()
         if self.cfg.folders is None:
             cmd = self._next(time.monotonic() + START_WAIT_S, "the recording did not start in time")
         else:
@@ -399,6 +421,8 @@ class Relay:
         if code == protocol.EXIT_PROTOCOL:
             self._write(protocol.error(f"the recording window sent a message the relay does not take "
                                        f"({self._broke})"))
+        elif code == protocol.EXIT_CRASH:
+            self._write(protocol.error(self._failed))
         self._write(protocol.end())
         self._goodbye()
         return code
@@ -468,7 +492,7 @@ class Relay:
         from lagdoctor.capture import target
         return target.check_proposed(
             self.parts.snapshot, self.parts.image, *proposed, session=self.session, folders=self.cfg.folders,
-            since=self.since, own=(self.cfg.recorder, (self.parts.me, self.since)), alive=(self.cfg.recorder,))
+            since=self.since, own=(self.cfg.recorder, self.me), alive=(self.cfg.recorder,))
 
     def _take(self, game: tuple[int, int] | None) -> None:
         """Play: the game it will record, accepted just now (None: none, until the next one is)."""
@@ -481,6 +505,8 @@ class Relay:
         while True:
             cmd = self._command(TICK_S)
             if cmd is not None:
+                if cmd["t"] == "failed":
+                    return protocol.EXIT_CRASH
                 return protocol.EXIT_OK if cmd["t"] == "stop" else protocol.EXIT_PROTOCOL
             if self._gone.is_set():
                 return protocol.EXIT_OK
@@ -495,7 +521,12 @@ class Relay:
         """The once-a-second refresh on a thread of its own, so a recorder that reads slowly (each write may wait
         WRITE_TIMEOUT_S) cannot stretch how long a pid keeps its standing."""
         while not self._refresh_stop.wait(STATUS_EVERY_S):
-            self._refresh()
+            try:
+                self._refresh()
+            except Exception as exc:  # noqa: BLE001 - unrefreshed, a reused pid would keep the game's standing
+                self._failed = f"the relay stopped checking the game's processes ({type(exc).__name__}: {exc})"
+                self._commands.put({"t": "failed"})
+                return
 
     def _start_sources(self, origin: float) -> None:
         self._refresh()                                   # the game's processes before its first event
@@ -551,7 +582,11 @@ class Relay:
                 etw_session.stop()
             except Exception as exc:  # noqa: BLE001 - PresentMon must still be stopped
                 self._net_why = f"the network trace did not stop cleanly: {type(exc).__name__}: {exc}"
-            self._refresh()
+            try:
+                self._refresh()                       # the last events' programs placed before the final totals
+            except Exception as exc:  # noqa: BLE001 - PresentMon must still be stopped, and the first reason said
+                self._failed = self._failed or (f"the relay stopped checking the game's processes "
+                                                f"({type(exc).__name__}: {exc})")
             self._flush()
             self._send_net(final=True, session=etw_session)
         frames, self._frames = self._frames, None
@@ -663,6 +698,8 @@ class Relay:
             # now. The recording ends, and nothing more is written.
             self._gone.set()
         tree = descendants(procs, *self.game)
+        if self.tree is not None:
+            tree = self.tree(procs, self.game, tree)
         game: dict[int, int] = {}
         for pid in tree | set(self._game):
             p = procs.get(pid)
