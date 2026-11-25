@@ -41,6 +41,21 @@ def _state() -> tuple[int, bool, bool] | None:
         elevation.release_named_mutex(h)
 
 
+def _sid(who: str) -> str:
+    """A SID as an SDDL string names it, in its S-1- form: a descriptor read back names well-known accounts by an alias
+    (SY, BA, WD), and the account CI's runner runs as, its local Administrator, as LA."""
+    psid, text = ctypes.c_void_p(), ctypes.c_void_p()
+    assert elevation._advapi32.ConvertStringSidToSidW(who, ctypes.byref(psid)), who
+    try:
+        assert elevation._advapi32.ConvertSidToStringSidW(psid, ctypes.byref(text)), who
+        try:
+            return ctypes.wstring_at(text.value)
+        finally:
+            elevation._kernel32.LocalFree(text)
+    finally:
+        elevation._kernel32.LocalFree(psid)
+
+
 def _shipped_name() -> str:
     """tracelock.NAME as its module assigns it (the fixture has moved the attribute)."""
     tree = ast.parse(Path(tracelock.__file__).read_text(encoding="utf-8"))
@@ -70,9 +85,9 @@ def test_a_new_lock_is_held_owned_as_asked_and_everyone_else_may_only_read_it():
         finally:
             elevation.release_named_mutex(h)
     assert dacl.startswith("D:P"), dacl
-    aces = dict((who, rights) for rights, who in re.findall(r"\(A;;([^;]*);;;([^)]*)\)", dacl))
-    assert aces == {"SY": FULL, "BA": FULL, scm.service_sid(protocol.SERVICE_NAME): FULL, ME: FULL,
-                    "WD": "CCRC"}, dacl                               # CCRC: 0x1 and READ_CONTROL, no SYNCHRONIZE
+    aces = dict((_sid(who), rights) for rights, who in re.findall(r"\(A;;([^;]*);;;([^)]*)\)", dacl))
+    assert aces == {_sid("SY"): FULL, _sid("BA"): FULL, scm.service_sid(protocol.SERVICE_NAME): FULL, ME: FULL,
+                    _sid("WD"): "CCRC"}, dacl                         # CCRC: 0x1 and READ_CONTROL, no SYNCHRONIZE
     assert _state() is None                                           # let go: gone with its last handle
 
 
