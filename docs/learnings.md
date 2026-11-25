@@ -1462,3 +1462,17 @@ nor its params. A newer recording, a newer plan or a second click with the same 
 replaced, and a setting changed by hand in between is refused by the fix's own stale check (`fixes/base.apply`).
 **Takeaway**: for show-then-do, have the confirm carry a server-side token for what was shown, used once, never the
 values themselves.
+
+### A value a controller holds at a limit never settles: gate a warm-up on time, not on its spread
+
+A thermal limit is a control loop: the GPU's firmware lowers and raises the clock to hold a temperature, so at the
+limit the clock keeps swinging (780 to 1,000 MHz here, at a flat 86-87 °C) instead of settling to one value. A rule
+that waits for the clock to stop moving waits for good.
+**Why it came up**: the settings sweep kept out a run whose clock's 90th percentile passed 1.15 times its 10th, meant
+to catch a GPU still heating up. Replaying the sweep's own `window_metrics` and `problems` over the owner's recordings
+before their first sweep showed it would have kept out 53 of 55 settled minutes. A fitted fall of the clock did little
+better, and any rule on the clock also leans on the setting tried, since a lighter one can run the clock faster. The
+fix (PR #69) counts time with the game in front before the press, and tells the player a wait 30 s past the one it
+checks.
+**Takeaway**: judge "warmed up" by time spent under the load, which the thing compared cannot move, and record the
+swinging value instead of gating on it; replay any acceptance rule over real data before a person spends time on it.

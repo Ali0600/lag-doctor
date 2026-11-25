@@ -11,7 +11,10 @@
 - **A chime once a sweep run's game has been in front 2 minutes**, so the player presses on it instead of timing
   2 minutes 30 s from the short chime (2026-11-21, the sweep's settling time). Worth it if runs are kept out for a
   press too soon. Revisit hook: `runner._record`'s observers, whose live ticks carry `game_focused`, and
-  `command.SWEEP_SOUNDS` for the new sound.
+  `command.SWEEP_SOUNDS` for the new sound. With it, the intro should say not to start the game until a run asks:
+  its "You start the game, load your save..." before "Begin the sweep?" read as "start it now" on the owner's first
+  sweep, whose first run then waited for the game to close with no word in the game (`command.intro`,
+  `runner.wait_closed`), and that sweep's next run was pressed right after the short chime.
 - **Fail a hold when another program from the folder draws more**, so a launcher that keeps drawing behind the game
   it started (an animated background that stays visible) is not what gets recorded: on the hold's last round, run
   `choose_auto` over the folder's other windowed programs not left out, and re-arm when one wins (2026-11-19, M6e).

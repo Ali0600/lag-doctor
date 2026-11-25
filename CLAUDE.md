@@ -273,7 +273,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   (`docs/research/settings-sweeps.md`, section 6). Reading them is fine. `lagdoctor sweep` does change a game's
   settings file, and records each run, so only the owner runs it, in their terminal; its tests keep the settings file
   under the test's own `tmp_path` (`tests/sweep_world.py`), and the one that drives `cmd_watch` uses stand-in
-  collectors.
+  collectors. A sweep run counts only once the game has been in front `results.SETTLE_S` (120 s) before the press, so
+  `sweep_world.PRESS_T` sits at 140 s and its recordings last `PRESS_T + 80`: a sweep test with a focus pattern of its
+  own keeps the game in front that long before the press, or the run reads as pressed too soon (PR #69 rewrote every
+  sweep test's times as offsets from `PRESS_T` and the window's end). Before you change a run's acceptance rule, replay
+  `results.window_metrics` and `problems` over the owner's own recordings in memory: the clock-spread rule PR #69
+  replaced would have kept out nearly every run on this laptop, and only that replay showed it.
 - **`scripts/stage2` creates throwaway Windows services** (the capture-service experiments, `docs/INSTALLER-PLAN.md`
   Stage 2). It runs only on GitHub's hosted runners, from `.github/workflows/experiments.yml` (started by hand, or by
   a pull request that changes it, `scripts/stage2` or a module the experiments import, which its `paths:` lists and
