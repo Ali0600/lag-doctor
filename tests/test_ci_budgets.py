@@ -36,7 +36,7 @@ BEFORE_S = {"wheel": 180, "msi": 480}
 OUTSIDE_S = {"wheel": wc.GIT_TIMEOUT_S + 60,
              "msi": wc.GIT_TIMEOUT_S + 60 + mc.MSIEXEC_TIMEOUT_S + mc.ACCOUNT_CLEANUP_S}   # + the account's deletion
 # How long the whole check took on CI (2026-11-08): a budget must leave a slow runner room.
-NORMAL_S = {"wheel": 7, "msi": 85}
+NORMAL_S = {"wheel": 7, "msi": 137}      # msi: 137 s with the capture service's checks (PR #73's first run)
 
 
 def ci_text() -> str:
