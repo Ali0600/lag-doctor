@@ -18,9 +18,10 @@ logical CPUs busy with other work. The pm- suites need an administrator terminal
 its own process, as recordings did before the relay, so they do not measure the relay's own cost; from such a
 terminal B runs the game-server tracker too, so the summary says whether its windows were elevated.
 
-Every suite is checked before anything starts, and the command holds lag-doctor's capture lock throughout, so no
-recording can start beside it (exit 2: a suite cannot run here; exit 4: a recording is running; exit 1: a run or a
-recorder failed). Each run's windows are appended to DIR/cycles.jsonl, a later run into the same folder taking the
+Every suite is checked before anything starts, and the command holds lag-doctor's capture lock throughout, and the
+machine-wide trace lock as watch does (only checked outside an administrator terminal), so no recording can start
+beside it, in this Windows session or another (exit 2: a suite cannot run here; exit 4: a recording is running; exit 1:
+a run or a recorder failed). Each run's windows are appended to DIR/cycles.jsonl, a later run into the same folder taking the
 next run number; summarize-cycles pairs them within each run's cycles, writes DIR/cycles-summary.json, and exits 1
 when an attached condition has fewer than 2 pairs.
 """
@@ -433,9 +434,29 @@ def cmd_cycles(args: argparse.Namespace) -> int:
         print("another lag-doctor recording is running; nothing was started", flush=True)
         return 4
     try:
-        return run_suites(args)
+        trace = take_trace_lock(any(c in FRAMES_CONDS for suite in args.suite for c in SUITES[suite]["conds"]))
+        if trace is None:
+            print("nothing was started", flush=True)
+            return 4
+        try:
+            return run_suites(args)
+        finally:
+            trace.release()
     finally:
         lock.release()
+
+
+def take_trace_lock(frames: bool):
+    """The machine-wide trace lock (capture/tracelock.py) for the whole command beside the capture lock, taken as watch
+    takes it (cli._TraceGuard.here), or None when the command must not start (said). Its recorders start PresentMon
+    (`frames`, the pm- suites) and the network trace, whose sessions' fixed names would stop another Windows session's
+    lag-doctor recording, which the capture lock does not see: held in an administrator terminal, only honoured in
+    another whose account may stop a trace session at all (cli._traces_here)."""
+    from lagdoctor import cli
+    guard = cli._TraceGuard(lambda line: print(line, flush=True))
+    if cli._traces_here(argparse.Namespace(no_network=False), frames, None) and guard.here():
+        return None
+    return guard
 
 
 def run_suites(args: argparse.Namespace) -> int:

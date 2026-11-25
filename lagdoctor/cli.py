@@ -550,9 +550,9 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
                 _watching(target, observers, say)
             _check_cancel(cancel)
             # PresentMon or the network trace started in this window: held with the capture lock while it records (an
-            # elevated window), or only honoured (a Performance Log Users member may set no owner the lock trusts). A
-            # cancel that lands meanwhile is the session's to see (SessionOptions.cancel).
-            if _traces_here(args, frames, relay) and (trace.hold() if _elevated() else trace.busy()):
+            # elevated window), or only honoured (_TraceGuard.here). A cancel that lands meanwhile is the session's to
+            # see (SessionOptions.cancel).
+            if _traces_here(args, frames, relay) and trace.here():
                 return EXIT_BUSY
             return _record(args, target, exe, frames, frames_why, relay, stop=stop, say=say,
                            interactive=interactive is not False, observers=observers, trace=trace,
@@ -575,9 +575,10 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
             start_advice: bool = True, trace: "_TraceGuard | None" = None) -> int:
     """Record, save and analyse. Ctrl+C, Ctrl+Break and closing the window all stop the recording; none of them can
     lose it once it is being stopped and saved. With a relay (relay/client.RelayLink), frame timing and the
-    game-server tracker come through it, and it is let go as soon as the recording stops; so is the trace lock this
-    window holds (`trace`). `stop`, `say`, `observers`, the tool processes, `remember`, `show_summary` and `sound` as in
-    cmd_watch; `interactive` False: no status line and no console handling (nobody is there)."""
+    game-server tracker come through it, and it is let go as soon as the recording stops; the trace lock this window
+    holds (`trace`) once it is saved, since closing the window stops the network trace by name until then. `stop`,
+    `say`, `observers`, the tool processes, `remember`, `show_summary` and `sound` as in cmd_watch; `interactive` False:
+    no status line and no console handling (nobody is there)."""
     from lagdoctor.capture import session as sess
     from lagdoctor.model import SourceStatus, clean_note
     say = _teller(say)
@@ -591,7 +592,10 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     start_key = None if (start_key or "none") == "none" else start_key
     # Through the capture service, a recording whose own longest end comes after the service's hold stops by itself
     # before it instead (relay/client.hold_left), and says so below: cut off at the hold, it would lose its last frames.
-    held = _held_duration(relay, _longest_end(args, start_key))
+    # A start key's own ends count only once Windows gives the key, which the session learns only as it starts, so a
+    # recording with no set length takes that stop either way, said "at the latest" when the key's ends come first.
+    held = _held_duration(relay, args.duration)
+    key_first = held is not None and _held_duration(relay, _longest_end(args, start_key)) is None
     duration = args.duration if held is None else held
     # A set length of a part or less leaves no room for one after any press (Session.start would refuse them all), so
     # the key is not even registered: the recording is analysed whole, as with --start-key none, and said so once.
@@ -620,7 +624,7 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     if held is not None:
         from lagdoctor.relay import protocol
         say(f"The capture service records for at most {protocol.hold_text()} at a time, so this recording stops by "
-            f"itself after {sess.span_words(held)}.")
+            f"itself after {sess.span_words(held)}" + (" at the latest." if key_first else "."))
     if off_key:
         say(f"{off_key.title()} is off for this recording: a part needs at least {WINDOW_MIN_S:.0f} s after the press, "
             f"and the recording stops after {duration:g} s, so all of it is analysed.")
@@ -636,8 +640,6 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
             try:
                 cap = sess.Session(target, opts, printer=printer, observers=observers).run(stop, ctrl_c=guard)
             finally:
-                if trace is not None:
-                    trace.release()                   # its trace sessions have stopped: another recording may start
                 if relay is not None:
                     relay.close()
             if cap.target.get("stop_reason") == sess.CANCELLED:
@@ -655,6 +657,11 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
             observers.event("saved", session=out_dir.name)
         finally:
             saved.set()
+    # Only now: closing the window stops the network trace session by name until the console's handling is gone, the
+    # save included, and once the lock is let go, a session of that name may be another recording's. (An error, or a
+    # cancel, leaves it to cmd_watch.)
+    if trace is not None:
+        trace.release()
     if cues is not None and cues.failed:
         say("(A chime could not be played during the recording: check the PC's sound, or record with --no-sound and "
             "keep an eye on the clock.)")
@@ -663,8 +670,8 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
 
 def _longest_end(args: argparse.Namespace, start_key: str | None) -> float | None:
     """How long a recording may run by its own rules, in seconds from its start: its set length (--duration), else with
-    a start key a press at the last moment (--start-by), its window and the tail after it; None when only a stop, the
-    game's end or a start key Windows would not give ends it."""
+    a start key a press at the last moment (--start-by), its window and the tail after it, should Windows give the key;
+    None when only a stop or the game's end ends it."""
     from lagdoctor.capture import session as sess
     if args.duration:
         return args.duration
@@ -678,13 +685,14 @@ def _held_duration(relay: Any, longest: float | None) -> float | None:
     """The set length a recording through the capture service takes so it stops itself before the service's hold
     ends (relay/client.hold_left), when its own longest end (`longest`, _longest_end; None: none) would come later:
     whole minutes from a minute up, else whole seconds, never below 1 s, and never longer than its own. None when the
-    hold does not bind it, and for the elevated relay's link or none, which no hold bounds."""
+    hold does not bind it (its own end fits in the time left, rounded or not), and for the elevated relay's link or
+    none, which no hold bounds."""
     from lagdoctor.relay import client
     left = client.hold_left(relay)
     if left is None:
         return None
     held = max(1.0, (left // 60) * 60 if left >= 60 else left // 1)
-    return held if longest is None or held < longest else None
+    return held if longest is None or (left < longest and held < longest) else None
 
 
 def _too_short_for_a_part(duration: float | None) -> bool:
@@ -808,6 +816,12 @@ class _TraceGuard:
         if state == tracelock.HELD:
             self.lock = lock
         return self._judged(state)
+
+    def here(self) -> bool:
+        """For a recording that starts its trace sessions in this process (watch, and the scripts that record as it
+        does): hold() in an elevated window, else busy(), since a Performance Log Users member may set no owner the lock
+        trusts. True (said) as busy() is."""
+        return self.hold() if _elevated() else self.busy()
 
     def release(self) -> None:
         lock, self.lock = self.lock, None

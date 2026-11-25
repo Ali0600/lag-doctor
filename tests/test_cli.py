@@ -875,6 +875,37 @@ def test_an_elevated_window_whose_recording_cannot_begin_lets_the_trace_lock_go(
     assert tracelock.check(trusted=trusted) == tracelock.FREE
 
 
+def test_closing_an_elevated_window_while_it_saves_stops_the_network_trace_only_while_it_holds_the_lock(
+        group_member, monkeypatch, tmp_path):
+    """The console's handler stops the network trace session by name until the save is done; once the lock is let go
+    that name may be another Windows session's recording's, so every such stop must come while the lock is held."""
+    from lagdoctor.capture import netflows
+    from lagdoctor.winapi import etw
+    monkeypatch.setattr(elevation, "is_elevated", lambda: True)
+    trusted = _this_tokens_trace_lock(monkeypatch)
+    stops = []
+    monkeypatch.setattr(etw, "stop_session", lambda name: stops.append((name, tracelock.check(trusted=trusted))) or 0)
+    monkeypatch.setattr(netflows, "expect_external_stop", lambda: None)
+    monkeypatch.setattr(cli, "CLOSE_SAVE_WAIT_S", 0.05)            # the save it would wait for is this test's own
+    consoles = []
+    real_init, real_save = cli._ConsoleControl.__init__, Capture.save
+
+    def init(self, *a, **kw):
+        real_init(self, *a, **kw)
+        consoles.append(self)
+
+    def save(self, path):
+        consoles[-1]._handle(cli.CTRL_CLOSE_EVENT)                  # the window is closed while it saves
+        return real_save(self, path)
+    monkeypatch.setattr(cli._ConsoleControl, "__init__", init)
+    monkeypatch.setattr(Capture, "save", save)
+    with_network = [a for a in WATCH if a != "--no-network"]
+    assert cli.main([*with_network, "--out", str(tmp_path / "out")]) == 0
+    assert stops == [("lag-doctor-net", tracelock.BUSY)]
+    assert tracelock.check(trusted=trusted) == tracelock.FREE      # let go once saved
+    assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
+
+
 @pytest.mark.parametrize("pm, extra, may_trace, honoured", [
     (True, [], True, True),                     # frame timing here: a member of Performance Log Users
     (True, ["--no-network"], True, True),       # frame timing alone

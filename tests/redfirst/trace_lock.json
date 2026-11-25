@@ -389,7 +389,7 @@
  {
   "name": "a window that traces itself ignores the lock",
   "file": "lagdoctor/cli.py",
-  "old": "            if _traces_here(args, frames, relay) and (trace.hold() if _elevated() else trace.busy()):",
+  "old": "            if _traces_here(args, frames, relay) and trace.here():",
   "new": "            if False:",
   "tests": [
    "tests/test_cli.py::test_an_unelevated_window_that_traces_itself_honours_another_sessions_recording_and_never_holds_the_lock",
@@ -399,8 +399,8 @@
  {
   "name": "an elevated window only checks the lock",
   "file": "lagdoctor/cli.py",
-  "old": "(trace.hold() if _elevated() else trace.busy())",
-  "new": "(trace.busy())",
+  "old": "        return self.hold() if _elevated() else self.busy()",
+  "new": "        return self.busy()",
   "tests": [
    "tests/test_cli.py::test_an_elevated_window_recording_here_holds_the_trace_lock_until_its_recording_stops"
   ]
@@ -408,8 +408,8 @@
  {
   "name": "an unelevated window tries to hold the lock",
   "file": "lagdoctor/cli.py",
-  "old": "(trace.hold() if _elevated() else trace.busy())",
-  "new": "(trace.hold())",
+  "old": "        return self.hold() if _elevated() else self.busy()",
+  "new": "        return self.hold()",
   "tests": [
    "tests/test_cli.py::test_an_unelevated_window_that_traces_itself_honours_another_sessions_recording_and_never_holds_the_lock"
   ]
@@ -498,8 +498,8 @@
  {
   "name": "the window keeps the lock through the analysis",
   "file": "lagdoctor/cli.py",
-  "old": "                if trace is not None:\n                    trace.release()",
-  "new": "                if False:\n                    trace.release()",
+  "old": "    if trace is not None:\n        trace.release()\n    if cues is not None and cues.failed:",
+  "new": "    if False:\n        trace.release()\n    if cues is not None and cues.failed:",
   "tests": [
    "tests/test_cli.py::test_an_elevated_window_recording_here_holds_the_trace_lock_until_its_recording_stops"
   ]
@@ -529,6 +529,106 @@
   "new": "    return tracelock.TraceLock(\"S-1-5-18\")",
   "tests": [
    "tests/test_cli.py::test_an_elevated_windows_trace_lock_is_owned_by_administrators"
+  ]
+ },
+ {
+  "name": "the window lets the lock go before it is saved",
+  "file": "lagdoctor/cli.py",
+  "old": "                if relay is not None:\n                    relay.close()\n            if cap.target.get(",
+  "new": "                if relay is not None:\n                    relay.close()\n                if trace is not None:\n                    trace.release()\n            if cap.target.get(",
+  "tests": [
+   "tests/test_cli.py::test_closing_an_elevated_window_while_it_saves_stops_the_network_trace_only_while_it_holds_the_lock"
+  ]
+ },
+ {
+  "name": "the service records while another program holds the lock's name",
+  "file": "lagdoctor/service/__init__.py",
+  "old": "        if got == tracelock.TAKEN:\n            raise Refused(",
+  "new": "        if False:\n            raise Refused(",
+  "tests": [
+   "tests/test_service.py::test_another_programs_hold_on_the_lock_name_refuses_the_caller_with_why"
+  ]
+ },
+ {
+  "name": "an e2e mode ignores another session's recording",
+  "file": "scripts/e2e.py",
+  "old": "    if guard.here():\n        raise Busy(\" \".join(said))",
+  "new": "    if False:\n        raise Busy(\" \".join(said))",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_an_e2e_mode_beside_another_sessions_recording_stops_before_laglab_starts"
+  ]
+ },
+ {
+  "name": "an e2e mode keeps the lock",
+  "file": "scripts/e2e.py",
+  "old": "        if trace is not None:\n            trace.release()\n    log = json.loads(",
+  "new": "        pass\n    log = json.loads(",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_an_e2e_mode_holds_the_trace_lock_from_before_laglab_starts_and_lets_it_go"
+  ]
+ },
+ {
+  "name": "an e2e mode takes the lock only after LagLab has started",
+  "file": "scripts/e2e.py",
+  "old": "        trace = take_trace_lock()             # so is another Windows session's recording, before LagLab starts\n",
+  "new": "",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_an_e2e_mode_beside_another_sessions_recording_stops_before_laglab_starts",
+   "tests/test_tracelock_scripts.py::test_an_e2e_mode_holds_the_trace_lock_from_before_laglab_starts_and_lets_it_go"
+  ]
+ },
+ {
+  "name": "the benchmark ignores another session's recording",
+  "file": "scripts/overhead/bench.py",
+  "old": "        if trace is None:\n            print(\"nothing was started\", flush=True)\n            return 4",
+  "new": "        if False:\n            print(\"nothing was started\", flush=True)\n            return 4",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_the_benchmark_beside_another_sessions_recording_starts_nothing_and_lets_the_capture_lock_go"
+  ]
+ },
+ {
+  "name": "the benchmark keeps the lock",
+  "file": "scripts/overhead/bench.py",
+  "old": "            trace.release()",
+  "new": "            pass",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_the_benchmark_holds_the_trace_lock_for_its_whole_command"
+  ]
+ },
+ {
+  "name": "the benchmark only checks the lock in an administrator terminal",
+  "file": "scripts/overhead/bench.py",
+  "old": "frames, None) and guard.here():",
+  "new": "frames, None) and guard.busy():",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_the_benchmark_holds_the_trace_lock_for_its_whole_command"
+  ]
+ },
+ {
+  "name": "the recorder on its own ignores another session's recording",
+  "file": "scripts/overhead/recorder.py",
+  "old": "        if cli._traces_here(args, args.frames, None) and trace.here():",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_the_recorder_on_its_own_beside_another_sessions_recording_records_nothing"
+  ]
+ },
+ {
+  "name": "the recorder on its own keeps the lock",
+  "file": "scripts/overhead/recorder.py",
+  "old": "        if trace is not None:\n            trace.release()",
+  "new": "        pass",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_the_recorder_on_its_own_holds_the_trace_lock_and_leaves_it_to_the_benchmark_that_started_it"
+  ]
+ },
+ {
+  "name": "the recorder the benchmark started takes the locks too",
+  "file": "scripts/overhead/recorder.py",
+  "old": "    lock = None if args.no_lock else sess.CaptureLock()",
+  "new": "    lock = sess.CaptureLock()",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_the_recorder_on_its_own_holds_the_trace_lock_and_leaves_it_to_the_benchmark_that_started_it"
   ]
  }
 ]

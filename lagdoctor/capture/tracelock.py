@@ -22,7 +22,9 @@ thread, so a held lock is owned by a thread of its own that lives until release(
   program can stop the trace sessions directly anyway.
 - BUSY: the name is a mutex with a trusted owner, held: another lag-doctor recording on this PC is tracing.
 - TAKEN: the name is held by something lag-doctor cannot trust (another owner, a DACL that shuts lag-doctor out,
-  another kind of object). The protection is lost and the recording goes on; the recorder says so once.
+  another kind of object). The protection is lost: the elevated relay and an elevated watch, which act for an
+  administrator who approved the prompt, go on, and the recorder says so once. The capture service refuses its caller
+  instead (service.Host): it records for any interactive account, and any account may make the name.
 - A token that may set none of the trusted owners (an unelevated member of Performance Log Users, which may trace) only
   checks (check()): it honours the lock but cannot hold one. The recorder also checks before it asks the capture
   service and before it raises the UAC prompt.

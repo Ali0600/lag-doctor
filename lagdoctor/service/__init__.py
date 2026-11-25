@@ -22,12 +22,14 @@ prompt approved, the service takes it from its caller, and so judges the caller 
    descendant from elsewhere may be another account's. Every other program's bytes count only in the totals for the
    caller's session, as the relay's do.
 6. One caller holds the service for at most protocol.SERVICE_HOLD_S, counted from when its ask was read: every wait
-   before the recording starts and the recording itself end by then (server.Relay's `until`), said in words, so a
-   forgotten or hostile hold cannot keep every other window from the service. The recorder stops itself before that
-   (relay/client.HOLD_MARGIN_S), so an honest recording ends cleanly with its frames.
+   before the recording starts and the recording itself end by then (server.Relay's `until`), said in words, so no one
+   ask, forgotten or hostile, keeps every other window from the service for longer. It bounds an ask, not an account:
+   one that asks again at once is served again. The recorder stops itself before that (relay/client.HOLD_MARGIN_S), so
+   an honest recording ends cleanly with its frames.
 7. Last of its checks, it takes the machine-wide trace lock (capture/tracelock.py) as its own SID, and lets it go once
    the recording has ended: while another lag-doctor recording on this PC holds it (an elevated relay or watch in
-   another Windows session), the caller is refused, since starting the trace sessions would stop that recording's.
+   another Windows session), the caller is refused, since starting the trace sessions would stop that recording's; so
+   it is while another program holds the lock's name, which any account may make.
 8. When the recording ends the service waits for the next caller, and stops itself after IDLE_S without one; the next
    recording starts it again.
 
@@ -246,8 +248,10 @@ class Host:
 
     def _hold_the_trace(self) -> None:
         """The machine-wide trace lock for the caller's recording, as the last of _judge's checks: Refused while another
-        lag-doctor recording on this PC holds it, or when Windows cannot say; held otherwise until the recording ends
-        (TAKEN, which another program holds, goes on: there is nothing to hold)."""
+        lag-doctor recording on this PC holds it, when another program holds its name (TAKEN), or when Windows cannot
+        say; held otherwise until the recording ends. The elevated relay and an elevated watch go on at TAKEN, for an
+        administrator who approved the prompt; the service records for any interactive account, and any account may
+        make that name, so going on would let one stop another account's recording through the service."""
         from lagdoctor.capture import tracelock
         lock = self.trace_lock()
         try:
@@ -258,6 +262,9 @@ class Host:
         if got == tracelock.BUSY:
             raise Refused("another lag-doctor recording on this PC, in another Windows session, is timing frames or "
                           "tracing the network, and recording now would stop it")
+        if got == tracelock.TAKEN:
+            raise Refused("another program holds the name lag-doctor uses to keep recordings on this PC apart, so the "
+                          "capture service cannot tell whether recording now would stop another one")
         self._trace = lock
 
     def _let_go_of_the_trace(self) -> None:

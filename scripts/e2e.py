@@ -11,7 +11,9 @@ once through a UAC prompt, runs there, and prints the verdicts back here.
 Nothing on the PC is changed; only LagLab, PresentMon and the samplers run.
 Each mode records under the one-recording lock (session.CaptureLock), as
 `lagdoctor watch` does: the trace sessions have fixed names, so a run beside a
-watch would end that watch's tracing. A busy lock stops the run before LagLab
+watch would end that watch's tracing. So it does under the machine-wide trace
+lock (capture/tracelock.py), for a recording in another Windows session, which
+the capture service may be making. A busy lock stops the run before LagLab
 starts.
 """
 from __future__ import annotations
@@ -161,6 +163,21 @@ def take_capture_lock():
                "stop it first.")
 
 
+def take_trace_lock():
+    """The machine-wide trace lock (capture/tracelock.py), taken as watch takes it (cli._TraceGuard.here): held by an
+    elevated run, only honoured by a Performance Log Users member's. Busy (watch's own sentence) when another Windows
+    session's lag-doctor recording holds it or Windows cannot say; that another program holds its name is printed, and
+    the run goes on, as watch's does. release() lets it go."""
+    from lagdoctor import cli
+    said: list[str] = []
+    guard = cli._TraceGuard(said.append)
+    if guard.here():
+        raise Busy(" ".join(said))
+    for line in said:
+        print(line, flush=True)
+    return guard
+
+
 def run_mode(mode: str, args: argparse.Namespace, out: Path) -> dict:
     from lagdoctor import setup as pm_setup
     from lagdoctor.analysis.diagnose import diagnose
@@ -170,7 +187,9 @@ def run_mode(mode: str, args: argparse.Namespace, out: Path) -> dict:
 
     print(f"\n=== {mode} ===", flush=True)
     lock = take_capture_lock()                # before LagLab starts: a busy lock leaves nothing running
+    trace = None
     try:
+        trace = take_trace_lock()             # so is another Windows session's recording, before LagLab starts
         d = out / mode
         d.mkdir(exist_ok=True)
         pid_file, log_file = d / "laglab-pid.json", d / "laglab-log.json"
@@ -196,6 +215,8 @@ def run_mode(mode: str, args: argparse.Namespace, out: Path) -> dict:
                 lab.kill()
     finally:
         lock.release()
+        if trace is not None:
+            trace.release()
     log = json.loads(log_file.read_text(encoding="utf-8"))
     cap_path = cap.save(d / "capture.ldcap.json.gz")
     diag = diagnose(cap)

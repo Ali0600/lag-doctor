@@ -617,16 +617,18 @@ def test_a_trace_lock_windows_cannot_answer_about_refuses_the_caller_with_why(ga
         assert host.served == 0 and calls == ["acquire"]
 
 
-def test_another_programs_hold_on_the_lock_name_does_not_stop_the_service_recording(game):  # noqa: F811
+def test_another_programs_hold_on_the_lock_name_refuses_the_caller_with_why(game):  # noqa: F811
+    # Any account may make the name, so a standard one could make it, then have the service stop an elevated recording's
+    # trace sessions through its own ask: the elevated relay and watch go on at TAKEN, the service does not.
     calls: list[str] = []
-    with running_host(trace_lock=lambda: tr.StandInTraceLock(tracelock.TAKEN, calls)) as (host, name, _stop, _out):
-        with pipe.connect(name, 10.0) as c:
-            c.write(ask_bytes(game), 5.0)
-            assert messages(c, "hello")[-1]["t"] == "hello"
-            c.write(protocol.stop(), 5.0)
-            messages(c, "end")
-        tr._until(lambda: calls == ["acquire", "release"], 15, "the lock to be let go")
-        assert host.served == 1
+    stops: list[str] = []
+    parts = tr.parts(frames=lambda cfg, forward, alive: tr.FakeFrames(cfg, forward, alive, stops=stops),
+                     etw=lambda on_event: tr.FakeEtw(on_event, [], stops=stops))
+    with running_host(parts=parts, trace_lock=lambda: tr.StandInTraceLock(tracelock.TAKEN, calls)) as (
+            host, name, _stop, _out):
+        why = refusal(name, ask_bytes(game, frames=True, network=True))
+        assert "another program holds the name lag-doctor uses to keep recordings on this PC apart" in why, why
+        assert host.served == 0 and calls == ["acquire"] and stops == []
 
 
 def test_the_services_trace_lock_is_owned_by_its_own_service_sid_by_default():

@@ -258,6 +258,8 @@ def test_a_recording_through_the_service_is_cut_to_end_before_the_hold_and_never
     assert cli._held_duration(near, None) == 960.0               # no end of its own: whole minutes, rounded down
     assert cli._held_duration(near, 7200.0) == 960.0             # a set length past it
     assert cli._held_duration(near, 600.0) is None               # one that ends first is left as it is
+    assert cli._held_duration(near, 1000.0) is None              # it fits in the time left, if not in whole minutes
+    assert cli._held_duration(near, 1015.0) == 960.0             # it would not: cut, to whole minutes again
     key = argparse.Namespace(duration=None, window=600.0, start_by=1200.0)
     assert cli._longest_end(key, "ctrl+alt+s") == 1200.0 + 600.0 + sess.WINDOW_TAIL_S
     assert cli._held_duration(near, cli._longest_end(key, "ctrl+alt+s")) == 960.0
@@ -300,6 +302,42 @@ def test_watch_through_the_service_stops_itself_before_the_hold_ends_and_says_so
     assert ("The capture service records for at most 2 hours at a time, so this recording stops by itself after 1 s."
             in said), said
     assert fake_relay["launches"] == [] and link.closed >= 1     # no prompt, and the link let go
+
+
+class RefusedKey:
+    """The start key's listener while another program holds the key: Windows does not give it."""
+    error, taken = "ctrl+alt+s is already used by another program", True
+
+    def __init__(self, key, on_press) -> None:
+        self.key = key
+
+    def start(self) -> bool:
+        return False
+
+    def stop(self) -> None:
+        pass
+
+
+def test_a_start_key_windows_may_refuse_still_stops_the_recording_before_the_hold(
+        watch_here, fake_relay, fake_world, tmp_path, monkeypatch):  # noqa: F811
+    # The start key's own ends (20 minutes for a press, 10 of measuring) come long before the hold, but only once
+    # Windows gives the key, which the session learns as it starts: refused, it no longer stops by itself.
+    link = HeldLink(True, 30.0)                                  # 6,990 s left: whole minutes, 116 of them
+    monkeypatch.setattr(cli, "_via_service", lambda *a, **k: (link, None))
+    fake_world["keys"] = RefusedKey
+    stop, said = threading.Event(), []
+    timer = threading.Timer(1.0, stop.set)
+    timer.start()
+    try:
+        assert cli.cmd_watch(_watch_args(tmp_path, "--start-key", "ctrl+alt+s", "--no-sound"), say=said.append,
+                             stop=stop) == 0
+    finally:
+        timer.cancel()
+    (session,) = fake_world["sessions"]
+    assert session["opts"].start_key == "ctrl+alt+s" and session["opts"].duration_s == 6960.0
+    assert session["opts"].start_by_s == cli.DEFAULT_START_BY_S                 # its own ends still come first
+    assert ("The capture service records for at most 2 hours at a time, so this recording stops by itself after 116 "
+            "minutes at the latest." in said), said
 
 
 def test_watch_through_the_elevated_relay_is_never_cut_to_the_services_hold(
