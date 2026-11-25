@@ -33,9 +33,10 @@ SCRIPTS = {"wheel": wc, "msi": mc}
 BEFORE_S = {"wheel": 180, "msi": 480}
 # What each script spends outside its budget: git's list of tracked files, the capture it makes in-process, reading and
 # hashing what it checks and the temp folder's cleanup; for the MSI also the uninstall, which keeps its own timeout.
-OUTSIDE_S = {"wheel": wc.GIT_TIMEOUT_S + 60, "msi": wc.GIT_TIMEOUT_S + 60 + mc.MSIEXEC_TIMEOUT_S}
+OUTSIDE_S = {"wheel": wc.GIT_TIMEOUT_S + 60,
+             "msi": wc.GIT_TIMEOUT_S + 60 + mc.MSIEXEC_TIMEOUT_S + mc.ACCOUNT_CLEANUP_S}   # + the account's deletion
 # How long the whole check took on CI (2026-11-08): a budget must leave a slow runner room.
-NORMAL_S = {"wheel": 7, "msi": 85}
+NORMAL_S = {"wheel": 7, "msi": 137}      # msi: 137 s with the capture service's checks (PR #73's first run)
 
 
 def ci_text() -> str:

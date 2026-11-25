@@ -295,6 +295,13 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   (`docs/DECISIONS.md`, 2026-11-08): `--accept-eula wix7` appears once in `ci.yml` (the test holds it there), every
   `wix` command but help, version and eula needs it, and no other place accepts it without asking the owner. The
   `UpgradeCode` in `installer/lag-doctor.wxs` never changes (a new one installs beside the old version). The
+  install's `python.exe` is the capture service's program, so it sits in a component of its own (`CaptureService`,
+  keyed by it) and the harvest excludes it; the service's name, arguments and descriptor are `protocol.SERVICE_NAME`,
+  `SERVICE_ARGUMENTS` and `SERVICE_SDDL`, which `tests/test_msi.py` holds equal to the `.wxs`. `wix build` lets
+  WIX1149 through by its id (`-sw1149`, DECISIONS 2026-11-25) and no other warning. The check's `recording` verdict
+  makes a throwaway standard account (`stage2/logon.py`), runs `scripts/msi_service_client.py` as it with the
+  installed runtime against a stand-in game (`stage2/standin.py`), and deletes the account after the uninstall: like
+  the install itself, only on the runner. The
   install's `PresentMon\` folder is where `setup.BUNDLED` looks (a test pins the two together), and `bin\` holds only
   `lagdoctor.cmd`, since the folder on PATH must not offer the runtime's `python.exe`. Python must never write into
   the install: the build ships unchecked-hash `.pyc` files the shipped runtime compiles, and the check's `untouched`

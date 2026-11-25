@@ -104,6 +104,10 @@ def test_wix_builds_for_x64_with_warnings_as_errors_and_accepts_the_eula_only_wh
     assert "-acceptEula" not in argv
     told = mb.wix_command("wix.exe", "0.1.0", Path(r"C:\p"), Path(r"C:\o\x.msi"), "wix7")
     assert told[-2:] == ["-acceptEula", "wix7"]
+    # One warning is let through, by its id: WIX1149, which WiX v7 raises for any core ServiceConfig. A bare -sw would
+    # let every warning through, and -wx stays on for all the others.
+    for line in (argv, told):
+        assert line.count("-sw1149") == 1 and "-sw" not in line and line.index("-sw1149") > line.index("-o")
     check = mb.validate_command("wix.exe", Path(r"C:\o\x.msi"), "wix7")
     assert check[:4] == ["wix.exe", "msi", "validate", "-wx"] and check[-2:] == ["-acceptEula", "wix7"]
     assert [check[i + 1] for i, a in enumerate(check) if a == "-sice"] == ["ICE61"]      # that one ICE alone
@@ -170,7 +174,9 @@ def test_the_payload_is_harvested_whole_with_bin_into_its_own_folder():
     files = wxs().find("w:Package", WXS_NS).findall("w:Files", WXS_NS)
     assert [(f.get("Directory"), f.get("Include")) for f in files] == [
         ("INSTALLFOLDER", r"!(bindpath.payload)\**"), ("BINFOLDER", r"!(bindpath.payload)\bin\**")]
-    assert [e.get("Files") for e in files[0].findall("w:Exclude", WXS_NS)] == [r"!(bindpath.payload)\bin\**"]
+    # python.exe is the capture service's program, so it has its own component, keyed by it, outside the harvest.
+    assert [e.get("Files") for e in files[0].findall("w:Exclude", WXS_NS)] == [r"!(bindpath.payload)\bin\**",
+                                                                              r"!(bindpath.payload)\python.exe"]
 
 
 def test_bin_alone_is_added_to_the_end_of_the_system_path_and_removed_on_uninstall():
@@ -461,7 +467,8 @@ def test_every_check_between_install_and_uninstall_runs_in_the_order_reported():
     """MIDDLE names the checks reported as not run when the install fails; run_checks must run exactly those."""
     ran = re.findall(r'guarded\("([a-z ]+)"', inspect.getsource(mc.run_checks))
     assert ran == [*mc.MIDDLE, "gone"]
-    assert mc.MIDDLE == ("files", "registered", "path", "registry", "shortcut", "command", "imports", "untouched")
+    assert mc.MIDDLE == ("files", "registered", "path", "registry", "shortcut", "service", "recording", "token",
+                         "command", "imports", "untouched")
 
 
 # ----------------------------------------------------------- the Start-menu shortcut and its registry value ---
@@ -676,6 +683,8 @@ def test_the_gone_check_finds_a_shortcut_or_registry_value_left_behind(tmp_path,
     monkeypatch.setattr(mc, "read_path", lambda: OLD)
     monkeypatch.setattr(mc, "read_registry_values", lambda rows: registry_now)
     monkeypatch.setattr(mc, "shortcut_paths", lambda: [common, own])
+    service = {"left": None}
+    monkeypatch.setattr(mc, "service_left", lambda: service["left"])
 
     def gone():
         return mc.check_gone(info, install, {"python.exe": "x"}, keys, OLD, ENTRY, {"reg1": (False, None)},
@@ -689,6 +698,10 @@ def test_the_gone_check_finds_a_shortcut_or_registry_value_left_behind(tmp_path,
     registry_now = {"reg1": (True, None)}                                # the emptied key left behind
     check = gone()
     assert not check.ok and "StartMenuShortcut" in check.detail
+    registry_now = {"reg1": (False, None)}
+    service["left"] = "the capture service is still installed (stopped)"
+    check = gone()
+    assert not check.ok and "capture service is still installed" in check.detail
 
 
 # ------------------------------------------------- the build and the file check, run on scripted inputs ---
@@ -829,7 +842,22 @@ def test_a_payload_unlike_its_inputs_stops_the_build(presentmon_exe, tmp_path, m
         mb.stage(tmp_path / "p", _zip(tmp_path / "w.whl", WHEEL), _zip(tmp_path / "r.zip", RUNTIME), presentmon_exe)
 
 
-def _readback(monkeypatch, tmp_path, *, props=None, summary=None, env=None, layout=None) -> Path:
+def _service_tables(**over) -> dict[str, list[dict]]:
+    """The capture service's rows as WiX writes them for lag-doctor.wxs; `over` replaces a table's rows."""
+    from lagdoctor.relay import protocol
+    tables = {"ServiceInstall": [{**mb.SERVICE_INSTALL_ROW, "ServiceInstall": "lagdoctor"}],
+              "ServiceControl": [dict(mb.SERVICE_CONTROL_ROW)],
+              "MsiServiceConfig": [{"Name": "lagdoctor", "Event": e, "ConfigType": t, "Argument": a,
+                                    "Component_": "CaptureService"} for e, t, a in mb.SERVICE_CONFIG_ROWS],
+              "MsiLockPermissionsEx": [{"LockObject": "lagdoctor", "Table": "ServiceInstall",
+                                        "SDDLText": protocol.SERVICE_SDDL, "Condition": None},
+                                       {"LockObject": "INSTALLFOLDER", "Table": "CreateFolder",
+                                        "SDDLText": mb.INSTALL_FOLDER_SDDL, "Condition": None}],
+              "Component": [{"Component": "CaptureService", "KeyPath": "f1"}, {"Component": "x", "KeyPath": "f2"}]}
+    return {**tables, **over}
+
+
+def _readback(monkeypatch, tmp_path, *, props=None, summary=None, env=None, layout=None, tables=None) -> Path:
     payload = tmp_path / "payload"
     for rel in ("python.exe", "lagdoctor/cli.py", "bin/lagdoctor.cmd"):
         (payload / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -839,7 +867,14 @@ def _readback(monkeypatch, tmp_path, *, props=None, summary=None, env=None, layo
     monkeypatch.setattr(mb.msidb, "properties", lambda msi: {**good_props, **(props or {})})
     monkeypatch.setattr(mb.msidb, "summary", lambda msi: {"subject": "lag-doctor", "author": "lag-doctor",
                                                           **(summary or {})})
-    monkeypatch.setattr(mb.msidb, "rows", lambda msi, table, cols: env if env is not None else [dict(mb.PATH_ROW)])
+    service = _service_tables(**(tables or {}))
+
+    def rows(msi, table, cols):
+        if table == "Environment":
+            return env if env is not None else [dict(mb.PATH_ROW)]
+        return [{c: r.get(c) for c in cols} for r in service[table]]
+
+    monkeypatch.setattr(mb.msidb, "rows", rows)
     monkeypatch.setattr(mb.msidb, "install_layout", lambda msi: layout if layout is not None else {
         "f1": "python.exe", "f2": "lagdoctor/cli.py", "f3": "bin/lagdoctor.cmd"})
     return payload
@@ -861,7 +896,30 @@ def test_the_built_msi_must_read_back_as_lag_doctor_with_its_payload_and_path_ro
            "a file added": {"layout": {"f1": "python.exe", "f2": "lagdoctor/cli.py", "f3": "bin/lagdoctor.cmd",
                                        "f4": "lagdoctor/extra.py"}},
            "a path twice": {"layout": {"f1": "python.exe", "f2": "lagdoctor/cli.py", "f3": "bin/lagdoctor.cmd",
-                                       "f4": "Python.exe"}}}
+                                       "f4": "Python.exe"}},
+           "the service starting with Windows": {"tables": {"ServiceInstall": [
+               {**mb.SERVICE_INSTALL_ROW, "StartType": "2", "ServiceInstall": "lagdoctor"}]}},
+           "the service as LocalSystem": {"tables": {"ServiceInstall": [
+               {**mb.SERVICE_INSTALL_ROW, "StartName": "LocalSystem", "ServiceInstall": "lagdoctor"}]}},
+           "a second service": {"tables": {"ServiceInstall": [
+               {**mb.SERVICE_INSTALL_ROW, "ServiceInstall": "lagdoctor"},
+               {**mb.SERVICE_INSTALL_ROW, "Name": "other", "ServiceInstall": "other"}]}},
+           "the service left on uninstall": {"tables": {"ServiceControl": [
+               {**mb.SERVICE_CONTROL_ROW, "Event": "34"}]}},
+           "no privilege trim": {"tables": {"MsiServiceConfig": [
+               {"Name": "lagdoctor", "Event": "5", "ConfigType": "5", "Argument": "1", "Component_": "CaptureService"}]}},
+           "a restricted service SID": {"tables": {"MsiServiceConfig": [
+               {"Name": "lagdoctor", "Event": "5", "ConfigType": "5", "Argument": "3", "Component_": "CaptureService"},
+               {"Name": "lagdoctor", "Event": "5", "ConfigType": "6", "Argument": "SeChangeNotifyPrivilege",
+                "Component_": "CaptureService"}]}},
+           "users may stop it": {"tables": {"MsiLockPermissionsEx": [
+               {"LockObject": "lagdoctor", "Table": "ServiceInstall", "Condition": None,
+                "SDDLText": "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCLCSWRPWPLOCRRC;;;IU)"},
+               {"LockObject": "INSTALLFOLDER", "Table": "CreateFolder", "SDDLText": mb.INSTALL_FOLDER_SDDL,
+                "Condition": None}]}},
+           "the install folder left open": {"tables": {"MsiLockPermissionsEx": [
+               {"LockObject": "lagdoctor", "Table": "ServiceInstall", "SDDLText": None, "Condition": None}]}},
+           "keyed by another file": {"tables": {"Component": [{"Component": "CaptureService", "KeyPath": "f2"}]}}}
     outcomes = {}
     for name, kw in bad.items():
         payload = _readback(monkeypatch, tmp_path / name.replace(" ", "-"), **kw)
@@ -871,3 +929,177 @@ def test_the_built_msi_must_read_back_as_lag_doctor_with_its_payload_and_path_ro
         except mb.BuildError:
             outcomes[name] = "refused"
     assert outcomes == dict.fromkeys(bad, "refused")
+
+
+# ------------------------------------------------------------------------------- the capture service ---
+
+def test_the_capture_service_is_declared_as_lag_doctor_runs_it_and_let_start_by_interactive_users_only():
+    from lagdoctor.relay import protocol
+    root = wxs()
+    comps = [c for c in root.iter(f"{{{WXS_NS['w']}}}Component") if c.get("Id") == "CaptureService"]
+    assert len(comps) == 1 and comps[0].get("Directory") == "INSTALLFOLDER"
+    comp = comps[0]
+    files = comp.findall("w:File", WXS_NS)
+    assert [(f.get("Source"), f.get("KeyPath")) for f in files] == [(r"!(bindpath.payload)\python.exe", "yes")]
+    installs = root.findall(".//w:ServiceInstall", WXS_NS)
+    assert len(installs) == 1 and installs[0] in list(comp)
+    si = installs[0]
+    assert (si.get("Name"), si.get("Arguments")) == (protocol.SERVICE_NAME, protocol.SERVICE_ARGUMENTS)
+    assert (si.get("Type"), si.get("Start"), si.get("ErrorControl"), si.get("Vital"), si.get("Account")) == (
+        "ownProcess", "demand", "normal", "yes", r"NT AUTHORITY\LocalService")
+    configs = si.findall("w:ServiceConfig", WXS_NS)
+    assert len(configs) == 1 and configs[0].get("ServiceSid") == "unrestricted"
+    assert [r.get("Name") for r in configs[0].findall("w:RequiredPrivilege", WXS_NS)] == ["SeChangeNotifyPrivilege"]
+    assert [x.get("Sddl") for x in si.findall("w:PermissionEx", WXS_NS)] == [protocol.SERVICE_SDDL]
+    folders = comp.findall("w:CreateFolder", WXS_NS)                # the install folder's own protected DACL
+    assert [[x.get("Sddl") for x in f.findall("w:PermissionEx", WXS_NS)] for f in folders] == [[mb.INSTALL_FOLDER_SDDL]]
+    assert mb.INSTALL_FOLDER_SDDL.startswith("D:P") and "(A;OICI;0x1200a9;;;BU)" in mb.INSTALL_FOLDER_SDDL
+    assert not root.findall(".//w:Permission", WXS_NS)       # MsiLockPermissionsEx and LockPermissions never mix
+    controls = root.findall(".//w:ServiceControl", WXS_NS)
+    assert len(controls) == 1 and controls[0] in list(comp)
+    sc = controls[0]
+    assert (sc.get("Name"), sc.get("Stop"), sc.get("Remove"), sc.get("Start")) == (
+        protocol.SERVICE_NAME, "both", "uninstall", None)           # never started by the install
+
+
+def test_the_services_descriptor_lets_interactive_users_start_and_query_it_and_nothing_more():
+    from lagdoctor.relay import protocol
+    import re as _re
+    aces = dict((sid, rights) for rights, sid in _re.findall(r"\(A;;([A-Z]+);;;([A-Z]+)\)", protocol.SERVICE_SDDL))
+    iu = set(_re.findall(r"..", aces["IU"]))
+    assert {"RP", "LC"} <= iu and not iu & {"WP", "DC", "DT", "SD", "WD", "WO"}, iu
+    assert set(aces) == {"SY", "BA", "IU", "SU"}
+
+
+SC_QC = ("[SC] QueryServiceConfig SUCCESS\n\nSERVICE_NAME: lagdoctor\n        TYPE               : 10  WIN32_OWN_PROCESS \n"
+         "        START_TYPE         : 3   DEMAND_START\n        ERROR_CONTROL      : 1   NORMAL\n"
+         '        BINARY_PATH_NAME   : "C:\\Program Files\\lag-doctor\\python.exe" -B -m lagdoctor.service\n'
+         "        LOAD_ORDER_GROUP   : \n        TAG                : 0\n"
+         "        DISPLAY_NAME       : lag-doctor capture service\n        DEPENDENCIES       : \n"
+         "        SERVICE_START_NAME : NT AUTHORITY\\LocalService\n")
+SC_PRIVS = "[SC] QueryServiceConfig2 SUCCESS\n\nSERVICE_NAME: lagdoctor\n        PRIVILEGES       : SeChangeNotifyPrivilege\n"
+SC_SIDTYPE = "[SC] QueryServiceConfig2 SUCCESS\n\nSERVICE_NAME: lagdoctor\nSERVICE_SID_TYPE:  UNRESTRICTED\n"
+
+
+def test_the_service_check_reads_the_install_back_as_the_msi_declares_it(monkeypatch):
+    from lagdoctor.relay import protocol
+    sd = "\n" + protocol.SERVICE_SDDL + "S:(AU;FA;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;WD)\n"
+    good = (SC_QC, SC_PRIVS, SC_SIDTYPE, sd, "stopped")
+    assert mc.judge_service(*good, INSTALL).ok, mc.judge_service(*good, INSTALL).detail
+    bad = {"unquoted path": (SC_QC.replace('"C:\\Program Files\\lag-doctor\\python.exe"',
+                                           "C:\\Program Files\\lag-doctor\\python.exe"), *good[1:]),
+           "auto start": (SC_QC.replace("3   DEMAND_START", "2   AUTO_START"), *good[1:]),
+           "LocalSystem": (SC_QC.replace("NT AUTHORITY\\LocalService", "LocalSystem"), *good[1:]),
+           "every privilege": (good[0], SC_PRIVS.replace("SeChangeNotifyPrivilege",
+                                                         "SeChangeNotifyPrivilege\n    SeImpersonatePrivilege"),
+                               *good[2:]),
+           "restricted SID": (*good[:2], SC_SIDTYPE.replace("UNRESTRICTED", "RESTRICTED"), *good[3:]),
+           "users may stop": (*good[:3], sd.replace("(A;;CCLCSWRPLOCRRC;;;IU)", "(A;;CCLCSWRPWPLOCRRC;;;IU)"), good[4]),
+           "running already": (*good[:4], "running"),
+           # interactive users' own entry unchanged: only the comparison with the whole descriptor sees this one
+           "everyone may stop it": (*good[:3], sd.replace("(A;;CCLCSWLOCRRC;;;SU)",
+                                                       "(A;;CCLCSWLOCRRC;;;SU)(A;;CCLCSWRPWPLOCRRC;;;WD)"), good[4]),
+           # the descriptor and the constant both without start: the read-back DACL itself is judged too
+           "users may not start": (*good[:3], sd.replace("(A;;CCLCSWRPLOCRRC;;;IU)", "(A;;CCLCSWLOCRRC;;;IU)"), good[4])}
+    assert {k: mc.judge_service(*v, INSTALL).ok for k, v in bad.items()} == dict.fromkeys(bad, False)
+    # The MSI built from a constant without start (PR #73's sabotage run): the read-back DACL equals that constant,
+    # and only the check of interactive users' own rights refuses it.
+    no_start = protocol.SERVICE_SDDL.replace("(A;;CCLCSWRPLOCRRC;;;IU)", "(A;;CCLCSWLOCRRC;;;IU)")
+    monkeypatch.setattr(protocol, "SERVICE_SDDL", no_start)
+    check = mc.judge_service(*good[:3], no_start + "S:(AU;FA;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;WD)", "stopped", INSTALL)
+    assert not check.ok and "interactive users hold" in check.detail and "DACL is" not in check.detail, check.detail
+
+
+def _client(**over) -> dict:
+    from lagdoctor.relay import protocol
+    from lagdoctor.winapi import service as svc
+    base = {"pid": 40, "lagdoctor": str(INSTALL / "lagdoctor" / "__init__.pyc"),
+            "rights": {"start": None, "stop": 5, "change_config": 5, "query_status": None}, "start_error": None,
+            "started_by_this": True, "scm_pid": 900, "server_pid": 900,
+            "owner_sid": svc.service_sid(protocol.SERVICE_NAME),
+            "hello": {"t": "hello", "pid": 900, "game": [77, 1]}, "errors": [], "net_started": True,
+            "event_pids": {"77": 12}, "ended": True,
+            "frames_last": {"state": "failed", "final": True, "detail": "PresentMon ran but wrote no CSV (no GPU)"},
+            "types": ["hello", "end"]}
+    return {**base, **over}
+
+
+def test_the_recording_check_needs_the_real_service_to_record_the_stand_in_for_a_standard_account():
+    assert mc.judge_recording(_client(), 77, INSTALL).ok, mc.judge_recording(_client(), 77, INSTALL).detail
+    bad = {"may stop it": {"rights": {"start": None, "stop": None, "change_config": 5, "query_status": None}},
+           "may not start it": {"rights": {"start": 5, "stop": 5, "change_config": 5, "query_status": None}},
+           "start failed": {"start_error": 5},
+           "a squatter": {"server_pid": 901},
+           "another owner": {"owner_sid": "S-1-5-19"},
+           "another game": {"hello": {"t": "hello", "pid": 900, "game": [78, 1]}},
+           "refused": {"hello": {"t": "error", "why": "no"}},
+           "no network": {"net_started": False},
+           "another program's events": {"event_pids": {"77": 12, "4": 3}},
+           "no events": {"event_pids": {}},
+           "no end": {"ended": False},
+           "the checkout's code": {"lagdoctor": r"D:\a\lag-doctor\lagdoctor\__init__.py"},
+           "started by someone else": {"started_by_this": False},
+           "PresentMon refused": {"frames_last": {"state": "unavailable", "final": True,
+                                                  "detail": "PresentMon needs admin rights"}},
+           "PresentMon never started": {"frames_last": {"state": "failed", "final": True,
+                                                        "detail": "PresentMon was not started: it exited"}},
+           "PresentMon still going": {"frames_last": {"state": "ok", "final": False, "detail": "12 frames"}},
+           "no frame status": {"frames_last": None}}
+    assert {k: mc.judge_recording(_client(**v), 77, INSTALL).ok for k, v in bad.items()} == dict.fromkeys(bad, False)
+    assert not mc.judge_recording(None, 77, INSTALL).ok
+    assert not mc.judge_recording({"crashed": "Traceback"}, 77, INSTALL).ok
+
+
+def test_the_token_check_needs_localservice_with_one_privilege_and_its_own_unrestricted_sid():
+    from lagdoctor.relay import protocol
+    from lagdoctor.winapi import service as svc
+    own = svc.service_sid(protocol.SERVICE_NAME)
+    good = {"user": {"sid": "S-1-5-19"}, "privileges": [{"name": "SeChangeNotifyPrivilege"}], "restricted": False,
+            "groups": [{"sid": "S-1-1-0"}, {"sid": own}]}
+    assert mc.judge_token(good).ok
+    bad = {"LocalSystem": {"user": {"sid": "S-1-5-18"}},
+           "impersonation kept": {"privileges": [{"name": "SeChangeNotifyPrivilege"}, {"name": "SeImpersonatePrivilege"}]},
+           "restricted": {"restricted": True},
+           "no service SID": {"groups": [{"sid": "S-1-1-0"}]}}
+    assert {k: mc.judge_token({**good, **v}).ok for k, v in bad.items()} == dict.fromkeys(bad, False)
+    assert not mc.judge_token(None).ok and not mc.judge_token({"error": "access denied"}).ok
+
+
+def test_the_installs_files_may_be_written_by_system_and_administrators_alone():
+    sy, ba, bu, au = "S-1-5-18", "S-1-5-32-544", "S-1-5-32-545", "S-1-5-11"
+    locked = [(0, 3, 0x1F01FF, sy), (0, 3, 0x1F01FF, ba), (0, 3, 0x1200A9, bu)]
+    assert mc.judge_dacl("folder", True, locked, need_protected=True) == []
+    assert mc.judge_dacl("file", False, locked, need_protected=False) == []
+    assert "not protected" in " ".join(mc.judge_dacl("folder", False, locked, need_protected=True))
+    assert "write it" in " ".join(mc.judge_dacl("folder", True, [*locked, (0, 3, 0x1301BF, au)], True))  # C:\'s Modify
+    assert "write it" in " ".join(mc.judge_dacl("folder", True, [(0, 3, 0x1F01FF, sy), (0, 3, 0x1F01FF, ba),
+                                                                 (0, 3, 0x1200A9 | 0x2, bu)], True))
+    assert "grants" in " ".join(mc.judge_dacl("folder", True, [*locked, (0, 3, 0x1200A9, "S-1-1-0")], True))
+    assert "full control" in " ".join(mc.judge_dacl("folder", True, [(0, 3, 0x1F01FF, sy), (0, 3, 0x1200A9, bu)],
+                                                     True))
+    assert mc.judge_dacl("folder", True, [*locked, (1, 3, 0x1F01FF, au)], True) == []   # a deny entry takes away
+
+
+def test_the_cleanup_is_judged_and_a_throwaway_account_left_behind_fails_it(tmp_path, monkeypatch):
+    from stage2 import logon
+    folder = tmp_path / "client"
+    folder.mkdir()
+    calls: list = []
+    state = {"delete": 0, "lookup": 2}
+
+    def delete(name):
+        calls.append(("delete", name))
+        return {"exit_code": state["delete"], "output": "done"}
+
+    monkeypatch.setattr(logon, "delete_user", delete)
+    monkeypatch.setattr(logon, "_net", lambda *args: calls.append(args) or {"exit_code": state["lookup"], "output": ""})
+    proc = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])
+    check = mc.clean_recording({"standin": proc, "account": {"exit_code": 0}, "folder": folder})
+    assert check.ok and proc.poll() is not None and not folder.exists(), check.detail
+    assert ("delete", mc.ACCOUNT) in calls and ("user", mc.ACCOUNT) in calls
+    state["lookup"] = 0                                    # the account is still found after its deletion
+    assert not mc.clean_recording({"account": {"exit_code": 0}}).ok
+    state.update(delete=2, lookup=2)                       # net.exe could not delete it
+    assert not mc.clean_recording({"account": {"exit_code": 0}}).ok
+    nothing = mc.clean_recording({})
+    assert nothing.ok and "made no account" in nothing.detail

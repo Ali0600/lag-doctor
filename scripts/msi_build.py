@@ -145,12 +145,30 @@ def pyc_problem(header: bytes, magic: bytes) -> str | None:
 
 def wix_command(wix: str, version: str, payload: Path, out_msi: Path, accept_eula: str | None) -> list[str]:
     """The `wix build` command line: x64 (64-bit components, as Program Files needs), every warning an error (a
-    harvest that found no files, a missing folder, a duplicate). The EULA is accepted only when the caller passes its
-    id: that is the owner's call (DECISIONS 2026-11-08), never a default here."""
+    harvest that found no files, a missing folder, a duplicate) but WIX1149, which WiX v7 raises for every core
+    ServiceConfig element (the capture service's SID type and privileges) whatever it holds: the install check reads
+    them back from the running service instead (DECISIONS 2026-11-25). The EULA is accepted only when the caller
+    passes its id: that is the owner's call (DECISIONS 2026-11-08), never a default here."""
     argv = [wix, "build", str(WXS), "-arch", "x64", "-wx", "-d", f"Version={version}", "-bindpath",
-            f"payload={payload}", "-o", str(out_msi)]
+            f"payload={payload}", "-o", str(out_msi), "-sw" + SERVICE_CONFIG_WARNING]
     return argv + (["-acceptEula", accept_eula] if accept_eula else [])
 
+
+SERVICE_CONFIG_WARNING = "1149"         # WIX1149: ServiceConfigFamilyNotSupported, raised for any core ServiceConfig
+# What the MSI's service tables must hold (Windows Installer's ServiceInstall, ServiceControl, MsiServiceConfig and
+# MsiLockPermissionsEx tables): own process (16), demand start (3), normal errors and vital (1 | 0x8000), LocalService,
+# no password; stop on install and on uninstall and delete on uninstall (0x2 | 0x20 | 0x80), never start; an
+# unrestricted service SID (5: SERVICE_CONFIG_SERVICE_SID_INFO, argument 1) and SeChangeNotifyPrivilege alone (6:
+# SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO), on install and reinstall (1 | 4); the descriptor on the ServiceInstall row.
+SERVICE_INSTALL_ROW = {"Name": "lagdoctor", "ServiceType": "16", "StartType": "3", "ErrorControl": "32769",
+                       "StartName": "NT AUTHORITY\\LocalService", "Password": None,
+                       "Arguments": "-B -m lagdoctor.service", "Component_": "CaptureService"}
+SERVICE_CONTROL_ROW = {"Name": "lagdoctor", "Event": "162", "Arguments": None, "Component_": "CaptureService"}
+SERVICE_CONFIG_ROWS = sorted([("5", "5", "1"), ("5", "6", "SeChangeNotifyPrivilege")])
+SERVICE_PROGRAM = "python.exe"
+# The install folder's own descriptor (a CreateFolder's PermissionEx in the service's component): protected, SYSTEM and
+# Administrators full, Users read and execute, inherited by every file and folder in it.
+INSTALL_FOLDER_SDDL = "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)"
 
 # ICE61 warns that a build may replace another of the same version, which the MajorUpgrade allows on purpose: CI
 # makes many builds of one version, and two of them must not install side by side.
@@ -292,6 +310,36 @@ def wheel_version(wheel: Path) -> str:
     return version.strip()
 
 
+def service_problems(msi: Path, layout: dict[str, str]) -> list[str]:
+    """What is wrong with the capture service's rows (SERVICE_* above), its program the python.exe the File table
+    lays out at the install's root, its descriptor protocol.SERVICE_SDDL; [] when nothing."""
+    from lagdoctor.relay import protocol
+    m = str(msi)
+    problems = []
+    installs = msidb.rows(m, "ServiceInstall", tuple(SERVICE_INSTALL_ROW) + ("ServiceInstall",))
+    if [{k: r[k] for k in SERVICE_INSTALL_ROW} for r in installs] != [SERVICE_INSTALL_ROW]:
+        problems.append(f"its ServiceInstall table is {installs}, not just {SERVICE_INSTALL_ROW}")
+    controls = msidb.rows(m, "ServiceControl", tuple(SERVICE_CONTROL_ROW))
+    if [{k: r[k] for k in SERVICE_CONTROL_ROW} for r in controls] != [SERVICE_CONTROL_ROW]:
+        problems.append(f"its ServiceControl table is {controls}, not just {SERVICE_CONTROL_ROW}")
+    configs = msidb.rows(m, "MsiServiceConfig", ("Name", "Event", "ConfigType", "Argument", "Component_"))
+    got = sorted((r["Event"], r["ConfigType"], r["Argument"]) for r in configs
+                 if r["Name"] == "lagdoctor" and r["Component_"] == "CaptureService")
+    if got != SERVICE_CONFIG_ROWS or len(configs) != len(SERVICE_CONFIG_ROWS):
+        problems.append(f"its MsiServiceConfig table is {configs}, not the SID type and privilege rows "
+                        f"{SERVICE_CONFIG_ROWS}")
+    locks = msidb.rows(m, "MsiLockPermissionsEx", ("LockObject", "Table", "SDDLText", "Condition"))
+    want = [{"LockObject": installs[0]["ServiceInstall"] if installs else None, "Table": "ServiceInstall",
+             "SDDLText": protocol.SERVICE_SDDL, "Condition": None},
+            {"LockObject": "INSTALLFOLDER", "Table": "CreateFolder", "SDDLText": INSTALL_FOLDER_SDDL, "Condition": None}]
+    if sorted(locks, key=lambda r: r["Table"]) != sorted(want, key=lambda r: r["Table"]):
+        problems.append(f"its MsiLockPermissionsEx table is {locks}, not just {want}")
+    keyed = [r["KeyPath"] for r in msidb.rows(m, "Component", ("Component", "KeyPath")) if r["Component"] == "CaptureService"]
+    if len(keyed) != 1 or layout.get(keyed[0] or "") != SERVICE_PROGRAM:
+        problems.append(f"the service's component is keyed by {keyed}, not by the {SERVICE_PROGRAM} at the install's root")
+    return problems
+
+
 def readback(msi: Path, payload: Path, version: str) -> dict:
     """The built MSI, read back: its identity (the product name and version SignPath's rules will hold every signed
     file to, in its properties and its summary), its PATH row, and its File table against the payload."""
@@ -314,6 +362,7 @@ def readback(msi: Path, payload: Path, version: str) -> dict:
         problems.append(f"its File table leaves out {missing[:8]} and adds {extra[:8]}")
     if len(set(v.lower() for v in layout.values())) != len(layout):
         problems.append("its File table installs one path twice")
+    problems += service_problems(msi, layout)
     if problems:
         raise BuildError("the MSI read back wrong: " + "; ".join(problems))
     return {"product_code": props.get("ProductCode"), "upgrade_code": props.get("UpgradeCode"),

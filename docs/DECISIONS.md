@@ -239,6 +239,25 @@
 
 ---
 
+## 2026-11-25: The MSI's build lets WiX's warning 1149 through, by its id
+
+`wix build` runs with `-wx` (every warning an error), and WiX v7.0.1 raises WIX1149 ("not [work] as expected") for
+every core `ServiceConfig` element, whatever it holds (Compiler_Package.cs at v7.0.1). The capture service needs that
+element: it is WiX's only way to set Windows Installer's MsiServiceConfig rows, the service SID type and the trimmed
+privileges. Settled by this session with the MSI's service.
+
+- **`-sw1149` alone, after the output (chosen)**: every other warning stays an error; the build reads the service's
+  rows back from the MSI, and the install check reads them back from the SCM and the running service's token, which
+  is the measurement WiX's warning stands in for (research note, section 13: they took effect at the first start).
+- **`util:ServiceConfig`**: rejected. WiX's suggested replacement sets failure actions only, no SID type and no
+  privileges.
+- **A custom action running `sc.exe sidtype` and `privs`**: rejected. The MSI has no custom actions, and this would
+  be the first.
+- **Dropping `-wx`**: rejected. It would let every other warning through as well.
+
+Revisit hook: `msi_build.SERVICE_CONFIG_WARNING`; if a WiX release stops raising it, the flag can go (the build would
+then pass without it, and `tests/test_msi.py` pins it present).
+
 ## 2026-11-25: Which of the game's processes the capture service counts as the game's
 
 The elevated relay counts the game's whole tree in the recorder's session as the game's (its processes' network events

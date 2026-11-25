@@ -31,12 +31,27 @@ failed, 2 if they could not start (not a runner, an input missing, the product o
   Program Files although a verified per-user copy is there too; `analyze` writes its report.
 - imports: every lagdoctor module imports in the installed runtime from the install folder, sys.path holds nothing
   else, and each shipped .pyc was compiled from the .py beside it.
+- service: the capture service is installed as the MSI says, read back with sc.exe: own process, demand start, its
+  program the install's quoted python.exe on `-B -m lagdoctor.service`, LocalService, SeChangeNotifyPrivilege alone,
+  an unrestricted service SID, its descriptor protocol.SERVICE_SDDL (interactive users' own rights judged in it too),
+  and not running; the install folder's DACL protected, and it and python.exe's writable by SYSTEM and Administrators
+  alone.
+- recording: a throwaway standard account (stage2/logon.py, deleted afterwards) runs msi_service_client.py with the
+  installed runtime: it may start the service and query it, not stop or reconfigure it; its own StartServiceW starts
+  it; the pipe's server is the process the SCM names and its owner the service's own SID; asked for a stand-in game
+  (stage2/standin.py, run by this job in the same session) it greets with that game, starts the network trace,
+  passes on that game's events, runs PresentMon (which writes no row on a runner with no GPU), and ends when told.
+- token: the running service's own token (read by this job, an administrator): LocalService, SeChangeNotifyPrivilege
+  alone, not restricted, its service SID among its groups. Windows Installer's page for MsiServiceConfig says its
+  settings take effect "the next time the system is started"; this is what the first start after the install got.
 - untouched: after all that ran (as an administrator), the install folder holds the same files with the same bytes,
-  so no __pycache__ was written beside the shipped bytecode.
+  so no __pycache__ was written beside the shipped bytecode, and the service wrote nothing there.
 - uninstall: `msiexec /x MSI /qn` exits 0.
 - gone: every installed file and the folder itself; the system PATH exactly as before; the product, its components
   and its upgrade code unknown to Windows Installer; the registry keys the install added gone, and its registry values
-  and their keys as before the install; the Start-menu shortcut and the icon file it showed gone.
+  and their keys as before the install; the Start-menu shortcut and the icon file it showed gone; the capture service
+  unknown to the SCM.
+- cleanup: the stand-in ended, the throwaway account deleted (and no longer found), the client's folder gone.
 """
 from __future__ import annotations
 
@@ -87,7 +102,25 @@ COMMAND_TIMEOUT_S = 120      # one command; the eight between the install and th
 # every verdict before the job's cap stops the step (tests/test_ci_budgets.py holds it under ci.yml's timeout-minutes).
 BUDGET_S = 720
 _deadline: float | None = None
-MIDDLE = ("files", "registered", "path", "registry", "shortcut", "command", "imports", "untouched")
+MIDDLE = ("files", "registered", "path", "registry", "shortcut", "service", "recording", "token", "command", "imports",
+          "untouched")
+CLIENT = ROOT / "scripts" / "msi_service_client.py"        # run by the throwaway account with the installed runtime
+STANDIN = ROOT / "scripts" / "stage2" / "standin.py"       # the game the recording check records
+ACCOUNT = "lagdoctor-msi-check"                            # the throwaway standard account (at most 20 characters)
+STANDIN_SECONDS = 150          # the stand-in draws this long at most; the check ends it sooner
+STANDIN_READY_S = 60           # its first frame
+CLIENT_TIMEOUT_S = 150         # the client's whole run: StartServiceW, the ask, 8 s recording, PresentMon's stop
+ACCOUNT_CLEANUP_S = 60         # the account's deletion, after the uninstall and outside the budget (net.exe's timeout)
+ERROR_ACCESS_DENIED = 5
+ERROR_SERVICE_DOES_NOT_EXIST = 1060
+LOCAL_SERVICE_SID = "S-1-5-19"
+SYSTEM_SID, ADMINISTRATORS_SID, USERS_SID = "S-1-5-18", "S-1-5-32-544", "S-1-5-32-545"
+FILE_ALL = 0x1F01FF
+# What a file or folder access mask may never grant anyone but SYSTEM and Administrators here: write data, append,
+# write extended attributes, delete a child, write attributes, delete, write the DACL, take ownership, generic all
+# and generic write (winnt.h).
+WRITE_BITS = 0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x10000000 | 0x40000000
+PRIVILEGE = "SeChangeNotifyPrivilege"
 
 # The app's Start-menu shortcut (installer/lag-doctor.wxs): the Shortcut's Name, to which Windows Installer adds .lnk,
 # and what it must start. pythonw.exe is the runtime's windowless interpreter: python.exe would open a console.
@@ -703,6 +736,328 @@ def run(argv: list[str], cwd: Path, env: dict[str, str] | None = None,
     return p.returncode, (p.stdout + p.stderr).decode("utf-8", "replace")
 
 
+def left_s() -> float:
+    """What is left of the budget, in seconds (0 when spent; the whole budget when none was started)."""
+    return BUDGET_S if _deadline is None else max(0.0, _deadline - time.monotonic())
+
+
+def sc_fields(text: str) -> dict[str, str]:
+    """`NAME : value` lines of sc.exe's output, each value's spaces collapsed."""
+    out = {}
+    for line in text.splitlines():
+        m = re.match(r"\s*([A-Z_]+)\s*:\s*(.*?)\s*$", line)
+        if m:
+            out.setdefault(m.group(1), " ".join(m.group(2).split()))
+    return out
+
+
+def service_command(install: Path) -> str:
+    """The command line the SCM must hold for the capture service: the install's python.exe, quoted (its folder has a
+    space, and an unquoted path with one is a way in for a planted C:\\Program.exe), on the MSI's arguments."""
+    from lagdoctor.relay import protocol
+    return f'"{install / mb.SERVICE_PROGRAM}" {protocol.SERVICE_ARGUMENTS}'
+
+
+def interactive_rights(dacl: str) -> set[str]:
+    """The rights (sc.exe's two-letter codes) an allow entry grants interactive users (IU) in a service's DACL, read
+    from the descriptor itself rather than compared with the constant the MSI was built from."""
+    return {code for rights, sid in re.findall(r"\(A;;([A-Z]*);;;([A-Z]+|S-[0-9-]+)\)", dacl)
+            if sid in ("IU", "S-1-5-4") for code in re.findall(r"..", rights)}
+
+
+def judge_service(qc: str, qprivs: str, qsidtype: str, sdshow: str, state: str | None, install: Path) -> Check:
+    """sc.exe's read-back of the capture service against what the MSI declares (see the module's docstring)."""
+    from lagdoctor.relay import protocol
+    f = sc_fields(qc)
+    problems = []
+    for key, want in (("TYPE", "10 WIN32_OWN_PROCESS"), ("START_TYPE", "3 DEMAND_START"),
+                      ("ERROR_CONTROL", "1 NORMAL"), ("BINARY_PATH_NAME", service_command(install)),
+                      ("SERVICE_START_NAME", "NT AUTHORITY\\LocalService")):
+        if f.get(key) != want:
+            problems.append(f"{key} is {f.get(key)!r}, not {want!r}")
+    privileges = re.findall(r"\bSe[A-Za-z]+Privilege\b", qprivs)
+    if privileges != [PRIVILEGE]:
+        problems.append(f"its required privileges are {privileges}, not [{PRIVILEGE!r}]")
+    sid_type = sc_fields(qsidtype).get("SERVICE_SID_TYPE")
+    if sid_type != "UNRESTRICTED":
+        problems.append(f"its service SID type is {sid_type!r}, not 'UNRESTRICTED'")
+    dacl = re.search(r"D:(?:\([^()]*\))+", sdshow)
+    if not dacl or dacl.group(0) != protocol.SERVICE_SDDL:
+        problems.append(f"its descriptor's DACL is {dacl.group(0) if dacl else None!r}, not {protocol.SERVICE_SDDL!r}")
+    users = interactive_rights(dacl.group(0) if dacl else "")
+    if "RP" not in users or users & {"WP", "DC", "DT", "SD", "WD", "WO"}:
+        problems.append(f"interactive users hold {sorted(users)} on it: start (RP) and no stop, change or delete")
+    if state != "stopped":
+        problems.append(f"it is {state!r} right after the install, not stopped (it starts on demand)")
+    if problems:
+        return Check("service", False, "; ".join(problems))
+    return Check("service", True, f"own process, demand start, {service_command(install)} as LocalService with "
+                                  f"{PRIVILEGE} alone and an unrestricted service SID, interactive users let start it")
+
+
+def read_dacl(path: Path) -> tuple[bool, list[tuple[int, int, int, str]]]:
+    """A file's or folder's DACL as Windows holds it: (protected, [(ACE type, ACE flags, access mask, SID)])."""
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    adv.GetNamedSecurityInfoW.argtypes = [wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD, ctypes.c_void_p,
+                                          ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p,
+                                          ctypes.POINTER(ctypes.c_void_p)]
+    adv.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    adv.GetSecurityDescriptorControl.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.WORD),
+                                                 ctypes.POINTER(wintypes.DWORD)]
+    adv.GetAce.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)]
+    adv.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    k32.LocalFree.argtypes = [ctypes.c_void_p]
+    dacl, sd = ctypes.c_void_p(), ctypes.c_void_p()
+    rc = adv.GetNamedSecurityInfoW(str(path), 1, 0x4, None, None, ctypes.byref(dacl), None, ctypes.byref(sd))
+    if rc:
+        raise ctypes.WinError(rc)
+    try:
+        control, revision = wintypes.WORD(), wintypes.DWORD()
+        if not adv.GetSecurityDescriptorControl(sd, ctypes.byref(control), ctypes.byref(revision)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        count = int.from_bytes(ctypes.string_at(dacl.value + 4, 2), "little") if dacl.value else 0   # ACL.AceCount
+        aces = []
+        for i in range(count):
+            ace = ctypes.c_void_p()
+            if not adv.GetAce(dacl, i, ctypes.byref(ace)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            head = ctypes.string_at(ace.value, 8)             # ACE_HEADER (type, flags, size) and the mask
+            text = wintypes.LPWSTR()
+            if not adv.ConvertSidToStringSidW(ace.value + 8, ctypes.byref(text)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            try:
+                aces.append((head[0], head[1], int.from_bytes(head[4:8], "little"), text.value))
+            finally:
+                k32.LocalFree(ctypes.cast(text, ctypes.c_void_p))
+        return bool(control.value & 0x1000), aces            # SE_DACL_PROTECTED
+    finally:
+        k32.LocalFree(sd)
+
+
+def judge_dacl(what: str, protected: bool, aces: list[tuple[int, int, int, str]], need_protected: bool) -> list[str]:
+    """Why a file or folder of the install is open to more than SYSTEM and Administrators writing it; [] when not."""
+    problems = []
+    if need_protected and not protected:
+        problems.append(f"{what}'s DACL is not protected, so it takes its parent's")
+    for kind, _flags, mask, sid in aces:
+        if kind == 0 and sid not in (SYSTEM_SID, ADMINISTRATORS_SID) and mask & WRITE_BITS:
+            problems.append(f"{what} lets {sid} write it (mask {mask:#x})")
+        elif kind == 0 and sid not in (SYSTEM_SID, ADMINISTRATORS_SID, USERS_SID):
+            problems.append(f"{what} grants {sid} access (mask {mask:#x})")
+    for sid in (SYSTEM_SID, ADMINISTRATORS_SID):
+        if not any(kind == 0 and s == sid and mask & FILE_ALL == FILE_ALL for kind, _f, mask, s in aces):
+            problems.append(f"{what} does not give {sid} full control")
+    return problems
+
+
+def check_service(install: Path) -> Check:
+    from lagdoctor.relay import protocol
+    from lagdoctor.winapi import service as svc
+    sc = system_tool("System32", "sc.exe")
+    outs = [run([sc, verb, protocol.SERVICE_NAME], install)[1] for verb in ("qc", "qprivs", "qsidtype", "sdshow")]
+    try:
+        state = svc.query(protocol.SERVICE_NAME)[0]
+    except OSError as exc:
+        state = f"not queried ({exc})"
+    verdict = judge_service(*outs, state, install)
+    folder = judge_dacl(str(install), *read_dacl(install), need_protected=True)
+    folder += judge_dacl(str(install / mb.SERVICE_PROGRAM), *read_dacl(install / mb.SERVICE_PROGRAM),
+                         need_protected=False)
+    if folder:
+        return Check("service", False, "; ".join(([] if verdict.ok else [verdict.detail]) + folder))
+    return verdict
+
+
+def judge_recording(client: dict | None, game_pid: int | None, install: Path) -> Check:
+    """The throwaway account's run of msi_service_client.py, judged (see the module's docstring)."""
+    from lagdoctor.relay import protocol
+    from lagdoctor.winapi import service as svc
+    if not client:
+        return Check("recording", False, "the client left no result")
+    if "crashed" in client:
+        return Check("recording", False, f"the client crashed: {client['crashed'][-600:]}")
+    problems = []
+    rights = client.get("rights") or {}
+    if rights.get("start") is not None or rights.get("query_status") is not None:
+        problems.append(f"the account could not open the service to start or query it ({rights})")
+    if rights.get("stop") != ERROR_ACCESS_DENIED or rights.get("change_config") != ERROR_ACCESS_DENIED:
+        problems.append(f"the account may stop or reconfigure the service ({rights})")
+    if client.get("start_error") is not None:
+        problems.append(f"StartServiceW failed with error {client['start_error']}")
+    elif client.get("started_by_this") is not True:
+        problems.append("the service was running before the account's StartServiceW, so the account did not start it")
+    lib = str(client.get("lagdoctor") or "")
+    if not lib.lower().startswith(str(install).lower() + "\\"):
+        problems.append(f"the client ran lag-doctor from {lib!r}, not the install")
+    scm_pid, server_pid = client.get("scm_pid"), client.get("server_pid")
+    if not scm_pid or server_pid != scm_pid:
+        problems.append(f"the pipe's server is process {server_pid}, the SCM's service {scm_pid}")
+    if client.get("owner_sid") != svc.service_sid(protocol.SERVICE_NAME):
+        problems.append(f"the pipe is owned by {client.get('owner_sid')}, not the service's own SID")
+    hello = client.get("hello") or {}
+    if hello.get("t") != "hello" or hello.get("pid") != scm_pid or not hello.get("game") or \
+            hello["game"][0] != game_pid:
+        problems.append(f"the service answered {hello or 'nothing'}, not a greeting for the stand-in {game_pid}")
+    if client.get("errors"):
+        problems.append(f"the service said {client['errors']}")
+    if client.get("net_started") is not True:
+        problems.append(f"the network trace did not start ({client.get('net_why')!r})")
+    pids = client.get("event_pids") or {}
+    if not pids.get(str(game_pid)) or set(pids) - {str(game_pid), str(client.get("pid"))}:
+        problems.append(f"whole events came for {pids}, not the stand-in {game_pid} alone")
+    frames = client.get("frames_last") or {}
+    if not frames.get("final") or not (frames.get("state") in ("ok", "partial")
+                                       or str(frames.get("detail", "")).startswith("PresentMon ran")):
+        problems.append(f"PresentMon did not run under the service ({frames or 'no frame-timing status came'})")
+    if not client.get("ended"):
+        problems.append(f"the recording did not end with `end` (last {client.get('types', [])[-3:]})")
+    if problems:
+        return Check("recording", False, "; ".join(problems))
+    frames = client["frames_last"]
+    return Check("recording", True, f"a standard account started the service and recorded the stand-in through it: "
+                                    f"{pids[str(game_pid)]} of its network events whole, PresentMon "
+                                    f"{frames.get('state')} ({frames.get('detail', '')[:120]})")
+
+
+def read_process_token(pid: int) -> dict:
+    """Another process's token, read as this administrator: its own service process, never a game."""
+    from stage2 import tokeninfo
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    k32.OpenProcess.restype = wintypes.HANDLE
+    adv.OpenProcessToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE)]
+    adv.OpenProcessToken.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    process = k32.OpenProcess(0x1000, False, pid)                    # PROCESS_QUERY_LIMITED_INFORMATION
+    if not process:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        token = wintypes.HANDLE()
+        if not adv.OpenProcessToken(process, tokeninfo.TOKEN_QUERY, ctypes.byref(token)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            return tokeninfo.read(token)
+        finally:
+            k32.CloseHandle(token)
+    finally:
+        k32.CloseHandle(process)
+
+
+def judge_token(token: dict | None) -> Check:
+    from lagdoctor.relay import protocol
+    from lagdoctor.winapi import service as svc
+    if not token or "user" not in token:
+        return Check("token", False, f"the running service's token was not read ({(token or {}).get('error')})")
+    problems = []
+    if token["user"]["sid"] != LOCAL_SERVICE_SID:
+        problems.append(f"it runs as {token['user']}, not LocalService")
+    privileges = [p["name"] for p in token["privileges"]]
+    if privileges != [PRIVILEGE]:
+        problems.append(f"its privileges are {privileges}, not [{PRIVILEGE!r}]")
+    if token["restricted"]:
+        problems.append("its token is restricted (a restricted service SID cannot start an ETW session)")
+    if svc.service_sid(protocol.SERVICE_NAME) not in {g["sid"] for g in token["groups"]}:
+        problems.append("its own service SID is not among its groups")
+    if problems:
+        return Check("token", False, "; ".join(problems))
+    return Check("token", True, f"LocalService with {PRIVILEGE} alone, unrestricted, its service SID among its groups")
+
+
+def wait_for_file(path: Path, timeout: float) -> dict | None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if data.get("ready"):
+                return data
+        except (OSError, ValueError):
+            pass
+        time.sleep(0.25)
+    return None
+
+
+def check_recording(install: Path, work: Path, seen: dict) -> Check:
+    """Start the stand-in, make the throwaway account, run the client as it; keep what it saw in `seen` (the stand-in's
+    process, the folder made for the client, the token of the running service) for the token check and the cleanup."""
+    from stage2 import logon
+    status = work / "standin.json"
+    seen["standin"] = subprocess.Popen([sys.executable, str(STANDIN), "--seconds", str(STANDIN_SECONDS), "--status",
+                                        str(status)], cwd=str(ROOT), stdin=subprocess.DEVNULL,
+                                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    game = wait_for_file(status, min(STANDIN_READY_S, left_s()))
+    if not game:
+        return Check("recording", False, "the stand-in game drew no frame")
+    folder = Path(tempfile.mkdtemp(prefix="lagdoctor-msi-check-", dir=os.environ.get("SystemDrive", "C:") + "\\"))
+    seen["folder"] = folder
+    shutil.copy2(CLIENT, folder / CLIENT.name)
+    password = logon.new_password()
+    seen["account"] = logon.add_user(ACCOUNT, password)
+    if seen["account"]["exit_code"] != 0:
+        return Check("recording", False, f"the throwaway account was not made: {seen['account']['output']}")
+    grant = run(["icacls", str(folder), "/grant", f"{ACCOUNT}:(OI)(CI)M"], folder)
+    if grant[0] != 0:
+        return Check("recording", False, f"icacls could not give the account its folder: {grant[1][-300:]}")
+    out = folder / "client.json"
+    seen["ran"] = logon.run_as(ACCOUNT, password, [str(install / "python.exe"), str(folder / CLIENT.name), str(out),
+                                                   str(game["pid"])], str(install), min(CLIENT_TIMEOUT_S, left_s()))
+    try:
+        client = json.loads(out.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        client = None
+    seen["client"] = client
+    if client and client.get("scm_pid"):
+        try:
+            seen["token"] = read_process_token(int(client["scm_pid"]))
+        except OSError as exc:
+            seen["token"] = {"error": str(exc)}
+    verdict = judge_recording(client, game["pid"], install)
+    if not verdict.ok and "ran" in seen:
+        verdict = Check("recording", False, f"{verdict.detail} (the client's run: {seen['ran']})")
+    return verdict
+
+
+def clean_recording(seen: dict) -> Check:
+    """After the uninstall, outside the budget: the stand-in ended, the account deleted and no longer found, the
+    client's folder gone; each one tried whatever became of the one before."""
+    from stage2 import logon
+    problems = []
+    proc = seen.get("standin")
+    if proc is not None:
+        if proc.poll() is None:
+            proc.kill()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            problems.append(f"the stand-in (process {proc.pid}) did not end")
+    if "account" in seen:
+        deleted = logon.delete_user(ACCOUNT)
+        if deleted["exit_code"] != 0 or logon._net("user", ACCOUNT)["exit_code"] == 0:
+            problems.append(f"the throwaway account {ACCOUNT} is still there ({deleted['output'][-200:]})")
+    if seen.get("folder"):
+        shutil.rmtree(seen["folder"], ignore_errors=True)
+        if Path(seen["folder"]).exists():
+            problems.append(f"{seen['folder']} is still there")
+    if problems:
+        return Check("cleanup", False, "; ".join(problems))
+    return Check("cleanup", True, "the stand-in ended, the throwaway account deleted, its folder gone"
+                 if "account" in seen else "nothing to clean: the recording check made no account")
+
+
+def service_left() -> str | None:
+    """Why the capture service is still there after the uninstall (or could not be looked for); None when it is not."""
+    from lagdoctor.relay import protocol
+    from lagdoctor.winapi import service as svc
+    try:
+        state = svc.query(protocol.SERVICE_NAME)
+        return f"the capture service is still installed ({state[0]})"
+    except OSError as exc:
+        if exc.winerror != ERROR_SERVICE_DOES_NOT_EXIST:
+            return f"the capture service could not be looked for ({exc})"
+    return None
+
+
 def manifest(top: Path) -> dict[str, str]:
     return {f: mb.sha256_file(top / f) for f in mb.tree_files(top)} if top.is_dir() else {}
 
@@ -865,11 +1220,15 @@ def check_gone(info: dict, install: Path, installed: dict[str, str], before_keys
     lnk_left = shortcut_left([*shortcut_paths(), shortcut_seen.get("icon")])
     if lnk_left:
         problems.append(lnk_left)
+    svc_left = service_left()
+    if svc_left:
+        problems.append(svc_left)
     if problems:
         return Check("gone", False, "; ".join(problems))
     return Check("gone", True, f"all {len(installed)} files and {install}, the PATH entry, the product's "
                                f"registration and its {len(INSTALLER_KEYS)} kinds of Installer keys, its "
-                               f"{len(info['registry'])} registry values, the Start-menu shortcut and its icon")
+                               f"{len(info['registry'])} registry values, the Start-menu shortcut and its icon, "
+                               f"and the capture service")
 
 
 def read_msi(msi: Path) -> dict:
@@ -893,6 +1252,11 @@ def guarded(name: str, fn, *args) -> list[Check]:
     return got if isinstance(got, list) else [got]
 
 
+def _service_installed() -> bool:
+    """Whether a service of the capture service's name exists already (then this is no fresh runner)."""
+    return service_left() is not None
+
+
 def install_folder() -> Path:
     """C:\\Program Files\\lag-doctor: where the MSI's INSTALLFOLDER lands (ProgramFiles64Folder)."""
     return Path(os.environ.get("ProgramW6432") or os.environ.get("ProgramFiles", r"C:\Program Files")) / mb.PRODUCT
@@ -911,12 +1275,13 @@ def run_checks(msi: Path, runtime_zip: Path, presentmon: Path, logs: Path) -> li
     except OSError as exc:
         raise CannotStart(f"the Start menu's Programs folders could not be found: {exc}") from exc
     if (msidb.product_state(info["product_code"]) != msidb.INSTALLSTATE_UNKNOWN or install.exists()
-            or msidb.related_products(info["upgrade_code"]) or any(p.exists() for p in shortcuts)):
+            or msidb.related_products(info["upgrade_code"]) or any(p.exists() for p in shortcuts)
+            or _service_installed()):
         raise CannotStart(f"lag-doctor is already installed here, or {install} or a shortcut in {shortcuts} exists: "
                           "this runs on a fresh runner")
     logs.mkdir(parents=True, exist_ok=True)
     path_before, keys_before = read_path(), installer_keys()
-    registry_before, shortcut_seen = read_registry_values(info["registry"]), {}
+    registry_before, shortcut_seen, recording_seen = read_registry_values(info["registry"]), {}, {}
     tmp = Path(tempfile.mkdtemp(prefix="msi-check-")).resolve()
     checks: list[Check] = []
     installed: dict[str, str] = {}
@@ -936,6 +1301,9 @@ def run_checks(msi: Path, runtime_zip: Path, presentmon: Path, logs: Path) -> li
         checks += guarded("path", judge_path_added, path_before, read_path(), entry)
         checks += guarded("registry", lambda: judge_registry(info["registry"], read_registry_values(info["registry"])))
         checks += guarded("shortcut", check_shortcut, install, shortcut_seen)
+        checks += guarded("service", check_service, install)
+        checks += guarded("recording", check_recording, install, work, recording_seen)
+        checks += guarded("token", lambda: judge_token(recording_seen.get("token")))
         checks += guarded("command", lambda: check_command(fresh_environment(), install, work, home,
                                                            info["version"], presentmon))
         checks += guarded("imports", check_imports, install, package, work)
@@ -949,6 +1317,10 @@ def run_checks(msi: Path, runtime_zip: Path, presentmon: Path, logs: Path) -> li
                               registry_before, shortcut_seen)
         else:
             checks += [Check(n, False, "not run: nothing was installed") for n in ("uninstall", "gone")]
+        try:
+            checks.append(clean_recording(recording_seen))
+        except Exception as exc:  # noqa: BLE001 - the runner is thrown away; say it, and the verdicts still print
+            checks.append(Check("cleanup", False, f"the recording check's leftovers were not all removed: {exc}"))
         z.close()
         wc._remove(tmp)
     return checks
