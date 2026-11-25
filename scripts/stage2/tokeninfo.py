@@ -1,8 +1,10 @@
-"""This process's own access token, read back: user, groups, privileges, restricted SIDs, session and integrity.
+"""An access token, read back: user, groups, privileges, restricted SIDs, session, integrity and elevation.
 
 E3 must read the service's trimmed privileges and its restricted service SID back from the running token, not
-from the service's configuration (docs/research/install-and-rights.md, E3). Read-only: it opens only this
-process's own token (TOKEN_QUERY), never another process. Layouts from winnt.h (Windows SDK 10.0.19041), x64.
+from the service's configuration (docs/research/install-and-rights.md, E3), and E9 reads a pipe client's token as
+the service sees it. Read-only: it opens this process's own token (TOKEN_QUERY), or a pipe client's through
+ImpersonateNamedPipeClient at the level the client allowed (client_token), never another process. Layouts from
+winnt.h (Windows SDK 10.0.19041 and 10.0.26100), x64.
 """
 from __future__ import annotations
 
@@ -13,8 +15,11 @@ from typing import Iterator
 
 TOKEN_QUERY = 0x8
 # TOKEN_INFORMATION_CLASS (winnt.h): TokenUser = 1, then in order.
-TOKEN_USER, TOKEN_GROUPS, TOKEN_PRIVILEGES = 1, 2, 3
-TOKEN_RESTRICTED_SIDS, TOKEN_SESSION_ID, TOKEN_INTEGRITY_LEVEL = 11, 12, 25
+TOKEN_USER, TOKEN_GROUPS, TOKEN_PRIVILEGES, TOKEN_TYPE, TOKEN_IMPERSONATION_LEVEL = 1, 2, 3, 8, 9
+TOKEN_RESTRICTED_SIDS, TOKEN_SESSION_ID, TOKEN_ELEVATION, TOKEN_INTEGRITY_LEVEL = 11, 12, 20, 25
+TOKEN_PRIMARY, TOKEN_IMPERSONATION = 1, 2                  # TOKEN_TYPE
+# SECURITY_IMPERSONATION_LEVEL, in order from SecurityAnonymous = 0
+LEVELS = {0: "anonymous", 1: "identification", 2: "impersonation", 3: "delegation"}
 ERROR_BAD_LENGTH, ERROR_INSUFFICIENT_BUFFER, ERROR_NONE_MAPPED = 24, 122, 1332
 # Group attributes (winnt.h)
 SE_GROUP_ENABLED = 0x4
@@ -63,6 +68,14 @@ _advapi32.LookupAccountSidW.restype = wintypes.BOOL
 _advapi32.LookupPrivilegeNameW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(LUID), wintypes.LPWSTR,
                                            ctypes.POINTER(wintypes.DWORD)]
 _advapi32.LookupPrivilegeNameW.restype = wintypes.BOOL
+_advapi32.ImpersonateNamedPipeClient.argtypes = [wintypes.HANDLE]
+_advapi32.ImpersonateNamedPipeClient.restype = wintypes.BOOL
+_advapi32.OpenThreadToken.argtypes = [wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL, ctypes.POINTER(wintypes.HANDLE)]
+_advapi32.OpenThreadToken.restype = wintypes.BOOL
+_advapi32.RevertToSelf.argtypes = []
+_advapi32.RevertToSelf.restype = wintypes.BOOL
+_kernel32.GetCurrentThread.argtypes = []
+_kernel32.GetCurrentThread.restype = wintypes.HANDLE
 _kernel32.GetCurrentProcess.argtypes = []
 _kernel32.GetCurrentProcess.restype = wintypes.HANDLE
 _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
@@ -161,22 +174,73 @@ def _privileges(buf: ctypes.Array) -> list[dict]:
     return out
 
 
-def snapshot() -> dict:
+def _dword(token: wintypes.HANDLE, cls: int) -> int:
+    return wintypes.DWORD.from_buffer(_info(token, cls), 0).value
+
+
+def read(token: wintypes.HANDLE) -> dict:
     """{"user": {sid, name}, "groups": [...], "privileges": [{name, attributes, enabled, enabled_by_default}],
-    "restricted_sids": [...], "restricted": IsTokenRestricted, "session_id", "integrity": SID text}.
+    "restricted_sids": [...], "restricted": IsTokenRestricted, "session_id", "integrity": SID text, "elevated",
+    "type": "primary" or "impersonation", "level": the impersonation level's name, None for a primary token}.
     Groups and restricted SIDs are {sid, name, attributes, enabled, deny_only, owner, logon_id}."""
+    user = SID_AND_ATTRIBUTES.from_buffer(_info(token, TOKEN_USER), 0)
+    label = SID_AND_ATTRIBUTES.from_buffer(_info(token, TOKEN_INTEGRITY_LEVEL), 0)
+    kind = _dword(token, TOKEN_TYPE)
+    level = _dword(token, TOKEN_IMPERSONATION_LEVEL) if kind == TOKEN_IMPERSONATION else None
+    return {
+        "user": {"sid": sid_text(user.Sid), "name": sid_name(user.Sid)},
+        "groups": _groups(_info(token, TOKEN_GROUPS)),
+        "privileges": _privileges(_info(token, TOKEN_PRIVILEGES)),
+        "restricted_sids": _groups(_info(token, TOKEN_RESTRICTED_SIDS)),
+        "restricted": bool(_advapi32.IsTokenRestricted(token)),
+        "session_id": _dword(token, TOKEN_SESSION_ID),
+        "integrity": sid_text(label.Sid),
+        "elevated": bool(_dword(token, TOKEN_ELEVATION)),
+        "type": {TOKEN_PRIMARY: "primary", TOKEN_IMPERSONATION: "impersonation"}.get(kind, kind),
+        "level": None if level is None else LEVELS.get(level, level),
+    }
+
+
+def snapshot() -> dict:
+    """This process's own token, read (see read)."""
     with own_token() as token:
-        user = SID_AND_ATTRIBUTES.from_buffer(_info(token, TOKEN_USER), 0)
-        label = SID_AND_ATTRIBUTES.from_buffer(_info(token, TOKEN_INTEGRITY_LEVEL), 0)
-        return {
-            "user": {"sid": sid_text(user.Sid), "name": sid_name(user.Sid)},
-            "groups": _groups(_info(token, TOKEN_GROUPS)),
-            "privileges": _privileges(_info(token, TOKEN_PRIVILEGES)),
-            "restricted_sids": _groups(_info(token, TOKEN_RESTRICTED_SIDS)),
-            "restricted": bool(_advapi32.IsTokenRestricted(token)),
-            "session_id": wintypes.DWORD.from_buffer(_info(token, TOKEN_SESSION_ID), 0).value,
-            "integrity": sid_text(label.Sid),
-        }
+        return read(token)
+
+
+def thread_token_error() -> int | None:
+    """None when this thread holds an impersonation token, else OpenThreadToken's error (ERROR_NO_TOKEN when it acts as
+    the process): the check that client_token left the thread as it found it."""
+    token = wintypes.HANDLE()
+    if _advapi32.OpenThreadToken(_kernel32.GetCurrentThread(), TOKEN_QUERY, True, ctypes.byref(token)):
+        _kernel32.CloseHandle(token)
+        return None
+    return ctypes.get_last_error()
+
+
+def client_token(pipe_handle: int) -> dict:
+    """The connected client's token as a pipe server sees it: ImpersonateNamedPipeClient, OpenThreadToken with
+    OpenAsSelf (the check runs against this process, so an identification-level token opens), RevertToSelf at once,
+    then read. Windows impersonates the sender of the last message read; on build 26200 it also impersonated a client
+    that had sent nothing yet (measured 2026-11-25). {"step": ..., "winerror": ...} when a step failed; RuntimeError
+    when the thread could not stop impersonating, since everything it did after that would run as the client."""
+    if not _advapi32.ImpersonateNamedPipeClient(pipe_handle):
+        return {"step": "ImpersonateNamedPipeClient", "winerror": ctypes.get_last_error()}
+    token, err = wintypes.HANDLE(), None
+    try:
+        if not _advapi32.OpenThreadToken(_kernel32.GetCurrentThread(), TOKEN_QUERY, True, ctypes.byref(token)):
+            err = ctypes.get_last_error()
+    finally:
+        if not _advapi32.RevertToSelf():
+            if token:
+                _kernel32.CloseHandle(token)
+            raise RuntimeError(f"RevertToSelf failed (error {ctypes.get_last_error()}): the thread still acts as the "
+                               "pipe's client")
+    if err is not None:
+        return {"step": "OpenThreadToken", "winerror": err}
+    try:
+        return read(token)
+    finally:
+        _kernel32.CloseHandle(token)
 
 
 def service_sids(entries: list[dict]) -> list[str]:

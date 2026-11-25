@@ -1,10 +1,11 @@
-"""Stage 2's driver: builds the service layout and runs E1, E3c, E3 and E3b on a GitHub-hosted runner.
+"""Stage 2's driver: builds the service layout and runs E1, E3c, E3, E3b and E9 on a GitHub-hosted runner.
 
-    uv run python scripts/stage2/drive.py facts|layout|e1|e3c|e3|e3b|summary
+    uv run python scripts/stage2/drive.py facts|layout|e1|e3c|e3|e3b|e9|summary
 
 .github/workflows/experiments.yml runs them in that order; each reads what the ones before it wrote. Every command
 but `summary` creates or changes something (a folder under Program Files, a results folder, services), so it
-refuses to run anywhere but a GitHub-hosted runner (guard.py) before its first change. Results land in RESULTS as
+refuses to run anywhere but a GitHub-hosted runner (guard.py) before its first change; e9 also makes and deletes a
+throwaway local account. Results land in RESULTS as
 JSON: one file per command, plus what the services and the stand-in wrote; `summary` turns them into the job
 summary. The experiments are defined in docs/research/install-and-rights.md (section 6).
 
@@ -34,7 +35,7 @@ for _p in (str(SCRIPTS), str(ROOT)):
         sys.path.insert(0, _p)
 
 from runtime_pin import EMBED_PTH, EMBED_SHA256, EMBED_SIZE, EMBED_URL, EMBED_VERSION  # noqa: E402
-from stage2 import guard, pipes, scm, tokeninfo  # noqa: E402
+from stage2 import guard, logon, pipes, scm, tokeninfo  # noqa: E402
 
 INSTALL = Path(r"C:\Program Files\lagdoctor-stage2")      # where the MSI would put lag-doctor (Stage 3)
 RESULTS = Path(r"C:\lagdoctor-stage2-results")             # uploaded by the workflow
@@ -45,6 +46,12 @@ CAPTURE_SECONDS = 120        # the service's own deadline; the capture should en
 IDLE_SECONDS = 10            # E3b: the service stops itself after this long without a client
 E3B_CYCLES = 3               # start, idle stop, start, idle stop, start, idle stop
 ERROR_WMI_INSTANCE_NOT_FOUND = 4201
+E9_IDLE_SECONDS = 30         # E9: the service stops itself after this long without a client
+E9_CLIENT_SECONDS = 120      # E9: how long one run of its client may take
+E9_USER = "lagdoctor-e9u"    # E9: the throwaway standard account (deleted at the end)
+ERROR_ACCESS_DENIED = 5
+INTERACTIVE = "S-1-5-4"
+ERROR_NO_TOKEN = 1008
 # E1 on the owner's laptop (build 26200, docs/research/install-and-rights.md section 1). The default descriptor's
 # last entry names a capability SID, compared here by its shape only.
 LAPTOP_OWN = "O:BAG:BAD:(A;;0x120fff;;;SY)(A;;LO;;;LS)(A;;0x1207ff;;;BA)"
@@ -551,6 +558,131 @@ def cmd_e3b() -> int:
     return MEASURED if ok or rec.get("manual_start", {}).get("connected") else INSTRUMENT_FAILED
 
 
+def with_interactive_start(sddl: str) -> str:
+    """The service's descriptor with SERVICE_START ("RP") added for interactive users and nothing else changed: into
+    the rights of its allow entry for IU when it has one, else as an entry of its own after the DACL's last one.
+    ValueError for a descriptor without a DACL."""
+    m = re.search(r"D:([A-Z]*)((?:\([^()]*\))*)", sddl)
+    if not m:
+        raise ValueError(f"no DACL in {sddl!r}")
+    aces = re.findall(r"\([^()]*\)", m.group(2))
+    out, done = [], False
+    for ace in aces:
+        parts = ace[1:-1].split(";")
+        if not done and len(parts) == 6 and parts[0] == "A" and parts[5] == "IU" and not parts[4]:
+            if "RP" not in re.findall(r"..", parts[2]):
+                parts[2] += "RP"
+            ace, done = "(" + ";".join(parts) + ")", True
+        out.append(ace)
+    if not done:
+        out.append("(A;;LCRP;;;IU)")
+    return sddl[:m.start(2)] + "".join(out) + sddl[m.end(2):]
+
+
+def _client_argv(target: Path, phase: str) -> list[str]:
+    return [str(INSTALL / "python.exe"), str(INSTALL / "stage2" / "e9_client.py"), str(target), "lagdoctor-e9",
+            "lagdoctor-e9", phase]
+
+
+def _run_client_as_user(password: str, folder: Path, phase: str) -> dict:
+    target = folder / f"client-{phase}.json"
+    ran = logon.run_as(E9_USER, password, _client_argv(target, phase), str(INSTALL), E9_CLIENT_SECONDS)
+    return {"ran": ran, "result": _read_json(target)}
+
+
+def _run_client_as_job(folder: Path) -> dict:
+    target = folder / "client-admin.json"
+    proc = subprocess.run(_client_argv(target, "admin"), capture_output=True, text=True, timeout=E9_CLIENT_SECONDS,
+                          cwd=str(INSTALL))
+    return {"ran": {"exit_code": proc.returncode, "stderr": proc.stderr[-2000:]}, "result": _read_json(target)}
+
+
+def _seen(client: dict | None, served: list[dict]) -> dict:
+    """What the service read of one client, against what the client says of itself."""
+    if not client or "own" not in client:
+        return {"ran": False, "why": (client or {}).get("crashed", "no result")[-500:]}
+    own, reply = client["own"], client.get("reply") or {}
+    row = next((r for r in served if r.get("pid") == client["pid"]), reply)
+    token = row.get("token") or {}
+    wts_row = ((row.get("wts") or {}).get("by_pid") or {}).get(str(client["pid"])) or \
+        ((row.get("wts") or {}).get("by_pid") or {}).get(client["pid"])
+    groups = {g["sid"] for g in own.get("groups", []) if g.get("enabled")}
+    return {
+        "ran": True,
+        "account": own["user"]["name"], "elevated": own.get("elevated"),
+        "interactive_group": INTERACTIVE in groups,
+        "server_pid_is_the_service": client.get("server_pid") == client.get("scm_pid") != 0,
+        "pipe_owner_seen": client.get("owner_sid"),
+        "token_read": "user" in token, "token_step_failed": None if "user" in token else token,
+        "same_user": token.get("user", {}).get("sid") == own["user"]["sid"],
+        "same_session": token.get("session_id") == row.get("session") == own.get("session_id"),
+        "level": token.get("level"), "same_elevation": token.get("elevated") == own.get("elevated"),
+        "service_back_to_itself": row.get("thread_token_error_after") == ERROR_NO_TOKEN,
+        "wts": wts_row if wts_row is None or "sid" not in wts_row else
+        {"listed": True, "same_user": wts_row["sid"] == own["user"]["sid"], "sid_null": wts_row["sid"] is None},
+        "wts_error": (row.get("wts") or {}).get("winerror"),
+    }
+
+
+def judge_e9(rec: dict, starts: list[dict]) -> dict:
+    """E9's verdict from the record: what a standard account may do to the service, who owns the pipe, and whether the
+    service read each caller's account and session through the pipe."""
+    before = (rec.get("before") or {}).get("result") or {}
+    after = (rec.get("after") or {}).get("result") or {}
+    served = [c for s in starts for c in s.get("clients", [])]
+    service = starts[0] if starts else {}
+    return {
+        "user_rights_by_default": before.get("rights"),
+        "user_rights_after_grant": after.get("rights"),
+        "user_start_refused_by_default": (before.get("rights") or {}).get("start") == ERROR_ACCESS_DENIED,
+        "user_started_it_after_grant": "start_error" in after and after["start_error"] in (
+            None, scm.ERROR_SERVICE_ALREADY_RUNNING),
+        "user_stop_and_reconfigure_refused": all((after.get("rights") or {}).get(k) == ERROR_ACCESS_DENIED
+                                                 for k in ("stop", "change_config")),
+        "service_starts": len(starts),
+        "owner_probes": {k: v.get("created") if v.get("created") else v.get("winerror", v.get("why"))
+                         for k, v in (service.get("owner_probes") or {}).items()},
+        "owner_used": service.get("owner_used"), "pipe_owner": service.get("pipe_owner"),
+        "stopped_by": service.get("stopped_by"),
+        "standard_user": _seen(after, served),
+        "administrator": _seen((rec.get("admin") or {}).get("result"), served),
+    }
+
+
+def cmd_e9() -> int:
+    """E9: who the service's caller is, read through the pipe; what a standard account may do to the service; which
+    owner the service may give its pipe; and what WTSEnumerateProcessesExW tells a LocalService service."""
+    name = pipe = "lagdoctor-e9"
+    folder = RESULTS / "e9"
+    rec: dict = {"service": create_service(name, "e9", "unrestricted",
+                                           (str(folder), pipe, str(E9_IDLE_SECONDS), "2"))}
+    folder.mkdir()                                             # after the grant on RESULTS, so it inherits it
+    password = logon.new_password()
+    try:
+        rec["user_add"] = logon.add_user(E9_USER, password)
+        grant = subprocess.run(["icacls", str(folder), "/grant", f"{E9_USER}:(OI)(CI)M"], capture_output=True,
+                               text=True)
+        rec["user_grant"] = grant.returncode
+        rec["sddl_default"] = scm.sc("sdshow", name)
+        rec["before"] = _run_client_as_user(password, folder, "before")
+        rec["sddl_asked"] = with_interactive_start(rec["sddl_default"])
+        rec["sdset"] = scm.sc("sdset", name, rec["sddl_asked"], check=False)
+        rec["sddl_after"] = scm.sc("sdshow", name)
+        rec["after"] = _run_client_as_user(password, folder, "after")      # starts the service, its first client
+        rec["admin"] = _run_client_as_job(folder)                         # its second client
+        rec["stop"] = scm.wait_for(name, {"stopped"}, E9_IDLE_SECONDS + 60)
+    finally:
+        rec["delete"] = delete_service(name)
+        rec["user_delete"] = logon.delete_user(E9_USER)
+    starts = [s for s in (_read_json(f) for f in sorted(folder.glob("e9-*.json"))) if s]
+    rec["starts"] = starts
+    rec["verdict"] = judge_e9(rec, starts)
+    _write_json(RESULTS / "e9.json", rec)
+    print(json.dumps(rec["verdict"], indent=1, default=str))
+    return MEASURED if starts and (rec["verdict"]["standard_user"]["ran"] or rec["verdict"]["administrator"]["ran"]) \
+        else INSTRUMENT_FAILED
+
+
 def cmd_summary() -> int:
     """A readable digest of every result file, for the job summary (and the log)."""
     lines = ["# Stage 2 service experiments", ""]
@@ -562,7 +694,7 @@ def cmd_summary() -> int:
                   f"elevated={facts.get('elevated')}; session {facts.get('session_id')}; dwm.exe in sessions "
                   f"{facts.get('dwm_sessions')}.", ""]
     for title, file, key in (("E1 on the runner", "e1.json", None), ("E3c", "e3c.json", "verdict"),
-                             ("E3b", "e3b.json", "verdict")):
+                             ("E3b", "e3b.json", "verdict"), ("E9", "e9.json", "verdict")):
         data = _read_json(RESULTS / file)
         lines += [f"## {title}", "", "```"]
         if data is None:
@@ -589,6 +721,7 @@ def cmd_summary() -> int:
 
 
 COMMANDS = {"facts": cmd_facts, "layout": cmd_layout, "e1": cmd_e1, "e3c": cmd_e3c, "e3": cmd_e3, "e3b": cmd_e3b,
+            "e9": cmd_e9,
             "summary": cmd_summary}
 
 

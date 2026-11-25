@@ -27,7 +27,12 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   from a fresh shell and uninstalled on a throwaway runner with nothing left; nothing published or signed yet.
 - [ ] Stage 4: the capture service. Begun 2026-11-08 with its channel, the locked pipe (`lagdoctor/winapi/pipe.py`, PR
   #19; research note section 11), and the relay core it will host (`lagdoctor/relay/`, `docs/LAUNCHER-PLAN.md` M3,
-  PR #23, merged 2026-11-08): its protocol, its checks and its client.
+  PR #23, merged 2026-11-08): its protocol, its checks and its client. Resumed 2026-11-25 with E9 (research note,
+  section 6), the questions only a runner can answer before the service is built: how it reads who its caller is,
+  whether a standard account may start it, which owner its pipe may have, and how it can judge the accounts in the
+  game's tree. Then, each its own pull request: the service host and its caller policy over the relay core; the
+  MSI's ServiceInstall with its check on the runner; the recorder and the app trying the service first; and the
+  owner's own install and recording, frame timing's first check under the service.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.
 
 ## E2: the group fallback

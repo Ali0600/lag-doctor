@@ -13,6 +13,11 @@ and SetServiceStatus (E3c's question). The arguments StartServiceW passes follow
   the game exits or SECONDS pass.
 - e3b FOLDER PIPE IDLE (on the command line, after the mode): serves \\\\.\\pipe\\PIPE and stops itself after IDLE
   seconds without a client; each start writes FOLDER\\e3b-<pid>.json.
+- e9 FOLDER PIPE IDLE CLIENTS (on the command line): Stage 4's caller checks. Which owners Windows lets this token give
+  a pipe (its service SID, LocalService, none named); then lag-doctor's own pipe (lagdoctor/winapi/pipe.py) for
+  interactive users and administrators, serving CLIENTS clients or stopping after IDLE seconds without one. Each
+  client's pid and session from the pipe, its token through ImpersonateNamedPipeClient, and what
+  WTSEnumerateProcessesExW says of it go back to it and into FOLDER\\e9-<pid>.json.
 Each mode writes its result as JSON into a new file (a crash writes the traceback instead) and then reports
 SERVICE_STOPPED with a service-specific exit code: 0 the mode finished, 1 it crashed, 2 bad arguments, 3 the
 result could not be written.
@@ -274,14 +279,90 @@ def mode_e3b(name: str, args: list[str], stop: threading.Event) -> dict:
     return out
 
 
+INTERACTIVE, ADMINISTRATORS = "S-1-5-4", "S-1-5-32-544"
+E9_MAX_MESSAGE = 1 << 20
+E9_READ_S = 10.0
+
+
+def _owner_probes(pipe_name: str, owners: dict[str, str | None], dacl: str) -> dict:
+    """Each owner tried on a pipe of its own, closed again: created or Windows' error, and the owner read back."""
+    from lagdoctor.winapi import pipe
+    probes = {}
+    for key, owner in owners.items():
+        if owner is None:
+            probes[key] = {"created": False, "why": "no service SID in this token"}
+            continue
+        try:
+            with pipe.PipeServer(f"{pipe_name}-owner-{key}", owner + dacl) as probe:
+                probes[key] = {"created": True, "asked": owner, "owner": probe.owner_sid()}
+        except OSError as exc:
+            probes[key] = {"created": False, "asked": owner, "winerror": exc.winerror, "error": str(exc)}
+    return probes
+
+
+def _serve_e9(server, rec: dict) -> None:
+    """One client: its message first, then who it is, from the pipe and its token; the answer goes back to it."""
+    from stage2 import wts
+    message = server.read(E9_READ_S)
+    rec["message"] = message.decode("ascii", "replace")[:200]
+    with server._using() as handle:            # the pipe's handle, for ImpersonateNamedPipeClient
+        rec["token"] = _part(tokeninfo.client_token, handle)
+    rec["thread_token_error_after"] = tokeninfo.thread_token_error()   # ERROR_NO_TOKEN: back to the service's own
+    rec["wts"] = _part(wts.processes, [rec["pid"], os.getpid()])
+    server.write(json.dumps(rec, default=str).encode(), E9_READ_S)
+
+
+def mode_e9(name: str, args: list[str], stop: threading.Event) -> dict:
+    from lagdoctor import clock
+    from lagdoctor.winapi import pipe
+    _folder, pipe_name, idle, clients = args
+    token = tokeninfo.snapshot()
+    sids = tokeninfo.service_sids(token["groups"])
+    dacl = pipe.client_dacl([INTERACTIVE, ADMINISTRATORS])
+    owners = {"service-sid": f"O:{sids[0]}" if sids else None, "local-service": "O:LS", "default": ""}
+    out: dict = {"started_qpc_s": clock.now(), "runtime": _runtime(), "token": token, "dacl": dacl,
+                 "owner_probes": _owner_probes(pipe_name, owners, dacl), "clients": []}
+    chosen = next((k for k in owners if out["owner_probes"][k].get("created")), None)
+    out["owner_used"] = chosen
+    if chosen is None:
+        out["stopped_by"] = "no owner was accepted"
+        return out
+    want, idle_s = int(clients), float(idle)
+    with pipe.PipeServer(pipe_name, owners[chosen] + dacl, max_message=E9_MAX_MESSAGE) as server:
+        out["pipe_ready_qpc_s"] = last = clock.now()
+        out["pipe_owner"], out["pipe_descriptor"] = server.owner_sid(), server.descriptor()
+        while len(out["clients"]) < want:
+            if stop.is_set():
+                out["stopped_by"] = "stop request"
+                break
+            if not server.wait_client(0.25):
+                if clock.now() - last >= idle_s:
+                    out["stopped_by"] = "idle"
+                    break
+                continue
+            rec = {"pid": server.client_pid(), "session": server.client_session(), "qpc_s": clock.now()}
+            try:
+                _serve_e9(server, rec)
+            except (OSError, TimeoutError, ValueError) as exc:
+                rec["error"] = f"{type(exc).__name__}: {exc}"
+            out["clients"].append(rec)
+            server.disconnect()
+            last = clock.now()
+        else:
+            out["stopped_by"] = "served every client"
+    out["stopped_qpc_s"] = clock.now()
+    return out
+
+
 # mode -> (function, number of arguments, where they come from). A trigger start passes no arguments of ours to
 # ServiceMain, so e3b takes its own from the service's command line (the binPath sc.exe set); e3 and e3c take
 # theirs from StartServiceW, since the game's PID is known only at start.
-MODES = {"e3c": (mode_e3c, 1, "start"), "e3": (mode_e3, 4, "start"), "e3b": (mode_e3b, 3, "command line")}
+MODES = {"e3c": (mode_e3c, 1, "start"), "e3": (mode_e3, 4, "start"), "e3b": (mode_e3b, 3, "command line"),
+         "e9": (mode_e9, 4, "command line")}
 
 
 def _target(mode: str, args: list[str]) -> Path:
-    return Path(args[0]) / f"e3b-{os.getpid()}.json" if mode == "e3b" else Path(args[0])
+    return Path(args[0]) / f"{mode}-{os.getpid()}.json" if mode in ("e3b", "e9") else Path(args[0])
 
 
 def run_mode(mode: str, name: str, start_args: list[str], command_args: list[str], stop: threading.Event) -> int:
