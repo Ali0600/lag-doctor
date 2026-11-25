@@ -365,8 +365,8 @@
  {
   "name": "play: aim asks until past the relay's own deadline",
   "file": "lagdoctor/relay/client.py",
-  "old": "        aim_by = time.monotonic() + wait_s + _game_slack() - AIM_S if folders is not None else None",
-  "new": "        aim_by = time.monotonic() + wait_s + _game_slack() + AIM_S if folders is not None else None",
+  "old": "        aim_by = time.monotonic() + wait_s + _game_slack() - AIM_S if folders is not None else None\n        since, session = _relay_and_session(child.pid, recorder[0])",
+  "new": "        aim_by = time.monotonic() + wait_s + _game_slack() + AIM_S if folders is not None else None\n        since, session = _relay_and_session(child.pid, recorder[0])",
   "tests": [
    "tests/test_relay.py::test_launch_for_a_folder_approves_the_forms_the_relay_will_use_and_knows_when_it_started"
   ]

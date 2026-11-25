@@ -643,8 +643,8 @@
  {
   "name": "the relay's hello may run other sources than asked",
   "file": "lagdoctor/relay/client.py",
-  "old": " or hello[\"frames\"] != frames or hello[\"network\"] != network):",
-  "new": "):",
+  "old": " or hello[\"game\"] != game or hello[\"frames\"] != frames or hello[\"network\"] != network):",
+  "new": " or hello[\"game\"] != game):",
   "tests": [
    "tests/test_relay.py::test_launch_refuses_a_relay_whose_hello_is_not_the_one_it_launched"
   ]
