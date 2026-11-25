@@ -33,12 +33,14 @@ failed, 2 if they could not start (not a runner, an input missing, the product o
   else, and each shipped .pyc was compiled from the .py beside it.
 - service: the capture service is installed as the MSI says, read back with sc.exe: own process, demand start, its
   program the install's quoted python.exe on `-B -m lagdoctor.service`, LocalService, SeChangeNotifyPrivilege alone,
-  an unrestricted service SID, its descriptor protocol.SERVICE_SDDL, and not running.
+  an unrestricted service SID, its descriptor protocol.SERVICE_SDDL (interactive users' own rights judged in it too),
+  and not running; the install folder's DACL protected, and it and python.exe's writable by SYSTEM and Administrators
+  alone.
 - recording: a throwaway standard account (stage2/logon.py, deleted afterwards) runs msi_service_client.py with the
-  installed runtime: it may start the service and query it, not stop or reconfigure it; StartServiceW starts it; the
-  pipe's server is the process the SCM names and its owner the service's own SID; asked for a stand-in game
+  installed runtime: it may start the service and query it, not stop or reconfigure it; its own StartServiceW starts
+  it; the pipe's server is the process the SCM names and its owner the service's own SID; asked for a stand-in game
   (stage2/standin.py, run by this job in the same session) it greets with that game, starts the network trace,
-  passes on that game's events, and ends when told.
+  passes on that game's events, runs PresentMon (which writes no row on a runner with no GPU), and ends when told.
 - token: the running service's own token (read by this job, an administrator): LocalService, SeChangeNotifyPrivilege
   alone, not restricted, its service SID among its groups. Windows Installer's page for MsiServiceConfig says its
   settings take effect "the next time the system is started"; this is what the first start after the install got.
@@ -48,7 +50,8 @@ failed, 2 if they could not start (not a runner, an input missing, the product o
 - gone: every installed file and the folder itself; the system PATH exactly as before; the product, its components
   and its upgrade code unknown to Windows Installer; the registry keys the install added gone, and its registry values
   and their keys as before the install; the Start-menu shortcut and the icon file it showed gone; the capture service
-  unknown to the SCM, and the throwaway account gone.
+  unknown to the SCM.
+- cleanup: the stand-in ended, the throwaway account deleted (and no longer found), the client's folder gone.
 """
 from __future__ import annotations
 
@@ -111,6 +114,12 @@ ACCOUNT_CLEANUP_S = 60         # the account's deletion, after the uninstall and
 ERROR_ACCESS_DENIED = 5
 ERROR_SERVICE_DOES_NOT_EXIST = 1060
 LOCAL_SERVICE_SID = "S-1-5-19"
+SYSTEM_SID, ADMINISTRATORS_SID, USERS_SID = "S-1-5-18", "S-1-5-32-544", "S-1-5-32-545"
+FILE_ALL = 0x1F01FF
+# What a file or folder access mask may never grant anyone but SYSTEM and Administrators here: write data, append,
+# write extended attributes, delete a child, write attributes, delete, write the DACL, take ownership, generic all
+# and generic write (winnt.h).
+WRITE_BITS = 0x2 | 0x4 | 0x10 | 0x40 | 0x100 | 0x10000 | 0x40000 | 0x80000 | 0x10000000 | 0x40000000
 PRIVILEGE = "SeChangeNotifyPrivilege"
 
 # The app's Start-menu shortcut (installer/lag-doctor.wxs): the Shortcut's Name, to which Windows Installer adds .lnk,
@@ -786,6 +795,62 @@ def judge_service(qc: str, qprivs: str, qsidtype: str, sdshow: str, state: str |
                                   f"{PRIVILEGE} alone and an unrestricted service SID, interactive users let start it")
 
 
+def read_dacl(path: Path) -> tuple[bool, list[tuple[int, int, int, str]]]:
+    """A file's or folder's DACL as Windows holds it: (protected, [(ACE type, ACE flags, access mask, SID)])."""
+    adv = ctypes.WinDLL("advapi32", use_last_error=True)
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    adv.GetNamedSecurityInfoW.argtypes = [wintypes.LPCWSTR, ctypes.c_int, wintypes.DWORD, ctypes.c_void_p,
+                                          ctypes.c_void_p, ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p,
+                                          ctypes.POINTER(ctypes.c_void_p)]
+    adv.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    adv.GetSecurityDescriptorControl.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.WORD),
+                                                 ctypes.POINTER(wintypes.DWORD)]
+    adv.GetAce.argtypes = [ctypes.c_void_p, wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p)]
+    adv.ConvertSidToStringSidW.argtypes = [ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR)]
+    k32.LocalFree.argtypes = [ctypes.c_void_p]
+    dacl, sd = ctypes.c_void_p(), ctypes.c_void_p()
+    rc = adv.GetNamedSecurityInfoW(str(path), 1, 0x4, None, None, ctypes.byref(dacl), None, ctypes.byref(sd))
+    if rc:
+        raise ctypes.WinError(rc)
+    try:
+        control, revision = wintypes.WORD(), wintypes.DWORD()
+        if not adv.GetSecurityDescriptorControl(sd, ctypes.byref(control), ctypes.byref(revision)):
+            raise ctypes.WinError(ctypes.get_last_error())
+        count = int.from_bytes(ctypes.string_at(dacl.value + 4, 2), "little") if dacl.value else 0   # ACL.AceCount
+        aces = []
+        for i in range(count):
+            ace = ctypes.c_void_p()
+            if not adv.GetAce(dacl, i, ctypes.byref(ace)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            head = ctypes.string_at(ace.value, 8)             # ACE_HEADER (type, flags, size) and the mask
+            text = wintypes.LPWSTR()
+            if not adv.ConvertSidToStringSidW(ace.value + 8, ctypes.byref(text)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            try:
+                aces.append((head[0], head[1], int.from_bytes(head[4:8], "little"), text.value))
+            finally:
+                k32.LocalFree(ctypes.cast(text, ctypes.c_void_p))
+        return bool(control.value & 0x1000), aces            # SE_DACL_PROTECTED
+    finally:
+        k32.LocalFree(sd)
+
+
+def judge_dacl(what: str, protected: bool, aces: list[tuple[int, int, int, str]], need_protected: bool) -> list[str]:
+    """Why a file or folder of the install is open to more than SYSTEM and Administrators writing it; [] when not."""
+    problems = []
+    if need_protected and not protected:
+        problems.append(f"{what}'s DACL is not protected, so it takes its parent's")
+    for kind, _flags, mask, sid in aces:
+        if kind == 0 and sid not in (SYSTEM_SID, ADMINISTRATORS_SID) and mask & WRITE_BITS:
+            problems.append(f"{what} lets {sid} write it (mask {mask:#x})")
+        elif kind == 0 and sid not in (SYSTEM_SID, ADMINISTRATORS_SID, USERS_SID):
+            problems.append(f"{what} grants {sid} access (mask {mask:#x})")
+    for sid in (SYSTEM_SID, ADMINISTRATORS_SID):
+        if not any(kind == 0 and s == sid and mask & FILE_ALL == FILE_ALL for kind, _f, mask, s in aces):
+            problems.append(f"{what} does not give {sid} full control")
+    return problems
+
+
 def check_service(install: Path) -> Check:
     from lagdoctor.relay import protocol
     from lagdoctor.winapi import service as svc
@@ -795,7 +860,13 @@ def check_service(install: Path) -> Check:
         state = svc.query(protocol.SERVICE_NAME)[0]
     except OSError as exc:
         state = f"not queried ({exc})"
-    return judge_service(*outs, state, install)
+    verdict = judge_service(*outs, state, install)
+    folder = judge_dacl(str(install), *read_dacl(install), need_protected=True)
+    folder += judge_dacl(str(install / mb.SERVICE_PROGRAM), *read_dacl(install / mb.SERVICE_PROGRAM),
+                         need_protected=False)
+    if folder:
+        return Check("service", False, "; ".join(([] if verdict.ok else [verdict.detail]) + folder))
+    return verdict
 
 
 def judge_recording(client: dict | None, game_pid: int | None, install: Path) -> Check:
@@ -814,6 +885,8 @@ def judge_recording(client: dict | None, game_pid: int | None, install: Path) ->
         problems.append(f"the account may stop or reconfigure the service ({rights})")
     if client.get("start_error") is not None:
         problems.append(f"StartServiceW failed with error {client['start_error']}")
+    elif client.get("started_by_this") is not True:
+        problems.append("the service was running before the account's StartServiceW, so the account did not start it")
     lib = str(client.get("lagdoctor") or "")
     if not lib.lower().startswith(str(install).lower() + "\\"):
         problems.append(f"the client ran lag-doctor from {lib!r}, not the install")
@@ -833,8 +906,10 @@ def judge_recording(client: dict | None, game_pid: int | None, install: Path) ->
     pids = client.get("event_pids") or {}
     if not pids.get(str(game_pid)) or set(pids) - {str(game_pid), str(client.get("pid"))}:
         problems.append(f"whole events came for {pids}, not the stand-in {game_pid} alone")
-    if client.get("frames_last") is None:
-        problems.append("no frame-timing status came")
+    frames = client.get("frames_last") or {}
+    if not frames.get("final") or not (frames.get("state") in ("ok", "partial")
+                                       or str(frames.get("detail", "")).startswith("PresentMon ran")):
+        problems.append(f"PresentMon did not run under the service ({frames or 'no frame-timing status came'})")
     if not client.get("ended"):
         problems.append(f"the recording did not end with `end` (last {client.get('types', [])[-3:]})")
     if problems:
@@ -943,21 +1018,35 @@ def check_recording(install: Path, work: Path, seen: dict) -> Check:
     return verdict
 
 
-def clean_recording(seen: dict) -> None:
-    """After the uninstall, outside the budget: the stand-in ended, the account deleted, the client's folder gone."""
+def clean_recording(seen: dict) -> Check:
+    """After the uninstall, outside the budget: the stand-in ended, the account deleted and no longer found, the
+    client's folder gone; each one tried whatever became of the one before."""
     from stage2 import logon
+    problems = []
     proc = seen.get("standin")
-    if proc is not None and proc.poll() is None:
-        proc.kill()
-        proc.wait(10)
+    if proc is not None:
+        if proc.poll() is None:
+            proc.kill()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            problems.append(f"the stand-in (process {proc.pid}) did not end")
     if "account" in seen:
-        seen["account_deleted"] = logon.delete_user(ACCOUNT)
+        deleted = logon.delete_user(ACCOUNT)
+        if deleted["exit_code"] != 0 or logon._net("user", ACCOUNT)["exit_code"] == 0:
+            problems.append(f"the throwaway account {ACCOUNT} is still there ({deleted['output'][-200:]})")
     if seen.get("folder"):
         shutil.rmtree(seen["folder"], ignore_errors=True)
+        if Path(seen["folder"]).exists():
+            problems.append(f"{seen['folder']} is still there")
+    if problems:
+        return Check("cleanup", False, "; ".join(problems))
+    return Check("cleanup", True, "the stand-in ended, the throwaway account deleted, its folder gone"
+                 if "account" in seen else "nothing to clean: the recording check made no account")
 
 
 def service_left() -> str | None:
-    """Why the capture service, or the throwaway account, is still there after the uninstall; None when neither is."""
+    """Why the capture service is still there after the uninstall (or could not be looked for); None when it is not."""
     from lagdoctor.relay import protocol
     from lagdoctor.winapi import service as svc
     try:
@@ -1229,7 +1318,7 @@ def run_checks(msi: Path, runtime_zip: Path, presentmon: Path, logs: Path) -> li
         else:
             checks += [Check(n, False, "not run: nothing was installed") for n in ("uninstall", "gone")]
         try:
-            clean_recording(recording_seen)
+            checks.append(clean_recording(recording_seen))
         except Exception as exc:  # noqa: BLE001 - the runner is thrown away; say it, and the verdicts still print
             checks.append(Check("cleanup", False, f"the recording check's leftovers were not all removed: {exc}"))
         z.close()

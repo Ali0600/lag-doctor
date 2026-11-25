@@ -50,9 +50,16 @@
          MsiServiceConfig table, for which WiX always warns WIX1149 (msi_build.py suppresses that one warning); the
          install check reads the service's running token back, not just its configuration. Vital is written out:
          WiX v7.0.1's compiler starts from vital = false. ServiceControl stops it on install and uninstall and
-         deletes it on uninstall, and never starts it. -->
+         deletes it on uninstall, and never starts it. The install folder gets a protected DACL of its own (SYSTEM and
+         Administrators full, Users read and execute), which every file in it inherits: the service runs this
+         folder's code as LocalService, and an administrator who installs it elsewhere than Program Files (a drive's
+         root lets every account write into a new folder) must not leave it writable by the users who may start it
+         (the review of 2026-11-25). -->
     <Component Id="CaptureService" Directory="INSTALLFOLDER">
       <File Id="PythonExe" Source="!(bindpath.payload)\python.exe" KeyPath="yes" />
+      <CreateFolder>
+        <PermissionEx Sddl="D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)" />
+      </CreateFolder>
       <ServiceInstall Name="lagdoctor" DisplayName="lag-doctor capture service"
                       Description="Records a game's frame timing and network traffic for lag-doctor's recording window, with no prompt."
                       Type="ownProcess" Start="demand" ErrorControl="normal" Vital="yes"

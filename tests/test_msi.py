@@ -850,7 +850,9 @@ def _service_tables(**over) -> dict[str, list[dict]]:
               "MsiServiceConfig": [{"Name": "lagdoctor", "Event": e, "ConfigType": t, "Argument": a,
                                     "Component_": "CaptureService"} for e, t, a in mb.SERVICE_CONFIG_ROWS],
               "MsiLockPermissionsEx": [{"LockObject": "lagdoctor", "Table": "ServiceInstall",
-                                        "SDDLText": protocol.SERVICE_SDDL, "Condition": None}],
+                                        "SDDLText": protocol.SERVICE_SDDL, "Condition": None},
+                                       {"LockObject": "INSTALLFOLDER", "Table": "CreateFolder",
+                                        "SDDLText": mb.INSTALL_FOLDER_SDDL, "Condition": None}],
               "Component": [{"Component": "CaptureService", "KeyPath": "f1"}, {"Component": "x", "KeyPath": "f2"}]}
     return {**tables, **over}
 
@@ -912,7 +914,11 @@ def test_the_built_msi_must_read_back_as_lag_doctor_with_its_payload_and_path_ro
                 "Component_": "CaptureService"}]}},
            "users may stop it": {"tables": {"MsiLockPermissionsEx": [
                {"LockObject": "lagdoctor", "Table": "ServiceInstall", "Condition": None,
-                "SDDLText": "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCLCSWRPWPLOCRRC;;;IU)"}]}},
+                "SDDLText": "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCLCSWRPWPLOCRRC;;;IU)"},
+               {"LockObject": "INSTALLFOLDER", "Table": "CreateFolder", "SDDLText": mb.INSTALL_FOLDER_SDDL,
+                "Condition": None}]}},
+           "the install folder left open": {"tables": {"MsiLockPermissionsEx": [
+               {"LockObject": "lagdoctor", "Table": "ServiceInstall", "SDDLText": None, "Condition": None}]}},
            "keyed by another file": {"tables": {"Component": [{"Component": "CaptureService", "KeyPath": "f2"}]}}}
     outcomes = {}
     for name, kw in bad.items():
@@ -945,6 +951,9 @@ def test_the_capture_service_is_declared_as_lag_doctor_runs_it_and_let_start_by_
     assert len(configs) == 1 and configs[0].get("ServiceSid") == "unrestricted"
     assert [r.get("Name") for r in configs[0].findall("w:RequiredPrivilege", WXS_NS)] == ["SeChangeNotifyPrivilege"]
     assert [x.get("Sddl") for x in si.findall("w:PermissionEx", WXS_NS)] == [protocol.SERVICE_SDDL]
+    folders = comp.findall("w:CreateFolder", WXS_NS)                # the install folder's own protected DACL
+    assert [[x.get("Sddl") for x in f.findall("w:PermissionEx", WXS_NS)] for f in folders] == [[mb.INSTALL_FOLDER_SDDL]]
+    assert mb.INSTALL_FOLDER_SDDL.startswith("D:P") and "(A;OICI;0x1200a9;;;BU)" in mb.INSTALL_FOLDER_SDDL
     assert not root.findall(".//w:Permission", WXS_NS)       # MsiLockPermissionsEx and LockPermissions never mix
     controls = root.findall(".//w:ServiceControl", WXS_NS)
     assert len(controls) == 1 and controls[0] in list(comp)
@@ -1006,9 +1015,11 @@ def _client(**over) -> dict:
     from lagdoctor.winapi import service as svc
     base = {"pid": 40, "lagdoctor": str(INSTALL / "lagdoctor" / "__init__.pyc"),
             "rights": {"start": None, "stop": 5, "change_config": 5, "query_status": None}, "start_error": None,
-            "scm_pid": 900, "server_pid": 900, "owner_sid": svc.service_sid(protocol.SERVICE_NAME),
+            "started_by_this": True, "scm_pid": 900, "server_pid": 900,
+            "owner_sid": svc.service_sid(protocol.SERVICE_NAME),
             "hello": {"t": "hello", "pid": 900, "game": [77, 1]}, "errors": [], "net_started": True,
-            "event_pids": {"77": 12}, "frames_last": {"state": "ok", "detail": "no rows"}, "ended": True,
+            "event_pids": {"77": 12}, "ended": True,
+            "frames_last": {"state": "failed", "final": True, "detail": "PresentMon ran but wrote no CSV (no GPU)"},
             "types": ["hello", "end"]}
     return {**base, **over}
 
@@ -1026,7 +1037,14 @@ def test_the_recording_check_needs_the_real_service_to_record_the_stand_in_for_a
            "another program's events": {"event_pids": {"77": 12, "4": 3}},
            "no events": {"event_pids": {}},
            "no end": {"ended": False},
-           "the checkout's code": {"lagdoctor": r"D:\a\lag-doctor\lagdoctor\__init__.py"}}
+           "the checkout's code": {"lagdoctor": r"D:\a\lag-doctor\lagdoctor\__init__.py"},
+           "started by someone else": {"started_by_this": False},
+           "PresentMon refused": {"frames_last": {"state": "unavailable", "final": True,
+                                                  "detail": "PresentMon needs admin rights"}},
+           "PresentMon never started": {"frames_last": {"state": "failed", "final": True,
+                                                        "detail": "PresentMon was not started: it exited"}},
+           "PresentMon still going": {"frames_last": {"state": "ok", "final": False, "detail": "12 frames"}},
+           "no frame status": {"frames_last": None}}
     assert {k: mc.judge_recording(_client(**v), 77, INSTALL).ok for k, v in bad.items()} == dict.fromkeys(bad, False)
     assert not mc.judge_recording(None, 77, INSTALL).ok
     assert not mc.judge_recording({"crashed": "Traceback"}, 77, INSTALL).ok
@@ -1045,3 +1063,43 @@ def test_the_token_check_needs_localservice_with_one_privilege_and_its_own_unres
            "no service SID": {"groups": [{"sid": "S-1-1-0"}]}}
     assert {k: mc.judge_token({**good, **v}).ok for k, v in bad.items()} == dict.fromkeys(bad, False)
     assert not mc.judge_token(None).ok and not mc.judge_token({"error": "access denied"}).ok
+
+
+def test_the_installs_files_may_be_written_by_system_and_administrators_alone():
+    sy, ba, bu, au = "S-1-5-18", "S-1-5-32-544", "S-1-5-32-545", "S-1-5-11"
+    locked = [(0, 3, 0x1F01FF, sy), (0, 3, 0x1F01FF, ba), (0, 3, 0x1200A9, bu)]
+    assert mc.judge_dacl("folder", True, locked, need_protected=True) == []
+    assert mc.judge_dacl("file", False, locked, need_protected=False) == []
+    assert "not protected" in " ".join(mc.judge_dacl("folder", False, locked, need_protected=True))
+    assert "write it" in " ".join(mc.judge_dacl("folder", True, [*locked, (0, 3, 0x1301BF, au)], True))  # C:\'s Modify
+    assert "write it" in " ".join(mc.judge_dacl("folder", True, [(0, 3, 0x1F01FF, sy), (0, 3, 0x1F01FF, ba),
+                                                                 (0, 3, 0x1200A9 | 0x2, bu)], True))
+    assert "grants" in " ".join(mc.judge_dacl("folder", True, [*locked, (0, 3, 0x1200A9, "S-1-1-0")], True))
+    assert "full control" in " ".join(mc.judge_dacl("folder", True, [(0, 3, 0x1F01FF, sy), (0, 3, 0x1200A9, bu)],
+                                                     True))
+    assert mc.judge_dacl("folder", True, [*locked, (1, 3, 0x1F01FF, au)], True) == []   # a deny entry takes away
+
+
+def test_the_cleanup_is_judged_and_a_throwaway_account_left_behind_fails_it(tmp_path, monkeypatch):
+    from stage2 import logon
+    folder = tmp_path / "client"
+    folder.mkdir()
+    calls: list = []
+    state = {"delete": 0, "lookup": 2}
+
+    def delete(name):
+        calls.append(("delete", name))
+        return {"exit_code": state["delete"], "output": "done"}
+
+    monkeypatch.setattr(logon, "delete_user", delete)
+    monkeypatch.setattr(logon, "_net", lambda *args: calls.append(args) or {"exit_code": state["lookup"], "output": ""})
+    proc = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])
+    check = mc.clean_recording({"standin": proc, "account": {"exit_code": 0}, "folder": folder})
+    assert check.ok and proc.poll() is not None and not folder.exists(), check.detail
+    assert ("delete", mc.ACCOUNT) in calls and ("user", mc.ACCOUNT) in calls
+    state["lookup"] = 0                                    # the account is still found after its deletion
+    assert not mc.clean_recording({"account": {"exit_code": 0}}).ok
+    state.update(delete=2, lookup=2)                       # net.exe could not delete it
+    assert not mc.clean_recording({"account": {"exit_code": 0}}).ok
+    nothing = mc.clean_recording({})
+    assert nothing.ok and "made no account" in nothing.detail

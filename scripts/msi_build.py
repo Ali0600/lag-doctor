@@ -166,6 +166,9 @@ SERVICE_INSTALL_ROW = {"Name": "lagdoctor", "ServiceType": "16", "StartType": "3
 SERVICE_CONTROL_ROW = {"Name": "lagdoctor", "Event": "162", "Arguments": None, "Component_": "CaptureService"}
 SERVICE_CONFIG_ROWS = sorted([("5", "5", "1"), ("5", "6", "SeChangeNotifyPrivilege")])
 SERVICE_PROGRAM = "python.exe"
+# The install folder's own descriptor (a CreateFolder's PermissionEx in the service's component): protected, SYSTEM and
+# Administrators full, Users read and execute, inherited by every file and folder in it.
+INSTALL_FOLDER_SDDL = "D:PAI(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)"
 
 # ICE61 warns that a build may replace another of the same version, which the MajorUpgrade allows on purpose: CI
 # makes many builds of one version, and two of them must not install side by side.
@@ -327,8 +330,9 @@ def service_problems(msi: Path, layout: dict[str, str]) -> list[str]:
                         f"{SERVICE_CONFIG_ROWS}")
     locks = msidb.rows(m, "MsiLockPermissionsEx", ("LockObject", "Table", "SDDLText", "Condition"))
     want = [{"LockObject": installs[0]["ServiceInstall"] if installs else None, "Table": "ServiceInstall",
-             "SDDLText": protocol.SERVICE_SDDL, "Condition": None}]
-    if locks != want:
+             "SDDLText": protocol.SERVICE_SDDL, "Condition": None},
+            {"LockObject": "INSTALLFOLDER", "Table": "CreateFolder", "SDDLText": INSTALL_FOLDER_SDDL, "Condition": None}]
+    if sorted(locks, key=lambda r: r["Table"]) != sorted(want, key=lambda r: r["Table"]):
         problems.append(f"its MsiLockPermissionsEx table is {locks}, not just {want}")
     keyed = [r["KeyPath"] for r in msidb.rows(m, "Component", ("Component", "KeyPath")) if r["Component"] == "CaptureService"]
     if len(keyed) != 1 or layout.get(keyed[0] or "") != SERVICE_PROGRAM:
