@@ -60,7 +60,7 @@
         <ServiceConfig ServiceSid="unrestricted" OnInstall="yes" OnReinstall="yes">
           <RequiredPrivilege Name="SeChangeNotifyPrivilege" />
         </ServiceConfig>
-        <PermissionEx Sddl="D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)" />
+        <PermissionEx Sddl="D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)(A;;CCLCSWLOCRRC;;;SU)" />
       </ServiceInstall>
       <ServiceControl Id="CaptureServiceControl" Name="lagdoctor" Stop="both" Remove="uninstall" Wait="yes" />
     </Component>
