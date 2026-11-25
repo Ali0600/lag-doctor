@@ -56,22 +56,27 @@ _kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 _kernel32.CloseHandle.restype = wintypes.BOOL
 
 
+PASSWORD_LENGTH = 14   # net.exe asks "Do you want to continue" for a longer one, from the console, not stdin, and
+                       # makes no account unanswered (E9's first two runs, 2026-11-25)
+
+
 def new_password() -> str:
-    """A random password that meets Windows' complexity rule (three of: upper, lower, digit, symbol)."""
-    return secrets.token_urlsafe(18) + "Aa1!"
+    """A random password that meets Windows' complexity rule (three of: upper, lower, digit, symbol), 14 characters:
+    about 60 random bits, for an account that lives a minute on a runner thrown away after the job."""
+    return secrets.token_urlsafe(8)[:PASSWORD_LENGTH - 4] + "Aa1!"
 
 
-def _net(*args: str, answer: str | None = None) -> dict:
-    """net.exe with these arguments, and `answer` typed to its question if it asks one."""
-    proc = subprocess.run(["net.exe", *args], capture_output=True, text=True, timeout=60, input=answer)
+def _net(*args: str) -> dict:
+    """net.exe with these arguments; nothing is typed to it (stdin is empty), so a question it asks goes unanswered."""
+    proc = subprocess.run(["net.exe", *args], capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
     return {"exit_code": proc.returncode, "output": (proc.stdout + proc.stderr).strip()[-400:]}
 
 
 def add_user(name: str, password: str) -> dict:
-    """A local account in Users only (net user's default), which an administrator did not make one of its own. For a
-    password over 14 characters net.exe first asks whether to go on (older Windows could not use it), and without an
-    answer it makes no account (E9's first run, 2026-11-25), so it is answered yes."""
-    out = _net("user", name, password, "/add", answer="Y" + chr(10))
+    """A local account in Users only (net user's default), which an administrator did not make one of its own."""
+    if len(password) > PASSWORD_LENGTH:
+        raise ValueError(f"net.exe asks before it takes a password over {PASSWORD_LENGTH} characters")
+    out = _net("user", name, password, "/add")
     if password in out["output"]:
         out["output"] = "(withheld: it named the password)"
     return out
