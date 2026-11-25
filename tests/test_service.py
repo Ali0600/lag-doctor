@@ -479,3 +479,75 @@ def test_a_game_that_exits_while_its_program_is_read_is_refused(game):  # noqa: 
     parts.image = image
     with running_host(parts=parts) as (host, name, _stop, _out):
         assert "exited while the capture service checked it" in refusal(name, ask_bytes(game))
+
+
+# ------------------------------------------------------------------------------------------ the hold ---
+
+def _codes(monkeypatch) -> list[int]:
+    """What each recording's relay core returned, newest last: the host itself keeps no exit code."""
+    codes: list[int] = []
+    real = server.Relay.serve
+
+    def serve(self):
+        codes.append(real(self))
+        return codes[-1]
+    monkeypatch.setattr(server.Relay, "serve", serve)
+    return codes
+
+
+def test_a_recording_held_past_the_services_hold_is_ended_with_its_sources_stopped_and_why_said(game, monkeypatch):  # noqa: F811
+    codes, stops = _codes(monkeypatch), []
+    parts = tr.parts(frames=lambda cfg, forward, alive: tr.FakeFrames(cfg, forward, alive, stops=stops),
+                     etw=lambda on_event: tr.FakeEtw(on_event, [], stops=stops))
+    with running_host(parts=parts, hold_s=3.0) as (host, name, _stop, _out):
+        with pipe.connect(name, 10.0) as c:
+            c.write(ask_bytes(game, frames=True, network=True), 5.0)
+            asked = time.monotonic()
+            messages(c, "hello")
+            c.write(protocol.start(clock.now()), 5.0)
+            assert messages(c, "rows")[-1]["t"] == "rows"           # it records, and this caller never says stop
+            got = messages(c, "end", timeout=20.0)
+            took = time.monotonic() - asked
+    assert [m["t"] for m in got[-2:]] == ["error", "end"], got
+    assert got[-2]["why"] == server.HELD and "at most 2 hours at a time" in server.HELD, got[-2]
+    assert [m["t"] for m in got if m.get("final")] == ["net", "frames"], got     # each source's last word came first
+    assert stops == ["net", "frames"] and codes == [protocol.EXIT_HELD]
+    assert 2.5 < took < 15.0, took
+
+
+def test_a_caller_that_never_starts_or_never_names_a_game_is_let_go_at_the_hold_not_at_its_own_wait(game, monkeypatch):  # noqa: F811
+    codes = _codes(monkeypatch)
+    with running_host(hold_s=1.0) as (host, name, _stop, _out):
+        # Play's wait for a game: 30 s, and the relay's slack past it; the running game's wait for its start: 5 minutes.
+        # The second caller reads only well after the hold: the service waits for it to read why before letting go.
+        for ask, read_after_s in ((ask_bytes(folders=[r"D:\Games\Blue"], wait_s=30.0), 0.0), (ask_bytes(game), 3.0)):
+            with pipe.connect(name, 20.0) as c:
+                c.write(ask, 5.0)
+                asked = time.monotonic()
+                assert messages(c, "hello")[-1]["t"] == "hello"
+                time.sleep(read_after_s)
+                got = messages(c, "end", timeout=15.0)
+                took = time.monotonic() - asked
+            assert got == [{"t": "error", "why": server.HELD}, {"t": "end"}], got
+            assert took < 10.0, took
+    assert codes == [protocol.EXIT_HELD, protocol.EXIT_HELD]
+
+
+def test_a_hold_that_ends_after_the_recording_changes_nothing(game, monkeypatch):  # noqa: F811
+    codes = _codes(monkeypatch)
+    with running_host(hold_s=60.0) as (host, name, _stop, _out):
+        with pipe.connect(name, 10.0) as c:
+            c.write(ask_bytes(game), 5.0)
+            messages(c, "hello")
+            c.write(protocol.start(clock.now()), 5.0)
+            time.sleep(0.3)
+            c.write(protocol.stop(), 5.0)
+            got = messages(c, "end")
+        assert not [m for m in got if m["t"] == "error"], got
+        monkeypatch.setattr(server, "GAME_SLACK_S", 0.3)
+        with pipe.connect(name, 20.0) as c:               # Play's own wait ends first, and says so in its own words
+            c.write(ask_bytes(folders=[r"D:\Games\Blue"], wait_s=0.5), 5.0)
+            messages(c, "hello")
+            got = messages(c, "end", timeout=15.0)
+        assert got == [{"t": "error", "why": "no game the relay could record started in time"}, {"t": "end"}], got
+    assert codes == [protocol.EXIT_OK, protocol.EXIT_NO_CLIENT]

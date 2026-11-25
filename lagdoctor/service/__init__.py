@@ -21,7 +21,11 @@ prompt approved, the service takes it from its caller, and so judges the caller 
    game's (GameFolderTree): nothing tells the service another process's account without opening it (E9), and a
    descendant from elsewhere may be another account's. Every other program's bytes count only in the totals for the
    caller's session, as the relay's do.
-6. When the recording ends the service waits for the next caller, and stops itself after IDLE_S without one; the next
+6. One caller holds the service for at most protocol.SERVICE_HOLD_S, counted from when its ask was read: every wait
+   before the recording starts and the recording itself end by then (server.Relay's `until`), said in words, so a
+   forgotten or hostile hold cannot keep every other window from the service. The recorder stops itself before that
+   (relay/client.HOLD_MARGIN_S), so an honest recording ends cleanly with its frames.
+7. When the recording ends the service waits for the next caller, and stops itself after IDLE_S without one; the next
    recording starts it again.
 
 It writes no file and prints nothing: a service has nowhere to print, and what a caller is refused is said on the
@@ -130,11 +134,12 @@ class Host:
     `parts`: what the relay core runs (server.Parts; the defaults are the real ones). `presentmon_exe`: the installed
     PresentMon (None: frame timing is refused). `owner`: the pipe's owner in SDDL ("O:<SID>"); the default is this
     service's own SID, which only its process holds, and "" leaves Windows' default (tests). `caller`: who the
-    connected client is (default: from its token, pipe.PipeServer.caller)."""
+    connected client is (default: from its token, pipe.PipeServer.caller). `hold_s`: how long one caller may hold the
+    service, from its ask to its recording's end (protocol.SERVICE_HOLD_S)."""
 
     def __init__(self, parts: server.Parts | None = None, *, presentmon_exe=None, pipe_name: str = protocol.SERVICE_PIPE,
                  owner: str | None = None, idle_s: float = IDLE_S, first_ask_s: float = FIRST_ASK_S,
-                 caller: Callable[[Any], Any] | None = None) -> None:
+                 caller: Callable[[Any], Any] | None = None, hold_s: float = protocol.SERVICE_HOLD_S) -> None:
         from lagdoctor.winapi import service
         self.parts = parts or server.Parts()
         if self.parts.snapshot is None:
@@ -142,7 +147,7 @@ class Host:
         self.presentmon_exe = presentmon_exe
         self.pipe_name = pipe_name
         self.owner = f"O:{service.service_sid(protocol.SERVICE_NAME)}" if owner is None else owner
-        self.idle_s, self.first_ask_s = idle_s, first_ask_s
+        self.idle_s, self.first_ask_s, self.hold_s = idle_s, first_ask_s, hold_s
         self.caller = caller or (lambda srv: srv.caller())
         self.served = 0                        # callers recorded for (tests read it)
         self._connected_at = 0                 # when the caller now on the pipe connected (FILETIME)
@@ -208,8 +213,9 @@ class Host:
             data = srv.read(self.first_ask_s)
         except (TimeoutError, OSError):
             return True                                # said nothing in time, or left: let go
+        until = time.monotonic() + self.hold_s         # the hold counts from the ask, its judging included
         try:
-            relay = self._judge(srv, data)
+            relay = self._judge(srv, data, until)
         except Refused as no:
             self._say_no(srv, str(no))
             return True
@@ -227,8 +233,9 @@ class Host:
             left = relay.close(READER_GONE_S)
         return left
 
-    def _judge(self, srv, data: bytes) -> server.Relay:
-        """The caller and what it asks for, judged; the relay that will record it. Refused with why when not."""
+    def _judge(self, srv, data: bytes, until: float) -> server.Relay:
+        """The caller and what it asks for, judged; the relay that will record it, which ends at `until` (its hold's
+        end, time.monotonic) at the latest. Refused with why when not."""
         from lagdoctor.capture import target
         from lagdoctor.winapi import pipe
         try:
@@ -294,4 +301,5 @@ class Host:
         cfg = server.Config(pipe=self.pipe_name, recorder=(pid, rec.create_time), sid=who.sid, game=ask["game"],
                             frames=ask["frames"], network=ask["network"], presentmon_exe=exe,
                             folders=folders, wait_s=ask["wait_s"])
-        return server.Relay(cfg, srv, who.session, self.parts, since=since, me=(me.pid, me.create_time), tree=tree)
+        return server.Relay(cfg, srv, who.session, self.parts, since=since, me=(me.pid, me.create_time), tree=tree,
+                            until=until)

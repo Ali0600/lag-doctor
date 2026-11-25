@@ -574,12 +574,16 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     hotkey = None if (args.hotkey or "").lower() in ("", "none", "off") else args.hotkey
     start_key = getattr(args, "start_key", None)
     start_key = None if (start_key or "none") == "none" else start_key
+    # Through the capture service, a recording whose own longest end comes after the service's hold stops by itself
+    # before it instead (relay/client.hold_left), and says so below: cut off at the hold, it would lose its last frames.
+    held = _held_duration(relay, _longest_end(args, start_key))
+    duration = args.duration if held is None else held
     # A set length of a part or less leaves no room for one after any press (Session.start would refuse them all), so
     # the key is not even registered: the recording is analysed whole, as with --start-key none, and said so once.
-    off_key = start_key if start_key and _too_short_for_a_part(args.duration) else None
+    off_key = start_key if start_key and _too_short_for_a_part(duration) else None
     if off_key:
         start_key = None
-    opts = sess.SessionOptions(duration_s=args.duration, network=not args.no_network, server_ip=args.server,
+    opts = sess.SessionOptions(duration_s=duration, network=not args.no_network, server_ip=args.server,
                                hotkey=hotkey, presentmon_exe=exe, frames=frames, relay=relay,
                                tool_procs=relay.tool_procs() if relay is not None else ())
     opts.tool_alone, opts.tool_roots = tuple(tool_alone), tool_roots
@@ -598,9 +602,13 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     else:
         say("Recording. Play normally" + (f"; press {hotkey.title()} the moment it lags" if hotkey else "")
             + "; Ctrl+C stops." + (f" Stops by itself after {args.duration:.0f} s." if args.duration else ""))
+    if held is not None:
+        from lagdoctor.relay import protocol
+        say(f"The capture service records for at most {protocol.hold_text()} at a time, so this recording stops by "
+            f"itself after {sess.span_words(held)}.")
     if off_key:
         say(f"{off_key.title()} is off for this recording: a part needs at least {WINDOW_MIN_S:.0f} s after the press, "
-            f"and the recording stops after {args.duration:g} s, so all of it is analysed.")
+            f"and the recording stops after {duration:g} s, so all of it is analysed.")
     stop = stop if stop is not None else threading.Event()
     saved = threading.Event()
     printer = None if interactive else _silent        # None: the session draws its status line here
@@ -634,6 +642,32 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
         say("(A chime could not be played during the recording: check the PC's sound, or record with --no-sound and "
             "keep an eye on the clock.)")
     return _analyze_saved(cap, cap_path, out_dir, say=say, remember=remember, show_summary=show_summary)
+
+
+def _longest_end(args: argparse.Namespace, start_key: str | None) -> float | None:
+    """How long a recording may run by its own rules, in seconds from its start: its set length (--duration), else with
+    a start key a press at the last moment (--start-by), its window and the tail after it; None when only a stop, the
+    game's end or a start key Windows would not give ends it."""
+    from lagdoctor.capture import session as sess
+    if args.duration:
+        return args.duration
+    if start_key:
+        return (getattr(args, "start_by", DEFAULT_START_BY_S) + getattr(args, "window", DEFAULT_WINDOW_S)
+                + sess.WINDOW_TAIL_S)
+    return None
+
+
+def _held_duration(relay: Any, longest: float | None) -> float | None:
+    """The set length a recording through the capture service takes so it stops itself before the service's hold
+    ends (relay/client.hold_left), when its own longest end (`longest`, _longest_end; None: none) would come later:
+    whole minutes from a minute up, else whole seconds, never below 1 s, and never longer than its own. None when the
+    hold does not bind it, and for the elevated relay's link or none, which no hold bounds."""
+    from lagdoctor.relay import client
+    left = client.hold_left(relay)
+    if left is None:
+        return None
+    held = max(1.0, (left // 60) * 60 if left >= 60 else left // 1)
+    return held if longest is None or held < longest else None
 
 
 def _too_short_for_a_part(duration: float | None) -> bool:
