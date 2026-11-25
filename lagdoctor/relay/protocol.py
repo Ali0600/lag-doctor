@@ -56,7 +56,7 @@ SERVICE_PIPE = "lagdoctor-capture"      # its pipe: fixed, so the client checks 
 SERVICE_ARGUMENTS = "-B -m lagdoctor.service"   # what the MSI runs the install's python.exe with (lag-doctor.wxs)
 # The service's own descriptor as the MSI sets it (PermissionEx; E9 measured this one): sc.exe's default for a new
 # service, with SERVICE_START (RP) added for interactive users, who may otherwise only query it.
-SERVICE_SDDL = ("D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWLOCRRC;;;IU)"
+SERVICE_SDDL = ("D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPLOCRRC;;;IU)"
                 "(A;;CCLCSWLOCRRC;;;SU)")
 MAX_WAIT_DECIMALS = 3                   # Play's wait_s, as the relay's command line writes it
 _PIPE_NAME = re.compile(re.escape(PIPE_PREFIX) + r"[0-9a-f]{32}")
