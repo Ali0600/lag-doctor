@@ -987,6 +987,9 @@ def test_the_service_check_reads_the_install_back_as_the_msi_declares_it(monkeyp
            "restricted SID": (*good[:2], SC_SIDTYPE.replace("UNRESTRICTED", "RESTRICTED"), *good[3:]),
            "users may stop": (*good[:3], sd.replace("(A;;CCLCSWRPLOCRRC;;;IU)", "(A;;CCLCSWRPWPLOCRRC;;;IU)"), good[4]),
            "running already": (*good[:4], "running"),
+           # interactive users' own entry unchanged: only the comparison with the whole descriptor sees this one
+           "everyone may stop it": (*good[:3], sd.replace("(A;;CCLCSWLOCRRC;;;SU)",
+                                                       "(A;;CCLCSWLOCRRC;;;SU)(A;;CCLCSWRPWPLOCRRC;;;WD)"), good[4]),
            # the descriptor and the constant both without start: the read-back DACL itself is judged too
            "users may not start": (*good[:3], sd.replace("(A;;CCLCSWRPLOCRRC;;;IU)", "(A;;CCLCSWLOCRRC;;;IU)"), good[4])}
     assert {k: mc.judge_service(*v, INSTALL).ok for k, v in bad.items()} == dict.fromkeys(bad, False)
