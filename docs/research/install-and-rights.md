@@ -477,7 +477,23 @@ with WiX v7.0.1: the service in a component of its own keyed by the runtime's `p
   StartServiceW refused with error 5) and `token` failed (no running service). Since then the service verdict also
   judges interactive users' rights in the read-back DACL itself.
 
-What a runner cannot show: frame rows from a GPU, Windows 11 Home, and an upgrade over an installed version.
+What a runner cannot show: frame rows from a GPU, Windows 11 Home, and an upgrade over an installed version. The
+first two were shown by the owner's own install (2026-11-25, Windows 11 Home build 26200, an RTX 3070 Laptop GPU):
+
+- **The install** (main's run 45661607688's MSI, one UAC prompt, MsiInstaller's success event) read back with `sc.exe`
+  as on the runner: the quoted program path, LocalService, demand start, SeChangeNotifyPrivilege alone, an
+  unrestricted service SID, the DACL exactly `protocol.SERVICE_SDDL`, and the install folder's DACL protected
+  [verified: `sc.exe qc`, `qprivs`, `qsidtype`, `sdshow`, Get-Acl].
+- **The first recording through it** was a Play recording of FINAL FANTASY VII REBIRTH from lag-doctor's window, opened
+  from the Start menu. It took 810 s and raised no prompt. PresentMon recorded 47,548 frames from the game's swap chain
+  with display tracking (`frames_source` display). The network trace started, its address layout verified by the
+  self-test. Among lag-doctor's own processes the capture lists PresentMon and its `python.exe` in session 0 (the
+  service's) and the window and its recorder (`pythonw.exe`) in the owner's session. An elevated relay would have run
+  `pythonw.exe` and PresentMon in the owner's session. After it the service had stopped itself, with exit code 0
+  [verified: the recording's capture, read in memory; `sc.exe query`]. Windows 11 logs no service start or stop to the
+  System log here, only its install (event 7045).
+
+So frame timing with display tracking works under the trimmed LocalService token, the one part E3 could not show.
 
 ## Decided (2026-11-06) and still open
 

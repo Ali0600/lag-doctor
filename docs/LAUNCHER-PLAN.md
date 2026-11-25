@@ -44,10 +44,10 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   works", which covered #64's Add a game too).
 - [x] M7: Apply and Undo in the app (PR #70, merged 2026-11-24 after the owner's own try in the app, which applied a fix
   and undid it).
-- [ ] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away. Built
+- [x] Stage 4 (INSTALLER-PLAN): the relay becomes the capture service, and the prompt goes away. Built
   2026-11-25 (PRs #71 to #74): the service, its install by the MSI, checked on GitHub's runner, and `watch` (so
-  the app's recorder too) asking it before the prompt. Left: the owner's own install and recording, frame
-  timing's first check under the service.
+  the app's recorder too) asking it before the prompt. The owner installed the MSI the same day and recorded FINAL
+  FANTASY VII REBIRTH from the app with no prompt, frame timing included (research note, section 13).
 
 ## What it looks like
 

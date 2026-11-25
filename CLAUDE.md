@@ -405,7 +405,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   the service before the UAC prompt (`relay/client.via_service`), so `tests/conftest.py` sets `LAGDOCTOR_NO_SERVICE`
   for the whole run (a `watch` a test starts in a child inherits it) and `_no_real_capture_service` fails a test that
   calls `winapi/service.start` or `query` on `protocol.SERVICE_NAME`; once the MSI is installed here the real service
-  would answer. `tests/test_service_client.py` lifts the variable for itself and talks to an in-process host.
+  would answer. `tests/test_service_client.py` lifts the variable for itself and talks to an in-process host. The owner installed the
+  MSI on this PC on 2026-11-25, so its capture service is real here: an agent may read it (`sc.exe query`, `qc`, `qprivs`,
+  `qsidtype`, `sdshow`) and the recordings it made, and never starts, stops or reconfigures it.
 - **The relay and the capture service talk only through `lagdoctor/winapi/pipe.py`.** Name a pipe through
   `pipe.path` (Windows folds `..` in a `\\.\` path, so a name holding one opened an ordinary file), build its
   descriptor with `pipe.client_dacl` (a SID string can carry entries of its own), and check who answered: a server

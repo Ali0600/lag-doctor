@@ -25,7 +25,8 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   restricted one refuses every ETW session (DECISIONS 2026-11-07).
 - [x] Stage 3: the MSI (2026-11-08, PRs #6, #8, #12 and #13). A WiX v7 per-machine MSI built in CI, installed, run
   from a fresh shell and uninstalled on a throwaway runner with nothing left; nothing published or signed yet.
-- [ ] Stage 4: the capture service. Begun 2026-11-08 with its channel, the locked pipe (`lagdoctor/winapi/pipe.py`, PR
+- [x] Stage 4: the capture service (done 2026-11-25: the owner's first recording through it, from the MSI on their own PC,
+  timed 47,548 frames with no prompt; research note section 13). Begun 2026-11-08 with its channel, the locked pipe (`lagdoctor/winapi/pipe.py`, PR
   #19; research note section 11), and the relay core it will host (`lagdoctor/relay/`, `docs/LAUNCHER-PLAN.md` M3,
   PR #23, merged 2026-11-08): its protocol, its checks and its client. Resumed 2026-11-25 with E9 (research note,
   sections 6 and 12), the questions only a runner can answer before the service is built, answered there: it reads

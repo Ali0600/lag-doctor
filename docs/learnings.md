@@ -1476,3 +1476,18 @@ fix (PR #69) counts time with the game in front before the press, and tells the 
 checks.
 **Takeaway**: judge "warmed up" by time spent under the load, which the thing compared cannot move, and record the
 swinging value instead of gating on it; replay any acceptance rule over real data before a person spends time on it.
+
+### A service's security, declared in the installer, is checked from the running service
+
+An installer can declare how a Windows service runs (its account, its privileges, its service SID, who may start it),
+but what matters is the token and descriptor the service actually gets, and the installer's own documentation may not
+say when its settings take effect. Read them back where they bite: the SCM's configuration, the running service's own
+token, and a real caller with the rights you granted.
+**Why it came up**: Stage 4's MSI declares the capture service's trimmed privileges and unrestricted SID through Windows
+Installer's MsiServiceConfig table, whose page says such a change "takes effect the next time the system is started",
+and WiX warns that the element may "not work as expected". CI's install check read the running service's token right
+after the install: one privilege, its own unrestricted SID, at the first start, with no reboot. A throwaway standard
+account then started the service and recorded through it, and a build with the start right taken out failed exactly
+there (research note, section 13). The same readback on the owner's Windows 11 Home matched.
+**Takeaway**: verify a service's least-privilege setup from the outside it faces (its live token, a standard caller,
+its folder's DACL), and prove the check with one sabotaged build, rather than trusting the installer's tables or docs.
