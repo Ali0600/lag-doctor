@@ -59,8 +59,10 @@ lagdoctor check                              # in a new terminal window: PATH ch
   bundled Python never stands in for your own `python`. `lagdoctor setup` finds that PresentMon: nothing to download.
 - It adds **lag-doctor** to the Start menu: the app's window (`lagdoctor app`, below), with its own icon on the
   taskbar.
-- Each recording still asks for one UAC prompt (`watch --elevate`) until the capture service lands (Stage 4); the
-  part that runs elevated then runs only code from Program Files, which only an administrator can change.
+- It installs lag-doctor's **capture service**, stopped: a recording starts it, so it asks no UAC prompt. The service
+  runs PresentMon and the network trace as LocalService, from Program Files, whose folder only an administrator can
+  change; any account on the PC may start it and nothing more, and it judges each recording's window and game for
+  itself. Without the MSI (a git checkout), each recording asks for one UAC prompt (`watch --elevate`) instead.
 - Uninstall it from Settings > Apps > Installed apps, or with `msiexec /x lag-doctor-0.1.0-x64.msi`; CI checks that
   no file, PATH entry, Start-menu shortcut or Windows Installer key is left. Your recordings and the app's own folders
   stay in `%LOCALAPPDATA%\lag-doctor` (its `webview` folder is the window's browser data); delete that folder to
@@ -131,7 +133,7 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
   what a fix would change, and where, before it changes anything, and a second click makes that change; its **Undo**,
   like Settings' list of the changes lag-doctor made, puts it back. **Record the
   game that's running** records the busiest game with a window instead, a game you started yourself. Each asks one
-  UAC prompt from the window for frame timing, and measures 10 minutes from your press of **Ctrl+Alt+S** once you
+  UAC prompt from the window for frame timing (none where the MSI's capture service is installed), and measures 10 minutes from your press of **Ctrl+Alt+S** once you
   are in the game, so its startup, menus and loading are left out (shaded on Results' charts); with no press within
   20 minutes it stops and all of it is analysed, and Stop or the game's exit ends it sooner. While you play, the
   window keeps still and only sounds: a knock if Windows' prompt waits behind the game, one note when Ctrl+Alt+S is
@@ -166,10 +168,12 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
   recording ends only in the other ways. A press less than 11 s before `--duration`'s end measures nothing, and says
   so; a `--duration` of 11 s or less has no start key. After the first Ctrl+C it says it is stopping and saving,
   and a second press cannot lose the capture. `lagdoctor analyze CAPTURE` analyses the same part again.
-- **Frame timing uses Windows event tracing (ETW), which needs admin rights.** `watch` offers one UAC prompt
-  per recording (`--elevate` skips the question, `--no-elevate` records without frame timing). Only PresentMon and
-  the network trace then run elevated, in lag-doctor's relay: a background process with no window, which passes
-  their data back over a locked pipe. The recording itself stays in your window, where Ctrl+C stops it. `setup`
+- **Frame timing uses Windows event tracing (ETW), which needs admin rights.** Where the MSI is installed, `watch`
+  records through its capture service with no prompt; elsewhere (or when the service cannot record for this window,
+  which it says) it offers one UAC prompt per recording (`--elevate` skips the question, `--no-elevate` records
+  without frame timing and never asks the service). Only PresentMon and the network trace then run with those rights,
+  in the service or in lag-doctor's relay: a background process with no window, which passes their data back over a
+  locked pipe. The recording itself stays in your window, where Ctrl+C stops it. `setup`
   explains the alternative of joining *Performance Log Users* once, which covers frame timing
   but not the game-server tracker (Windows does not let that group start it; `--elevate` still does).
   Without either, everything else is still measured and the report says frame timing was not.

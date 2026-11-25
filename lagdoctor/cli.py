@@ -776,6 +776,12 @@ def _elevation(args: argparse.Namespace, target: dict[str, Any] | None, exe: Pat
     # An explicit --elevate also elevates an account that may trace only through Performance Log
     # Users: Windows lets that group start frame timing but not the game-server tracker (E1, 2026-11-06).
     if not may_trace or (args.elevate and not _elevated()):
+        if not args.no_elevate:               # the capture service, when installed: the same, with no prompt
+            relay, code = _via_service(args, target, say=say, folders=folders, wait_s=wait_s)
+            if code is not None:
+                return None, frames, frames_why, code
+            if relay is not None:
+                return relay, frames, frames_why, None
         choice = elevation_choice(args.elevate, args.no_elevate, _interactive(interactive), _ask, say=say)
         if choice == "elevate":
             relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher, folders=folders,
@@ -1034,6 +1040,34 @@ def _start_relay(args: argparse.Namespace, target: dict[str, Any] | None, exe: P
     except OSError as exc:
         say(f"The UAC prompt could not be shown ({exc}), so {goes_on}.")
         return None, None
+    return link, None
+
+
+def _via_service(args: argparse.Namespace, target: dict[str, Any] | None, *, say: Callable[[str], None],
+                 folders: tuple[str, ...] | None = None, wait_s: float | None = None) -> tuple[Any, int | None]:
+    """Frame timing and the game-server tracker through lag-doctor's capture service (Stage 4), with no prompt:
+    (link, None) when it records; (None, None) when it cannot here, so the UAC prompt comes as before (said, unless it
+    is simply not installed); (None, EXIT_BUSY) when it records for another window, which a relay would stop."""
+    from lagdoctor.capture import session as sess
+    from lagdoctor.relay import client
+    say = _teller(say)
+    try:
+        me = sess._snapshot().get(os.getpid())
+        if me is None:
+            raise OSError("this window's own process is not in Windows' process list")
+        link = client.via_service(target, frames=True, network=not args.no_network, recorder=(me.pid, me.create_time),
+                                  folders=folders, wait_s=wait_s)
+    except client.ServiceBusy as exc:
+        say(f"Not recorded: {exc.why}. Try again once it has ended.")
+        return None, EXIT_BUSY
+    except client.ServiceUnavailable as exc:
+        if exc.installed:
+            say(f"The capture service did not record ({exc.why}), so the UAC prompt comes instead.")
+        return None, None
+    except (OSError, ValueError) as exc:
+        say(f"The capture service was not asked ({exc}), so the UAC prompt comes instead.")
+        return None, None
+    say("Recording through lag-doctor's capture service: no UAC prompt. The recording stays in this window.")
     return link, None
 
 

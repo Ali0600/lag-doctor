@@ -35,8 +35,8 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   own pull request: the service host and its caller policy over the relay core (`lagdoctor/service/`, DESIGN.md "The
   capture service", tested on a thread here, never installed; PR #72); the MSI's ServiceInstall with its check on the
   runner (PR #73: a standard account started it and recorded a stand-in game through it, research note section 13);
-  the recorder and the app trying the service first; and the owner's own install and recording, frame timing's first
-  check under the service.
+  the recorder and the app trying the service first (PR #74: `watch` asks it before the prompt, the app through its
+  recorder); and the owner's own install and recording, frame timing's first check under the service.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.
 
 ## E2: the group fallback

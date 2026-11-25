@@ -263,6 +263,14 @@ starts (anything else starting it runs nothing and exits 1063).
 - **Between callers** the recording's pipe reader is stopped and waited out (`Relay.close`) before the next caller is
   taken, and a refusal waits for the caller to hang up before the pipe is disconnected (a disconnect drops what the
   caller has not read). A stop from the SCM closes the pipe, which ends a recording in progress.
+- **The recorder's side** is `relay/client.via_service`, which `watch` tries before it would offer the UAC prompt
+  (`cli._via_service`; never with `--no-elevate`): StartServiceW, the pipe checked as the relay's is (its server the
+  process the SCM names, its owner the service's SID), the `ask`, and a `RelayLink` like the relay's, with no process
+  of its own (`close()` waits for none) and Play's `since` the ask's time, while `own()` and `tool_procs()` name the
+  service's process. `ServiceUnavailable` sends the recording to the prompt (said, unless the service is not
+  installed); `ServiceBusy`, a service recording for another window, ends it with `EXIT_BUSY`, since a relay would stop
+  that recording (their trace sessions share names). The app needs nothing of its own: its recorder asks the window
+  for the prompt only when it starts the relay. `LAGDOCTOR_NO_SERVICE` turns it off (every test run sets it).
 - **It writes no file and prints nothing.** What a caller is refused is said on the pipe (`error`, then `end`), in
   printable text; another `protocol.VERSION` is told so whatever its ask holds. A recording whose pipe reader would not
   leave ends the service (the SCM's next start gives a fresh one).
