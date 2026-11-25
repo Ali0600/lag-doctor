@@ -417,8 +417,8 @@
  {
   "name": "the refresh waits on the recorder's reading",
   "file": "lagdoctor/relay/server.py",
-  "old": "        while not self._refresh_stop.wait(STATUS_EVERY_S):\n            self._refresh()",
-  "new": "        while False:\n            self._refresh()",
+  "old": "        while not self._refresh_stop.wait(STATUS_EVERY_S):\n            try:\n                self._refresh()",
+  "new": "        while False:\n            try:\n                self._refresh()",
   "tests": [
    "tests/test_relay.py::test_the_once_a_second_refresh_goes_on_while_a_slow_recorder_holds_up_every_write"
   ]

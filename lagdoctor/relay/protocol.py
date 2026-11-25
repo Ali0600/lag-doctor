@@ -22,6 +22,12 @@ From the relay:
   net     {started: bool|null, why: str, health: {...}, totals: [[pid, rx, tx] ...], final: bool}
   end     {}                                                   nothing more will come
   error   {why}                                                the relay stops: why, in plain words
+From the recorder, to the capture service only, first and once (Stage 4: no prompt approved anything, so the
+caller says what it asks for, and the service judges it, the caller and the game on its own snapshots):
+  ask     {v, game: [pid, create_time] | null, folders: [form ...] | null, wait_s: float | null, frames: bool,
+          network: bool}   the running game, or for Play the forms of its install folder with how long the recorder
+                           waits for the store to start it (exactly one of the two); what to run. The service
+                           answers `hello`, or `error` then `end`
 From the recorder:
   game    {game: [pid, create_time]}   Play only, before `start`, at most MAX_GAMES times: the process the folder
                                        wait found; each one answered by `game` or `refused`, and a later one takes
@@ -38,12 +44,16 @@ import re
 import secrets
 from typing import Any, Iterable
 
-VERSION = 2                             # 2: Play's folder mode (hello's folders, the game messages), M6d
+VERSION = 3                             # 2: Play's folder mode (hello's folders, the game messages), M6d;
+                                        # 3: the capture service's `ask` (Stage 4)
 MAX_MESSAGE = 65536                     # bytes per pipe message, both ways (the pipe's own cap)
 MAX_GAMES = 8                           # Play's `game` proposals before `start`: a re-armed wait, or a failed read
 MAX_FORMS = 4                           # forms of the install folder (target.MAX_FORMS, which a test holds equal)
 MAX_FORM_CHARS = 260                    # each form's length (target.MAX_FOLDER_CHARS, which a test holds equal)
 PIPE_PREFIX = "lagdoctor-relay-"
+SERVICE_NAME = "lagdoctor"              # the capture service, as the MSI installs it (Stage 4)
+SERVICE_PIPE = "lagdoctor-capture"      # its pipe: fixed, so the client checks who made it (owner and pid)
+MAX_WAIT_DECIMALS = 3                   # Play's wait_s, as the relay's command line writes it
 _PIPE_NAME = re.compile(re.escape(PIPE_PREFIX) + r"[0-9a-f]{32}")
 MAX_PID = 0xFFFFFFFF
 MAX_QPC = (1 << 63) - 1
@@ -177,6 +187,15 @@ def end() -> bytes:
 
 def error(why: str) -> bytes:
     return encode({"t": "error", "why": _cut(why, MAX_TEXT)})
+
+
+def ask(game: tuple[int, int] | None, folders: tuple[str, ...] | None, wait_s: float | None, frames: bool,
+        network: bool) -> bytes:
+    """The recorder's first message to the capture service: what it asks to record (see from_caller)."""
+    return encode({"t": "ask", "v": VERSION, "game": None if game is None else [int(game[0]), int(game[1])],
+                   "folders": None if folders is None else list(folders),
+                   "wait_s": None if wait_s is None else round(float(wait_s), MAX_WAIT_DECIMALS),
+                   "frames": bool(frames), "network": bool(network)})
 
 
 def start(origin: float) -> bytes:
@@ -398,6 +417,41 @@ def from_relay(data: bytes) -> dict[str, Any]:
         _keys(msg, "why")
         return {"t": t, "why": _text(msg["why"], MAX_TEXT, "the reason")}
     raise ProtocolError(f"a message of a type the recorder does not know ({_cut(t, 40)!r})")
+
+
+@_readable
+def from_caller(data: bytes) -> dict[str, Any]:
+    """The first message a caller sends the capture service, checked: `ask`, naming either the running game or Play's
+    install folder (with how long the recorder waits for it), and at least one of frame timing and the network
+    trace. Its `v` is returned as sent, so the service can say plainly that the two are different versions. What the
+    caller asks for is only asked: the service judges the caller and the game on its own snapshots."""
+    msg = _load(data)
+    if msg["t"] != "ask":
+        raise ProtocolError("a first message that is not an ask")
+    v = msg.get("v")
+    if isinstance(v, int) and not isinstance(v, bool) and v != VERSION:
+        return {"t": "ask", "v": _int(v, 0, 1_000_000, "the version")}   # another version: its fields may differ
+    _keys(msg, "v", "game", "folders", "wait_s", "frames", "network")
+    out = {"t": "ask", "v": _int(msg["v"], 0, 1_000_000, "the version"),
+           "frames": _bool(msg["frames"], "frames"), "network": _bool(msg["network"], "network")}
+    if not out["frames"] and not out["network"]:
+        raise ProtocolError("an ask for nothing: neither frame timing nor the network trace")
+    if (msg["game"] is None) == (msg["folders"] is None):
+        raise ProtocolError("an ask must name the running game or its install folder, one of the two")
+    out["game"] = None if msg["game"] is None else _proposed(msg["game"], "the game asked for")
+    out["folders"] = None if msg["folders"] is None else _forms(msg["folders"])
+    wait = msg["wait_s"]
+    if out["folders"] is None:
+        if wait is not None:
+            raise ProtocolError("a wait for a game that is running already")
+        out["wait_s"] = None
+    else:
+        from lagdoctor.capture.target import MAX_WAIT_S
+        if (isinstance(wait, bool) or not isinstance(wait, (int, float)) or not math.isfinite(wait)
+                or not 0 < wait <= MAX_WAIT_S or round(wait, MAX_WAIT_DECIMALS) != wait):
+            raise ProtocolError(f"a folder's wait that is not more than 0 and at most {MAX_WAIT_S:g} seconds")
+        out["wait_s"] = float(wait)
+    return out
 
 
 @_readable

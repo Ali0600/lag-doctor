@@ -107,7 +107,7 @@ def test_start_and_stop_round_trip():
 def test_the_folders_bounds_are_the_folder_rules_own():
     from lagdoctor.capture import target as tgt
     assert rp.MAX_FORMS == tgt.MAX_FORMS and rp.MAX_FORM_CHARS == tgt.MAX_FOLDER_CHARS
-    assert rp.VERSION == 2 and rp.MAX_GAMES == 8
+    assert rp.VERSION == 3 and rp.MAX_GAMES == 8        # 3: the capture service's ask
 
 
 def _rows(cols, *rows):

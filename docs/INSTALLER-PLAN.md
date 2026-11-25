@@ -31,9 +31,11 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   sections 6 and 12), the questions only a runner can answer before the service is built, answered there: it reads
   its caller's account and session through the pipe, a standard account may start it once its descriptor grants
   interactive users SERVICE_START (and nothing more), it owns its pipe as its service SID, and nothing tells it a
-  game's account without a handle (so the game's tree is judged another way, decided with the service host). Then, each its own pull request: the service host and its caller policy over the relay core; the
-  MSI's ServiceInstall with its check on the runner; the recorder and the app trying the service first; and the
-  owner's own install and recording, frame timing's first check under the service.
+  game's account without a handle (so the game's tree is judged by its folder, DECISIONS 2026-11-25). Then, each its
+  own pull request: the service host and its caller policy over the relay core (`lagdoctor/service/`, DESIGN.md "The
+  capture service", tested on a thread here, never installed); the MSI's ServiceInstall with its check on the runner;
+  the recorder and the app trying the service first; and the owner's own install and recording, frame timing's first
+  check under the service.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.
 
 ## E2: the group fallback
@@ -172,7 +174,12 @@ but a GitHub-hosted runner. Measured (research note section 8):
 - What M3's review (2026-11-08) left for the service, where any local user is a caller:
   - **One recording machine-wide.** The ETW session names (`lagdoctor`, `lag-doctor-net`) are global, and starting
     either stops another Windows session's recording; the capture lock is per session. An elevated relay in another
-    session can already do this; the service must refuse a second caller instead.
+    session can already do this; the service must refuse a second caller instead. The service host (2026-11-25)
+    takes one caller at a time on its one pipe instance; a lock that the service and an elevated `watch` in any
+    session both honour, refusing rather than stopping the other, is the client's pull request's.
+  - **How long one caller may hold it.** Nothing caps a recording through the service yet: a caller that keeps
+    reading holds the one instance (watch's own caps bound an honest recorder). A cap, and the recorder falling back
+    to `--elevate` when the service is busy or its pipe is not the service's, belong with the client.
   - **The caller's session, from the caller.** The relay filters per-program totals by its own session, which equals
     the recorder's only because it checks that at start; the service runs in session 0 and must use the client's.
   - **The caller's account, from its token**, never a command line, for the pipe's DACL and the checks.

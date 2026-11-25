@@ -119,7 +119,7 @@
  {
   "name": "play: lag-doctor's own processes may be the game",
   "file": "lagdoctor/relay/server.py",
-  "old": "since=self.since, own=(self.cfg.recorder, (self.parts.me, self.since)), alive=(self.cfg.recorder,))",
+  "old": "since=self.since, own=(self.cfg.recorder, self.me), alive=(self.cfg.recorder,))",
   "new": "since=self.since, own=(), alive=(self.cfg.recorder,))",
   "tests": [
    "tests/test_relay.py::test_a_play_relay_refuses_each_game_its_folder_rule_does_not_take_and_waits_on"
@@ -128,7 +128,7 @@
  {
   "name": "play: the relay's own processes may be the game",
   "file": "lagdoctor/relay/server.py",
-  "old": "since=self.since, own=(self.cfg.recorder, (self.parts.me, self.since)), alive=(self.cfg.recorder,))",
+  "old": "since=self.since, own=(self.cfg.recorder, self.me), alive=(self.cfg.recorder,))",
   "new": "since=self.since, own=(self.cfg.recorder,), alive=(self.cfg.recorder,))",
   "tests": [
    "tests/test_relay.py::test_a_play_relay_refuses_each_game_its_folder_rule_does_not_take_and_waits_on"
@@ -137,8 +137,8 @@
  {
   "name": "play: a game named once the recording window has gone is taken",
   "file": "lagdoctor/relay/server.py",
-  "old": "since=self.since, own=(self.cfg.recorder, (self.parts.me, self.since)), alive=(self.cfg.recorder,))",
-  "new": "since=self.since, own=(self.cfg.recorder, (self.parts.me, self.since)), alive=())",
+  "old": "since=self.since, own=(self.cfg.recorder, self.me), alive=(self.cfg.recorder,))",
+  "new": "since=self.since, own=(self.cfg.recorder, self.me), alive=())",
   "tests": [
    "tests/test_relay.py::test_a_play_relay_takes_nothing_once_the_recording_window_has_gone_and_ends"
   ]
