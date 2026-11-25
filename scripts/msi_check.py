@@ -749,6 +749,13 @@ def service_command(install: Path) -> str:
     return f'"{install / mb.SERVICE_PROGRAM}" {protocol.SERVICE_ARGUMENTS}'
 
 
+def interactive_rights(dacl: str) -> set[str]:
+    """The rights (sc.exe's two-letter codes) an allow entry grants interactive users (IU) in a service's DACL, read
+    from the descriptor itself rather than compared with the constant the MSI was built from."""
+    return {code for rights, sid in re.findall(r"\(A;;([A-Z]*);;;([A-Z]+|S-[0-9-]+)\)", dacl)
+            if sid in ("IU", "S-1-5-4") for code in re.findall(r"..", rights)}
+
+
 def judge_service(qc: str, qprivs: str, qsidtype: str, sdshow: str, state: str | None, install: Path) -> Check:
     """sc.exe's read-back of the capture service against what the MSI declares (see the module's docstring)."""
     from lagdoctor.relay import protocol
@@ -768,6 +775,9 @@ def judge_service(qc: str, qprivs: str, qsidtype: str, sdshow: str, state: str |
     dacl = re.search(r"D:(?:\([^()]*\))+", sdshow)
     if not dacl or dacl.group(0) != protocol.SERVICE_SDDL:
         problems.append(f"its descriptor's DACL is {dacl.group(0) if dacl else None!r}, not {protocol.SERVICE_SDDL!r}")
+    users = interactive_rights(dacl.group(0) if dacl else "")
+    if "RP" not in users or users & {"WP", "DC", "DT", "SD", "WD", "WO"}:
+        problems.append(f"interactive users hold {sorted(users)} on it: start (RP) and no stop, change or delete")
     if state != "stopped":
         problems.append(f"it is {state!r} right after the install, not stopped (it starts on demand)")
     if problems:

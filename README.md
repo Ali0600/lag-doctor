@@ -376,14 +376,14 @@ connection to Microsoft, as the runtime does on its own.
   says how far off the next limit is (the CPU, the GPU or the screen, and how
   many times faster the limiting part must get), from thread CPU time rather than PresentMon's CPU Busy, which
   read 16.55 ms of a 16.9 ms GPU-bound frame.
-- **Testing that proves itself**: 5,759 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 5,764 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 44 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 4,475 deliberate
-  sabotages in 70 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 4,498 deliberate
+  sabotages in 71 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes, applied from the terminal or the app's window through one
   shared flow (the change shown first, then exactly that change, never while any recording runs), and a settings
   sweep that edits a game's settings file between runs and puts it back byte for byte, all behind a write-ahead
@@ -391,17 +391,19 @@ connection to Microsoft, as the runtime does on its own.
   process; the sweep compares settings by
   Welch's t interval over warmed-up, interleaved runs, and its 38 whole-sweep tests stop, resume and fail it
   on purpose.
-- **Supply chain and least privilege**: a per-machine WiX MSI of 179 files built in CI from pinned inputs (Python
-  runtime and PresentMon by SHA-256, WiX by SHA-512), installed, run from a fresh shell and uninstalled on a
-  throwaway runner with nothing left behind, its Start-menu shortcut and app ID read back from the installed
-  link, its check proven by 3 sabotaged builds; PresentMon checked through a deny-write handle and launched by
-  that handle's resolved path; only PresentMon and the ETW trace run elevated, in a windowless relay behind 1
-  UAC prompt that passes back only the game's data and the player's own programs' byte totals; a capture service to
-  replace that prompt, measured on GitHub's runners before it was built (a 1-privilege LocalService service enabling
-  all 13 ETW providers, which a throwaway standard account could start and could not stop or reconfigure), that
-  reads each caller from its own token through the pipe and judges the game on its own handle-free snapshots, behind
-  32 sabotages; its pipe locked 6 ways (first instance, local clients only, an exact DACL, no access below medium
-  integrity, identification-level clients, checked names), each lock tested against the attack it stops.
+- **Supply chain and least privilege**: a per-machine WiX MSI of 249 files built in CI from pinned inputs (Python
+  runtime and PresentMon by SHA-256, WiX by SHA-512), installed, run from a fresh shell and uninstalled on a throwaway
+  runner with nothing left behind, its Start-menu shortcut and app ID read back from the installed link, its check
+  proven by 4 sabotaged builds; PresentMon checked through a deny-write handle and launched by that handle's resolved
+  path; only PresentMon and the ETW trace run elevated, in a windowless relay behind 1 UAC prompt that passes back
+  only the game's data and the player's own programs' byte totals; a capture service to replace that prompt, measured
+  on GitHub's runners before it was built (a 1-privilege LocalService service enabling all 13 ETW providers), that
+  reads each caller from its own token through the pipe and judges the game on its own handle-free snapshots,
+  installed by the MSI with no custom action and checked on a throwaway runner, where a standard account started it,
+  was refused stop and change-config, and recorded a stand-in game through it, with the service's running token read
+  back (1 privilege, its own unrestricted SID); its pipe locked 6 ways (first instance, local clients only, an exact
+  DACL, no access below medium integrity, identification-level clients, checked names), each lock tested against the
+  attack it stops.
 - **Review to fix**: closed all 49 findings (12 high) of an adversarial code review in 3 verified fix waves,
   cut the capture save from 36 s to 2.6 s to fit the 5 s Windows gives a closing console, and traced a 14-minute
   game recording with no frame timing to Windows keeping a packaged app's AppData files in a private copy.

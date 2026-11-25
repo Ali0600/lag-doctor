@@ -33,7 +33,8 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   interactive users SERVICE_START (and nothing more), it owns its pipe as its service SID, and nothing tells it a
   game's account without a handle (so the game's tree is judged by its folder, DECISIONS 2026-11-25). Then, each its
   own pull request: the service host and its caller policy over the relay core (`lagdoctor/service/`, DESIGN.md "The
-  capture service", tested on a thread here, never installed); the MSI's ServiceInstall with its check on the runner;
+  capture service", tested on a thread here, never installed; PR #72); the MSI's ServiceInstall with its check on the
+  runner (PR #73: a standard account started it and recorded a stand-in game through it, research note section 13);
   the recorder and the app trying the service first; and the owner's own install and recording, frame timing's first
   check under the service.
 - [ ] Stage 5: unsigned preview release, SignPath, winget.

@@ -444,6 +444,36 @@ the layout's runtime.
 
 What a runner cannot show: a client edition (Windows 11 Home), and an account made the way a player's is.
 
+## 13. The capture service from the MSI (2026-11-25)
+
+Run by `ci.yml`'s msi job on `windows-2025` (`scripts/msi_check.py`'s service, recording and token verdicts, about 50 s
+of the check's 137 s; run 45638317436, and the sabotage run 45639097835). The MSI was built from `installer/lag-doctor.wxs`
+with WiX v7.0.1: the service in a component of its own keyed by the runtime's `python.exe` (left out of the harvest),
+`ServiceConfig` over the MsiServiceConfig table and `PermissionEx` over MsiLockPermissionsEx, and no custom action.
+
+- **The configuration**, read back with `sc.exe qc`, `qprivs`, `qsidtype` and `sdshow` right after `msiexec /i`: own
+  process, demand start, normal errors, `SERVICE_START_NAME` NT AUTHORITY\LocalService, `PRIVILEGES`
+  SeChangeNotifyPrivilege alone, `SERVICE_SID_TYPE` UNRESTRICTED, the DACL exactly `protocol.SERVICE_SDDL`, not running.
+  Windows Installer quotes the program's path: `BINARY_PATH_NAME` was `"C:\Program Files\lag-doctor\python.exe" -B -m
+  lagdoctor.service` [verified: the run's verdicts]. No Microsoft page says it does.
+- **The first start after the install.** A throwaway standard account, running a client with the installed runtime
+  (`scripts/msi_service_client.py`, its lag-doctor the install's), was refused stop and change-config and allowed start
+  and query; its StartServiceW started the service; the pipe's server was the process the SCM named and its owner the
+  service's own SID; asked for a stand-in game (`scripts/stage2/standin.py`, run by the job's administrator in the same
+  session), the service greeted with that game, started the network trace, passed on 16 of its events whole and
+  nothing else of anyone's, and ended when told. PresentMon ran and wrote no row, as on every GPU-less runner (E3).
+  The running service's own token, read by the job: LocalService, SeChangeNotifyPrivilege alone, not restricted, its
+  service SID among its groups [verified: the run's verdicts]. So MsiServiceConfig's SID type and privilege trim were
+  in the token at the first start after the install, with no reboot, although its Microsoft page says such a change
+  "takes effect the next time the system is started".
+- **The uninstall** left the service unknown to the SCM [verified: the gone verdict].
+- **The sabotage run** built the MSI with interactive users' start right taken out of both the `.wxs` and the constant
+  the build reads it back against: `service` still passed (it compared the two), `recording` failed (OpenServiceW and
+  StartServiceW refused with error 5) and `token` failed (no running service). Since then the service verdict also
+  judges interactive users' rights in the read-back DACL itself.
+
+What a runner cannot show: frame rows from a GPU, Windows 11 Home, and an upgrade over an installed version.
+
 ## Decided (2026-11-06) and still open
 
 Decided by the owner (DECISIONS 2026-11-06; the work is tracked in `docs/INSTALLER-PLAN.md`):

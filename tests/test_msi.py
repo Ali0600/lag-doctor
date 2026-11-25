@@ -972,7 +972,7 @@ SC_PRIVS = "[SC] QueryServiceConfig2 SUCCESS\n\nSERVICE_NAME: lagdoctor\n       
 SC_SIDTYPE = "[SC] QueryServiceConfig2 SUCCESS\n\nSERVICE_NAME: lagdoctor\nSERVICE_SID_TYPE:  UNRESTRICTED\n"
 
 
-def test_the_service_check_reads_the_install_back_as_the_msi_declares_it():
+def test_the_service_check_reads_the_install_back_as_the_msi_declares_it(monkeypatch):
     from lagdoctor.relay import protocol
     sd = "\n" + protocol.SERVICE_SDDL + "S:(AU;FA;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;WD)\n"
     good = (SC_QC, SC_PRIVS, SC_SIDTYPE, sd, "stopped")
@@ -986,8 +986,16 @@ def test_the_service_check_reads_the_install_back_as_the_msi_declares_it():
                                *good[2:]),
            "restricted SID": (*good[:2], SC_SIDTYPE.replace("UNRESTRICTED", "RESTRICTED"), *good[3:]),
            "users may stop": (*good[:3], sd.replace("(A;;CCLCSWRPLOCRRC;;;IU)", "(A;;CCLCSWRPWPLOCRRC;;;IU)"), good[4]),
-           "running already": (*good[:4], "running")}
+           "running already": (*good[:4], "running"),
+           # the descriptor and the constant both without start: the read-back DACL itself is judged too
+           "users may not start": (*good[:3], sd.replace("(A;;CCLCSWRPLOCRRC;;;IU)", "(A;;CCLCSWLOCRRC;;;IU)"), good[4])}
     assert {k: mc.judge_service(*v, INSTALL).ok for k, v in bad.items()} == dict.fromkeys(bad, False)
+    # The MSI built from a constant without start (PR #73's sabotage run): the read-back DACL equals that constant,
+    # and only the check of interactive users' own rights refuses it.
+    no_start = protocol.SERVICE_SDDL.replace("(A;;CCLCSWRPLOCRRC;;;IU)", "(A;;CCLCSWLOCRRC;;;IU)")
+    monkeypatch.setattr(protocol, "SERVICE_SDDL", no_start)
+    check = mc.judge_service(*good[:3], no_start + "S:(AU;FA;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;WD)", "stopped", INSTALL)
+    assert not check.ok and "interactive users hold" in check.detail and "DACL is" not in check.detail, check.detail
 
 
 def _client(**over) -> dict:
