@@ -382,8 +382,16 @@ def test_the_throwaway_accounts_password_never_reaches_the_record(monkeypatch):
     password = logon.new_password()
     assert len(password) >= 20 and any(c.isupper() for c in password) and any(c.isdigit() for c in password)
     assert logon.new_password() != password
-    monkeypatch.setattr(logon, "_net", lambda *args: {"exit_code": 0, "output": " ".join(args)})
+    answers: list = []
+
+    def fake_net(*args, answer=None) -> dict:
+        answers.append(answer)
+        return {"exit_code": 0, "output": " ".join(args)}
+
+    monkeypatch.setattr(logon, "_net", fake_net)
     assert password not in json.dumps(logon.add_user("someone", password))
+    # net.exe asks whether to go on with a password over 14 characters, and makes no account unanswered.
+    assert answers == ["Y" + chr(10)]
 
 
 def test_e9s_client_refuses_other_arguments_and_records_a_service_it_may_not_open(tmp_path):

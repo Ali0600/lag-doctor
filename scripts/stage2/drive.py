@@ -669,6 +669,8 @@ def cmd_e9() -> int:
         rec["sdset"] = scm.sc("sdset", name, rec["sddl_asked"], check=False)
         rec["sddl_after"] = scm.sc("sdshow", name)
         rec["after"] = _run_client_as_user(password, folder, "after")      # starts the service, its first client
+        if scm.status(name)["state"] not in ("running", "start_pending"):
+            rec["started_by_job"] = start_service(name, [])                 # so the administrator's half still runs
         rec["admin"] = _run_client_as_job(folder)                         # its second client
         rec["stop"] = scm.wait_for(name, {"stopped"}, E9_IDLE_SECONDS + 60)
     finally:

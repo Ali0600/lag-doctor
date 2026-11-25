@@ -61,15 +61,17 @@ def new_password() -> str:
     return secrets.token_urlsafe(18) + "Aa1!"
 
 
-def _net(*args: str) -> dict:
-    """net.exe with these arguments; the password, when one is passed, never appears in what is returned."""
-    proc = subprocess.run(["net.exe", *args], capture_output=True, text=True, timeout=60)
+def _net(*args: str, answer: str | None = None) -> dict:
+    """net.exe with these arguments, and `answer` typed to its question if it asks one."""
+    proc = subprocess.run(["net.exe", *args], capture_output=True, text=True, timeout=60, input=answer)
     return {"exit_code": proc.returncode, "output": (proc.stdout + proc.stderr).strip()[-400:]}
 
 
 def add_user(name: str, password: str) -> dict:
-    """A local account in Users only (net user's default), which an administrator did not make one of its own."""
-    out = _net("user", name, password, "/add")
+    """A local account in Users only (net user's default), which an administrator did not make one of its own. For a
+    password over 14 characters net.exe first asks whether to go on (older Windows could not use it), and without an
+    answer it makes no account (E9's first run, 2026-11-25), so it is answered yes."""
+    out = _net("user", name, password, "/add", answer="Y" + chr(10))
     if password in out["output"]:
         out["output"] = "(withheld: it named the password)"
     return out
