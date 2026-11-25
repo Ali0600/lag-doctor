@@ -628,3 +628,20 @@ def test_the_wait_counts_from_the_links_since_which_for_the_capture_service_is_i
     assert _watch(play, tmp_path, "--elevate") == 0
     (kw,) = play["waits"]
     assert kw["since"] == RELAY_CT + 7 and play["link"].create_time == RELAY_CT
+
+
+def test_through_the_service_a_program_from_the_folder_older_than_the_ask_is_already_running(play, monkeypatch,
+                                                                                             tmp_path):
+    real = PlayLink.__init__
+
+    def service_link(self, *args, **kwargs):             # the capture service ran before this recording asked it
+        real(self, *args, **kwargs)
+        self.since, self.service = RELAY_CT + 10 * SECOND, True
+
+    monkeypatch.setattr(PlayLink, "__init__", service_link)
+    started = {"pid": 4301, "create_time": RELAY_CT + 1, "name": "lantern.exe", "exe": GAME_DIR + "\lantern.exe"}
+    play["running"] = [[], [started]]
+    play["windows"] = [_window_of(4301)]                 # after the service's start, before the ask: never the wait's
+    assert _watch(play, tmp_path, "--elevate") == cli.EXIT_BAD_ARGS and play["waits"] == []
+    assert any("started from the game's folder while lag-doctor's capture service started" in line
+               for line in play["said"]), play["said"]

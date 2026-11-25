@@ -67,6 +67,7 @@ def test_a_recording_through_the_service_needs_no_prompt_and_its_link_names_the_
         try:
             assert link.pid == os.getpid() and link.game == (game["pid"], game["create_time"])
             assert link.frames and link.network and link.folders is None
+            assert link.service is True                  # no prompt was raised for it
             assert link.tool_procs() == ((os.getpid(), tr._me().create_time),)   # the service: lag-doctor's own
             assert before <= link.since <= client._filetime_now()
             link.stop()
@@ -110,6 +111,35 @@ def test_a_pipe_the_service_did_not_make_is_never_used(game, service_on, who):  
             client.via_service(game, frames=True, network=True, recorder=recorder(), scm=scm, connect=to_host(name))
         assert exc.value.installed and host.served == 0
         assert ("another program" if who == "another process" else "not owned by the service") in exc.value.why
+
+
+def test_a_running_service_whose_pipe_never_appears_is_no_busy_one(game, service_on):  # noqa: F811
+    def absent(name, timeout_s, max_message=pipe.MAX_MESSAGE):
+        exc = TimeoutError("no pipe")
+        exc.attempts, exc.errors = 9, {2: 9}                 # ERROR_FILE_NOT_FOUND each time: nobody made it
+        raise exc
+
+    with pytest.raises(client.ServiceUnavailable) as exc:
+        client.via_service(game, frames=True, network=True, recorder=recorder(),
+                           scm=StandInSCM(os.getpid(), "S-1-5-80-1"), connect=absent, start_s=1.0)
+    assert "never appeared" in exc.value.why and exc.value.installed
+
+
+class StoppedOnce(StandInSCM):
+    """A service that stopped itself (its idle end) as the first StartServiceW reached it: running after the second."""
+
+    def query(self, name):
+        self.calls.append(f"query {name}")
+        starts = sum(c.startswith("start") for c in self.calls)
+        return ("stopped", 0) if starts < 2 else ("running", self.pid)
+
+
+def test_a_service_that_stopped_as_it_was_asked_is_started_again(game, service_on):  # noqa: F811
+    with ts.running_host() as (host, name, _stop, _out):
+        scm = StoppedOnce(os.getpid(), tr._default_owner())
+        link = client.via_service(game, frames=True, network=True, recorder=recorder(), scm=scm, connect=to_host(name))
+        link.close()
+    assert sum(c.startswith("start") for c in scm.calls) == 2
 
 
 def test_what_the_service_refuses_is_said_and_the_prompt_comes_instead(game, service_on):  # noqa: F811

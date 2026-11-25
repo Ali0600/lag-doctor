@@ -204,26 +204,34 @@ def via_service(target: dict[str, Any] | None = None, *, frames: bool, network: 
         from lagdoctor.capture.target import check_forms
         folders = check_forms(folders)
     name = protocol.SERVICE_NAME
-    try:
-        scm.start(name)
-    except OSError as exc:
-        if getattr(exc, "winerror", None) == 1060:     # ERROR_SERVICE_DOES_NOT_EXIST: no MSI install here
-            raise ServiceUnavailable("the capture service is not installed", installed=False) from None
-        raise ServiceUnavailable(f"the capture service could not be started ({exc})") from None
     deadline = time.monotonic() + start_s
-    state, pid = scm.query(name)
-    while state != "running" and time.monotonic() < deadline:
-        time.sleep(0.05)
+    pid, client = 0, None
+    for attempt in range(2):          # a service that stopped itself as this one asked (its idle end) is asked again
+        _start_service(scm, name)
         state, pid = scm.query(name)
-    if state != "running" or not pid:
-        raise ServiceUnavailable(f"the capture service did not start (it is {state})")
-    try:
-        client = connect(protocol.SERVICE_PIPE, max(0.5, deadline - time.monotonic()), max_message=protocol.MAX_MESSAGE)
-    except TimeoutError:
-        raise ServiceBusy("lag-doctor's capture service is recording for another window on this PC, and a "
-                          "recording started now would stop that one") from None
-    except OSError as exc:
-        raise ServiceUnavailable(f"the capture service's pipe could not be opened ({exc})") from None
+        while state != "running" and state != "stopped" and time.monotonic() < deadline:
+            time.sleep(0.05)
+            state, pid = scm.query(name)
+        if state != "running" or not pid:
+            if state == "stopped" and attempt == 0:
+                continue
+            raise ServiceUnavailable(f"the capture service did not start (it is {state})")
+        try:
+            client = connect(protocol.SERVICE_PIPE, max(0.5, deadline - time.monotonic()),
+                             max_message=protocol.MAX_MESSAGE)
+            break
+        except TimeoutError as exc:
+            errors = getattr(exc, "errors", {}) or {}
+            if errors.get(pipe.ERROR_PIPE_BUSY):        # its one instance answers another window
+                raise ServiceBusy("lag-doctor's capture service is recording for another window on this PC, and a "
+                                  "recording started now would stop that one") from None
+            if attempt == 0 and scm.query(name)[0] == "stopped":
+                continue
+            raise ServiceUnavailable("the capture service runs, but its pipe never appeared") from None
+        except OSError as exc:
+            raise ServiceUnavailable(f"the capture service's pipe could not be opened ({exc})") from None
+    if client is None:
+        raise ServiceUnavailable("the capture service stopped again as it was started")
     try:
         if client.server_pid() != pid:
             raise ServiceUnavailable(f"another program (process {client.server_pid()}) answered on the capture "
@@ -257,6 +265,16 @@ def via_service(target: dict[str, Any] | None = None, *, frames: bool, network: 
     finally:
         if client is not None:
             client.close()
+
+
+def _start_service(scm, name: str) -> None:
+    """StartServiceW: ServiceUnavailable when it is not installed (installed False) or may not be started here."""
+    try:
+        scm.start(name)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1060:     # ERROR_SERVICE_DOES_NOT_EXIST: no MSI install here
+            raise ServiceUnavailable("the capture service is not installed", installed=False) from None
+        raise ServiceUnavailable(f"the capture service could not be started ({exc})") from None
 
 
 def _filetime_now() -> int:
@@ -346,6 +364,7 @@ class RelayLink:
         # Play: after which its game must have started: the relay's start, or the capture service's ask (the service
         # ran before this recording asked it anything).
         self.since = self.create_time if since is _UNREAD else since
+        self.service = child is None                # the capture service's link: no prompt was raised for it
         self._reader = threading.Thread(target=self._read_loop, name="lagdoctor-relay", daemon=True)
         self._reader.start()
 

@@ -907,7 +907,7 @@ def _play_wait(folder: str, forms: tuple[str, ...], looked: int, wait_s: float, 
         observers.event("already_running", name=named[0]["name"], pid=named[0]["pid"])
         names = ", ".join(sorted({p["name"] or "a program" for p in named}))
         if during:
-            say(f"Not recorded: {names} started from the game's folder while the UAC prompt was up, and a recording "
+            say(f"Not recorded: {names} started from the game's folder {_while_ready(relay)}, and a recording "
                 f"started this way takes only a game that starts after it. Record it as it runs: lagdoctor watch "
                 f"--pid {named[0]['pid']}.")
         else:
@@ -917,7 +917,7 @@ def _play_wait(folder: str, forms: tuple[str, ...], looked: int, wait_s: float, 
     if relay is not None:
         for p in before:        # no window yet: a stub or a launcher, whose game may still start after the relay
             if p["create_time"] > looked:
-                say(f"({p['name']}, pid {p['pid']}, started from the game's folder while the UAC prompt was up, so "
+                say(f"({p['name']}, pid {p['pid']}, started from the game's folder {_while_ready(relay)}, so "
                     "this recording cannot take it. If it is the game itself, record it as it runs once it shows its "
                     f"window: lagdoctor watch --pid {p['pid']}.)")
 
@@ -1043,6 +1043,13 @@ def _start_relay(args: argparse.Namespace, target: dict[str, Any] | None, exe: P
     return link, None
 
 
+def _while_ready(relay: Any) -> str:
+    """When a program that started before the wait looks started: during the prompt, or the capture service's start."""
+    if relay is not None and getattr(relay, "service", False):
+        return "while lag-doctor's capture service started"
+    return "while the UAC prompt was up"
+
+
 def _via_service(args: argparse.Namespace, target: dict[str, Any] | None, *, say: Callable[[str], None],
                  folders: tuple[str, ...] | None = None, wait_s: float | None = None) -> tuple[Any, int | None]:
     """Frame timing and the game-server tracker through lag-doctor's capture service (Stage 4), with no prompt:
@@ -1065,7 +1072,7 @@ def _via_service(args: argparse.Namespace, target: dict[str, Any] | None, *, say
             say(f"The capture service did not record ({exc.why}), so the UAC prompt comes instead.")
         return None, None
     except (OSError, ValueError) as exc:
-        say(f"The capture service was not asked ({exc}), so the UAC prompt comes instead.")
+        say(f"The capture service was not asked ({exc}).")
         return None, None
     say("Recording through lag-doctor's capture service: no UAC prompt. The recording stays in this window.")
     return link, None
