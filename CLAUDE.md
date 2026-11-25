@@ -571,6 +571,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   one_it_took` failed once (PR #65, 2026-11-20, a change to the analysis only) on its check that no process it started
   sits under the recorder or the relay, and passed on the rerun of that job: rerun the failed job before blaming a
   change, and read which process the check found if it repeats.
+  `tests/test_relay_live.py::test_the_real_relay_runs_presentmon_and_the_network_trace_for_this_process` failed once
+  on main's push run (69bd3b7, 2026-11-25: PresentMon's exit code at the stop was 1, not 0) after the same tree had
+  passed it on its pull request, and passed on the rerun of that job: rerun before blaming a change.
   `tests/test_folder_wait.py::test_a_real_laglab_window_is_found_by_its_folder` (needs a GPU, so not on CI) failed on
   2026-11-17 with "a window from the game's folder (python.exe) never drew within 20 seconds", alone and on main's own
   `target.py` alike, with no other LagLab window open and the screen unlocked: LagLab's draws did not reach the GPU
