@@ -39,8 +39,8 @@ MOMENT_MAX_S = 120.0                  # longest span a moment shows
 TOP_PROGRAMS = 5
 RECENT = 6
 
-NO_FIX_HERE = ("Fixes are applied from your last recording only: an older recording may describe this PC as it was "
-               "then, not as it is now.")
+UNNAMED_FIX = ("A fix here has no Apply because an older lag-doctor found it without noting exactly what it would "
+               "change (for a refresh rate, which monitor). Record again to apply it from the new recording.")
 
 # Charts on Results besides frame times: (id, title, unit, [columns], source the columns come from).
 CHARTS = (
@@ -406,8 +406,6 @@ def deleted_view(done: int, failed: list[tuple[Entry, str]], listed: bool) -> di
 
 # ------------------------------------------------------------------------------------- Apply and Undo (fixes) --
 
-NOT_LAST = ("A newer recording was made since this one: fixes are applied from the last recording only, so open that "
-            "one to apply its fixes.")
 SWEEP_CHANGE = ("A settings sweep's change, in a game's own settings file: in a terminal, `lagdoctor sweep --resume` "
                 "puts it back (and goes on with the sweep), and so does `lagdoctor undo game_setting`.")
 NEWER_CHANGE = "A newer lag-doctor made this change: undo it with that version."
@@ -501,6 +499,24 @@ def undone_view(res: Any, change: str) -> dict[str, Any]:
     return {"text": text, "done": bool(res.ok), "force": res.why == "changed"}
 
 
+def undone_all_view(done: list[tuple[str, Any, str]], stopped: str = "") -> dict[str, Any]:
+    """What the page says once Undo all ran: a line for each change it tried, newest first ((title, fixes/flow.undo's
+    outcome, the change in its fix's own words) in `done`), then why it stopped early (`stopped`: a journal that turned
+    unreadable). `force` names the changes left alone because they were changed since, whose rows may then offer to
+    put them back anyway."""
+    lines = []
+    for title, res, change in done:
+        text = undone_view(res, change)["text"]
+        lines.append(text if res.ok and res.why not in ("already", "ended") and change else f"{title}: {text}")
+    if stopped:
+        lines.append(stopped)
+    if not lines:
+        lines.append("Those changes are not on the list any more: they were undone already.")
+    force = [res.entry_id for _, res, _ in done
+             if res.why == "changed" and isinstance(res.entry_id, str) and bridge.entry_ok(res.entry_id)]
+    return {"lines": lines, "done": sum(1 for _, res, _ in done if res.ok), "force": force}
+
+
 def _journal_time(value: Any) -> str:
     """When a journal entry was made, in this PC's time, as a session's start is shown; '-' when it is not a time
     Windows can show (one before 1970, or past the year 9999 in this time zone, raises there)."""
@@ -536,7 +552,9 @@ def changes_view(entries: list, about: Callable[[Any], tuple[str | None, str]] |
                      "where": str(e.target), "when": _journal_time(e.created_at), "note": note,
                      "undo": undo and named, "force": force and named})
     text = paused or ("" if rows else "lag-doctor has no changes of yours in place: none were made, or each was undone.")
-    return {"rows": rows, "text": text, "paused": bool(paused)}
+    # Undo all: every change with an Undo, newest first, when there is more than one to put back (App.do_undo_all).
+    every = [r["id"] for r in rows if r["undo"]][:bridge.MAX_UNDO_ALL]
+    return {"rows": rows, "text": text, "paused": bool(paused), "all": every if len(every) > 1 else []}
 
 
 # ------------------------------------------------------------------------------------------------ results --
@@ -591,23 +609,24 @@ def frame_bytes(main: dict[str, list]) -> tuple[bytes, int]:
     return data.tobytes(), len(ts)
 
 
-def _fixes(f, is_last: bool, apply_ids: frozenset[str]) -> list[dict[str, Any]]:
-    """A finding's fixes as Results lists them: `apply` when the window can apply it here (an offer of the last
-    recording whose fix is among `apply_ids`, fixes/flow.offerable), `can_apply` when it is an automatic fix at all."""
+def _fixes(f, apply_ids: frozenset[str]) -> list[dict[str, Any]]:
+    """A finding's fixes as Results lists them: `apply` when the window can apply it (an offer whose fix is among
+    `apply_ids` and whose params say on their own what it changes, fixes/flow.offerable), `unnamed` when only the
+    params keep it from that (an older report's), `can_apply` when it is an automatic fix at all."""
     out = []
     for fx in f.fixes:
         restart = {"game": "Restart the game afterwards.", "reboot": "Restart the PC afterwards."}.get(
             fx.needs_restart or "", "")
+        why = flow.why_not_offered(fx.fix_id, fx.params, apply_ids)
         out.append({"title": fx.title, "detail": fx.detail or "", "restart": restart, "admin": bool(fx.needs_admin),
-                    "apply": is_last and flow.offerable(fx.fix_id, fx.params, apply_ids),
-                    "can_apply": bool(fx.fix_id)})
+                    "apply": why is None, "unnamed": why == "unnamed", "can_apply": bool(fx.fix_id)})
     return out
 
 
-def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list], is_last: bool,
-                 has_report: bool, apply_ids: frozenset[str] = frozenset()) -> dict[str, Any]:
+def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list], has_report: bool,
+                 apply_ids: frozenset[str] = frozenset()) -> dict[str, Any]:
     """Screen 4, without the frame times themselves (frame_bytes hands those over in a shared buffer). `apply_ids`: the
-    fixes the window applies (App.fixes' known(); none where it applies none), offered on the last recording only."""
+    fixes the window applies (App.fixes' known(); none where it applies none), offered on any recording."""
     stats = _dict(d.stats)
     target = _dict(cap.target)
     started = None
@@ -637,8 +656,8 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
     findings = [{"title": f.title, "confidence": f.confidence,
                  "confidence_text": labels.CONFIDENCE.get(f.confidence, str(f.confidence)),
                  "summary": f.summary, "evidence": [x.text for x in f.evidence if isinstance(x.text, str)],
-                 "fixes": _fixes(f, is_last, apply_ids)} for f in d.findings]
-    any_fix = any(fx["can_apply"] for f in findings for fx in f["fixes"])
+                 "fixes": _fixes(f, apply_ids)} for f in d.findings]
+    unnamed = any(fx["unnamed"] for f in findings for fx in f["fixes"])
     charts = [_chart(cap, spec) for spec in CHARTS]
     # The charts' right edge: the recording's length, or the last sample when that is later (report/html._x1).
     end = max([v for v in (number(cap.duration_s), *(number(x) for x in _list(main.get("t"))[-1:]),
@@ -675,7 +694,7 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
                   ["Jitter", fmt(stats.get("jitter_ms"), "{:.1f}", " ms")],
                   ["Packet loss", fmt(stats.get("loss_pct"), "{:.1f}", "%")]],
         "findings": findings,
-        "fix_note": NO_FIX_HERE if any_fix and not is_last else "",
+        "fix_note": UNNAMED_FIX if unnamed else "",
         "frames": {"duration": number(cap.duration_s), "refresh_ms": 1000.0 / refresh if refresh else None,
                    "drops": [[number(ev.t_start), number(ev.t_end)] for ev in d.events if ev.kind == "fps_drop"],
                    "stutters": [s for s in stutters if s[0] is not None and s[1] is not None],

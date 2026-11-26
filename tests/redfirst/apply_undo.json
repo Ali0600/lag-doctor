@@ -74,18 +74,18 @@
  {
   "name": "offerable: a fix this lag-doctor does not know",
   "file": "lagdoctor/fixes/flow.py",
-  "old": "    return isinstance(fix_id, str) and fix_id in ids and fix_id not in NEVER_OFFERED and isinstance(params, dict)",
-  "new": "    return isinstance(fix_id, str) and fix_id not in NEVER_OFFERED and isinstance(params, dict)",
+  "old": "    if not isinstance(fix_id, str) or fix_id not in ids or fix_id in NEVER_OFFERED:",
+  "new": "    if not isinstance(fix_id, str) or fix_id in NEVER_OFFERED:",
   "tests": [
    "tests/test_fix_flow.py::test_a_fix_is_applied_from_a_report_only_when_this_lag_doctor_knows_it_and_its_params_are_an_object",
-   "tests/test_app_fixes.py::test_results_offer_apply_for_the_last_recordings_fixes_the_window_applies"
+   "tests/test_app_fixes.py::test_a_window_without_fixes_offers_no_apply_and_says_so"
   ]
  },
  {
   "name": "offerable: the sweep's own fix",
   "file": "lagdoctor/fixes/flow.py",
-  "old": "    return isinstance(fix_id, str) and fix_id in ids and fix_id not in NEVER_OFFERED and isinstance(params, dict)",
-  "new": "    return isinstance(fix_id, str) and fix_id in ids and isinstance(params, dict)",
+  "old": "    if not isinstance(fix_id, str) or fix_id not in ids or fix_id in NEVER_OFFERED:",
+  "new": "    if not isinstance(fix_id, str) or fix_id not in ids:",
   "tests": [
    "tests/test_fix_flow.py::test_a_fix_is_applied_from_a_report_only_when_this_lag_doctor_knows_it_and_its_params_are_an_object"
   ]
@@ -93,11 +93,11 @@
  {
   "name": "offerable: params of another shape",
   "file": "lagdoctor/fixes/flow.py",
-  "old": "    return isinstance(fix_id, str) and fix_id in ids and fix_id not in NEVER_OFFERED and isinstance(params, dict)",
-  "new": "    return isinstance(fix_id, str) and fix_id in ids and fix_id not in NEVER_OFFERED",
+  "old": "    if not isinstance(params, dict):\n        return \"params\"",
+  "new": "    if False:\n        return \"params\"",
   "tests": [
    "tests/test_fix_flow.py::test_a_fix_is_applied_from_a_report_only_when_this_lag_doctor_knows_it_and_its_params_are_an_object",
-   "tests/test_app_fixes.py::test_results_offer_apply_for_the_last_recordings_fixes_the_window_applies"
+   "tests/test_app_fixes.py::test_results_offer_apply_on_every_recording_for_the_fixes_the_window_applies"
   ]
  },
  {
@@ -231,21 +231,12 @@
   ]
  },
  {
-  "name": "plan: an older recording's fix is planned",
-  "file": "lagdoctor/app/main.py",
-  "old": "        if library.last_session(self.home, self.sessions) != session:\n            raise Gone(views.NOT_LAST)",
-  "new": "        if False:\n            raise Gone(views.NOT_LAST)",
-  "tests": [
-   "tests/test_app_fixes.py::test_a_newer_recording_since_stops_the_plan_and_the_change"
-  ]
- },
- {
   "name": "plan: a place past the findings",
   "file": "lagdoctor/app/main.py",
   "old": "        if finding < len(d.findings) and fix < len(d.findings[finding].fixes):",
   "new": "        if True:",
   "tests": [
-   "tests/test_app_fixes.py::test_the_page_names_a_fix_only_by_its_place_on_the_last_recordings_results"
+   "tests/test_app_fixes.py::test_the_page_names_a_fix_only_by_its_place_on_a_recordings_results"
   ]
  },
  {
@@ -254,7 +245,7 @@
   "old": "        if found is None or not flow.offerable(found.fix_id, found.params, fixes.known()):",
   "new": "        if found is None:",
   "tests": [
-   "tests/test_app_fixes.py::test_the_page_names_a_fix_only_by_its_place_on_the_last_recordings_results"
+   "tests/test_app_fixes.py::test_the_page_names_a_fix_only_by_its_place_on_a_recordings_results"
   ]
  },
  {
@@ -292,15 +283,6 @@
   "new": "        if planned is None:",
   "tests": [
    "tests/test_app_fixes.py::test_each_plan_applies_once_and_only_the_newest_one"
-  ]
- },
- {
-  "name": "apply: applied after a newer recording",
-  "file": "lagdoctor/app/main.py",
-  "old": "        if library.last_session(self.home, self.sessions) != planned.session:",
-  "new": "        if False:",
-  "tests": [
-   "tests/test_app_fixes.py::test_a_newer_recording_since_stops_the_plan_and_the_change"
   ]
  },
  {
@@ -454,8 +436,8 @@
  {
   "name": "undo: made while a recording runs",
   "file": "lagdoctor/app/main.py",
-  "old": "            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()",
-  "new": "            why = None\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()",
+  "old": "            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                found = next(",
+  "new": "            why = None\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                found = next(",
   "tests": [
    "tests/test_app_fixes.py::test_nothing_is_changed_while_this_windows_recording_runs",
    "tests/test_app_fixes.py::test_nothing_is_changed_while_another_process_records",
@@ -465,8 +447,8 @@
  {
   "name": "undo: a recording looked for before the change lock is taken",
   "file": "lagdoctor/app/main.py",
-  "old": "        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()",
-  "new": "        why = self.change_refusal(fixes)\n        if why is not None:\n            raise Gone(why)\n        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            journal = fixes.journal()",
+  "old": "        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                found = next(",
+  "new": "        why = self.change_refusal(fixes)\n        if why is not None:\n            raise Gone(why)\n        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            journal = fixes.journal()\n            try:\n                found = next(",
   "tests": [
    "tests/test_app_fixes.py::test_a_recording_is_looked_for_with_the_change_lock_held"
   ]
@@ -483,8 +465,8 @@
  {
   "name": "apply: made during another change",
   "file": "lagdoctor/app/main.py",
-  "old": "            raise Gone(views.NOT_LAST)\n        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n",
-  "new": "            raise Gone(views.NOT_LAST)\n        if not self.fix_lock.acquire(blocking=False) and False:\n            raise Gone(BUSY)\n        try:\n",
+  "old": "            raise Gone(NO_LONGER_PLANNED)\n        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n",
+  "new": "            raise Gone(NO_LONGER_PLANNED)\n        if not self.fix_lock.acquire(blocking=False) and False:\n            raise Gone(BUSY)\n        try:\n",
   "tests": [
    "tests/test_app_fixes.py::test_one_change_at_a_time"
   ]

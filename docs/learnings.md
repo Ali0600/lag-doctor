@@ -1458,8 +1458,7 @@ the confirming click: the app keeps the plan it showed, read at that moment, und
 back only the token; and the confirm applies exactly that plan, with the action's own "has it moved since?" check
 refusing when the world changed in between.
 **Why it came up**: M7's Apply in lag-doctor's window. The page is untrusted territory, so it names neither the fix
-nor its params. A newer recording, a newer plan or a second click with the same token each finds the token gone or
-replaced, and a setting changed by hand in between is refused by the fix's own stale check (`fixes/base.apply`).
+nor its params. A newer plan or a second click with the same token each finds the token gone or replaced, and a setting changed by hand in between is refused by the fix's own stale check (`fixes/base.apply`).
 **Takeaway**: for show-then-do, have the confirm carry a server-side token for what was shown, used once, never the
 values themselves.
 
@@ -1518,3 +1517,13 @@ S-1-5-21-...-500 the test expected. `tests/test_tracelock.py` now turns every AC
 (ConvertStringSidToSid, then ConvertSidToStringSid) before comparing.
 **Takeaway**: compare SIDs read from SDDL in their S-1- form, never as text, and expect the alias set to depend on the
 account the test runs as.
+
+### A name the system hands out by position is no identity to keep
+Windows names displays `\\.\DISPLAY1`, `DISPLAY2` and on in the order it lists them, so a dock, another screen or a
+driver update gives a name to another monitor; the monitor's device interface path (`monitorDevicePath`) stays with
+one monitor on one port. Data kept for later must hold the lasting identity and look up the current name when it acts.
+**Why it came up**: applying a fix from an older recording in lag-doctor's window (M7b). Its refresh-rate offer named
+the screen only by its display name, which may belong to another monitor by then. Reports now name the monitor by
+its path, the fix's plan follows that monitor to the name it has now, and an older offer without one gets no Apply.
+**Takeaway**: store what a thing is (a stable id), not where the system put it (a slot, an index), and resolve the
+slot when you act.

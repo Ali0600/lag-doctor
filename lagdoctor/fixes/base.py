@@ -107,6 +107,14 @@ class Fix(ABC):
         default."""
         return False
 
+    @classmethod
+    def stands_alone(cls, params: dict[str, Any]) -> bool:
+        """Whether `params` say on their own what this fix changes, however long ago a report wrote them: lag-doctor's
+        window applies an offer from any recording only then (fixes/flow.offerable). A fix whose params may name their
+        subject only by where Windows put it at the time (a display name, which belongs to whichever monitor Windows
+        lists first) says no unless they also name it by an identity that lasts."""
+        return True
+
     def ended(self, params: dict[str, Any]) -> bool:
         """For a session-only change: True once its subject is gone. This default reads the live value; a fix
         whose read opens something that must not be opened (a process) overrides it with a check that opens

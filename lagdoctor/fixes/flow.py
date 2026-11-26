@@ -54,10 +54,24 @@ def known() -> frozenset[str]:
     return frozenset(catalog.ids()) - NEVER_OFFERED
 
 
+def why_not_offered(fix_id: Any, params: Any, ids: frozenset[str]) -> str | None:
+    """Why lag-doctor's window does not apply an offer, or None when it does, from whichever recording made it.
+    "unknown": no id among `ids` (known(): a report a newer lag-doctor wrote may name a fix this one does not know), or
+    the sweep's own; "params": params that are not an object; "unnamed": params that do not say on their own what the
+    fix changes (Fix.stands_alone: an older report's display name may belong to another monitor by now)."""
+    if not isinstance(fix_id, str) or fix_id not in ids or fix_id in NEVER_OFFERED:
+        return "unknown"
+    if not isinstance(params, dict):
+        return "params"
+    cls = catalog.find(fix_id)
+    if cls is None:
+        return "unknown"
+    return None if cls.stands_alone(params) else "unnamed"
+
+
 def offerable(fix_id: Any, params: Any, ids: frozenset[str]) -> bool:
-    """Whether an offer is one to apply: an id among `ids` (known(): a report a newer lag-doctor wrote may name a fix
-    this one does not know), never the sweep's own, with params that are an object."""
-    return isinstance(fix_id, str) and fix_id in ids and fix_id not in NEVER_OFFERED and isinstance(params, dict)
+    """Whether lag-doctor's window applies an offer (why_not_offered says none of the reasons not to)."""
+    return why_not_offered(fix_id, params, ids) is None
 
 
 def apply(fix: Fix, plan: FixPlan, journal: Journal) -> FixResult:

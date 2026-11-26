@@ -33,8 +33,8 @@ ones.*
 - **Fixes, only with your OK**: the power plan, the GPU a game runs on (hybrid laptops), the screen refresh
   rate, Game Mode, background recording, windowed-game optimisations, and the priority of your own
   background programs. Each change is journaled first, verified by reading it back, and undone with
-  `lagdoctor undo`, or from lag-doctor's window, which applies them from your last recording's Results and lists
-  every change still in place in Settings. It never turns off a security feature, never kills or suspends a process,
+  `lagdoctor undo`, or from lag-doctor's window, which applies them from any recording's Results and lists
+  every change still in place in Settings, with Undo on each and Undo all. It never turns off a security feature, never kills or suspends a process,
   and never touches the game.
 - **Tries a game's settings for you, run by run** (`lagdoctor sweep`): it writes each setting into the game's
   settings file while the game is closed, you play each run from the same spot, and it compares the settings by
@@ -129,9 +129,9 @@ uv run lagdoctor sweep --resume                         # go on with a sweep you
   its program (picked in Windows' Open dialog; its name and icon come from the file, and you can rename it), and its
   page's **Record when it starts** waits for you to start the game yourself and records it from its start, the same
   way; a game with no cover shows its program's icon. Tick recordings on a game's page to compare two or delete them
-  (to the Recycle Bin, where Windows can put them back). On your last recording's Results, **Apply this fix** shows
+  (to the Recycle Bin, where Windows can put them back). On a recording's Results, **Apply this fix** shows
   what a fix would change, and where, before it changes anything, and a second click makes that change; its **Undo**,
-  like Settings' list of the changes lag-doctor made, puts it back. **Record the
+  like Settings' list of the changes lag-doctor made, puts it back, and **Undo all** there puts back every one. **Record the
   game that's running** records the busiest game with a window instead, a game you started yourself. Each asks one
   UAC prompt from the window for frame timing (none where the MSI's capture service is installed), and measures 10 minutes from your press of **Ctrl+Alt+S** once you
   are in the game, so its startup, menus and loading are left out (shaded on Results' charts); with no press within

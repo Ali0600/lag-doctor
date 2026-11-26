@@ -1,0 +1,408 @@
+[
+ {
+  "name": "stands_alone: what a fix's params name lasts, by default",
+  "file": "lagdoctor/fixes/base.py",
+  "old": "lists first) says no unless they also name it by an identity that lasts.\"\"\"\n        return True",
+  "new": "lists first) says no unless they also name it by an identity that lasts.\"\"\"\n        return False",
+  "tests": [
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_say_what_it_changes_on_their_own",
+   "tests/test_app_fixes.py::test_results_offer_apply_on_every_recording_for_the_fixes_the_window_applies"
+  ]
+ },
+ {
+  "name": "stands_alone: a refresh rate needs the monitor it was found on",
+  "file": "lagdoctor/fixes/refresh_rate.py",
+  "old": "            return _monitor(params) is not None\n        except ValueError:",
+  "new": "            return True\n        except ValueError:",
+  "tests": [
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_say_what_it_changes_on_their_own",
+   "tests/test_machine_fixes.py::test_refresh_rate_stands_alone_only_with_the_monitor_it_was_found_on",
+   "tests/test_app_fixes.py::test_an_older_reports_refresh_rate_names_no_monitor_so_it_has_no_apply"
+  ]
+ },
+ {
+  "name": "stands_alone: a junk monitor is none",
+  "file": "lagdoctor/fixes/refresh_rate.py",
+  "old": "        except ValueError:\n            return False\n\n    def plan(",
+  "new": "        except ValueError:\n            return True\n\n    def plan(",
+  "tests": [
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_say_what_it_changes_on_their_own",
+   "tests/test_machine_fixes.py::test_refresh_rate_stands_alone_only_with_the_monitor_it_was_found_on"
+  ]
+ },
+ {
+  "name": "why_not_offered: a fix the catalogue does not know",
+  "file": "lagdoctor/fixes/flow.py",
+  "old": "    if cls is None:\n        return \"unknown\"",
+  "new": "    if False:\n        return \"unknown\"",
+  "tests": [
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_a_report_only_when_this_lag_doctor_knows_it_and_its_params_are_an_object"
+  ]
+ },
+ {
+  "name": "why_not_offered: params that do not stand alone",
+  "file": "lagdoctor/fixes/flow.py",
+  "old": "    return None if cls.stands_alone(params) else \"unnamed\"",
+  "new": "    return None",
+  "tests": [
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_say_what_it_changes_on_their_own",
+   "tests/test_app_fixes.py::test_an_older_reports_refresh_rate_names_no_monitor_so_it_has_no_apply",
+   "tests/test_app_views.py::test_results_offer_apply_on_any_recording_for_fixes_the_window_applies_that_name_what_they_change"
+  ]
+ },
+ {
+  "name": "Results: an offer kept from Apply only by its params is not said",
+  "file": "lagdoctor/app/views.py",
+  "old": "\"unnamed\": why == \"unnamed\",",
+  "new": "\"unnamed\": False,",
+  "tests": [
+   "tests/test_app_fixes.py::test_an_older_reports_refresh_rate_names_no_monitor_so_it_has_no_apply",
+   "tests/test_app_views.py::test_results_offer_apply_on_any_recording_for_fixes_the_window_applies_that_name_what_they_change"
+  ]
+ },
+ {
+  "name": "Results: why such an offer has no Apply",
+  "file": "lagdoctor/app/views.py",
+  "old": "        \"fix_note\": UNNAMED_FIX if unnamed else \"\",",
+  "new": "        \"fix_note\": \"\",",
+  "tests": [
+   "tests/test_app_fixes.py::test_an_older_reports_refresh_rate_names_no_monitor_so_it_has_no_apply",
+   "tests/test_app_views.py::test_results_offer_apply_on_any_recording_for_fixes_the_window_applies_that_name_what_they_change"
+  ]
+ },
+ {
+  "name": "refresh rate: a plan never follows the monitor a report named",
+  "file": "lagdoctor/fixes/refresh_rate.py",
+  "old": "        elif self.display.monitor_path(device) != monitor:",
+  "new": "        elif False:",
+  "tests": [
+   "tests/test_machine_fixes.py::test_refresh_rate_plan_follows_the_monitor_a_report_named_to_the_name_it_has_now",
+   "tests/test_machine_fixes.py::test_refresh_rate_plan_refuses_when_the_monitor_a_report_named_is_not_connected"
+  ]
+ },
+ {
+  "name": "refresh rate: a plan follows the monitor but keeps the old name",
+  "file": "lagdoctor/fixes/refresh_rate.py",
+  "old": "            params = {**params, \"device\": check_device(moved)}",
+  "new": "            params = dict(params)",
+  "tests": [
+   "tests/test_machine_fixes.py::test_refresh_rate_plan_follows_the_monitor_a_report_named_to_the_name_it_has_now"
+  ]
+ },
+ {
+  "name": "refresh rate: a monitor that is not connected is said so",
+  "file": "lagdoctor/fixes/refresh_rate.py",
+  "old": "            if moved is None:\n                raise LookupError(",
+  "new": "            if False:\n                raise LookupError(",
+  "tests": [
+   "tests/test_machine_fixes.py::test_refresh_rate_plan_refuses_when_the_monitor_a_report_named_is_not_connected"
+  ]
+ },
+ {
+  "name": "rule: the offer never names its monitor",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if _monitor_path(d.get(\"monitor\")):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_analysis_rules.py::test_refresh_rate_fix_names_the_monitor_the_display_showed_so_any_recording_can_apply_it"
+  ]
+ },
+ {
+  "name": "rule: a monitor path of any length",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "and 0 < len(value) <= MONITOR_MAX_CHARS and value.isprintable()",
+  "new": "and 0 < len(value) and value.isprintable()",
+  "tests": [
+   "tests/test_analysis_rules.py::test_refresh_rate_fix_names_the_monitor_the_display_showed_so_any_recording_can_apply_it",
+   "tests/test_analysis_rules.py::test_the_rule_and_the_fix_agree_on_what_a_monitor_path_is"
+  ]
+ },
+ {
+  "name": "rule: an empty monitor path",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "and 0 < len(value) <= MONITOR_MAX_CHARS and value.isprintable()",
+  "new": "and 0 <= len(value) <= MONITOR_MAX_CHARS and value.isprintable()",
+  "tests": [
+   "tests/test_analysis_rules.py::test_refresh_rate_fix_names_the_monitor_the_display_showed_so_any_recording_can_apply_it",
+   "tests/test_analysis_rules.py::test_the_rule_and_the_fix_agree_on_what_a_monitor_path_is"
+  ]
+ },
+ {
+  "name": "rule: a monitor path that cannot be printed",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "and 0 < len(value) <= MONITOR_MAX_CHARS and value.isprintable()",
+  "new": "and 0 < len(value) <= MONITOR_MAX_CHARS",
+  "tests": [
+   "tests/test_analysis_rules.py::test_refresh_rate_fix_names_the_monitor_the_display_showed_so_any_recording_can_apply_it",
+   "tests/test_analysis_rules.py::test_the_rule_and_the_fix_agree_on_what_a_monitor_path_is"
+  ]
+ },
+ {
+  "name": "displays: no monitor listed",
+  "file": "lagdoctor/winapi/display.py",
+  "old": "            \"monitor\": path.get(\"device_path\") or None,",
+  "new": "            \"monitor\": None,",
+  "tests": [
+   "tests/test_machine_winapi.py::test_live_displays_agree_with_enum_display_settings"
+  ]
+ },
+ {
+  "name": "changes: Undo all for changes without an Undo",
+  "file": "lagdoctor/app/views.py",
+  "old": "    every = [r[\"id\"] for r in rows if r[\"undo\"]][:bridge.MAX_UNDO_ALL]",
+  "new": "    every = [r[\"id\"] for r in rows][:bridge.MAX_UNDO_ALL]",
+  "tests": [
+   "tests/test_app_views.py::test_undo_all_names_each_change_with_an_undo_newest_first_up_to_its_cap",
+   "tests/test_app_fixes.py::test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name"
+  ]
+ },
+ {
+  "name": "changes: Undo all past its cap",
+  "file": "lagdoctor/app/views.py",
+  "old": "    every = [r[\"id\"] for r in rows if r[\"undo\"]][:bridge.MAX_UNDO_ALL]",
+  "new": "    every = [r[\"id\"] for r in rows if r[\"undo\"]]",
+  "tests": [
+   "tests/test_app_views.py::test_undo_all_names_each_change_with_an_undo_newest_first_up_to_its_cap"
+  ]
+ },
+ {
+  "name": "changes: Undo all for a single change",
+  "file": "lagdoctor/app/views.py",
+  "old": "\"all\": every if len(every) > 1 else []}",
+  "new": "\"all\": every}",
+  "tests": [
+   "tests/test_app_views.py::test_undo_all_names_each_change_with_an_undo_newest_first_up_to_its_cap"
+  ]
+ },
+ {
+  "name": "bridge: Undo all of no change",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "isinstance(v, list) and 1 <= len(v) <= MAX_UNDO_ALL and",
+  "new": "isinstance(v, list) and len(v) <= MAX_UNDO_ALL and",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_is_refused"
+  ]
+ },
+ {
+  "name": "bridge: Undo all past its cap",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "isinstance(v, list) and 1 <= len(v) <= MAX_UNDO_ALL and",
+  "new": "isinstance(v, list) and 1 <= len(v) and",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_is_refused"
+  ]
+ },
+ {
+  "name": "bridge: Undo all of what is no change's id",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "and all(entry_ok(e) for e in v)",
+  "new": "and True",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_is_refused"
+  ]
+ },
+ {
+  "name": "bridge: Undo all of one change twice",
+  "file": "lagdoctor/app/bridge.py",
+  "old": "            and len(set(v)) == len(v))",
+  "new": "            and True)",
+  "tests": [
+   "tests/test_app_bridge.py::test_anything_else_is_refused"
+  ]
+ },
+ {
+  "name": "Undo all: while a recording runs or as administrator",
+  "file": "lagdoctor/app/main.py",
+  "old": "            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen",
+  "new": "            why = None\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen",
+  "tests": [
+   "tests/test_app_fixes.py::test_nothing_is_changed_while_this_windows_recording_runs",
+   "tests/test_app_fixes.py::test_nothing_is_changed_while_another_process_records",
+   "tests/test_app_fixes.py::test_nothing_is_changed_as_administrator_or_when_that_cannot_be_told"
+  ]
+ },
+ {
+  "name": "Undo all: during another change",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen",
+  "new": "        if not self.fix_lock.acquire(blocking=False) and False:\n            raise Gone(BUSY)\n        try:\n            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen",
+  "tests": [
+   "tests/test_app_fixes.py::test_one_change_at_a_time"
+  ]
+ },
+ {
+  "name": "Undo all: a recording looked for before the change lock is taken",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen",
+  "new": "        why = self.change_refusal(fixes)\n        if why is not None:\n            raise Gone(why)\n        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            journal = fixes.journal()\n            try:\n                chosen",
+  "tests": [
+   "tests/test_app_fixes.py::test_a_recording_is_looked_for_with_the_change_lock_held"
+  ]
+ },
+ {
+  "name": "Undo all: oldest first",
+  "file": "lagdoctor/app/main.py",
+  "old": "                chosen = [e for e in journal.outstanding() if e.id in wanted]",
+  "new": "                chosen = [e for e in reversed(journal.outstanding()) if e.id in wanted]",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_puts_back_two_changes_of_one_setting_in_turn",
+   "tests/test_app_fixes.py::test_undo_all_puts_back_each_change_the_list_named_newest_first"
+  ]
+ },
+ {
+  "name": "Undo all: a settings sweep's change too",
+  "file": "lagdoctor/app/main.py",
+  "old": "                if e.fix_id in flow.NEVER_OFFERED:\n                    continue\n                title, change",
+  "new": "                if False:\n                    continue\n                title, change",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name"
+  ]
+ },
+ {
+  "name": "Undo all: a change a newer lag-doctor made too",
+  "file": "lagdoctor/app/main.py",
+  "old": "                if title is None:                   # a fix this lag-doctor does not know",
+  "new": "                if False:                   # a fix this lag-doctor does not know",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name"
+  ]
+ },
+ {
+  "name": "Undo all: puts back anyway",
+  "file": "lagdoctor/app/main.py",
+  "old": "                    res = flow.undo(e, fixes.fix, journal, force=False)",
+  "new": "                    res = flow.undo(e, fixes.fix, journal, force=True)",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_leaves_a_change_made_since_alone_and_its_row_may_put_it_back_anyway"
+  ]
+ },
+ {
+  "name": "Undo all: goes on past an unreadable journal",
+  "file": "lagdoctor/app/main.py",
+  "old": "                    stopped = exc.plain()\n                    break",
+  "new": "                    stopped = exc.plain()\n                    continue",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did"
+  ]
+ },
+ {
+  "name": "Undo all: says nothing of an unreadable journal",
+  "file": "lagdoctor/app/main.py",
+  "old": "                    stopped = exc.plain()\n                    break",
+  "new": "                    stopped = \"\"\n                    break",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did"
+  ]
+ },
+ {
+  "name": "Undo all: says nothing of what it did",
+  "file": "lagdoctor/app/main.py",
+  "old": "                done.append((title, res, change))",
+  "new": "                pass",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_puts_back_each_change_the_list_named_newest_first",
+   "tests/test_app_fixes.py::test_undo_all_leaves_a_change_made_since_alone_and_its_row_may_put_it_back_anyway"
+  ]
+ },
+ {
+  "name": "Undo all's words: each change by its title alone",
+  "file": "lagdoctor/app/views.py",
+  "old": "        lines.append(text if res.ok and res.why not in (\"already\", \"ended\") and change else f\"{title}: {text}\")",
+  "new": "        lines.append(f\"{title}: {text}\")",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_puts_back_each_change_the_list_named_newest_first",
+   "tests/test_app_fixes.py::test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did"
+  ]
+ },
+ {
+  "name": "Undo all's words: why it stopped",
+  "file": "lagdoctor/app/views.py",
+  "old": "    if stopped:\n        lines.append(stopped)",
+  "new": "    if False:\n        lines.append(stopped)",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did"
+  ]
+ },
+ {
+  "name": "Undo all's words: nothing to undo",
+  "file": "lagdoctor/app/views.py",
+  "old": "    if not lines:\n        lines.append(",
+  "new": "    if False:\n        lines.append(",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name"
+  ]
+ },
+ {
+  "name": "Undo all's words: what may be put back anyway",
+  "file": "lagdoctor/app/views.py",
+  "old": "             if res.why == \"changed\" and isinstance(res.entry_id, str)",
+  "new": "             if res.why == \"unreadable\" and isinstance(res.entry_id, str)",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_leaves_a_change_made_since_alone_and_its_row_may_put_it_back_anyway"
+  ]
+ },
+ {
+  "name": "Undo all's words: how many were put back",
+  "file": "lagdoctor/app/views.py",
+  "old": "\"done\": sum(1 for _, res, _ in done if res.ok),",
+  "new": "\"done\": len(done),",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_leaves_a_change_made_since_alone_and_its_row_may_put_it_back_anyway",
+   "tests/test_app_fixes.py::test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did"
+  ]
+ },
+ {
+  "name": "page: no Undo all",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "  const all = c.all.length ? undoAllButton(",
+  "new": "  const all = false ? undoAllButton(",
+  "tests": [
+   "tests/test_app_page.py::test_apply_works_from_a_recording_that_is_not_the_last_and_undo_all_puts_back_every_change"
+  ]
+ },
+ {
+  "name": "page: Undo all at the first click",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "    if (b.dataset.armed !== '1') {\n      b.dataset.armed = '1';\n      b.textContent = `Click again to undo all",
+  "new": "    if (false) {\n      b.dataset.armed = '1';\n      b.textContent = `Click again to undo all",
+  "tests": [
+   "tests/test_app_page.py::test_apply_works_from_a_recording_that_is_not_the_last_and_undo_all_puts_back_every_change"
+  ]
+ },
+ {
+  "name": "page: Undo all names other changes than the list's",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "    ask('undo_all', {entries}).then(",
+  "new": "    ask('undo_all', {entries: entries.slice(1)}).then(",
+  "tests": [
+   "tests/test_app_page.py::test_apply_works_from_a_recording_that_is_not_the_last_and_undo_all_puts_back_every_change"
+  ]
+ },
+ {
+  "name": "page: a change Undo all left alone keeps its Undo",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "    const left = forced.includes(r.id);",
+  "new": "    const left = false;",
+  "tests": [
+   "tests/test_app_page.py::test_apply_works_from_a_recording_that_is_not_the_last_and_undo_all_puts_back_every_change"
+  ]
+ },
+ {
+  "name": "page: what Undo all left alone is not passed on",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "    if (live()) go('settings', {said: u.lines, force: u.force}, false);",
+  "new": "    if (live()) go('settings', {said: u.lines}, false);",
+  "tests": [
+   "tests/test_app_page.py::test_apply_works_from_a_recording_that_is_not_the_last_and_undo_all_puts_back_every_change"
+  ]
+ },
+ {
+  "name": "page: Undo all's lines run together",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "  if (Array.isArray(text)) {          // a line for each change Undo all tried",
+  "new": "  if (false) {          // a line for each change Undo all tried",
+  "tests": [
+   "tests/test_app_page.py::test_apply_works_from_a_recording_that_is_not_the_last_and_undo_all_puts_back_every_change"
+  ]
+ }
+]

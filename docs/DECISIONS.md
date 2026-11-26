@@ -8,12 +8,6 @@
 - **An elevated `watch` that may record over the capture service's lock after asking**, for the PC's administrator
   when another account holds the service: it would stop that recording, so only with a question first (2026-11-25,
   Stage 4). Revisit hook: `cli._TraceGuard.here`.
-- **Apply from any recording's Results**, not only the last one made, once a fix's params name what they meant on
-  their own (a refresh rate's monitor by its device path, not by the display name Windows gives whichever monitor it
-  lists first) (2026-11-21, M7). Revisit hook: `App.do_plan_fix`'s last-session check and `views._fixes`' `is_last`.
-- **Undo all in the window**, as `lagdoctor undo --all` does: worth it if the list of changes ever grows long; an undo
-  out of order reads as a conflict, so it would go newest first (2026-11-21, M7). Revisit hook: `fillChanges` in
-  `app.js` and `App.do_undo_change`.
 - **A chime once a sweep run's game has been in front 2 minutes**, so the player presses on it instead of timing
   2 minutes 30 s from the short chime (2026-11-21, the sweep's settling time). Worth it if runs are kept out for a
   press too soon. Revisit hook: `runner._record`'s observers, whose live ticks carry `game_focused`, and
@@ -242,6 +236,39 @@
   game's tree), for a launcher the re-arm's hold missed: worth trying if Play recordings show the hold delaying too
   much of a game's start. Revisit hook: `Relay._out_of_turn` ("a game after the start") and `_start_sources` in
   relay/server.py (DECISIONS 2026-11-17, M6d).
+
+---
+
+## 2026-11-26: Apply from any recording, and Undo all (M7's two follow-ups)
+
+The owner chose these two Backlog items of M7 as the next piece ("do C", one of four offered). The forks inside them
+were settled while building, as M7's were; the owner's own try in the app before the merge is their check.
+
+- **Which recordings' fixes the window applies**
+  - **Any recording's, when the offer's params say on their own what the fix changes (chosen)**: each fix answers
+    (`Fix.stands_alone`), and the window applies an offer only then (`flow.why_not_offered`). Every fix's params name
+    a lasting thing (a power plan's GUID, a program's path, a process by its id and start time, or none at all) but a
+    refresh rate's, whose display name Windows hands to whichever monitor it lists first. So a report now names the
+    monitor too, by the path `monitor_path` reads (the inventory's displays keep it), and an older report's refresh
+    rate shows without Apply, Results saying why. A process an older recording named has usually exited, and its plan
+    says so with nothing to change.
+  - **Keep the last recording's exemption for an offer that does not stand alone**: rejected. The last recording can
+    be weeks old, and the window would then have two rules for one question; recording again gives an offer that
+    stands alone.
+  - **Any recording's offers as they are**: rejected. An old refresh rate could land on another monitor.
+- **Where the refresh rate's monitor is now**
+  - **The plan follows the monitor to the name it has now (chosen)**: docking or another screen moves the names, and
+    the fix still finds the monitor the recording saw; it refuses when that monitor is not connected.
+  - **Refuse when the name moved**: rejected. A valid fix would be refused after every dock.
+- **What Undo all puts back**
+  - **The changes the list showed with an Undo, by their ids, newest first, never put back anyway (chosen)**: what the
+    player saw is what changes, as with Apply's plan; newest first as `lagdoctor undo --all` goes, so that two changes
+    of one setting come back in turn; one changed since is left alone, and its row then offers Put it back anyway,
+    which stays the single change's second click.
+  - **Whatever the journal lists when the click lands**: rejected. Another window's newer change would be undone unseen.
+  - **With Put it back anyway**: rejected. It would overwrite a change the player made by hand, unasked.
+- **Undo all's confirm**: a second click on the same button (chosen), as Put it back anyway asks; one click
+  (rejected) puts back several settings at once, the cost of a slip.
 
 ---
 

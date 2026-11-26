@@ -98,14 +98,15 @@ class FakeDisplay:
         return dict(self.mode) if self.stored is _FOLLOW else (dict(self.stored) if self.stored else None)
 
     def monitor_path(self, device):
-        return self.path if self.connected else None
+        return self.path if self.connected and device.upper() == DEV.upper() else None
 
     def list_displays(self):
         if not self.connected:
             return []
         hz = self.exact_hz if self.exact_hz is not _FOLLOW else (
             self.mode["hz"] + 0.003 if self.mode["hz"] is not None else None)
-        return [{"device": DEV, "name": "Generic PnP Monitor", "adapter_luid": "0x00000000_0x00010c49",
+        return [{"device": DEV, "name": "Generic PnP Monitor", "monitor": self.path,
+                 "adapter_luid": "0x00000000_0x00010c49",
                  "internal": True, "primary": True, "width": self.mode["width"], "height": self.mode["height"],
                  "hz": hz, "max_hz": max(self.offered), "modes_hz": list(self.offered)}]
 
@@ -369,6 +370,34 @@ def test_refresh_rate_undo_leaves_another_monitor_at_the_same_name_alone(journal
     assert fake.calls == calls and fake.mode == mode(144)        # that monitor was never touched
     fake.path = PANEL                                            # the right one is back on DISPLAY1
     assert fix.undo(journal.undoable()[0], journal).ok and fake.mode == mode(60)
+
+
+def test_refresh_rate_plan_follows_the_monitor_a_report_named_to_the_name_it_has_now(journal):
+    """Undocked since the recording: the panel it named was DISPLAY2 then, and Windows calls it DISPLAY1 now."""
+    fake = FakeDisplay()
+    fix = RefreshRateFix(display=fake)
+    plan = fix.plan({"device": "\\\\.\\DISPLAY2", "hz": 144, "monitor": PANEL})
+    assert plan.params == {"device": DEV, "hz": 144, "monitor": PANEL}
+    assert (plan.before, plan.after) == (mode(60), mode(144))
+    assert fix.apply(plan, journal).ok and fake.mode == mode(144)
+    assert journal.entries()[0].params["device"] == DEV
+    assert fix.plan({"device": DEV, "hz": 144, "monitor": PANEL}).params["device"] == DEV    # where it still is
+
+
+@pytest.mark.parametrize("now", [None, OTHER])
+def test_refresh_rate_plan_refuses_when_the_monitor_a_report_named_is_not_connected(now):
+    fake = FakeDisplay()
+    fake.path = now                         # unplugged, or another monitor in its place
+    with pytest.raises(LookupError, match="the monitor this fix is for \\(it was .*DISPLAY2\\) is not connected now"):
+        RefreshRateFix(display=fake).plan({"device": "\\\\.\\DISPLAY2", "hz": 144, "monitor": PANEL})
+    assert fake.calls == []
+
+
+def test_refresh_rate_stands_alone_only_with_the_monitor_it_was_found_on():
+    assert RefreshRateFix.stands_alone({"device": DEV, "hz": 144, "monitor": PANEL})
+    for odd in ({"device": DEV, "hz": 144}, {"device": DEV, "hz": 144, "monitor": None},
+                {"device": DEV, "hz": 144, "monitor": "bad\npath"}, {"device": DEV, "hz": 144, "monitor": "x" * 200}):
+        assert not RefreshRateFix.stands_alone(odd), odd
 
 
 @pytest.mark.parametrize("monitor", ["", 5, "x" * 200, "bad\npath"])

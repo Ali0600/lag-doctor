@@ -14,7 +14,11 @@ and if that fails the entry stays applied, so undo can still take it back.
 
 The GDI name (\\\\.\\DISPLAY1) belongs to whichever monitor Windows lists first, so a plan also stores the
 monitor's own identity (its monitorDevicePath, WT 6.2) as params "monitor". read() and write() refuse a name
-that now shows another monitor: to them it is a display that is not connected.
+that now shows another monitor: to them it is a display that is not connected. A report's offer names the monitor
+too (the inventory's displays read it, DESIGN.md), and then the plan follows that monitor to the name Windows gives it
+now: such an offer says what it changes on its own, so lag-doctor's window applies it from any recording
+(stands_alone). An offer without one (a report from before monitors were named) is planned for whichever monitor
+its name shows now, as `lagdoctor fix` always did, and the window applies it from no recording.
 """
 from __future__ import annotations
 
@@ -76,16 +80,32 @@ class RefreshRateFix(Fix):
         return (f"the refresh rate of display {check_device(params.get('device'))} "
                 f"(Settings > System > Display > Advanced display)")
 
+    @classmethod
+    def stands_alone(cls, params: dict[str, Any]) -> bool:
+        """Only with the monitor's own identity: a display name alone may belong to another monitor by now."""
+        try:
+            return _monitor(params) is not None
+        except ValueError:
+            return False
+
     def plan(self, params: dict[str, Any]) -> FixPlan:
-        """The report suggests {device, hz}; the plan adds which monitor that name shows now, so a later read,
-        write or undo can tell when Windows has given the name to another monitor."""
+        """The report suggests {device, hz, monitor}. With the monitor, the plan is for that monitor under the name
+        it has now; without it (an older report), the plan adds which monitor that name shows now. Either way a later
+        read, write or undo can tell when Windows has given the name to another monitor."""
         device = check_device(params.get("device"))
-        if _monitor(params) is None:
+        monitor = _monitor(params)
+        if monitor is None:
             monitor = self.display.monitor_path(device)
             if not monitor:
                 raise LookupError(f"display {device} is not connected (or Windows did not say which monitor it "
                                   f"is), so lag-doctor could not be sure a later undo reaches the same screen")
             params = {**params, "monitor": monitor}
+        elif self.display.monitor_path(device) != monitor:
+            # Windows names monitors in the order it lists them, so a dock or another screen moves the name.
+            moved = next((d.get("device") for d in self.display.list_displays() if d.get("monitor") == monitor), None)
+            if moved is None:
+                raise LookupError(f"the monitor this fix is for (it was {device}) is not connected now")
+            params = {**params, "device": check_device(moved)}
         return super().plan(params)
 
     def read(self, params: dict[str, Any]) -> Any:

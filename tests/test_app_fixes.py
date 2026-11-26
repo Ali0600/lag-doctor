@@ -90,15 +90,31 @@ def plain(text: str) -> str:
 
 # ---------------------------------------------------------------- Results ---
 
-def test_results_offer_apply_for_the_last_recordings_fixes_the_window_applies(tmp_path):
+SCREEN = {"device": "\\\\.\\DISPLAY1", "hz": 144}
+MONITOR = "\\\\?\\DISPLAY#ABC1234#5&1a2b3c4d&0&UID4352#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+
+
+def test_results_offer_apply_on_every_recording_for_the_fixes_the_window_applies(tmp_path):
     app, _, sid = fixing(tmp_path, fixes=[[offer(), ADVICE, offer("game_setting", {"key": "x"})],
                                           [offer("from_a_newer_lag_doctor")], [offer(params=["not", "an", "object"])]])
-    old = recorded(app.home, [[offer()]], last=False, when=datetime(2026, 11, 1, 20, 0))
+    old = recorded(app.home, [[offer(), offer("refresh_rate", dict(SCREEN, monitor=MONITOR))]], last=False,
+                   when=datetime(2026, 11, 1, 20, 0))
     r = ask(app, "results", session=sid)
     assert [[fx["apply"] for fx in f["fixes"]] for f in r["findings"]] == [[True, False, False], [False], [False]]
     assert r["fix_note"] == ""
     o = ask(app, "results", session=old)
-    assert [fx["apply"] for f in o["findings"] for fx in f["fixes"]] == [False] and o["fix_note"] == views.NO_FIX_HERE
+    assert [fx["apply"] for f in o["findings"] for fx in f["fixes"]] == [True, True] and o["fix_note"] == ""
+
+
+def test_an_older_reports_refresh_rate_names_no_monitor_so_it_has_no_apply(tmp_path):
+    """Its display name belongs to whichever monitor Windows lists first, which may be another one by now."""
+    app, fx, sid = fixing(tmp_path, fixes=[[offer("refresh_rate", dict(SCREEN)), offer()]])
+    r = ask(app, "results", session=sid)
+    assert [fx["apply"] for fx in r["findings"][0]["fixes"]] == [False, True]
+    assert plain(r["fix_note"]) == views.UNNAMED_FIX
+    assert ask(app, "plan_fix", session=sid, finding=0, fix=0) == \
+        "That is not a fix lag-doctor can apply from this recording: open its results again."
+    assert fx.asked == [] and app.planned is None
 
 
 def test_a_window_without_fixes_offers_no_apply_and_says_so(tmp_path):
@@ -130,7 +146,7 @@ def test_apply_shows_the_plan_first_then_makes_exactly_that_change_and_undo_puts
     assert a["done"] and fx.store["writes"] == [("power_plan", AFTER)]
     (e,) = journal_of(app).entries()
     assert (e.id, e.state, e.before, e.after) == (a["entry"], "applied", BEFORE, AFTER)
-    assert any("apply power_plan: applied" in line for line in log)
+    assert any(line.startswith(f"apply power_plan (offered by {sid}): applied") for line in log)
     rows = ask(app, "changes")["rows"]
     assert [(r["id"], r["title"], r["change"], r["where"], r["undo"], r["force"]) for r in rows] == [
         (e.id, "The stand-in for power_plan", "The stand-in for power_plan: off -> on",
@@ -141,7 +157,7 @@ def test_apply_shows_the_plan_first_then_makes_exactly_that_change_and_undo_puts
     assert journal_of(app).get(e.id).state == "undone" and ask(app, "changes")["rows"] == []
 
 
-def test_the_page_names_a_fix_only_by_its_place_on_the_last_recordings_results(tmp_path):
+def test_the_page_names_a_fix_only_by_its_place_on_a_recordings_results(tmp_path):
     app, fx, sid = fixing(tmp_path, fixes=[[ADVICE, offer()]])
     gone = "That is not a fix lag-doctor can apply from this recording: open its results again."
     assert ask(app, "plan_fix", session=sid, finding=0, fix=0) == gone           # advice is no fix to apply
@@ -189,14 +205,15 @@ def test_a_plan_another_request_applied_meanwhile_is_not_applied_again(tmp_path)
     assert "writes" not in fx.store and journal_of(app).entries() == [] and not app.fix_lock.locked()
 
 
-def test_a_newer_recording_since_stops_the_plan_and_the_change(tmp_path):
+def test_an_older_recordings_fix_is_applied_as_the_last_ones_is(tmp_path):
     app, fx, sid = fixing(tmp_path)
     token = planned(app, sid)["plan"]
-    newer = recorded(app.home, [[offer()]], when=datetime(2026, 11, 5, 21, 0))      # the last one now
-    assert ask(app, "apply_fix", plan=token) == views.NOT_LAST
-    assert ask(app, "plan_fix", session=sid, finding=0, fix=0) == views.NOT_LAST
-    assert "writes" not in fx.store and journal_of(app).entries() == []
-    assert planned(app, newer)["plan"]
+    recorded(app.home, [[offer("game_mode_on")]], when=datetime(2026, 11, 5, 21, 0))      # the last one now
+    a = ask(app, "apply_fix", plan=token)                                             # shown before it: still applied
+    assert a["done"] and fx.store["writes"] == [("power_plan", AFTER)]
+    assert ask(app, "undo_change", entry=a["entry"], force=False)["done"]
+    again = ask(app, "apply_fix", plan=planned(app, sid)["plan"])                        # and planned after it
+    assert again["done"] and fx.store["writes"][-1] == ("power_plan", AFTER)
 
 
 # ---------------------------------------------------------------- when nothing is changed ---
@@ -209,6 +226,7 @@ def test_nothing_is_changed_while_this_windows_recording_runs(tmp_path):
     assert ask(app, "plan_fix", session=sid, finding=0, fix=0) == words
     assert ask(app, "apply_fix", plan=token) == words
     assert ask(app, "undo_change", entry="0123456789ab", force=False) == words
+    assert ask(app, "undo_all", entries=["0123456789ab"]) == words
     assert "writes" not in fx.store
 
 
@@ -224,6 +242,7 @@ def test_nothing_is_changed_while_another_process_records(tmp_path):
         assert ask(app, "apply_fix", plan=token) == words
         assert ask(app, "plan_fix", session=sid, finding=0, fix=0) == words
         assert ask(app, "undo_change", entry="0123456789ab", force=False) == words
+        assert ask(app, "undo_all", entries=["0123456789ab"]) == words
     finally:
         elevation.release_named_mutex(held)
     assert "writes" not in fx.store
@@ -256,6 +275,7 @@ def test_nothing_is_changed_as_administrator_or_when_that_cannot_be_told(tmp_pat
     assert ask(app, "apply_fix", plan=token) == words
     assert ask(app, "plan_fix", session=sid, finding=0, fix=0) == words
     assert ask(app, "undo_change", entry="0123456789ab", force=False) == words
+    assert ask(app, "undo_all", entries=["0123456789ab"]) == words
     assert "writes" not in fx.store and journal_of(app).entries() == []
 
 
@@ -270,6 +290,7 @@ def test_one_change_at_a_time(tmp_path, monkeypatch):
         assert ask(app, "apply_fix", plan=token) == app_main.BUSY
         assert ask(app, "plan_fix", session=sid, finding=0, fix=0) == app_main.BUSY
         assert ask(app, "undo_change", entry="0123456789ab", force=False) == app_main.BUSY
+        assert ask(app, "undo_all", entries=["0123456789ab"]) == app_main.BUSY
         monkeypatch.setattr(app_main, "LIST_WAIT_S", 0.05)
         assert ask(app, "changes") == "lag-doctor is still changing a setting: open Settings again in a moment."
         assert ask(app, "record") == "lag-doctor is changing a setting: record once it is done."
@@ -317,7 +338,7 @@ def test_an_unreadable_journal_pauses_apply_undo_and_the_list(tmp_path):
     token = planned(app, sid)["plan"]
     journal_of(app).path.write_text("not a journal", encoding="utf-8")
     for said in (ask(app, "plan_fix", session=sid, finding=0, fix=0), ask(app, "apply_fix", plan=token),
-                 ask(app, "undo_change", entry="0123456789ab", force=False)):
+                 ask(app, "undo_change", entry="0123456789ab", force=False), ask(app, "undo_all", entries=["0123456789ab"])):
         assert said.startswith("lag-doctor cannot read its fix journal") and "nothing was changed" in said, said
     c = ask(app, "changes")
     assert c["paused"] and c["rows"] == [] and c["text"].startswith("lag-doctor cannot read its fix journal")
@@ -336,6 +357,7 @@ def test_a_journal_another_lag_doctor_holds_changes_nothing(tmp_path):
         assert plain(a["text"]).startswith("lag-doctor could not open its fix journal") and not a["done"]
         assert ask(app, "plan_fix", session=sid, finding=0, fix=0) == app_main.NO_JOURNAL
         assert ask(app, "undo_change", entry="0123456789ab", force=False) == app_main.NO_JOURNAL
+        assert ask(app, "undo_all", entries=["0123456789ab"]) == app_main.NO_JOURNAL
         assert "could not open its fix journal" in ask(app, "changes")["text"]
     finally:
         os.lseek(fd, 0, os.SEEK_SET)
@@ -368,7 +390,9 @@ def test_a_recording_is_looked_for_with_the_change_lock_held(tmp_path):
     app.change_refusal = lambda fixes: held.append(app.fix_lock.locked()) or real(fixes)
     entry = ask(app, "apply_fix", plan=planned(app, sid)["plan"])["entry"]
     assert ask(app, "undo_change", entry=entry, force=False)["done"]
-    assert held == [True, True, True]                     # the plan, the apply and the undo
+    entry = ask(app, "apply_fix", plan=planned(app, sid)["plan"])["entry"]
+    assert ask(app, "undo_all", entries=[entry])["done"] == 1
+    assert held == [True] * 6                             # each plan, apply and undo, Undo all's included
 
 
 def test_a_change_that_left_neither_value_offers_only_to_put_it_back_anyway(tmp_path):
@@ -449,6 +473,104 @@ def test_the_list_says_each_change_and_offers_undo_only_where_it_can(tmp_path):
     assert all(re.fullmatch(r"\d{1,2} \w{3} \d{4}, \d\d:\d\d", r["when"]) for r in rows)
 
 
+THREE = [[offer("power_plan")], [offer("game_mode_on")], [offer("game_dvr_off")]]
+
+
+def made_changes(app, sid, count):
+    """A change applied through Apply for each of the recording's first `count` findings, the first one first; their
+    journal ids, newest first."""
+    out = []
+    for k in range(count):
+        out.insert(0, ask(app, "apply_fix", plan=planned(app, sid, k, 0)["plan"])["entry"])
+    return out
+
+
+def test_undo_all_puts_back_each_change_the_list_named_newest_first(tmp_path):
+    log = []
+    app, fx, sid = fixing(tmp_path, fixes=THREE, log=log)
+    ids = made_changes(app, sid, 3)
+    c = ask(app, "changes")
+    assert c["all"] == ids == [r["id"] for r in c["rows"]]
+    u = ask(app, "undo_all", entries=c["all"])
+    assert u["done"] == 3 and u["force"] == []
+    assert [plain(line) for line in u["lines"]] == [
+        f"Undone: The stand-in for {fid}: off -> on. It is back to how it was."
+        for fid in ("game_dvr_off", "game_mode_on", "power_plan")]
+    assert fx.store["writes"][-3:] == [("game_dvr_off", BEFORE), ("game_mode_on", BEFORE), ("power_plan", BEFORE)]
+    assert ask(app, "changes")["rows"] == [] and all(journal_of(app).get(i).state == "undone" for i in ids)
+    assert [line for line in log if line.startswith("undo ")] == [
+        f"undo {fid} ({i}): restored: restored the stand-in setting of {fid} to {BEFORE!r}"
+        for fid, i in zip(("game_dvr_off", "game_mode_on", "power_plan"), ids)]
+
+
+def test_undo_all_puts_back_two_changes_of_one_setting_in_turn(tmp_path):
+    """Newest first: the older change's own value is back before it is undone, so neither reads as changed since."""
+    app, fx, _ = fixing(tmp_path)
+    j = journal_of(app)
+    older = j.begin("power_plan", "the stand-in setting of power_plan", {}, BEFORE, "between")
+    j.set_state(older.id, "applied")
+    newer = j.begin("power_plan", "the stand-in setting of power_plan", {}, "between", AFTER)
+    j.set_state(newer.id, "applied")
+    fx.store["power_plan"] = AFTER
+    c = ask(app, "changes")
+    assert c["all"] == [newer.id, older.id]
+    u = ask(app, "undo_all", entries=list(reversed(c["all"])))          # whatever order the page names them in
+    assert u["done"] == 2 and fx.store["writes"] == [("power_plan", "between"), ("power_plan", BEFORE)]
+    assert fx.store["power_plan"] == BEFORE and ask(app, "changes")["rows"] == []
+
+
+def test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name(tmp_path):
+    app, fx, _ = fixing(tmp_path)
+    j = journal_of(app)
+
+    def made(fix_id, state="applied"):
+        e = j.begin(fix_id, f"the stand-in setting of {fix_id}", {"key": "sg.X"}, BEFORE, AFTER)
+        j.set_state(e.id, state)
+        fx.store[fix_id] = AFTER
+        return e.id
+    sweep, newer, conflict = made("game_setting"), made("from_a_newer_lag_doctor"), made("game_mode_on", "conflict")
+    left_out, named = made("game_dvr_off"), made("power_plan")
+    c = ask(app, "changes")
+    assert c["all"] == [named, left_out]                      # only the rows with an Undo
+    u = ask(app, "undo_all", entries=[named, sweep, newer, conflict])     # a page that names more than it was given
+    assert u["done"] == 2 and len(u["lines"]) == 2            # the conflict was undone too: it was back to lag-doctor's
+    assert fx.store["writes"] == [("power_plan", BEFORE), ("game_mode_on", BEFORE)]
+    assert {i: j.get(i).state for i in (sweep, newer, left_out)} == {sweep: "applied", newer: "applied",
+                                                                      left_out: "applied"}
+    assert ask(app, "undo_all", entries=[named]) == {
+        "lines": ["Those changes are not on the list any more: they were undone already."], "done": 0, "force": []}
+
+
+def test_undo_all_leaves_a_change_made_since_alone_and_its_row_may_put_it_back_anyway(tmp_path):
+    app, fx, sid = fixing(tmp_path, fixes=THREE)
+    ids = made_changes(app, sid, 2)
+    fx.store["power_plan"] = "set by hand since"
+    u = ask(app, "undo_all", entries=ids)
+    assert (u["done"], u["force"]) == (1, [ids[1]])
+    assert plain(u["lines"][1]) == ("The stand-in for power_plan: It was changed after lag-doctor set it, so it was "
+                                    "left alone. Put it back anyway restores how it was before lag-doctor's change.")
+    assert fx.store["power_plan"] == "set by hand since" and fx.store["game_mode_on"] == BEFORE
+    assert ask(app, "undo_change", entry=ids[1], force=True)["done"] and fx.store["power_plan"] == BEFORE
+
+
+def test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did(tmp_path, monkeypatch):
+    from lagdoctor.fixes import flow
+    app, fx, sid = fixing(tmp_path, fixes=THREE)
+    ids = made_changes(app, sid, 3)
+    real, calls = flow.undo, []
+
+    def then_unreadable(entry, fix_for, journal, force=False):
+        calls.append(entry.id)
+        res = real(entry, fix_for, journal, force=force)
+        journal.path.write_text("not a journal", encoding="utf-8")       # something else broke the file meanwhile
+        return res
+    monkeypatch.setattr(flow, "undo", then_unreadable)
+    u = ask(app, "undo_all", entries=ids)
+    assert calls == ids[:2] and u["done"] == 1                # the second undo could not write itself down
+    assert plain(u["lines"][0]) == "Undone: The stand-in for game_dvr_off: off -> on. It is back to how it was."
+    assert u["lines"][1].startswith("lag-doctor cannot read its fix journal") and len(u["lines"]) == 2
+
+
 def test_the_list_settles_the_journal_first_and_logs_what_settling_said(tmp_path):
     log = []
     app, fx, sid = fixing(tmp_path, log=log, session_only=frozenset({"background_priority"}))
@@ -482,7 +604,7 @@ def test_every_answer_to_an_apply_or_an_undo_is_in_plain_words():
                                   "Power plan: Silent -> Balanced")
             plain(v["text"])
             assert v["force"] == (why == "changed")
-    for text in (views.NO_FIX_HERE, views.NOT_LAST, views.NEWER_CHANGE, views.CONFLICT_NOTE, app_main.BUSY,
+    for text in (views.UNNAMED_FIX, views.NEWER_CHANGE, views.CONFLICT_NOTE, app_main.BUSY,
                  app_main.NO_JOURNAL, app_main.NO_LONGER_PLANNED):
         plain(text)
     assert views.refused_text(ValueError("")) == "lag-doctor will not make this change."

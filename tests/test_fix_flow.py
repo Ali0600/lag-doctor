@@ -43,6 +43,23 @@ def test_a_fix_is_applied_from_a_report_only_when_this_lag_doctor_knows_it_and_i
     assert not flow.offerable("power_plan", None, ids)
     assert not flow.offerable(None, {}, ids)
     assert not flow.offerable(["power_plan"], {}, ids)
+    assert not flow.offerable("from_a_newer_lag_doctor", {}, ids | {"from_a_newer_lag_doctor"})   # not in the catalogue
+    assert not flow.offerable("power_plan", {}, frozenset())              # a window that applies none
+
+
+def test_a_fix_is_applied_from_any_report_only_when_its_params_say_what_it_changes_on_their_own():
+    ids = flow.known()
+    screen = {"device": "\\\\.\\DISPLAY1", "hz": 144}
+    monitor = "\\\\?\\DISPLAY#ABC1234#5&1a2b3c4d&0&UID4352#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+    assert flow.why_not_offered("refresh_rate", dict(screen, monitor=monitor), ids) is None
+    # An older report's display name belongs to whichever monitor Windows lists first, which may be another by now.
+    for odd in (screen, dict(screen, monitor=""), dict(screen, monitor=5), dict(screen, monitor="x" * 200)):
+        assert flow.why_not_offered("refresh_rate", odd, ids) == "unnamed", odd
+        assert not flow.offerable("refresh_rate", odd, ids)
+    assert flow.why_not_offered("refresh_rate", ["device"], ids) == "params"
+    assert flow.why_not_offered("from_a_newer_lag_doctor", {}, ids) == "unknown"
+    assert flow.why_not_offered("game_setting", {}, ids | {"game_setting"}) == "unknown"
+    assert all(catalog.find(i).stands_alone({}) for i in ids if i != "refresh_rate")    # what else they name lasts
 
 
 # ---------------------------------------------------------------- apply ---
