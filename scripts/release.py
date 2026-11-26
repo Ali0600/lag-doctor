@@ -191,8 +191,9 @@ def sums_text(digest: str, name: str) -> str:
 
 def releases_with(gh: Gh, repo: str, tag: str) -> list[dict]:
     """Every release that has the tag `tag`: drafts too, when the token may push (no other token sees a draft)."""
+    # `@json` makes each release one line of compact JSON, which gh prints as it is (a string), on every page.
     pages = gh(["api", "--paginate", f"repos/{repo}/releases?per_page=100", "--jq",
-                f'.[] | select(.tag_name == "{tag}")']).decode("utf-8")
+                f'.[] | select(.tag_name == "{tag}") | @json']).decode("utf-8")
     return [json.loads(line) for line in pages.splitlines() if line.strip()]
 
 
