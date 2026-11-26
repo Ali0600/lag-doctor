@@ -301,9 +301,10 @@ Limits, accepted: trusting Administrators trusts every elevated program, which c
 anyway. Between `watch`'s check and the service's own, another recording may take the lock; `watch` then says the
 service did not record before it refuses, with no prompt.
 
-Revisit hook: `tracelock.trusted_owners` and `TraceLock._take`; a live check on GitHub's runner (a second real relay
-exiting 8 while one records, `tests/test_relay_live.py`; the lock's owner read as the service's SID while the MSI's
-standard account records, `scripts/msi_service_client.py`) is not built yet.
+Revisit hook: `tracelock.trusted_owners` and `TraceLock._take`. Checked live on GitHub's runner since 2026-11-26: a
+second real relay exits 8 while one records (`tests/test_relay_live.py`), and the MSI check's `trace-lock` verdict
+reads the service's lock as its standard account sees it (held, owned by the service's SID, not its to take, free
+afterwards).
 
 ## 2026-11-25: The MSI's build lets WiX's warning 1149 through, by its id
 

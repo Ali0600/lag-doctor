@@ -9,7 +9,9 @@ the installed one (it records which). In order, it records:
 - StartServiceW, as the recorder will call it, and the process id the SCM then names;
 - the pipe: its server's process id and its owner (the service's own SID, which nothing else can set);
 - an `ask` for the stand-in game (frame timing and the network trace), the service's answer, then a short recording
-  and its end: the frames status, whether the network trace started, which processes' events came whole.
+  and its end: the frames status, whether the network trace started, which processes' events came whole;
+- the machine-wide trace lock under its real name while the service records (`lock_during`: its state, its owner, and
+  what opening it to take it met) and once the recording has ended and the pipe is closed (`lock_after`).
 The result goes into OUT, a new file. Exit code 0 when it ran to the end, whatever it found; 1 when it crashed (the
 traceback is in OUT).
 """
@@ -25,6 +27,7 @@ RIGHTS = {"start": 0x0010, "stop": 0x0020, "change_config": 0x0002, "query_statu
 RECORD_S = 8.0                 # how long the recording runs before the stop
 END_S = 45.0                   # the stop to the service's `end`: PresentMon's worst stop is 25 s
 CONNECT_S = 30.0
+LOCK_FREE_S = 10.0             # the recording's end to the trace lock read free: the service lets go as its relay ends
 
 
 def open_error(name: str, access: int) -> int | None:
@@ -62,6 +65,54 @@ def read_until(client, protocol, kinds: set[str], timeout: float, seen: list[dic
     return None
 
 
+def _read(what):
+    """One read of the lock: what `what()` answers, or the error it raised as text, never a crash."""
+    try:
+        return what()
+    except Exception as exc:  # noqa: BLE001 - the result must say what each read met
+        return f"{type(exc).__name__}: {exc}"
+
+
+def lock_now() -> dict:
+    """This PC's machine-wide trace lock (lagdoctor/capture/tracelock.py, its real name) as this account sees it: its
+    state, its owner (None: no lock of that name) and what opening it to wait on it, which is how a thread takes a
+    mutex, met: the error number when Windows refused, None when it opened, "no lock" when there was none."""
+    from lagdoctor.capture import tracelock
+    from lagdoctor.winapi import elevation
+
+    def owner():
+        handle = elevation.open_mutex(tracelock.NAME, tracelock.OTHERS)
+        if handle is None:
+            return None
+        try:
+            return elevation.mutex_owner(handle)
+        finally:
+            elevation.release_named_mutex(handle)
+
+    def take():
+        try:
+            handle = elevation.open_mutex(tracelock.NAME, elevation.SYNCHRONIZE)
+        except OSError as exc:
+            if exc.winerror is None:
+                raise
+            return exc.winerror
+        if handle is None:
+            return "no lock"
+        elevation.release_named_mutex(handle)        # opened, never waited on: this account took nothing
+        return None
+
+    return {"state": _read(tracelock.check), "owner": _read(owner), "take": _read(take)}
+
+
+def lock_after() -> str:
+    """The lock's state after the recording, read until it is free for LOCK_FREE_S at most: the last answer."""
+    from lagdoctor.capture import tracelock
+    deadline = time.monotonic() + LOCK_FREE_S
+    while (state := _read(tracelock.check)) != tracelock.FREE and time.monotonic() < deadline:
+        time.sleep(0.1)
+    return state
+
+
 def run(game_pid: int) -> dict:
     import lagdoctor
     from lagdoctor import clock
@@ -92,8 +143,11 @@ def run(game_pid: int) -> dict:
         if out["hello"] is not None and out["hello"]["t"] == "hello":
             client.write(protocol.start(clock.now()), 10.0)
             read_until(client, protocol, set(), RECORD_S, seen)
+            out["lock_during"] = lock_now()          # the service is recording: it holds the lock
             client.write(protocol.stop(), 10.0)
             out["last"] = read_until(client, protocol, set(), END_S, seen)
+    if "lock_during" in out:
+        out["lock_after"] = lock_after()             # the pipe is closed: the service lets go once its relay ends
     events = [ev for m in seen if m["t"] == "events" for ev in m["ev"]]
     pids: dict[str, int] = {}
     for ev in events:

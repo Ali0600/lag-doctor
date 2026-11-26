@@ -93,6 +93,69 @@ def test_the_real_relay_runs_presentmon_and_the_network_trace_for_this_process(p
     assert code == protocol.EXIT_OK
 
 
+def _lock_owner() -> str | None:
+    """The owner of this PC's trace lock, read with the rights everyone has on it (tracelock.OTHERS); None when there is
+    no lock of that name."""
+    from lagdoctor.capture import tracelock
+    handle = elevation.open_mutex(tracelock.NAME, tracelock.OTHERS)
+    if handle is None:
+        return None
+    try:
+        return elevation.mutex_owner(handle)
+    finally:
+        elevation.release_named_mutex(handle)
+
+
+@pytest.mark.real_trace_lock
+def test_a_second_real_relay_ends_busy_before_its_pipe_while_the_first_holds_this_pcs_trace_lock(presentmon_exe):
+    """The machine-wide trace lock under its real name, the one the real relay takes (tests/conftest.py leaves it to
+    this test, on the runner only): busy and owned by Administrators while one relay records, so a second relay for the
+    same game ends with EXIT_BUSY before it makes its pipe, and free once the first has ended."""
+    from lagdoctor.capture import tracelock
+    from tests import conftest
+    assert elevation.is_elevated(), "GitHub's runner account is an administrator with UAC off"
+    assert tracelock.NAME == conftest.REAL_TRACE_LOCK, "the conftest guard did not leave this test the real name"
+    _until(lambda: tracelock.check() == tracelock.FREE, 15, "this PC's trace lock to be free before the first relay")
+    snap = ntquery.Snapshotter()
+    game = subprocess.Popen([BASE_PY, "-I", "-c", "import sys; sys.stdin.read()"], stdin=subprocess.PIPE)
+    first = second = busy = None
+    during: tuple = ()
+    try:
+        _until(lambda: game.pid in snap.snapshot(), 10, "the stand-in game")
+        procs = snap.snapshot()
+        target = {"pid": game.pid, "create_time": procs[game.pid].create_time, "name": "python.exe"}
+        me = procs[os.getpid()]
+        how = dict(presentmon_exe=Path(presentmon_exe).resolve(), frames=True, network=True,
+                   recorder=(me.pid, me.create_time), sid=elevation.token_user_sid())
+        first = client.launch(target, **how)
+        frames = first.frames_collector(game.pid)
+        tracker = nf.FlowTracker(lambda: {game.pid}, selftest=False, relay=first)
+        origin = clock.now()
+        frames.start(origin)
+        tracker.start(origin)
+        _until(lambda: tracker.status().state == "ok", 20, "the first relay's network trace to start")
+        _until(lambda: any(p.ppid == first.pid and "presentmon" in p.name.lower()
+                           for p in snap.snapshot().values()), 20, "the first relay's PresentMon")
+        during = (tracelock.check(), _lock_owner())
+        try:
+            second = client.launch(target, **how)
+        except client.RelayFailed as exc:
+            busy = exc
+        frames.stop()
+        tracker.stop()
+    finally:
+        code = first.close(wait_s=5) if first is not None else None
+        if second is not None:
+            second.close(wait_s=5)
+        game.stdin.close()
+        game.wait(10)
+    assert during == (tracelock.BUSY, tracelock.ADMINISTRATORS), f"the lock while the first relay recorded: {during}"
+    assert second is None, f"a second relay (process {second.pid}) started beside the first"
+    assert busy is not None and busy.code == protocol.EXIT_BUSY, (busy.why, busy.code) if busy else None
+    assert code == protocol.EXIT_OK
+    _until(lambda: tracelock.check() == tracelock.FREE, 10, "this PC's trace lock to be free once the relay ended")
+
+
 def _detached(argv: list[str]) -> int:
     """Start `argv` through a short-lived process that exits at once, so the new process is nobody's child here (Play's
     folder rule never takes one of lag-doctor's own, and this test is the recorder): its pid."""
