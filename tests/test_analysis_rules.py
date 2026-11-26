@@ -1831,6 +1831,31 @@ def test_refresh_rate_fix_names_the_device_and_the_rate_and_vsync_makes_it_likel
     assert is_finding(run("refresh_rate", cap, stats={"avg_fps": 40.0}, bound={"verdict": "gpu"}), "medium")
 
 
+MONITOR = r"\\?\DISPLAY#ABC1234#5&1a2b3c4d&0&UID4352#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+
+
+def test_refresh_rate_fix_names_the_monitor_the_display_showed_so_any_recording_can_apply_it():
+    cap = make(inventory={"displays": [dict(DISPLAY, hz=60.0, monitor=MONITOR)]})
+    fix = next(f for f in run("refresh_rate", cap).fixes if f.fix_id)
+    assert fix.params == {"device": r"\\.\DISPLAY1", "hz": 144, "monitor": MONITOR}
+    for odd in (None, "", 5, "x" * 128, "bad\npath"):       # not read, or not a monitor's path: the name alone
+        cap = make(inventory={"displays": [dict(DISPLAY, hz=60.0, monitor=odd)]})
+        assert next(f for f in run("refresh_rate", cap).fixes if f.fix_id).params == \
+            {"device": r"\\.\DISPLAY1", "hz": 144}, odd
+
+
+@pytest.mark.parametrize("value", [MONITOR, "x", "x" * 127, "x" * 128, "", None, 5, ["x"], "bad\npath", "tab\there",
+                                   chr(233) * 10])
+def test_the_rule_and_the_fix_agree_on_what_a_monitor_path_is(value):
+    """The rule copies a display's "monitor" into the offer only where the refresh-rate fix takes it."""
+    from lagdoctor.fixes import refresh_rate
+    try:
+        took = refresh_rate._monitor({"monitor": value}) is not None
+    except ValueError:
+        took = False
+    assert rules._monitor_path(value) == took
+
+
 @pytest.mark.parametrize("device", [r"\\.\DISPLAY1; rm", "DISPLAY1", r"\\?\DISPLAY1", None])
 def test_refresh_rate_never_offers_the_fix_for_an_odd_device_name(device):
     res = run("refresh_rate", make(inventory={"displays": [dict(DISPLAY, hz=60.0, device=device)]}))

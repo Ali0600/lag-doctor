@@ -461,19 +461,29 @@ def _load(entry):
     return cap, Diagnosis.from_json(library.read_diagnosis(entry)), main_chain(cap)
 
 
-def test_results_offer_apply_only_on_the_last_recording_and_only_for_fixes_the_window_applies(demo):
+def test_results_offer_apply_for_the_fixes_the_window_applies_and_dated_ones_on_the_last_recording_only(demo):
     from lagdoctor.fixes import flow
+    from lagdoctor.model import FixSuggestion
     home, _ = demo
     entry = next(e for e in entries_of(home) if e.game == app_demo.MARKUP_TITLE)
     cap, d, main = _load(entry)
-    last = views.results_view(entry, d, cap, main, is_last=True, has_report=True, apply_ids=flow.known())
-    other = views.results_view(entry, d, cap, main, is_last=False, has_report=True, apply_ids=flow.known())
-    applied = [fx["title"] for f in last["findings"] for fx in f["fixes"] if fx["apply"]]
-    assert applied and last["fix_note"] == ""
-    assert all(fx["can_apply"] for f in last["findings"] for fx in f["fixes"] if fx["apply"])
-    assert not [fx for f in other["findings"] for fx in f["fixes"] if fx["apply"]]
-    assert other["fix_note"] == views.NO_FIX_HERE
-    none = views.results_view(entry, d, cap, main, is_last=True, has_report=True)      # a window that applies none
+    for is_last in (True, False):                             # a GPU preference names its program: from any recording
+        v = views.results_view(entry, d, cap, main, has_report=True, apply_ids=flow.known(), is_last=is_last)
+        assert [fx["title"] for f in v["findings"] for fx in f["fixes"] if fx["apply"]] and v["fix_note"] == ""
+        assert all(fx["can_apply"] for f in v["findings"] for fx in f["fixes"] if fx["apply"])
+    # A refresh rate an older lag-doctor offered names its screen only by the name Windows gave it then: Apply on the
+    # last recording only, and an older one's Results says why. With its monitor noted, Apply on any.
+    screen = {"device": "\\\\.\\DISPLAY1", "hz": 144}
+    d.findings[0].fixes[:] = [FixSuggestion("Set it to 144 Hz", fix_id="refresh_rate", params=dict(screen)),
+                              FixSuggestion("Set it to 144 Hz", fix_id="refresh_rate",
+                                            params=dict(screen, monitor="\\\\?\\DISPLAY#ABC1234#5&1&0&UID1#{x}"))]
+    last = views.results_view(entry, d, cap, main, has_report=True, apply_ids=flow.known(), is_last=True)
+    assert [fx["apply"] for fx in last["findings"][0]["fixes"]] == [True, True] and last["fix_note"] == ""
+    older = views.results_view(entry, d, cap, main, has_report=True, apply_ids=flow.known())
+    assert [fx["apply"] for fx in older["findings"][0]["fixes"]] == [False, True]
+    assert older["fix_note"] == views.LAST_ONLY_FIX
+    none = views.results_view(entry, d, cap, main, has_report=True)      # a window that applies none
+    assert none["fix_note"] == ""
     assert not [fx for f in none["findings"] for fx in f["fixes"] if fx["apply"]]
     assert not [fx for f in last["findings"] for fx in f["fixes"] if "command" in fx]      # no terminal command now
     assert last["game"] == app_demo.MARKUP_TITLE                # text, as it came: the page shows it as text
@@ -484,16 +494,16 @@ def test_results_show_the_recordings_note_as_its_capture_keeps_it(demo):
     home, _ = demo
     entry = next(e for e in entries_of(home) if e.game == "Demo Racer")    # the newest: the one with a note
     cap, d, main = _load(entry)
-    assert views.results_view(entry, d, cap, main, is_last=False, has_report=True)["note"] == app_demo.MARKUP_NOTE
+    assert views.results_view(entry, d, cap, main, has_report=True)["note"] == app_demo.MARKUP_NOTE
     cap.note = "a" + chr(7) + "b"                               # a Capture made in code: cleaned all the same
-    assert views.results_view(entry, d, cap, main, is_last=False, has_report=True)["note"] == "a b"
+    assert views.results_view(entry, d, cap, main, has_report=True)["note"] == "a b"
 
 
 def test_results_name_every_chart_series_in_words_and_say_why_a_source_is_missing(demo):
     home, _ = demo
     entry = next(e for e in entries_of(home) if e.game == app_demo.MARKUP_TITLE)
     cap, d, main = _load(entry)
-    v = views.results_view(entry, d, cap, main, is_last=False, has_report=False)
+    v = views.results_view(entry, d, cap, main, has_report=False)
     by_id = {c["id"]: c for c in v["charts"]}
     assert [s["label"] for s in by_id["cpu_gpu"]["series"]][:1] == ["the game's GPU use (%)"]
     assert by_id["nv_clock"]["missing"].startswith("Not measured: the game renders on the Intel GPU")
@@ -872,7 +882,7 @@ def test_results_say_which_part_a_start_key_measured_and_draw_only_its_presses(t
     from lagdoctor.analysis.crop import crop
     cap, entry = _keyed_session(tmp_path)
     part = views.results_view(entry, diagnose(crop(cap, 70.0, 130.0, how="key")), cap, main_chain(cap),
-                              is_last=False, has_report=False)
+                              has_report=False)
     assert part["part"].startswith("Analysed 1m, from 1m 10s to 2m 10s of the recording (measured from your start "
                                    "key)") and part["part"].endswith(" It is shaded on the charts.")
     assert part["frames"]["marks"] == [100.0]
@@ -880,9 +890,9 @@ def test_results_say_which_part_a_start_key_measured_and_draw_only_its_presses(t
     # drawn apart.
     assert part["frames"]["rest"] == [[0.0, 70.0], [130.0, cap.system["t"][-1]]] and part["frames"]["outside"] == [20.0]
     later = views.results_view(entry, diagnose(crop(cap, 130.0, 180.0, how="key")), cap, main_chain(cap),
-                               is_last=False, has_report=False)
+                               has_report=False)
     assert later["frames"]["marks"] == []                 # a part without a press: never the presses it left out
-    whole = views.results_view(entry, diagnose(cap), cap, main_chain(cap), is_last=False, has_report=False)
+    whole = views.results_view(entry, diagnose(cap), cap, main_chain(cap), has_report=False)
     assert whole["part"] == "" and whole["frames"]["marks"] == [20.0, 100.0]
     assert (whole["frames"]["rest"], whole["frames"]["outside"]) == ([], [])
     # The header's figures: the part's length beside the part's frames, as the HTML report's header says them.
@@ -897,12 +907,12 @@ def test_the_rest_is_shaded_to_the_last_sample_when_a_chart_runs_past_the_record
     d = diagnose(crop(cap, 70.0, 130.0, how="key"))
     last_system = cap.system["t"][-1]
     assert last_system > 179.0
-    v = views.results_view(entry, d, cap, main_chain(cap), is_last=False, has_report=False)
+    v = views.results_view(entry, d, cap, main_chain(cap), has_report=False)
     assert v["frames"]["rest"] == [[0.0, 70.0], [130.0, last_system]]
     # And to the last frame, when the frames run on past every other table and the length.
     cap.system = {name: column[:len(column) // 2] for name, column in cap.system.items()}
     cap.duration_s, last_frame = 150.0, cap.frames["t"][-1]
-    v = views.results_view(entry, d, cap, main_chain(cap), is_last=False, has_report=False)
+    v = views.results_view(entry, d, cap, main_chain(cap), has_report=False)
     assert last_frame > max([150.0] + [c["t"][-1] for c in v["charts"] if c.get("t")])
     assert v["frames"]["rest"] == [[0.0, 70.0], [130.0, last_frame]]
 
@@ -911,7 +921,7 @@ def test_a_part_that_leaves_nothing_out_says_nothing_is_shaded(tmp_path):
     from lagdoctor.analysis.crop import crop
     cap, entry = _keyed_session(tmp_path)
     v = views.results_view(entry, diagnose(crop(cap, 0.0, 200.0, how="set")), cap, main_chain(cap),
-                           is_last=False, has_report=False)
+                           has_report=False)
     assert v["frames"]["rest"] == [] and v["part"].startswith("Analysed 3m") and "shaded" not in v["part"]
 
 
@@ -930,12 +940,12 @@ def test_the_frame_charts_scale_is_the_reports_from_the_frames_the_analysis_coun
     [entry] = library.scan(tmp_path / "sessions")
     load_end = cap.frames[F.T][600]
     d = diagnose(crop(cap, load_end - 0.5, load_end + 12.0, how="set"))
-    v = views.results_view(entry, d, cap, main_chain(cap, d.stats.get("main_chain")), is_last=False, has_report=False)
+    v = views.results_view(entry, d, cap, main_chain(cap, d.stats.get("main_chain")), has_report=False)
     t, ms = html._main_frames(d, cap)
     assert v["frames"]["top"] == html.frame_scale(d, cap, t, ms)[0] < 100.0     # the wait was 5000 ms
     whole = diagnose(cap)
     cap.frames = {name: [] for name in cap.frames}                              # no frames: the page's own fallback
-    assert views.results_view(entry, whole, cap, main_chain(cap), is_last=False, has_report=False)["frames"]["top"] is None
+    assert views.results_view(entry, whole, cap, main_chain(cap), has_report=False)["frames"]["top"] is None
 
 
 @pytest.mark.parametrize("key, why", [
@@ -947,11 +957,11 @@ def test_a_start_key_that_measured_nothing_says_the_whole_recording_was_analysed
     # terminal's own advice (a command to type) is not the window's.
     cap, entry = _keyed_session(tmp_path)
     cap.start_key = key
-    v = views.results_view(entry, diagnose(cap), cap, main_chain(cap), is_last=False, has_report=False)
+    v = views.results_view(entry, diagnose(cap), cap, main_chain(cap), has_report=False)
     assert v["part"] == (f"The start key Ctrl+Alt+S {why}, so the whole recording was analysed, startup included.")
     assert v["analysed"] == "" and v["frames"]["rest"] == [] and "lagdoctor" not in v["part"]
     cap.start_key = None                                    # no start key at all: nothing to say
-    assert views.results_view(entry, diagnose(cap), cap, main_chain(cap), is_last=False, has_report=False)["part"] == ""
+    assert views.results_view(entry, diagnose(cap), cap, main_chain(cap), has_report=False)["part"] == ""
 
 
 def test_a_moment_at_a_parts_edge_shades_what_the_part_left_out(tmp_path):
@@ -975,7 +985,7 @@ def test_a_part_with_no_frames_of_its_own_says_so_while_the_chart_draws_the_rest
     kept = [i for i, t in enumerate(cap.frames["t"]) if t < 50.0]          # PresentMon stopped at 50 s
     cap.frames = {name: [column[i] for i in kept] for name, column in cap.frames.items()}
     part = views.results_view(entry, diagnose(crop(cap, 70.0, 130.0, how="key")), cap, main_chain(cap),
-                              is_last=False, has_report=False)
+                              has_report=False)
     assert part["frames_text"] == "no frame timing in the measured part" and part["analysed"] == "1m analysed"
     assert views.frame_bytes(main_chain(cap))[1] > 0                       # the frames the chart is sent
 
@@ -1004,3 +1014,21 @@ def test_the_app_draws_the_swap_chain_its_diagnosis_analysed(tmp_path):
     assert views.frame_bytes(main)[1] == sum(1 for c in cap.frames[F.SWAP_CHAIN] if c == "0xB")
     # Asked for a chain the capture does not have, or for none, it is the whole recording's main chain.
     assert set(main_chain(cap, "0xC")[F.SWAP_CHAIN]) == set(main_chain(cap, None)[F.SWAP_CHAIN]) == {"0xA"}
+
+
+def test_undo_all_names_each_change_with_an_undo_newest_first_up_to_its_cap():
+    from types import SimpleNamespace
+    from lagdoctor.app import bridge
+
+    def entry(i, fix_id="power_plan", state="applied"):
+        return SimpleNamespace(id=f"{i:012x}", fix_id=fix_id, state=state, session_only=False, target="t",
+                               created_at="2026-11-26T12:00:00+00:00")
+
+    def about(e):
+        return ("Power plan", "")
+    assert views.changes_view([entry(1)], about)["all"] == []          # one change: its own Undo is enough
+    assert views.changes_view([entry(1, "game_setting"), entry(2, state="conflict"), entry(3)], about)["all"] == []
+    many = [entry(i) for i in range(bridge.MAX_UNDO_ALL + 5)]
+    assert views.changes_view(many, about)["all"] == [e.id for e in many[:bridge.MAX_UNDO_ALL]]
+    assert views.changes_view([entry(1), entry(2, "game_setting"), entry(3)], about)["all"] == [entry(1).id, entry(3).id]
+    assert views.changes_view([], None, "paused")["all"] == []

@@ -34,6 +34,7 @@ MAX_NAME_CHARS = 400                               # a name the player typed; th
 MAX_DELETE = 100                                   # recordings one Delete names: a hundred ids are about 9,000 characters
 PLAN_ID = re.compile(r"p-[0-9a-f]{16}")            # a change Apply showed, before it is applied
 ENTRY_ID = re.compile(r"[0-9a-f]{12}")             # a change in the fix journal (fixes/journal.py's ids)
+MAX_UNDO_ALL = 200                                 # changes one Undo all names: 200 ids are about 3,200 characters
 
 
 def _session(v: Any) -> bool:
@@ -70,6 +71,12 @@ def entry_ok(v: Any) -> bool:
     return isinstance(v, str) and ENTRY_ID.fullmatch(v) is not None
 
 
+def _entries(v: Any) -> bool:
+    """One to MAX_UNDO_ALL journal entry ids, none twice."""
+    return (isinstance(v, list) and 1 <= len(v) <= MAX_UNDO_ALL and all(entry_ok(e) for e in v)
+            and len(set(v)) == len(v))
+
+
 def _flag(v: Any) -> bool:
     return isinstance(v, bool)
 
@@ -96,6 +103,7 @@ REQUESTS = {
     "apply_fix": {"plan": _plan},                     # make the change Apply showed
     "changes": {},                                    # the changes lag-doctor made that are still in place
     "undo_change": {"entry": entry_ok, "force": _flag},    # put one back (force: even if it was changed since)
+    "undo_all": {"entries": _entries},                # put back each of those the list showed, newest first
     "stop_recording": {},
     "cancel_recording": {},
     "recording": {},               # where that recording has got to

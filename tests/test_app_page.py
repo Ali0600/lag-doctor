@@ -223,6 +223,28 @@ def test_apply_shows_its_plan_then_makes_that_change_and_settings_undoes_it(run)
 
 
 @pytest.mark.needs("webview2")
+def test_apply_works_from_a_recording_that_is_not_the_last_and_undo_all_puts_back_every_change(run):
+    from tests.fake_fixes import AFTER, BEFORE
+    _ok(run)
+    assert run["racer_applies"] >= 1 and run["racer_applied"].startswith("Done: ")
+    assert run["undo_all_rows"] == 4 and run["undo_all_armed"] == "Click again to undo all 4 changes"
+    assert run["undo_all_first_click"][-1] == ["gpu_preference", AFTER]          # the first click changed nothing
+    *left, power, gpu = run["undo_all_said"]                                     # newest first
+    assert [s.split(":")[0] for s in left] == ["The stand-in for game_dvr_off", "The stand-in for game_mode_on"]
+    assert all(s.split(": ", 1)[1].startswith("It was changed after lag-doctor set it") for s in left)
+    assert [s.split(":")[1].strip() for s in (power, gpu)] == ["The stand-in for power_plan",
+                                                               "The stand-in for gpu_preference"]
+    assert power.startswith("Undone: ") and gpu.startswith("Undone: ")
+    done = len(run["undo_all_first_click"])
+    assert run["undo_all_writes"][done:] == [["power_plan", BEFORE], ["gpu_preference", BEFORE]]
+    # The two changed since: their rows offer only to put each back anyway, and Undo all is not offered for them.
+    assert run["undo_all_left"] == {"rows": [{"title": f"The stand-in for {fid}", "undo": False, "anyway": True}
+                                             for fid in ("game_dvr_off", "game_mode_on")], "again": False}
+    assert run["undo_all_anyway"].startswith("Undone: ")
+    assert run["undo_all_anyway_writes"][done + 2:] == [["game_dvr_off", BEFORE]]
+
+
+@pytest.mark.needs("webview2")
 def test_a_lag_moment_opens_with_its_charts(run):
     _ok(run)
     assert run["moment"]["title"] and run["moment"]["charts"] >= 2

@@ -107,6 +107,13 @@ class BackgroundPriorityFix(Fix):
     def __init__(self, proc: Any = None) -> None:
         self.proc = proc if proc is not None else winproc
 
+    @classmethod
+    def stands_alone(cls, params: dict[str, Any]) -> bool:
+        """Never: the process named was in the background when the recording was made, and may be the game by now
+        (one started before it and played since), which `exclude` and `game_name`, the recording's own game, would not
+        see. lag-doctor's window applies it from the last recording made only."""
+        return False
+
     # ---- refusals ------------------------------------------------------
     def _subject(self, params: dict[str, Any]) -> tuple[int, int] | None:
         """(pid, create_time) of a process this fix may touch, None if it is gone; Refused otherwise."""

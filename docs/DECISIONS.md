@@ -12,12 +12,6 @@
 - **An elevated `watch` that may record over the capture service's lock after asking**, for the PC's administrator
   when another account holds the service: it would stop that recording, so only with a question first (2026-11-25,
   Stage 4). Revisit hook: `cli._TraceGuard.here`.
-- **Apply from any recording's Results**, not only the last one made, once a fix's params name what they meant on
-  their own (a refresh rate's monitor by its device path, not by the display name Windows gives whichever monitor it
-  lists first) (2026-11-21, M7). Revisit hook: `App.do_plan_fix`'s last-session check and `views._fixes`' `is_last`.
-- **Undo all in the window**, as `lagdoctor undo --all` does: worth it if the list of changes ever grows long; an undo
-  out of order reads as a conflict, so it would go newest first (2026-11-21, M7). Revisit hook: `fillChanges` in
-  `app.js` and `App.do_undo_change`.
 - **A chime once a sweep run's game has been in front 2 minutes**, so the player presses on it instead of timing
   2 minutes 30 s from the short chime (2026-11-21, the sweep's settling time). Worth it if runs are kept out for a
   press too soon. Revisit hook: `runner._record`'s observers, whose live ticks carry `game_focused`, and
@@ -271,6 +265,47 @@ App Control on may refuse the MSI (not tried yet, E6).
 
 Revisit hook: INSTALLER-PLAN Stage 5, steps 2 and 3. The signing step goes between `release.gather` and
 `release.create`, and the README's Code signing policy section is already written for SignPath.
+
+---
+
+## 2026-11-26: Apply from any recording, and Undo all (M7's two follow-ups)
+
+The owner chose these two Backlog items of M7 as the next piece ("do C", one of four offered). The forks inside them
+were settled while building, as M7's were; the owner's own try in the app before the merge is their check.
+
+- **Which recordings' fixes the window applies**
+  - **Any recording's when the fix's params still mean what they meant, the last recording's otherwise (chosen)**:
+    each fix answers (`Fix.stands_alone`, read by `flow.applies`). A power plan's GUID, a program's path and the
+    settings with no params last. Two kinds name the PC as it was then. One is a refresh rate's display name, which
+    Windows hands to whichever monitor it lists first, so a report now names the monitor too, by the path
+    `monitor_path` reads (the inventory's displays keep it). The other is a background program's priority: that
+    program may be the game by now (one started before the recording and played since), which the offer's own
+    exclusions, the recording's game, would not see. Those two keep M7's rule, the last recording only, and an older
+    recording's Results says why.
+  - **Every offer from any recording once the refresh rate names its monitor**: rejected after review. The first
+    version did this, and an independent review found that an older recording's background priority could then open,
+    and lower, a process that had become the game since, which the project's first rule forbids.
+  - **Any recording's offers as they are**: rejected. An old refresh rate could land on another monitor.
+- **Where the refresh rate's monitor is now**
+  - **The fix follows the monitor to the name it has now, in its plan, its reads and its writes (chosen)**: docking or
+    another screen moves the names, and the fix still finds the monitor the recording saw, for the change and for its
+    undo; it refuses when that monitor is not connected.
+  - **Refuse when the name moved**: rejected. A valid fix would be refused after every dock, and a change made before
+    a dock could be undone only after undocking.
+- **What Undo all puts back**
+  - **The changes the list showed with an Undo, by their ids, newest first, never put back anyway (chosen)**: what the
+    player saw is what changes, as with Apply's plan; newest first as `lagdoctor undo --all` goes, so that two changes
+    of one setting come back in turn; one changed since is left alone, and its row then offers Put it back anyway,
+    which stays the single change's second click.
+  - **Whatever the journal lists when the click lands**: rejected. Another window's newer change would be undone unseen.
+  - **Where it stops**: at a journal that turns unreadable, and at an undo the journal could not write down (`unsure`),
+    since every later one would go unwritten too; a change that is neither value (a conflict) is passed over, as the
+    list gives it no Undo.
+  - **With Put it back anyway**: rejected. It would overwrite a change the player made by hand, unasked.
+- **Undo all's confirm**: a second click on the same button (chosen), as Put it back anyway asks; one click
+  (rejected) puts back several settings at once, the cost of a slip.
+
+---
 
 ## 2026-11-26: The preview release: the MSI CI checked, promoted to a draft
 

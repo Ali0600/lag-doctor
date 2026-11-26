@@ -451,9 +451,9 @@ class App:
 
     def do_results(self, session: str) -> tuple:
         entry, cap, d, main = self.load(session)
-        is_last = library.last_session(self.home, self.sessions) == session
-        view = views.results_view(entry, d, cap, main, is_last, (entry.folder / library.REPORT_NAME).is_file(),
-                                  apply_ids=self.fixes.known() if self.fixes is not None else frozenset())
+        view = views.results_view(entry, d, cap, main, (entry.folder / library.REPORT_NAME).is_file(),
+                                  apply_ids=self.fixes.known() if self.fixes is not None else frozenset(),
+                                  is_last=library.last_session(self.home, self.sessions) == session)
         payload, count = views.frame_bytes(main)
         return view, ((payload, {"kind": "frames", "session": session, "count": count}) if count else None)
 
@@ -672,20 +672,22 @@ class App:
     def do_plan_fix(self, session: str, finding: int, fix: int) -> dict:
         """What Apply would change, for the fix the page names by its place on a recording's Results (finding, fix):
         the plan `lagdoctor fix` prints, read now and kept here under a token the page applies by (do_apply_fix). The
-        fix and its params are this app's own reading of the recording's diagnosis, never the page's, and only the last
-        recording made offers them: an older one may describe this PC as it was then. Never while a recording runs, or
+        fix and its params are this app's own reading of the recording's diagnosis, never the page's: from any recording
+        when they stand alone, and from the last recording made when they name the PC as it was then (fixes/flow.applies:
+        a display by its name, a program that was running), as M7 applied every offer. Never while a recording runs, or
         in a window that runs as administrator (change_refusal); an unreadable journal pauses it, as it pauses `fix`."""
         from lagdoctor.fixes import flow
         from lagdoctor.fixes.base import is_gone
         fixes = self.fixes_here()
         _entry, _cap, d, _main = self.load(session)
-        if library.last_session(self.home, self.sessions) != session:
-            raise Gone(views.NOT_LAST)
         found = None
         if finding < len(d.findings) and fix < len(d.findings[finding].fixes):
             found = d.findings[finding].fixes[fix]
-        if found is None or not flow.offerable(found.fix_id, found.params, fixes.known()):
+        offered = "unknown" if found is None else flow.why_not_offered(found.fix_id, found.params, fixes.known())
+        if offered not in (None, "dated"):
             raise Gone("That is not a fix lag-doctor can apply from this recording: open its results again.")
+        if offered == "dated" and library.last_session(self.home, self.sessions) != session:
+            raise Gone(views.NOT_LAST)
         if not self.fix_lock.acquire(blocking=False):
             raise Gone(BUSY)
         try:
@@ -704,7 +706,7 @@ class App:
             return views.plan_view(None, plan)
         token = "p-" + secrets.token_hex(8)
         with self.lock:
-            self.planned = Planned(token=token, session=session, fix_id=found.fix_id, plan=plan)
+            self.planned = Planned(token=token, session=session, fix_id=found.fix_id, plan=plan, dated=offered == "dated")
         return views.plan_view(token, plan)
 
     def do_apply_fix(self, plan: str) -> dict:
@@ -717,8 +719,8 @@ class App:
             planned = self.planned
         if planned is None or planned.token != plan:
             raise Gone(NO_LONGER_PLANNED)
-        if library.last_session(self.home, self.sessions) != planned.session:
-            raise Gone(views.NOT_LAST)
+        if planned.dated and library.last_session(self.home, self.sessions) != planned.session:
+            raise Gone(views.NOT_LAST)              # what it names may be another one since that newer recording
         if not self.fix_lock.acquire(blocking=False):
             raise Gone(BUSY)
         try:
@@ -735,7 +737,7 @@ class App:
                 raise Gone(exc.plain()) from None
         finally:
             self.fix_lock.release()
-        self.log(f"apply {planned.fix_id}: {res.state}: {res.message}")
+        self.log(f"apply {planned.fix_id} (offered by {planned.session}): {res.state}: {res.message}")
         return views.applied_view(res, planned.plan)
 
     def do_changes(self) -> dict:
@@ -799,6 +801,56 @@ class App:
             self.fix_lock.release()
         self.log(f"undo {found.fix_id} ({found.id}): {res.why or res.state}: {res.message}")
         return views.undone_view(res, change)
+
+    def do_undo_all(self, entries: list[str]) -> dict:
+        """Undo all, in Settings: each change the list offered it for (their journal ids, do_changes' `all`) that is
+        still in place, newest first as `lagdoctor undo --all` goes, so that two changes of one setting are put back in
+        turn. Each is do_undo_change's undo without `force`: one changed since is left alone, and its row may then offer
+        to put it back anyway. A settings sweep's change, one a newer lag-doctor made and one left neither value (a
+        conflict) are passed over, as the list offers them no Undo. A journal that turns unreadable, or one that could not
+        write an undo down ("unsure"), stops it there, with what it did said. Never while a recording runs, or in a
+        window that runs as administrator (change_refusal)."""
+        from lagdoctor.fixes import flow
+        from lagdoctor.fixes.journal import JournalCorrupt
+        fixes = self.fixes_here()
+        wanted = set(entries)
+        done: list[tuple[str, Any, str]] = []
+        stopped = ""
+        if not self.fix_lock.acquire(blocking=False):
+            raise Gone(BUSY)
+        try:
+            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)
+            if why is not None:
+                raise Gone(why)
+            journal = fixes.journal()
+            try:
+                chosen = [e for e in journal.outstanding() if isinstance(e.id, str) and e.id in wanted]  # newest first
+            except JournalCorrupt as exc:
+                raise Gone(exc.plain()) from None
+            except OSError as exc:
+                self.log(f"reading the fix journal: {exc}")
+                raise Gone(NO_JOURNAL) from None
+            for e in chosen:
+                title, change = self.about_change(fixes, e)
+                # A fix this lag-doctor does not know (or an id that is no text), a settings sweep's change, and one
+                # left neither value: the list gave each no Undo.
+                if title is None or e.fix_id in flow.NEVER_OFFERED or e.state == "conflict":
+                    continue
+                try:
+                    res = flow.undo(e, fixes.fix, journal, force=False)
+                except JournalCorrupt as exc:
+                    self.log(f"undo all stopped at {e.fix_id} ({e.id}), which may be back without being written "
+                             f"down: {exc.plain()}")
+                    stopped = views.UNDO_ALL_STOPPED.format(title=title)
+                    break
+                self.log(f"undo {e.fix_id} ({e.id}): {res.why or res.state}: {res.message}")
+                done.append((title, res, change))
+                if res.why == "unsure":                 # the journal failed once: what follows would go unwritten too
+                    stopped = views.UNDO_ALL_UNSURE
+                    break
+        finally:
+            self.fix_lock.release()
+        return views.undone_all_view(done, stopped)
 
     def fixes_here(self) -> Any:
         if self.fixes is None:
@@ -1121,11 +1173,13 @@ class Trash:
 @dataclass(frozen=True)
 class Planned:
     """The change Apply showed, before it is applied: `token` is the page's name for it (never the fix or its params),
-    `session` the recording that offered it, `plan` the fix's own (fixes/base.FixPlan, read when it was shown)."""
+    `session` the recording that offered it, `plan` the fix's own (fixes/base.FixPlan, read when it was shown), and
+    `dated` whether its params name the PC as it was then, so that only the last recording made may apply it."""
     token: str
     session: str
     fix_id: str
     plan: Any
+    dated: bool = False
 
 
 @dataclass(frozen=True)
