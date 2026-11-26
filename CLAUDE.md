@@ -113,7 +113,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   new text). Renaming a test does the same to each mutation that names it: only a run of that spec notices, as
   BAD-BASE, so grep the specs for a test's old name when you rename it. Before merging, rerun every mutation whose
   `file` or tests the change touches, picked by path from all of `tests/redfirst/`, never from a list kept by hand
-  (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). Commit before
+  (one missed `crop.json`, and a renamed test sat BAD-BASE until the gate ran, PR #40, 2026-11-10). The one
+  exception, the owner's (2026-11-26, PR #79: "Isn't this a simple doc change? Why do all these tests?"): a change
+  whose code lines are wording only (a docstring, or text a person reads that no check parses) gets no rerun. Check
+  instead that every `old` on its files still occurs exactly once, run the test files that read that text, and let
+  CI run. Commit before
   picking: a pick by `git diff --name-only origin/main HEAD` cannot see an uncommitted edit (PR #53's first pick left
   out `frames.py`'s 112). Merge `origin/main` into the branch first, too: worktrees share their refs, so another
   session's fetch moves `origin/main` under yours, and the two-dot diff then counts main's new files as the branch's
