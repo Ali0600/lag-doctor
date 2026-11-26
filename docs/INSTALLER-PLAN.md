@@ -2,7 +2,7 @@
 
 Goal (DECISIONS 2026-11-06): a stranger installs lag-doctor with one UAC prompt, then records with no prompt and
 no sign-out. The route is a signed per-machine MSI that installs a small capture service; signing is free through
-SignPath Foundation; the licence is MIT. Facts, sources and the experiments' details are in
+SignPath Foundation, and deferred since 2026-11-26, so releases are unsigned meanwhile; the licence is MIT. Facts, sources and the experiments' details are in
 [research/install-and-rights.md](research/install-and-rights.md); the experiment ids (E1 to E8) are defined there.
 
 ## Status (2026-11-08)
@@ -42,7 +42,8 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   `.github/workflows/release.yml`, PR #77): main's tested MSI on a draft release, which the owner publishes.
   The first, v0.1.0, was drafted on 2026-11-26 from main's CI run of the merge (d867ee1), read back with no tag
   yet, and published the same day on the owner's word ("Publish"): a pre-release whose tag GitHub made at
-  d867ee1, and whose MSI, downloaded without signing in, matched its SHA256SUMS. Next: SignPath (step 2).
+  d867ee1, and whose MSI, downloaded without signing in, matched its SHA256SUMS. Signing (steps 2 and 3) is
+  deferred: the owner's choice, 2026-11-26 (DECISIONS).
 
 ## E2: the group fallback
 
@@ -209,9 +210,10 @@ but a GitHub-hosted runner. Measured (research note section 8):
    push, and GitHub makes its tag when it is published, which is the owner's step. Done 2026-11-26: v0.1.0 is
    published (https://github.com/Ali0600/lag-doctor/releases/tag/v0.1.0). Left open: whether Smart App Control
    blocks the MSI (E6), and Windows 10 (E7).
-2. Apply to SignPath Foundation. Its approval is manual and may be declined for reputation; then releases stay
-   unsigned, and the README says what SmartScreen and Smart App Control will show.
-3. With SignPath: signing in the release workflow, each request approved by the owner.
+2. Deferred by the owner on 2026-11-26 (DECISIONS): apply to SignPath Foundation. Its approval is manual and may
+   be declined for reputation; then releases stay unsigned, and the README says what SmartScreen and Smart App
+   Control will show.
+3. Deferred with step 2: with SignPath, signing in the release workflow, each request approved by the owner.
 4. winget: a hand-written first manifest (`wix`, machine scope, `elevationRequired`), then automated updates.
 5. Before announcing: E5 (Administrator protection on), E6 (a Smart App Control machine), E7 (winget from elevated,
    unelevated and standard-account shells, and Windows 10).
