@@ -1491,3 +1491,19 @@ account then started the service and recorded through it, and a build with the s
 there (research note, section 13). The same readback on the owner's Windows 11 Home matched.
 **Takeaway**: verify a service's least-privilege setup from the outside it faces (its live token, a standard caller,
 its folder's DACL), and prove the check with one sabotaged build, rather than trusting the installer's tables or docs.
+
+### A named object's existence is a lock only while no one else can open the name
+A Windows named mutex can lock two ways: by existing (create it, keep the handle; "already exists" means held) or by
+being owned (a thread waits on it and holds it until it lets go). An object lives as long as any handle to it is
+open, by anyone, so existence locks only where no other account can open the name. Ownership survives that: a handle
+someone else keeps open locks nothing, and a holder that dies leaves the mutex abandoned, which the next waiter takes.
+Ownership belongs to a thread, so the lock needs a thread that lives as long as the hold.
+**Why it came up**: the capture lock (`Local\lag-doctor-capture`) locks by existence, which is safe inside one
+Windows session. The trace lock that keeps the capture service and elevated recordings in other sessions apart had to
+live in `Global\`, which every account can open. Drafted the same way, any standard account could have opened the
+name, kept the handle, and made every later recording read as busy. A check of Microsoft's pages before building
+caught it ("The mutex object is destroyed when its last handle has been closed"). `capture/tracelock.py` holds the
+mutex on a thread of its own, lets other accounts read its owner and state but never wait on it, and trusts it only
+when its owner is one a standard account cannot set.
+**Takeaway**: when a lock's name moves to a namespace others share, lock by ownership, deny everyone else the right
+to take it, and trust it by an owner they cannot set.

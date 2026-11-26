@@ -10,16 +10,20 @@ from __future__ import annotations
 
 import argparse
 import os
+import threading
+import uuid
 
 import pytest
 
 from lagdoctor import cli
+from lagdoctor.capture import session as sess
 from lagdoctor.relay import client, protocol
-from lagdoctor.winapi import pipe
+from lagdoctor.winapi import elevation, pipe
 from lagdoctor.winapi import service as winsvc
 from tests import conftest
 from tests import test_relay as tr
 from tests import test_service as ts
+from tests.test_cli import fake_relay, fake_world  # noqa: F401 - fixtures: watch with stand-in collectors and relay
 from tests.test_relay import game  # noqa: F401 - a fixture: a running 'game' in this session
 
 
@@ -216,6 +220,140 @@ def test_watch_says_what_the_service_did_and_goes_on_to_the_prompt_unless_it_is_
     lines: list[str] = []
     assert cli._via_service(_args(), {"pid": 1, "create_time": 1}, say=lines.append) == (None, code)
     assert (said is None and lines == []) or (said is not None and said in " ".join(lines)), lines
+
+
+# ------------------------------------------------------------------------------------------ the hold ---
+
+def test_the_services_hold_fits_every_default_recording_and_the_recorders_margin_fits_its_stop():
+    from lagdoctor.app import recording
+    # watch: Play's default wait, then a start-key press at the last moment, the longest window and its tail.
+    watch = cli.WAIT_DEFAULT_S + cli.DEFAULT_START_BY_S + cli.MAX_WINDOW_S + sess.WINDOW_TAIL_S
+    assert protocol.SERVICE_HOLD_S >= watch + client.HOLD_MARGIN_S
+    assert protocol.SERVICE_HOLD_S >= recording.LENGTH_S + cli.WAIT_DEFAULT_S + client.HOLD_MARGIN_S   # the app's
+    assert client.HOLD_MARGIN_S > client.STOP_FRAMES_S + client.NET_START_S
+    assert protocol.hold_text() == "2 hours" and protocol.hold_text(3600.0) == "1 hour"
+
+
+class HeldLink:
+    """A recording's link as watch holds it: the capture service's (`service`) or the elevated relay's, whose ask went
+    out `held_s` ago (`since`, as client._filetime_now counts)."""
+
+    def __init__(self, service: bool, held_s: float) -> None:
+        self.service, self.pid, self.create_time, self.frames, self.network = service, 7777, 1234, True, False
+        self.since = client._filetime_now() - int(held_s * 10_000_000)
+        self.closed = 0
+
+    def tool_procs(self):
+        return ((self.pid, self.create_time),)
+
+    def close(self):
+        self.closed += 1
+
+
+ROOM_S = protocol.SERVICE_HOLD_S - client.HOLD_MARGIN_S        # what the recorder may spend of the hold
+
+
+def test_a_recording_through_the_service_is_cut_to_end_before_the_hold_and_never_lengthened():
+    near = HeldLink(True, ROOM_S - 1010.0)                      # about 1010 s left before it must stop itself
+    assert cli._held_duration(near, None) == 960.0               # no end of its own: whole minutes, rounded down
+    assert cli._held_duration(near, 7200.0) == 960.0             # a set length past it
+    assert cli._held_duration(near, 600.0) is None               # one that ends first is left as it is
+    assert cli._held_duration(near, 1000.0) is None              # it fits in the time left, if not in whole minutes
+    assert cli._held_duration(near, 1015.0) == 960.0             # it would not: cut, to whole minutes again
+    key = argparse.Namespace(duration=None, window=600.0, start_by=1200.0)
+    assert cli._longest_end(key, "ctrl+alt+s") == 1200.0 + 600.0 + sess.WINDOW_TAIL_S
+    assert cli._held_duration(near, cli._longest_end(key, "ctrl+alt+s")) == 960.0
+    short = argparse.Namespace(duration=None, window=300.0, start_by=100.0)
+    assert cli._held_duration(near, cli._longest_end(short, "ctrl+alt+s")) is None
+    assert cli._longest_end(short, None) is None                 # no start key and no set length: no end of its own
+    assert cli._longest_end(argparse.Namespace(duration=42.0, window=600.0, start_by=1200.0), "ctrl+alt+s") == 42.0
+    assert cli._held_duration(HeldLink(True, ROOM_S - 45.4), None) == 45.0     # under a minute: whole seconds
+    over = HeldLink(True, ROOM_S + 500.0)                       # past it already (a clock moved on, say)
+    assert cli._held_duration(over, None) == 1.0 and cli._held_duration(over, 0.2) is None
+    assert cli._held_duration(HeldLink(False, ROOM_S + 500.0), None) is None   # the elevated relay: no hold
+    assert cli._held_duration(None, None) is None
+
+
+@pytest.fixture
+def watch_here(monkeypatch):
+    """watch run in this process as tests/test_cli.py runs it: a lock name of the test's own, no real UAC prompt, an
+    unelevated owner."""
+    monkeypatch.setattr(sess, "CAPTURE_LOCK_NAME", f"Local\\lagdoctor-test-{uuid.uuid4().hex}")
+
+    def refuse(*a, **k):
+        raise AssertionError("a test reached the real elevated launch")
+    monkeypatch.setattr(elevation, "_ShellExecuteExW", refuse)
+    monkeypatch.setattr(elevation, "is_elevated", lambda: False)
+
+
+def _watch_args(tmp_path, *extra) -> argparse.Namespace:
+    return cli.build_parser().parse_args(["watch", "--pid", "4242", "--no-network", "--hotkey", "none",
+                                          "--start-key", "none", "--out", str(tmp_path / "out"), *extra])
+
+
+def test_watch_through_the_service_stops_itself_before_the_hold_ends_and_says_so(
+        watch_here, fake_relay, fake_world, tmp_path, monkeypatch):  # noqa: F811
+    link = HeldLink(True, ROOM_S - 1.5)                          # about 1.5 s left: it stops itself after 1 s
+    monkeypatch.setattr(cli, "_via_service", lambda *a, **k: (link, None))
+    said: list[str] = []
+    assert cli.cmd_watch(_watch_args(tmp_path), say=said.append) == 0
+    (session,) = fake_world["sessions"]
+    assert session["opts"].relay is link and session["opts"].duration_s == 1.0
+    assert ("The capture service records for at most 2 hours at a time, so this recording stops by itself after 1 s."
+            in said), said
+    assert fake_relay["launches"] == [] and link.closed >= 1     # no prompt, and the link let go
+
+
+class RefusedKey:
+    """The start key's listener while another program holds the key: Windows does not give it."""
+    error, taken = "ctrl+alt+s is already used by another program", True
+
+    def __init__(self, key, on_press) -> None:
+        self.key = key
+
+    def start(self) -> bool:
+        return False
+
+    def stop(self) -> None:
+        pass
+
+
+def test_a_start_key_windows_may_refuse_still_stops_the_recording_before_the_hold(
+        watch_here, fake_relay, fake_world, tmp_path, monkeypatch):  # noqa: F811
+    # The start key's own ends (20 minutes for a press, 10 of measuring) come long before the hold, but only once
+    # Windows gives the key, which the session learns as it starts: refused, it no longer stops by itself.
+    link = HeldLink(True, 30.0)                                  # 6,990 s left: whole minutes, 116 of them
+    monkeypatch.setattr(cli, "_via_service", lambda *a, **k: (link, None))
+    fake_world["keys"] = RefusedKey
+    stop, said = threading.Event(), []
+    timer = threading.Timer(1.0, stop.set)
+    timer.start()
+    try:
+        assert cli.cmd_watch(_watch_args(tmp_path, "--start-key", "ctrl+alt+s", "--no-sound"), say=said.append,
+                             stop=stop) == 0
+    finally:
+        timer.cancel()
+    (session,) = fake_world["sessions"]
+    assert session["opts"].start_key == "ctrl+alt+s" and session["opts"].duration_s == 6960.0
+    assert session["opts"].start_by_s == cli.DEFAULT_START_BY_S                 # its own ends still come first
+    assert ("The capture service records for at most 2 hours at a time, so this recording stops by itself after 116 "
+            "minutes at the latest." in said), said
+
+
+def test_watch_through_the_elevated_relay_is_never_cut_to_the_services_hold(
+        watch_here, fake_relay, fake_world, tmp_path, monkeypatch):  # noqa: F811
+    link = HeldLink(False, protocol.SERVICE_HOLD_S)              # asked a whole hold ago: the service would have cut it
+    monkeypatch.setattr(client, "launch", lambda target, **kw: link)
+    stop, said = threading.Event(), []
+    timer = threading.Timer(1.0, stop.set)
+    timer.start()
+    try:
+        assert cli.cmd_watch(_watch_args(tmp_path, "--elevate"), say=said.append, stop=stop) == 0
+    finally:
+        timer.cancel()
+    (session,) = fake_world["sessions"]
+    assert session["opts"].relay is link and session["opts"].duration_s is None
+    assert not [line for line in said if "capture service records" in line], said
 
 
 # ----------------------------------------------------------------------------------------- the guard ---

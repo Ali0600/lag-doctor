@@ -226,6 +226,52 @@ def capture_service_guard(monkeypatch):
     assert caught == [], " and ".join(caught)
 
 
+# capture/tracelock.py's NAME as the product ships it: tests/test_tracelock.py holds the two equal.
+REAL_TRACE_LOCK = "Global\\lag-doctor-trace"
+
+
+@pytest.fixture(autouse=True)
+def _no_real_trace_lock(monkeypatch):
+    """No test makes, opens or waits on this PC's machine-wide trace lock (capture/tracelock.py, in Windows' Global\\
+    namespace): the owner's own recording in any Windows session, or the capture service, may hold it, so a test that
+    met it would read busy, and one that held it would keep a real recording from starting. Every test gets a name of
+    its own (tracelock.NAME, Global\\lagdoctor-test-<uuid>); one that reaches the real name anyway reads it as no lock
+    there, and fails at its end. A test that starts watch in a child process moves the name there too, as it does the
+    capture lock's."""
+    from lagdoctor.capture import tracelock
+    monkeypatch.setattr(tracelock, "NAME", f"Global\\lagdoctor-test-{uuid.uuid4().hex}")
+    yield from trace_lock_guard(monkeypatch)
+
+
+def trace_lock_guard(monkeypatch):
+    """_no_real_trace_lock's body: refuses the real name to the mutex calls while it is suspended (elevation.create_mutex
+    and open_mutex, which every use of the lock goes through), yields the list of reaches, and raises AssertionError at
+    its end if anything reached (tests/test_tracelock.py drives it to prove that)."""
+    from lagdoctor.winapi import elevation
+    caught = []
+    real = {"create": elevation.create_mutex, "open": elevation.open_mutex}
+    tail = REAL_TRACE_LOCK.rsplit("\\", 1)[-1].casefold()
+
+    def is_real(name) -> bool:                      # in any namespace, in any case
+        return isinstance(name, str) and name.rsplit("\\", 1)[-1].casefold() == tail
+
+    def create(name, *args, **kwargs):
+        if is_real(name):
+            caught.append(f"a test tried to make or open this PC's trace lock ({name})")
+            raise OSError(None, "not in a test", None, elevation.ERROR_INVALID_HANDLE)
+        return real["create"](name, *args, **kwargs)
+
+    def open_mutex(name, *args, **kwargs):
+        if is_real(name):
+            caught.append(f"a test tried to open this PC's trace lock ({name})")
+            return None
+        return real["open"](name, *args, **kwargs)
+    monkeypatch.setattr(elevation, "create_mutex", create)
+    monkeypatch.setattr(elevation, "open_mutex", open_mutex)
+    yield caught
+    assert caught == [], " and ".join(caught)
+
+
 @pytest.fixture(autouse=True)
 def _no_real_fixes(monkeypatch):
     """No test applies or undoes a real fix through lag-doctor's window (App(fixes=), fixes/flow.Fixes, which only the

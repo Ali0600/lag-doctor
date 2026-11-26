@@ -24,8 +24,10 @@ from tests.test_cli import (  # noqa: F401 - fixtures, and test_cli's own guards
 
 ROOT = Path(__file__).resolve().parents[1]
 WITHIN_S = 10.0                  # a wait in the prompt that has not ended by then is a failure, never a hang
-# A real recorder, with a capture lock of its own (a monkeypatch cannot reach a child), as test_cli's console child.
-CHILD = ("import sys\nfrom lagdoctor.capture import session\nsession.CAPTURE_LOCK_NAME = sys.argv[1]\n"
+# A real recorder, with a capture lock and a trace lock of its own (a monkeypatch cannot reach a child), as test_cli's
+# console child.
+CHILD = ("import sys\nfrom lagdoctor.capture import session, tracelock\nsession.CAPTURE_LOCK_NAME = sys.argv[1]\n"
+         "tracelock.NAME = 'Global' + sys.argv[1][len('Local'):]\n"
          "from lagdoctor import cli\nraise SystemExit(cli.main(sys.argv[2:]))\n")
 NOT_ASCII = "Pok" + chr(0xE9) + "mon.exe"
 

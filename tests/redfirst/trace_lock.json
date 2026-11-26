@@ -1,0 +1,634 @@
+[
+ {
+  "name": "check reads a squatted name as an error",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "        if exc.winerror in _SQUATTED:\n            return TAKEN\n        raise",
+  "new": "        raise",
+  "tests": [
+   "tests/test_tracelock.py::test_a_name_another_kind_of_object_holds_is_taken",
+   "tests/test_tracelock.py::test_a_mutex_whose_dacl_shuts_lag_doctor_out_is_taken"
+  ]
+ },
+ {
+  "name": "check swallows every other error as taken",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "        if exc.winerror in _SQUATTED:\n            return TAKEN\n        raise",
+  "new": "        return TAKEN",
+  "tests": [
+   "tests/test_tracelock.py::test_any_other_answer_from_windows_is_raised_so_the_caller_refuses"
+  ]
+ },
+ {
+  "name": "check reads no lock as busy",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "    if handle is None:\n        return FREE",
+  "new": "    if handle is None:\n        return BUSY",
+  "tests": [
+   "tests/test_tracelock.py::test_check_never_makes_the_lock_nor_takes_it"
+  ]
+ },
+ {
+  "name": "check trusts any owner",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "        if elevation.mutex_owner(handle) not in trusted:\n            return TAKEN",
+  "new": "        if False:\n            return TAKEN",
+  "tests": [
+   "tests/test_tracelock.py::test_a_second_lock_is_busy_while_the_first_holds_it_and_holds_it_once_it_is_let_go"
+  ]
+ },
+ {
+  "name": "check reads a held lock as free",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "        return BUSY if count <= 0 else FREE",
+  "new": "        return FREE",
+  "tests": [
+   "tests/test_tracelock.py::test_a_second_lock_is_busy_while_the_first_holds_it_and_holds_it_once_it_is_let_go",
+   "tests/test_tracelock.py::test_check_never_makes_the_lock_nor_takes_it"
+  ]
+ },
+ {
+  "name": "check reads a lock nobody holds as busy",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "        return BUSY if count <= 0 else FREE",
+  "new": "        return BUSY",
+  "tests": [
+   "tests/test_tracelock.py::test_a_handle_left_open_keeps_the_name_but_not_the_lock",
+   "tests/test_tracelock.py::test_a_holder_that_ended_holding_the_lock_never_blocks_the_next_recording"
+  ]
+ },
+ {
+  "name": "acquire reads a squatted name as an error",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "            if exc.winerror in _SQUATTED:\n                return None, TAKEN\n            raise",
+  "new": "            raise",
+  "tests": [
+   "tests/test_tracelock.py::test_a_name_another_kind_of_object_holds_is_taken",
+   "tests/test_tracelock.py::test_a_mutex_whose_dacl_shuts_lag_doctor_out_is_taken"
+  ]
+ },
+ {
+  "name": "acquire swallows every other error as taken",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "            if exc.winerror in _SQUATTED:\n                return None, TAKEN\n            raise",
+  "new": "            return None, TAKEN",
+  "tests": [
+   "tests/test_tracelock.py::test_any_other_answer_from_windows_is_raised_so_the_caller_refuses",
+   "tests/test_tracelock.py::test_an_administrators_owner_is_refused_to_this_token_unless_it_is_elevated"
+  ]
+ },
+ {
+  "name": "a new lock is not held",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "        if made:\n            return handle, HELD",
+  "new": "        if made:\n            return handle, BUSY",
+  "tests": [
+   "tests/test_tracelock.py::test_a_new_lock_is_held_owned_as_asked_and_everyone_else_may_only_read_it"
+  ]
+ },
+ {
+  "name": "acquire trusts any owner",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "            if elevation.mutex_owner(handle) not in trusted:\n                return handle, TAKEN",
+  "new": "            if False:\n                return handle, TAKEN",
+  "tests": [
+   "tests/test_tracelock.py::test_a_second_lock_is_busy_while_the_first_holds_it_and_holds_it_once_it_is_let_go"
+  ]
+ },
+ {
+  "name": "a lock nobody holds is never taken over",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "            return handle, (HELD if elevation.take_mutex(handle) else BUSY)",
+  "new": "            return handle, BUSY",
+  "tests": [
+   "tests/test_tracelock.py::test_a_handle_left_open_keeps_the_name_but_not_the_lock",
+   "tests/test_tracelock.py::test_a_holder_that_ended_holding_the_lock_never_blocks_the_next_recording"
+  ]
+ },
+ {
+  "name": "a held lock is taken anyway",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "            return handle, (HELD if elevation.take_mutex(handle) else BUSY)",
+  "new": "            return handle, HELD",
+  "tests": [
+   "tests/test_tracelock.py::test_a_second_lock_is_busy_while_the_first_holds_it_and_holds_it_once_it_is_let_go"
+  ]
+ },
+ {
+  "name": "the holder thread lets go at once",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "        let_go.wait()\n        try:",
+  "new": "        try:",
+  "tests": [
+   "tests/test_tracelock.py::test_a_new_lock_is_held_owned_as_asked_and_everyone_else_may_only_read_it",
+   "tests/test_tracelock.py::test_the_lock_is_held_by_a_thread_of_its_own_so_the_thread_that_took_it_may_end"
+  ]
+ },
+ {
+  "name": "the holder thread closes its handle still holding the mutex",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "            elevation.release_mutex(handle)    # this thread holds it: let it go before its handle closes",
+  "new": "            pass",
+  "tests": [
+   "tests/test_tracelock.py::test_a_handle_left_open_keeps_the_name_but_not_the_lock"
+  ]
+ },
+ {
+  "name": "release never lets go",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "        if let_go is not None:\n            let_go.set()",
+  "new": "        if False:\n            let_go.set()",
+  "tests": [
+   "tests/test_tracelock.py::test_a_second_lock_is_busy_while_the_first_holds_it_and_holds_it_once_it_is_let_go"
+  ]
+ },
+ {
+  "name": "a second acquire of a held lock asks again",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "            if self.state == HELD:\n                return HELD",
+  "new": "            if False:\n                return HELD",
+  "tests": [
+   "tests/test_tracelock.py::test_release_is_safe_twice_and_before_acquire_and_a_with_block_lets_go"
+  ]
+ },
+ {
+  "name": "an owner that is no SID reaches the descriptor",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "    if not pipe.is_sid(owner):",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_tracelock.py::test_an_owner_that_is_not_a_sid_never_reaches_a_descriptor"
+  ]
+ },
+ {
+  "name": "everyone may take the lock",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "OTHERS = elevation.READ_CONTROL | elevation.MUTANT_QUERY_STATE",
+  "new": "OTHERS = elevation.READ_CONTROL | elevation.MUTANT_QUERY_STATE | elevation.SYNCHRONIZE",
+  "tests": [
+   "tests/test_tracelock.py::test_a_new_lock_is_held_owned_as_asked_and_everyone_else_may_only_read_it"
+  ]
+ },
+ {
+  "name": "the trusted owners may not wait on the lock",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "    full = sorted(trusted_owners() | {owner})",
+  "new": "    full = sorted({owner})",
+  "tests": [
+   "tests/test_tracelock.py::test_a_new_lock_is_held_owned_as_asked_and_everyone_else_may_only_read_it"
+  ]
+ },
+ {
+  "name": "the capture service is not trusted",
+  "file": "lagdoctor/capture/tracelock.py",
+  "old": "    return frozenset((SYSTEM, ADMINISTRATORS, service.service_sid(protocol.SERVICE_NAME)))",
+  "new": "    return frozenset((SYSTEM, ADMINISTRATORS))",
+  "tests": [
+   "tests/test_tracelock.py::test_the_lock_trusts_system_administrators_and_the_capture_service_and_tests_never_use_its_name"
+  ]
+ },
+ {
+  "name": "an existing mutex reads as made",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    return handle, err != ERROR_ALREADY_EXISTS",
+  "new": "    return handle, True",
+  "tests": [
+   "tests/test_tracelock.py::test_a_second_lock_is_busy_while_the_first_holds_it_and_holds_it_once_it_is_let_go"
+  ]
+ },
+ {
+  "name": "an existing mutex is asked for every right",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "                                 SYNCHRONIZE | READ_CONTROL)",
+  "new": "                                 0x1F0001)",
+  "tests": [
+   "tests/test_tracelock.py::test_an_existing_lock_is_asked_only_to_be_waited_on_and_read"
+  ]
+ },
+ {
+  "name": "a name nobody holds is an error",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    if err == ERROR_FILE_NOT_FOUND:\n        return None",
+  "new": "    if False:\n        return None",
+  "tests": [
+   "tests/test_tracelock.py::test_check_never_makes_the_lock_nor_takes_it"
+  ]
+ },
+ {
+  "name": "an abandoned mutex is not taken",
+  "file": "lagdoctor/winapi/elevation.py",
+  "old": "    if r in (WAIT_OBJECT_0, WAIT_ABANDONED):",
+  "new": "    if r == WAIT_OBJECT_0:",
+  "tests": [
+   "tests/test_tracelock.py::test_a_holder_that_ended_holding_the_lock_never_blocks_the_next_recording"
+  ]
+ },
+ {
+  "name": "the guard lets a test make the real lock",
+  "file": "tests/conftest.py",
+  "old": "        if is_real(name):\n            caught.append(f\"a test tried to make or open",
+  "new": "        if False:\n            caught.append(f\"a test tried to make or open",
+  "tests": [
+   "tests/test_tracelock.py::test_the_guard_keeps_tests_from_this_pcs_trace_lock"
+  ]
+ },
+ {
+  "name": "the guard lets a test open the real lock",
+  "file": "tests/conftest.py",
+  "old": "        if is_real(name):\n            caught.append(f\"a test tried to open",
+  "new": "        if False:\n            caught.append(f\"a test tried to open",
+  "tests": [
+   "tests/test_tracelock.py::test_the_guard_keeps_tests_from_this_pcs_trace_lock"
+  ]
+ },
+ {
+  "name": "the guard is fooled by another case or namespace",
+  "file": "tests/conftest.py",
+  "old": "        return isinstance(name, str) and name.rsplit(\"\\\\\", 1)[-1].casefold() == tail",
+  "new": "        return name == REAL_TRACE_LOCK",
+  "tests": [
+   "tests/test_tracelock.py::test_the_guard_keeps_tests_from_this_pcs_trace_lock"
+  ]
+ },
+ {
+  "name": "tests keep the real lock name",
+  "file": "tests/conftest.py",
+  "old": "    monkeypatch.setattr(tracelock, \"NAME\", f\"Global\\\\lagdoctor-test-{uuid.uuid4().hex}\")\n",
+  "new": "",
+  "tests": [
+   "tests/test_tracelock.py::test_the_lock_trusts_system_administrators_and_the_capture_service_and_tests_never_use_its_name"
+  ]
+ },
+ {
+  "name": "the relay records beside another recording that traces",
+  "file": "lagdoctor/relay/server.py",
+  "old": "        if held == tracelock.BUSY:\n            return protocol.EXIT_BUSY",
+  "new": "        if False:\n            return protocol.EXIT_BUSY",
+  "tests": [
+   "tests/test_relay.py::test_a_relay_that_finds_another_recording_tracing_ends_before_its_pipe_exists"
+  ]
+ },
+ {
+  "name": "the relay refuses when another program holds the name",
+  "file": "lagdoctor/relay/server.py",
+  "old": "        if held == tracelock.BUSY:\n            return protocol.EXIT_BUSY",
+  "new": "        if held != tracelock.HELD:\n            return protocol.EXIT_BUSY",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_takes_the_trace_lock_only_once_presentmon_passed_and_goes_on_when_another_program_holds_it"
+  ]
+ },
+ {
+  "name": "the relay never takes the lock",
+  "file": "lagdoctor/relay/server.py",
+  "old": "        held = lock.acquire()",
+  "new": "        held = tracelock.HELD",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_holds_the_trace_lock_from_before_its_pipe_until_it_ends",
+   "tests/test_relay.py::test_a_relay_that_finds_another_recording_tracing_ends_before_its_pipe_exists"
+  ]
+ },
+ {
+  "name": "a lock the relay cannot check is not a crash",
+  "file": "lagdoctor/relay/server.py",
+  "old": "    except OSError:\n        return protocol.EXIT_CRASH                # Windows could not say",
+  "new": "    except ZeroDivisionError:\n        return protocol.EXIT_CRASH                # Windows could not say",
+  "tests": [
+   "tests/test_relay.py::test_a_relay_that_finds_another_recording_tracing_ends_before_its_pipe_exists"
+  ]
+ },
+ {
+  "name": "the relay keeps the lock after it ends",
+  "file": "lagdoctor/relay/server.py",
+  "old": "    finally:\n        lock.release()\n\n\ndef _serve(",
+  "new": "    finally:\n        pass\n\n\ndef _serve(",
+  "tests": [
+   "tests/test_relay.py::test_the_relay_holds_the_trace_lock_from_before_its_pipe_until_it_ends"
+  ]
+ },
+ {
+  "name": "the relay's lock is not owned by Administrators",
+  "file": "lagdoctor/relay/server.py",
+  "old": "    return tracelock.TraceLock(tracelock.ADMINISTRATORS)",
+  "new": "    return tracelock.TraceLock(\"S-1-5-18\")",
+  "tests": [
+   "tests/test_relay.py::test_the_relays_trace_lock_is_owned_by_administrators_as_its_pipe_is"
+  ]
+ },
+ {
+  "name": "the service records beside another recording that traces",
+  "file": "lagdoctor/service/__init__.py",
+  "old": "        if got == tracelock.BUSY:\n            raise Refused(",
+  "new": "        if False:\n            raise Refused(",
+  "tests": [
+   "tests/test_service.py::test_a_caller_is_refused_while_another_recording_holds_the_trace_lock_and_served_once_it_is_free"
+  ]
+ },
+ {
+  "name": "the service never takes the lock",
+  "file": "lagdoctor/service/__init__.py",
+  "old": "        self._hold_the_trace()                         # last: no check after it may refuse the caller",
+  "new": "        pass",
+  "tests": [
+   "tests/test_service.py::test_a_caller_is_refused_while_another_recording_holds_the_trace_lock_and_served_once_it_is_free"
+  ]
+ },
+ {
+  "name": "a lock the service cannot check is said as a surprise",
+  "file": "lagdoctor/service/__init__.py",
+  "old": "        except OSError as exc:\n            raise Refused(f\"the capture service could not check",
+  "new": "        except ZeroDivisionError as exc:\n            raise Refused(f\"the capture service could not check",
+  "tests": [
+   "tests/test_service.py::test_a_trace_lock_windows_cannot_answer_about_refuses_the_caller_with_why"
+  ]
+ },
+ {
+  "name": "the service keeps the lock after a recording",
+  "file": "lagdoctor/service/__init__.py",
+  "old": "            left = relay.close(READER_GONE_S)\n            self._let_go_of_the_trace()",
+  "new": "            left = relay.close(READER_GONE_S)",
+  "tests": [
+   "tests/test_service.py::test_a_caller_is_refused_while_another_recording_holds_the_trace_lock_and_served_once_it_is_free",
+   "tests/test_service.py::test_the_trace_lock_is_the_last_check_and_let_go_when_the_recording_fails"
+  ]
+ },
+ {
+  "name": "the service keeps the lock when its relay core cannot be made",
+  "file": "lagdoctor/service/__init__.py",
+  "old": "            self._let_go_of_the_trace()                # the relay core could not be made once it was held",
+  "new": "            pass",
+  "tests": [
+   "tests/test_service.py::test_a_relay_core_that_cannot_be_made_once_the_lock_is_held_lets_it_go"
+  ]
+ },
+ {
+  "name": "the service's lock is not owned by its own SID",
+  "file": "lagdoctor/service/__init__.py",
+  "old": "        self.trace_lock = trace_lock or (lambda: tracelock.TraceLock(service.service_sid(protocol.SERVICE_NAME)))",
+  "new": "        self.trace_lock = trace_lock or (lambda: tracelock.TraceLock(tracelock.ADMINISTRATORS))",
+  "tests": [
+   "tests/test_service.py::test_the_services_trace_lock_is_owned_by_its_own_service_sid_by_default"
+  ]
+ },
+ {
+  "name": "watch asks the service beside another recording that traces",
+  "file": "lagdoctor/cli.py",
+  "old": "            if trace.busy():                  # it would stop another Windows session's recording, as a relay would",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_cli.py::test_another_sessions_recording_is_honoured_before_the_service_is_asked_and_before_the_prompt"
+  ]
+ },
+ {
+  "name": "watch raises the prompt beside another recording that traces",
+  "file": "lagdoctor/cli.py",
+  "old": "            if trace.busy():                  # again: the answer may have taken a while, and no prompt is in vain",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_cli.py::test_another_sessions_recording_is_honoured_before_the_service_is_asked_and_before_the_prompt"
+  ]
+ },
+ {
+  "name": "a window that traces itself ignores the lock",
+  "file": "lagdoctor/cli.py",
+  "old": "            if _traces_here(args, frames, relay) and trace.here():",
+  "new": "            if False:",
+  "tests": [
+   "tests/test_cli.py::test_an_unelevated_window_that_traces_itself_honours_another_sessions_recording_and_never_holds_the_lock",
+   "tests/test_cli.py::test_an_elevated_window_recording_here_holds_the_trace_lock_until_its_recording_stops"
+  ]
+ },
+ {
+  "name": "an elevated window only checks the lock",
+  "file": "lagdoctor/cli.py",
+  "old": "        return self.hold() if _elevated() else self.busy()",
+  "new": "        return self.busy()",
+  "tests": [
+   "tests/test_cli.py::test_an_elevated_window_recording_here_holds_the_trace_lock_until_its_recording_stops"
+  ]
+ },
+ {
+  "name": "an unelevated window tries to hold the lock",
+  "file": "lagdoctor/cli.py",
+  "old": "        return self.hold() if _elevated() else self.busy()",
+  "new": "        return self.hold()",
+  "tests": [
+   "tests/test_cli.py::test_an_unelevated_window_that_traces_itself_honours_another_sessions_recording_and_never_holds_the_lock"
+  ]
+ },
+ {
+  "name": "a window with a relay checks the lock again",
+  "file": "lagdoctor/cli.py",
+  "old": "    if relay is not None:\n        return False\n    if frames:",
+  "new": "    if frames:",
+  "tests": [
+   "tests/test_cli.py::test_another_programs_hold_on_the_lock_name_is_said_once_and_the_recording_goes_on"
+  ]
+ },
+ {
+  "name": "frame timing here alone is not taken for tracing",
+  "file": "lagdoctor/cli.py",
+  "old": "    if frames:\n        return True\n    if args.no_network:",
+  "new": "    if args.no_network:",
+  "tests": [
+   "tests/test_cli.py::test_an_unelevated_window_that_traces_itself_honours_another_sessions_recording_and_never_holds_the_lock"
+  ]
+ },
+ {
+  "name": "a recording with the network off is taken for tracing",
+  "file": "lagdoctor/cli.py",
+  "old": "    if args.no_network:\n        return False\n    try:\n        from lagdoctor.winapi import elevation\n        return elevation.can_trace()",
+  "new": "    try:\n        from lagdoctor.winapi import elevation\n        return elevation.can_trace()",
+  "tests": [
+   "tests/test_cli.py::test_an_unelevated_window_that_traces_itself_honours_another_sessions_recording_and_never_holds_the_lock"
+  ]
+ },
+ {
+  "name": "the network trace here alone is not taken for tracing",
+  "file": "lagdoctor/cli.py",
+  "old": "        from lagdoctor.winapi import elevation\n        return elevation.can_trace()\n    except OSError:\n        return True                                   # cannot tell: honour the lock",
+  "new": "        from lagdoctor.winapi import elevation\n        return False\n    except OSError:\n        return True                                   # cannot tell: honour the lock",
+  "tests": [
+   "tests/test_cli.py::test_an_unelevated_window_that_traces_itself_honours_another_sessions_recording_and_never_holds_the_lock"
+  ]
+ },
+ {
+  "name": "another recording that traces is not refused",
+  "file": "lagdoctor/cli.py",
+  "old": "        if state == tracelock.BUSY:\n            self.say(TRACE_BUSY)\n            return True",
+  "new": "        if False:\n            self.say(TRACE_BUSY)\n            return True",
+  "tests": [
+   "tests/test_cli.py::test_another_sessions_recording_is_honoured_before_the_service_is_asked_and_before_the_prompt"
+  ]
+ },
+ {
+  "name": "a lost lock name is said every time",
+  "file": "lagdoctor/cli.py",
+  "old": "        if state == tracelock.TAKEN and not self.told:",
+  "new": "        if state == tracelock.TAKEN:",
+  "tests": [
+   "tests/test_cli.py::test_another_programs_hold_on_the_lock_name_is_said_once_and_the_recording_goes_on"
+  ]
+ },
+ {
+  "name": "a lost lock name is never said",
+  "file": "lagdoctor/cli.py",
+  "old": "        if state == tracelock.TAKEN and not self.told:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_cli.py::test_another_programs_hold_on_the_lock_name_is_said_once_and_the_recording_goes_on"
+  ]
+ },
+ {
+  "name": "a lock windows cannot answer about lets watch go on",
+  "file": "lagdoctor/cli.py",
+  "old": "                 \"start one.\")\n        return True",
+  "new": "                 \"start one.\")\n        return False",
+  "tests": [
+   "tests/test_cli.py::test_a_trace_lock_windows_cannot_answer_about_refuses_to_record"
+  ]
+ },
+ {
+  "name": "the window drops the lock it holds",
+  "file": "lagdoctor/cli.py",
+  "old": "        if state == tracelock.HELD:\n            self.lock = lock",
+  "new": "        if False:\n            self.lock = lock",
+  "tests": [
+   "tests/test_cli.py::test_an_elevated_window_recording_here_holds_the_trace_lock_until_its_recording_stops"
+  ]
+ },
+ {
+  "name": "the window keeps the lock through the analysis",
+  "file": "lagdoctor/cli.py",
+  "old": "    if trace is not None:\n        trace.release()\n    if cues is not None and cues.failed:",
+  "new": "    if False:\n        trace.release()\n    if cues is not None and cues.failed:",
+  "tests": [
+   "tests/test_cli.py::test_an_elevated_window_recording_here_holds_the_trace_lock_until_its_recording_stops"
+  ]
+ },
+ {
+  "name": "a recording that cannot begin keeps the lock",
+  "file": "lagdoctor/cli.py",
+  "old": "            relay.close()\n        trace.release()\n\n\ndef _record(",
+  "new": "            relay.close()\n\n\ndef _record(",
+  "tests": [
+   "tests/test_cli.py::test_an_elevated_window_whose_recording_cannot_begin_lets_the_trace_lock_go"
+  ]
+ },
+ {
+  "name": "a relay that found another recording tracing is said as a failure",
+  "file": "lagdoctor/cli.py",
+  "old": "    if exc.code == protocol.EXIT_BUSY:          # the relay found another recording holding the trace lock",
+  "new": "    if False:",
+  "tests": [
+   "tests/test_cli.py::test_a_relay_that_found_another_recording_tracing_says_so_and_records_nothing"
+  ]
+ },
+ {
+  "name": "an elevated window's lock is not owned by Administrators",
+  "file": "lagdoctor/cli.py",
+  "old": "    return tracelock.TraceLock(tracelock.ADMINISTRATORS)",
+  "new": "    return tracelock.TraceLock(\"S-1-5-18\")",
+  "tests": [
+   "tests/test_cli.py::test_an_elevated_windows_trace_lock_is_owned_by_administrators"
+  ]
+ },
+ {
+  "name": "the window lets the lock go before it is saved",
+  "file": "lagdoctor/cli.py",
+  "old": "                if relay is not None:\n                    relay.close()\n            if cap.target.get(",
+  "new": "                if relay is not None:\n                    relay.close()\n                if trace is not None:\n                    trace.release()\n            if cap.target.get(",
+  "tests": [
+   "tests/test_cli.py::test_closing_an_elevated_window_while_it_saves_stops_the_network_trace_only_while_it_holds_the_lock"
+  ]
+ },
+ {
+  "name": "the service records while another program holds the lock's name",
+  "file": "lagdoctor/service/__init__.py",
+  "old": "        if got == tracelock.TAKEN:\n            raise Refused(",
+  "new": "        if False:\n            raise Refused(",
+  "tests": [
+   "tests/test_service.py::test_another_programs_hold_on_the_lock_name_refuses_the_caller_with_why"
+  ]
+ },
+ {
+  "name": "an e2e mode ignores another session's recording",
+  "file": "scripts/e2e.py",
+  "old": "    if guard.here():\n        raise Busy(\" \".join(said))",
+  "new": "    if False:\n        raise Busy(\" \".join(said))",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_an_e2e_mode_beside_another_sessions_recording_stops_before_laglab_starts"
+  ]
+ },
+ {
+  "name": "an e2e mode keeps the lock",
+  "file": "scripts/e2e.py",
+  "old": "        if trace is not None:\n            trace.release()\n    log = json.loads(",
+  "new": "        pass\n    log = json.loads(",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_an_e2e_mode_holds_the_trace_lock_from_before_laglab_starts_and_lets_it_go"
+  ]
+ },
+ {
+  "name": "an e2e mode takes the lock only after LagLab has started",
+  "file": "scripts/e2e.py",
+  "old": "        trace = take_trace_lock()             # so is another Windows session's recording, before LagLab starts\n",
+  "new": "",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_an_e2e_mode_beside_another_sessions_recording_stops_before_laglab_starts",
+   "tests/test_tracelock_scripts.py::test_an_e2e_mode_holds_the_trace_lock_from_before_laglab_starts_and_lets_it_go"
+  ]
+ },
+ {
+  "name": "the benchmark ignores another session's recording",
+  "file": "scripts/overhead/bench.py",
+  "old": "        if trace is None:\n            print(\"nothing was started\", flush=True)\n            return 4",
+  "new": "        if False:\n            print(\"nothing was started\", flush=True)\n            return 4",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_the_benchmark_beside_another_sessions_recording_starts_nothing_and_lets_the_capture_lock_go"
+  ]
+ },
+ {
+  "name": "the benchmark keeps the lock",
+  "file": "scripts/overhead/bench.py",
+  "old": "            trace.release()",
+  "new": "            pass",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_the_benchmark_holds_the_trace_lock_for_its_whole_command"
+  ]
+ },
+ {
+  "name": "the benchmark only checks the lock in an administrator terminal",
+  "file": "scripts/overhead/bench.py",
+  "old": "frames, None) and guard.here():",
+  "new": "frames, None) and guard.busy():",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_the_benchmark_holds_the_trace_lock_for_its_whole_command"
+  ]
+ },
+ {
+  "name": "the recorder on its own ignores another session's recording",
+  "file": "scripts/overhead/recorder.py",
+  "old": "        if cli._traces_here(args, args.frames, None) and trace.here():",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_the_recorder_on_its_own_beside_another_sessions_recording_records_nothing"
+  ]
+ },
+ {
+  "name": "the recorder on its own keeps the lock",
+  "file": "scripts/overhead/recorder.py",
+  "old": "        if trace is not None:\n            trace.release()",
+  "new": "        pass",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_the_recorder_on_its_own_holds_the_trace_lock_and_leaves_it_to_the_benchmark_that_started_it"
+  ]
+ },
+ {
+  "name": "the recorder the benchmark started takes the locks too",
+  "file": "scripts/overhead/recorder.py",
+  "old": "    lock = None if args.no_lock else sess.CaptureLock()",
+  "new": "    lock = sess.CaptureLock()",
+  "tests": [
+   "tests/test_tracelock_scripts.py::test_the_recorder_on_its_own_holds_the_trace_lock_and_leaves_it_to_the_benchmark_that_started_it"
+  ]
+ }
+]

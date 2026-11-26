@@ -22,6 +22,7 @@ on:
       - "lagdoctor/winapi/__init__.py"
       - "lagdoctor/winapi/elevation.py"
       - "lagdoctor/winapi/ntquery.py"
+      - "lagdoctor/winapi/pipe.py"
       - "lagdoctor/winapi/storage.py"
       - "scripts/stage2/__init__.py"
       - "scripts/stage2/guard.py"

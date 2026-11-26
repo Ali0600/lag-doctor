@@ -227,6 +227,64 @@ def path(name: str) -> str:
     return _PREFIX + name
 
 
+def is_sid(text: object) -> bool:
+    """A SID in its text form ("S-1-5-18"), and nothing an SDDL string could read as more than one: a SID handed to a
+    descriptor must be checked by this first."""
+    return isinstance(text, str) and _SID.fullmatch(text) is not None
+
+
+@contextlib.contextmanager
+def security_attributes(sddl: str):
+    """SECURITY_ATTRIBUTES for a new kernel object under the descriptor `sddl`, not inherited by child processes. The
+    descriptor is freed when the block ends: an object made inside it keeps a copy of its own. OSError when Windows
+    cannot read `sddl`."""
+    sd = ctypes.c_void_p()
+    if not _adv.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, ctypes.byref(sd), None):
+        raise _error()
+    try:
+        yield SECURITY_ATTRIBUTES(ctypes.sizeof(SECURITY_ATTRIBUTES), sd, False)
+    finally:
+        _k32.LocalFree(sd)
+
+
+def owner_of(handle: int) -> str:
+    """The owner of a kernel object, through a handle opened with READ_CONTROL, as a SID ("S-1-..."; never an SDDL
+    alias). Windows sets it from the creator's token and lets a token set only an owner it holds."""
+    owner, sd = ctypes.c_void_p(), ctypes.c_void_p()
+    rc = _adv.GetSecurityInfo(handle, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION, ctypes.byref(owner), None,
+                              None, None, ctypes.byref(sd))
+    if rc:
+        raise _error(rc)
+    text = wintypes.LPWSTR()
+    try:
+        if not _adv.ConvertSidToStringSidW(owner, ctypes.byref(text)):
+            raise _error()
+        return text.value
+    finally:
+        if text:
+            _k32.LocalFree(ctypes.cast(text, ctypes.c_void_p))
+        _k32.LocalFree(sd)
+
+
+def descriptor_of(handle: int, info: int = DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION) -> str:
+    """The parts `info` names of a kernel object's descriptor as Windows holds them, in SDDL (GetSecurityInfo through a
+    handle opened with READ_CONTROL)."""
+    sd = ctypes.c_void_p()
+    rc = _adv.GetSecurityInfo(handle, SE_KERNEL_OBJECT, info, None, None, None, None, ctypes.byref(sd))
+    if rc:
+        raise _error(rc)
+    text = wintypes.LPWSTR()
+    try:
+        if not _adv.ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, SDDL_REVISION_1, info,
+                                                                         ctypes.byref(text), None):
+            raise _error()
+        return text.value
+    finally:
+        if text:
+            _k32.LocalFree(ctypes.cast(text, ctypes.c_void_p))
+        _k32.LocalFree(sd)
+
+
 def client_dacl(sids: list[str] | tuple[str, ...]) -> str:
     """The descriptor for a pipe that only these accounts or groups may open as clients: a protected DACL granting
     each SID exactly what connect() asks for (CLIENT_GRANT), and the medium label. ValueError on a SID that is not
@@ -526,41 +584,14 @@ class _Pipe:
     def descriptor(self) -> str:
         """The pipe's DACL and integrity label as Windows holds them, in SDDL (GetSecurityInfo)."""
         with self._using() as handle:
-            info = DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION
-            sd = ctypes.c_void_p()
-            rc = _adv.GetSecurityInfo(handle, SE_KERNEL_OBJECT, info, None, None, None, None, ctypes.byref(sd))
-            if rc:
-                raise _error(rc)
-            text = wintypes.LPWSTR()
-            try:
-                if not _adv.ConvertSecurityDescriptorToStringSecurityDescriptorW(sd, SDDL_REVISION_1, info,
-                                                                                 ctypes.byref(text), None):
-                    raise _error()
-                return text.value
-            finally:
-                if text:
-                    _k32.LocalFree(ctypes.cast(text, ctypes.c_void_p))
-                _k32.LocalFree(sd)
+            return descriptor_of(handle, DACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION)
 
     def owner_sid(self) -> str:
         """The pipe's owner as a SID ("S-1-..."; never an SDDL alias): set by the process that made the pipe, from
         its own token. A process cannot make a pipe owned by a group it does not hold, so a client can check the
         owner as well as server_pid()."""
         with self._using() as handle:
-            owner, sd = ctypes.c_void_p(), ctypes.c_void_p()
-            rc = _adv.GetSecurityInfo(handle, SE_KERNEL_OBJECT, OWNER_SECURITY_INFORMATION, ctypes.byref(owner), None,
-                                      None, None, ctypes.byref(sd))
-            if rc:
-                raise _error(rc)
-            text = wintypes.LPWSTR()
-            try:
-                if not _adv.ConvertSidToStringSidW(owner, ctypes.byref(text)):
-                    raise _error()
-                return text.value
-            finally:
-                if text:
-                    _k32.LocalFree(ctypes.cast(text, ctypes.c_void_p))
-                _k32.LocalFree(sd)
+            return owner_of(handle)
 
     def remote_clients_rejected(self) -> bool:
         """Whether Windows holds this pipe as refusing remote clients (FilePipeLocalInformation's NamedPipeType)."""
@@ -611,20 +642,13 @@ class PipeServer(_Pipe):
     def __init__(self, name: str, sddl: str, max_message: int = MAX_MESSAGE) -> None:
         self.path = path(name)
         max_message = _size(max_message)
-        sd = ctypes.c_void_p()
-        if not _adv.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, ctypes.byref(sd),
-                                                                         None):
-            raise _error()
-        try:
-            sa = SECURITY_ATTRIBUTES(ctypes.sizeof(SECURITY_ATTRIBUTES), sd, False)
+        with security_attributes(sddl) as sa:                # the pipe keeps a copy of its own descriptor
             handle = _k32.CreateNamedPipeW(
                 self.path, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED | FILE_FLAG_FIRST_PIPE_INSTANCE,
                 PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
                 1, max_message, max_message, 0, ctypes.byref(sa))
             if handle in (None, INVALID_HANDLE_VALUE):
                 raise _error()
-        finally:
-            _k32.LocalFree(sd)                               # the pipe keeps a copy of its own
         super().__init__(handle, max_message)
         try:
             self._connector = self._op()

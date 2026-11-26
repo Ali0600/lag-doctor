@@ -10,20 +10,24 @@ origin and, for Play, the processes the recorder found, which the relay judges f
 1. Its own handle-free snapshot must show the recorder running as exactly that process in the relay's own Windows
    session, and with --game the game too (target.accept_target, which the recorder called before the prompt).
 2. PresentMon must pass its check again here (setup.verify).
-3. It creates the pipe: first instance only, remote clients refused, a DACL for the recorder's account, a medium
+3. It takes the machine-wide trace lock (capture/tracelock.py) and holds it until it ends: while another lag-doctor
+   recording on this PC holds it, the relay ends at once (EXIT_BUSY), since starting its trace sessions would stop
+   that recording's.
+4. It creates the pipe: first instance only, remote clients refused, a DACL for the recorder's account, a medium
    label, and Administrators as its owner, which only an elevated token may set (the recorder checks it).
-4. Only the recorder may stay connected: its pid and session are checked; anyone else is let go.
-5. For Play, each process the recorder names (`game`, up to protocol.MAX_GAMES) is judged by the folder rule on the
+5. Only the recorder may stay connected: its pid and session are checked; anyone else is let go.
+6. For Play, each process the recorder names (`game`, up to protocol.MAX_GAMES) is judged by the folder rule on the
    relay's own snapshots and its own read of the program's path (target.check_proposed): started after the relay, in
    its session, a program under one of the forms, none of lag-doctor's own, and the recorder still running. It
    answers `game` (that one is recorded) or `refused` with why, and waits on; it gives up when none is accepted by the
    recorder's wait plus GAME_SLACK_S, and whenever the recorder is gone.
-6. On `start` it runs PresentMon on the game (rows forwarded, not kept: PresentMonSource's `forward`) and the
+7. On `start` it runs PresentMon on the game (rows forwarded, not kept: PresentMonSource's `forward`) and the
    Kernel-Network session. It forwards the game's frame rows, the events of the game's processes (the game and what
    it started, from its own snapshot once a second) and of the recorder (its DNS self-test), whole; for every other
    program it counts bytes received and sent and passes on the totals only for programs in the recorder's session
    (DECISIONS 2026-11-08). Events of other programs never leave it.
-7. On `stop`, or when the recorder hangs up, it stops both, sends what is left and the final statuses, then `end`.
+8. On `stop`, or when the recorder hangs up, it stops both, sends what is left and the final statuses, then `end`.
+   In the capture service it does so too when its caller's hold ends (Relay's `until`), and says why before `end`.
 
 It writes no file and prints nothing (pythonw has nowhere to print): before the pipe is up its exit code says what
 went wrong (protocol.EXIT_*), after that the pipe does.
@@ -61,6 +65,9 @@ MAX_QUEUED_ROWS = 100_000     # rows waiting for the pipe; past this they are co
 MAX_QUEUED_EVENTS = 50_000
 MAX_PROGRAMS = 4096           # programs whose session is remembered
 OWNER = "O:BA"                # Administrators: Windows refuses that owner to an unelevated token (error 1307)
+# What the capture service's caller is told when its hold ends (Relay's `until`, protocol.SERVICE_HOLD_S from its ask).
+HELD = (f"the capture service records for at most {protocol.hold_text()} at a time, so it ended this "
+        "recording")
 _PID_SIZE = struct.Struct("<II")   # NE 4.3: the payload's PID and size
 _SID = re.compile(r"S-1-[0-9]{1,13}(?:-[0-9]{1,10}){1,15}")
 # PresentMon's path: a plain local drive path, never UNC or a device. Opening a network path as an administrator would
@@ -190,6 +197,13 @@ def _image_path(pid: int) -> str | None:
     return ntquery.image_path(pid)
 
 
+def _trace_lock():
+    """The machine-wide trace lock (capture/tracelock.py), owned by Administrators as the relay's pipe is: only an
+    elevated token may set that owner."""
+    from lagdoctor.capture import tracelock
+    return tracelock.TraceLock(tracelock.ADMINISTRATORS)
+
+
 @dataclass
 class Parts:
     """What the relay runs, made replaceable for tests; the defaults are the real ones."""
@@ -199,6 +213,7 @@ class Parts:
     etw: Callable[..., Any] = _etw_session                  # (on_event) -> an ETW session
     me: int = field(default_factory=os.getpid)
     image: Callable[[int], str | None] = _image_path        # Play: a process's program path, read without a handle
+    trace_lock: Callable[[], Any] = _trace_lock             # () -> a tracelock.TraceLock, not yet acquired
 
 
 # ---------------------------------------------------------------------------------------- the process ---
@@ -230,6 +245,24 @@ def main(argv: list[str] | None = None, *, owner: str | None = None, parts: Part
             parts.verify(cfg.presentmon_exe)
         except Exception:  # noqa: BLE001 - SetupError, or anything that stops the check: never run it unchecked
             return protocol.EXIT_NOT_READY
+    # The machine-wide trace lock, before the pipe and until this process ends: the trace sessions' names are fixed, so
+    # PresentMon or the network trace started here would stop another lag-doctor recording's on this PC.
+    from lagdoctor.capture import tracelock
+    lock = parts.trace_lock()
+    try:
+        held = lock.acquire()
+    except OSError:
+        return protocol.EXIT_CRASH                # Windows could not say: never trace beside another recording
+    try:
+        if held == tracelock.BUSY:
+            return protocol.EXIT_BUSY
+        return _serve(cfg, parts, owner, me)      # TAKEN goes on: the recorder, which checked first, has said so
+    finally:
+        lock.release()
+
+
+def _serve(cfg: Config, parts: Parts, owner: str, me) -> int:
+    """main's part once the trace lock is taken: the pipe, the recorder on it, and the recording."""
     from lagdoctor.winapi import pipe
     try:
         server = pipe.PipeServer(cfg.pipe, owner + pipe.client_dacl([cfg.sid]), max_message=protocol.MAX_MESSAGE)
@@ -269,14 +302,18 @@ class Relay:
     create time; the capture service's, when the caller asked). `me`: this process as (pid, create time), one of
     lag-doctor's own that is never a game (default: parts.me started at `since`). `tree`: for the capture service,
     which processes of the game's tree may count as the game's (tree(procs, game, pids) -> pids); the relay, which
-    the UAC prompt approved, counts the whole tree in the session."""
+    the UAC prompt approved, counts the whole tree in the session. `until`: for the capture service, when its caller's
+    hold ends (time.monotonic): every wait before the start ends by then, and the recording ends there (EXIT_HELD,
+    said in HELD's words); None, the elevated relay's, has no such end."""
 
     def __init__(self, cfg: Config, server, session: int, parts: Parts, since: int | None = None,
                  me: tuple[int, int] | None = None,
-                 tree: Callable[[dict, tuple[int, int], set[int]], set[int]] | None = None) -> None:
+                 tree: Callable[[dict, tuple[int, int], set[int]], set[int]] | None = None,
+                 until: float | None = None) -> None:
         self.cfg, self.server, self.session, self.parts, self.since = cfg, server, session, parts, since
         self.me = me if me is not None else (parts.me, since)
         self.tree = tree
+        self.until = until
         self._reader: threading.Thread | None = None
         self._failed = ""                       # why the recording stopped on its own (the refresh could not run)
         # Play's games (at most protocol.MAX_GAMES), then start, then stop: the reader queues nothing else.
@@ -401,6 +438,8 @@ class Relay:
         else:
             cmd = self._play()
         if isinstance(cmd, int):
+            if cmd == protocol.EXIT_HELD:
+                self._goodbye()                       # the caller reads why before the service lets it go
             return cmd
         if cmd["t"] == "broken":
             self.fail(f"the recording window sent a message the relay does not take ({self._broke})")
@@ -423,6 +462,8 @@ class Relay:
                                        f"({self._broke})"))
         elif code == protocol.EXIT_CRASH:
             self._write(protocol.error(self._failed))
+        elif code == protocol.EXIT_HELD:
+            self._write(protocol.error(HELD))
         self._write(protocol.end())
         self._goodbye()
         return code
@@ -430,7 +471,11 @@ class Relay:
     def _next(self, deadline: float, late: str) -> dict | int:
         """The recorder's next command, or the exit code when there is none: it hung up (EXIT_OK), its snapshot shows
         it gone while its pipe lives on, perhaps in another process (EXIT_TARGET), or nothing came by `deadline` (then
-        `late` is said, EXIT_NO_CLIENT). The recorder is looked for once every STATUS_EVERY_S."""
+        `late` is said, EXIT_NO_CLIENT), or by the end of the capture service's hold (`until`) when that comes first
+        (then HELD, EXIT_HELD). The recorder is looked for once every STATUS_EVERY_S."""
+        code = protocol.EXIT_NO_CLIENT
+        if self.until is not None and self.until < deadline:      # the hold ends first: its words, not the wait's
+            deadline, late, code = self.until, HELD, protocol.EXIT_HELD
         next_look = 0.0
         while True:
             cmd = self._command(min(TICK_S * 5, max(0.0, deadline - time.monotonic())))
@@ -442,7 +487,7 @@ class Relay:
             if now >= deadline:
                 self._write(protocol.error(late))
                 self._write(protocol.end())
-                return protocol.EXIT_NO_CLIENT
+                return code
             if now >= next_look:
                 next_look = now + STATUS_EVERY_S
                 if self._recorder_left():
@@ -463,7 +508,8 @@ class Relay:
         """Play: each `game` the recorder names is judged (_judge) and answered, and a later one takes the place of
         the one before; the game recorded is the last one accepted. With none accepted the relay gives up at the
         recorder's own wait plus GAME_SLACK_S, counted from its hello; once one is, it waits START_WAIT_S for `start`,
-        never past that same point plus START_WAIT_S. Returns the command that ends the wait, or the exit code."""
+        never past that same point plus START_WAIT_S, nor past the capture service's hold (_next). Returns the command
+        that ends the wait, or the exit code."""
         game_by = time.monotonic() + self.cfg.wait_s + GAME_SLACK_S
         by = game_by
         while True:
@@ -508,6 +554,8 @@ class Relay:
                 if cmd["t"] == "failed":
                     return protocol.EXIT_CRASH
                 return protocol.EXIT_OK if cmd["t"] == "stop" else protocol.EXIT_PROTOCOL
+            if self.until is not None and time.monotonic() >= self.until:
+                return protocol.EXIT_HELD             # the caller's hold is over: serve() stops the sources, says why
             if self._gone.is_set():
                 return protocol.EXIT_OK
             self._flush()

@@ -85,7 +85,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--only", default="", help="comma-separated collector names to keep (default: all)")
     ap.add_argument("--no-network", action="store_true")
     ap.add_argument("--no-lock", action="store_true",
-                    help="do not take lag-doctor's capture lock: the caller holds it (bench.py does, for its whole run)")
+                    help="do not take lag-doctor's capture lock nor its trace lock: the caller holds them (bench.py "
+                         "does, for its whole run)")
     ap.add_argument("--stop-at", type=float, help="absolute perf_counter time to stop the recording (default: "
                                                   "when the target exits)")
     args = ap.parse_args(argv)
@@ -97,6 +98,7 @@ def main(argv: list[str] | None = None) -> int:
     stats: dict = {"pid": os.getpid(), "argv": sys.argv[1:] if argv is None else list(argv),
                    "t_launch": time.perf_counter()}
     lock = None if args.no_lock else sess.CaptureLock()
+    trace = None
     if lock is not None:
         try:
             held = lock.acquire()
@@ -108,6 +110,18 @@ def main(argv: list[str] | None = None) -> int:
             stats["error"] = "another lag-doctor recording holds the capture lock"
             _write(args.stats, stats)
             return 3
+        # And the machine-wide trace lock, as watch takes it: PresentMon's and the network trace's fixed session names
+        # would stop another Windows session's lag-doctor recording, which the capture lock does not see.
+        from lagdoctor import cli
+        said: list[str] = []
+        trace = cli._TraceGuard(said.append)
+        if cli._traces_here(args, args.frames, None) and trace.here():
+            lock.release()
+            stats["error"] = " ".join(said)
+            _write(args.stats, stats)
+            return 3
+        if said:
+            stats["trace_lock"] = " ".join(said)        # another program holds its name: recorded unprotected
     try:
         t0 = time.perf_counter()
         target = tgt.find_target(pid=args.pid)          # watch's default: a 2 s GPU Engine sample
@@ -161,6 +175,8 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         if lock is not None:
             lock.release()
+        if trace is not None:
+            trace.release()
         _write(args.stats, stats)
     return 0
 

@@ -46,6 +46,11 @@ AIM_S = 10.0                  # Play: for the relay's answer about a game (two s
 GOODBYE_WAIT_S = 6.0          # past the relay's GOODBYE_S: once the link is over, how long its exit code is awaited
 ADMINISTRATORS = "S-1-5-32-544"
 SERVICE_START_S = 15.0        # StartServiceW to the service running, and its pipe answering
+# A recording through the capture service stops itself this long before the service's hold ends (protocol.
+# SERVICE_HOLD_S, counted from the ask: hold_left), so it ends cleanly with its frames instead of being cut off. Inside
+# it: the session's start (it reads the PC's details before its clock starts), PresentMon's stop through the relay
+# (STOP_FRAMES_S), the network trace's and the last messages (a test holds it above STOP_FRAMES_S + NET_START_S).
+HOLD_MARGIN_S = 180.0
 SERVICE_OFF_ENV = "LAGDOCTOR_NO_SERVICE"   # set (tests/conftest.py does): never use the capture service
 
 
@@ -280,6 +285,19 @@ def _start_service(scm, name: str) -> None:
 def _filetime_now() -> int:
     """Now in a process create time's units (FILETIME): Play's game must start after the ask, as the service judges."""
     return time.time_ns() // 100 + 116_444_736_000_000_000
+
+
+def hold_left(link: Any, now: int | None = None) -> float | None:
+    """How long a recording through `link` may still run before it must stop itself (seconds; at or below 0 once it
+    should have): the capture service's hold less HOLD_MARGIN_S, counted from the ask (the link's `since`, FILETIME;
+    `now` likewise, default now). None for the elevated relay's link, or one that names no ask: no hold bounds it.
+    The ask came before the service read it and took its own deadline, so this ends first."""
+    since = getattr(link, "since", None)
+    if not getattr(link, "service", False) or isinstance(since, bool) or not isinstance(since, int):
+        return None
+    now = _filetime_now() if now is None else now
+    held = max(0.0, (now - since) / 10_000_000)          # a clock set back since the ask counts no time
+    return protocol.SERVICE_HOLD_S - HOLD_MARGIN_S - held
 
 
 def _game_slack() -> float:

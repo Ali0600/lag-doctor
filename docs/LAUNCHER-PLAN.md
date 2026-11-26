@@ -33,7 +33,7 @@ protocol early ([INSTALLER-PLAN.md](INSTALLER-PLAN.md), Stage 4).
   merged 2026-11-09, PR #37), the start key in `watch` (merged 2026-11-17, PR #53, on by default in a terminal) and
   the app's half (M5c, merged 2026-11-19, PR #55, on the owner's go). The trim handles in Results were dropped: the
   owner judged them not worth building (2026-11-19).
-- [ ] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
+- [x] M6: Play. Built: its folder wait (`capture/target.py`, PR #36), the store launch (`stores/launch.py` over
   `winapi/launch.py`, PR #39) and the Steam and Epic library readers (`stores/steam.py`, `stores/epic.py`; M6,
   below), the relay's folder mode (M6d: the relay approved for the install folder judges the game the recorder
   names), `watch --wait-folder` with the re-arm (M6e, PR #58), Play's order on the control channel (M6f, PR #61),
@@ -797,6 +797,8 @@ above:
   adds the folder wait's 5-minute deadline (`target.WAIT_DEADLINE_S`, which the relay's approval follows). The hold
   within which a chosen process that exits re-arms the wait (`target.REARM_HOLD_S`) is judged: the owner's own run of
   `watch --wait-folder` on FINAL FANTASY VII REBIRTH picked the game, and the owner set the hold to 30 s (2026-11-19).
+  The capture service (Stage 4) adds how long one recording may hold it, 2 hours (`protocol.SERVICE_HOLD_S`),
+  which `watch` stops itself 3 minutes before.
 - **Fixes from a trimmed span.** Should a trimmed span feed `lagdoctor fix`? Today `analyze` never does. A watch
   measured from its start key does: its diagnosis covers the part, and it is the one `fix` acts on.
 - **A fork the planning session settled** (DECISIONS 2026-11-08), open to the owner: measuring from a start key,

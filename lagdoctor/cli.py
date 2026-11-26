@@ -69,6 +69,13 @@ PRIVATE_COPY_POLICY = {"setup": "refuse", "watch": "refuse", "fix": "refuse", "u
 # (measured with scripts/etw_access.py on 2026-11-06; docs/research/install-and-rights.md, E1).
 TRACKER_NOT_IN_GROUP = ("The game-server tracker still needs one UAC prompt: Windows does not let the Performance "
                         "Log Users group start it, so add `--elevate` to a recording to include it.")
+# The machine-wide trace lock (capture/tracelock.py): the trace sessions of frame timing and the network trace have
+# fixed names, so starting them stops another recording's, in any Windows session on this PC.
+TRACE_BUSY = ("Not recorded: another lag-doctor recording on this PC, in another Windows session, is timing frames or "
+              "tracing the network, and starting this one would stop it. Try again once it has ended.")
+TRACE_TAKEN = ("(Another program holds the name lag-doctor uses to keep two recordings on this PC apart, so a "
+               "lag-doctor recording in another Windows session could stop this one's frame timing and network "
+               "trace.)")
 
 # Console control events (wincon.h). Windows ends the process 5 s after CTRL_CLOSE_EVENT.
 CTRL_C_EVENT, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT = 0, 1, 2, 5, 6
@@ -493,6 +500,7 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
     # session names, so a second one would silently end the first one's tracing). This window holds the lock
     # for the whole recording, the relay's part included.
     lock = sess.CaptureLock()
+    trace = _TraceGuard(say)          # the machine-wide lock, for another Windows session's recordings
     if not _take_lock(lock, say):
         return EXIT_BUSY
     relay = None
@@ -529,6 +537,7 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
             frames = exe is not None
             if frames:
                 relay, frames, frames_why, code = _elevation(args, target, exe, frames_why, interactive, say=say,
+                                                             trace=trace,
                                                              launcher=launcher, folders=forms, wait_s=wait_s)
                 if code is not None:
                     return code
@@ -540,8 +549,13 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
                     return code
                 _watching(target, observers, say)
             _check_cancel(cancel)
+            # PresentMon or the network trace started in this window: held with the capture lock while it records (an
+            # elevated window), or only honoured (_TraceGuard.here). A cancel that lands meanwhile is the session's to
+            # see (SessionOptions.cancel).
+            if _traces_here(args, frames, relay) and trace.here():
+                return EXIT_BUSY
             return _record(args, target, exe, frames, frames_why, relay, stop=stop, say=say,
-                           interactive=interactive is not False, observers=observers,
+                           interactive=interactive is not False, observers=observers, trace=trace,
                            tool_alone=tool_alone, tool_roots=tool_roots, cancel=cancel, remember=remember,
                            show_summary=show_summary, sound=sound, start_advice=start_advice)
     except Cancelled:
@@ -550,6 +564,7 @@ def cmd_watch(args: argparse.Namespace, *, stop: threading.Event | None = None,
     finally:
         if relay is not None:
             relay.close()
+        trace.release()
 
 
 def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, frames: bool, frames_why: str,
@@ -557,12 +572,13 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
             interactive: bool = True, observers: Any = None, tool_alone: tuple[tuple[int, int], ...] = (),
             tool_roots: Callable[[dict[int, Any]], Any] | None = None, cancel: threading.Event | None = None,
             remember: bool = True, show_summary: bool = True, sound: Callable[[str], bool] | None = None,
-            start_advice: bool = True) -> int:
+            start_advice: bool = True, trace: "_TraceGuard | None" = None) -> int:
     """Record, save and analyse. Ctrl+C, Ctrl+Break and closing the window all stop the recording; none of them can
     lose it once it is being stopped and saved. With a relay (relay/client.RelayLink), frame timing and the
-    game-server tracker come through it, and it is let go as soon as the recording stops. `stop`, `say`, `observers`,
-    the tool processes, `remember`, `show_summary` and `sound` as in cmd_watch; `interactive` False: no status line
-    and no console handling (nobody is there)."""
+    game-server tracker come through it, and it is let go as soon as the recording stops; the trace lock this window
+    holds (`trace`) once it is saved, since closing the window stops the network trace by name until then. `stop`,
+    `say`, `observers`, the tool processes, `remember`, `show_summary` and `sound` as in cmd_watch; `interactive` False:
+    no status line and no console handling (nobody is there)."""
     from lagdoctor.capture import session as sess
     from lagdoctor.model import SourceStatus, clean_note
     say = _teller(say)
@@ -574,12 +590,19 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     hotkey = None if (args.hotkey or "").lower() in ("", "none", "off") else args.hotkey
     start_key = getattr(args, "start_key", None)
     start_key = None if (start_key or "none") == "none" else start_key
+    # Through the capture service, a recording whose own longest end comes after the service's hold stops by itself
+    # before it instead (relay/client.hold_left), and says so below: cut off at the hold, it would lose its last frames.
+    # A start key's own ends count only once Windows gives the key, which the session learns only as it starts, so a
+    # recording with no set length takes that stop either way, said "at the latest" when the key's ends come first.
+    held = _held_duration(relay, args.duration)
+    key_first = held is not None and _held_duration(relay, _longest_end(args, start_key)) is None
+    duration = args.duration if held is None else held
     # A set length of a part or less leaves no room for one after any press (Session.start would refuse them all), so
     # the key is not even registered: the recording is analysed whole, as with --start-key none, and said so once.
-    off_key = start_key if start_key and _too_short_for_a_part(args.duration) else None
+    off_key = start_key if start_key and _too_short_for_a_part(duration) else None
     if off_key:
         start_key = None
-    opts = sess.SessionOptions(duration_s=args.duration, network=not args.no_network, server_ip=args.server,
+    opts = sess.SessionOptions(duration_s=duration, network=not args.no_network, server_ip=args.server,
                                hotkey=hotkey, presentmon_exe=exe, frames=frames, relay=relay,
                                tool_procs=relay.tool_procs() if relay is not None else ())
     opts.tool_alone, opts.tool_roots = tuple(tool_alone), tool_roots
@@ -598,9 +621,13 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
     else:
         say("Recording. Play normally" + (f"; press {hotkey.title()} the moment it lags" if hotkey else "")
             + "; Ctrl+C stops." + (f" Stops by itself after {args.duration:.0f} s." if args.duration else ""))
+    if held is not None:
+        from lagdoctor.relay import protocol
+        say(f"The capture service records for at most {protocol.hold_text()} at a time, so this recording stops by "
+            f"itself after {sess.span_words(held)}" + (" at the latest." if key_first else "."))
     if off_key:
         say(f"{off_key.title()} is off for this recording: a part needs at least {WINDOW_MIN_S:.0f} s after the press, "
-            f"and the recording stops after {args.duration:g} s, so all of it is analysed.")
+            f"and the recording stops after {duration:g} s, so all of it is analysed.")
     stop = stop if stop is not None else threading.Event()
     saved = threading.Event()
     printer = None if interactive else _silent        # None: the session draws its status line here
@@ -630,10 +657,42 @@ def _record(args: argparse.Namespace, target: dict[str, Any], exe: Path | None, 
             observers.event("saved", session=out_dir.name)
         finally:
             saved.set()
+    # Only now: closing the window stops the network trace session by name until the console's handling is gone, the
+    # save included, and once the lock is let go, a session of that name may be another recording's. (An error, or a
+    # cancel, leaves it to cmd_watch.)
+    if trace is not None:
+        trace.release()
     if cues is not None and cues.failed:
         say("(A chime could not be played during the recording: check the PC's sound, or record with --no-sound and "
             "keep an eye on the clock.)")
     return _analyze_saved(cap, cap_path, out_dir, say=say, remember=remember, show_summary=show_summary)
+
+
+def _longest_end(args: argparse.Namespace, start_key: str | None) -> float | None:
+    """How long a recording may run by its own rules, in seconds from its start: its set length (--duration), else with
+    a start key a press at the last moment (--start-by), its window and the tail after it, should Windows give the key;
+    None when only a stop or the game's end ends it."""
+    from lagdoctor.capture import session as sess
+    if args.duration:
+        return args.duration
+    if start_key:
+        return (getattr(args, "start_by", DEFAULT_START_BY_S) + getattr(args, "window", DEFAULT_WINDOW_S)
+                + sess.WINDOW_TAIL_S)
+    return None
+
+
+def _held_duration(relay: Any, longest: float | None) -> float | None:
+    """The set length a recording through the capture service takes so it stops itself before the service's hold
+    ends (relay/client.hold_left), when its own longest end (`longest`, _longest_end; None: none) would come later:
+    whole minutes from a minute up, else whole seconds, never below 1 s, and never longer than its own. None when the
+    hold does not bind it (its own end fits in the time left, rounded or not), and for the elevated relay's link or
+    none, which no hold bounds."""
+    from lagdoctor.relay import client
+    left = client.hold_left(relay)
+    if left is None:
+        return None
+    held = max(1.0, (left // 60) * 60 if left >= 60 else left // 1)
+    return held if longest is None or (left < longest and held < longest) else None
 
 
 def _too_short_for_a_part(duration: float | None) -> bool:
@@ -686,6 +745,88 @@ def _take_lock(lock, say: Callable[[str], None] | None = None) -> bool:
     except OSError as exc:
         say(f"lag-doctor could not check whether another recording is running ({exc}), so it did not start one.")
     return False
+
+
+def _trace_lock():
+    """The machine-wide trace lock an elevated window holds while it records PresentMon or the network trace itself
+    (capture/tracelock.py), owned by Administrators: only an elevated token may set that owner."""
+    from lagdoctor.capture import tracelock
+    return tracelock.TraceLock(tracelock.ADMINISTRATORS)
+
+
+def _traces_here(args: argparse.Namespace, frames: bool, relay: Any) -> bool:
+    """Does this window start a trace session itself? PresentMon, for frame timing with no relay link; the network
+    trace, with no link and the network on, for a token that may start or stop trace sessions (one that may not could
+    not stop another recording's either)."""
+    if relay is not None:
+        return False
+    if frames:
+        return True
+    if args.no_network:
+        return False
+    try:
+        from lagdoctor.winapi import elevation
+        return elevation.can_trace()
+    except OSError:
+        return True                                   # cannot tell: honour the lock
+
+
+class _TraceGuard:
+    """One watch's side of the machine-wide trace lock (capture/tracelock.py), for another Windows session's lag-doctor
+    recording, which starting this one's trace sessions would stop. busy() checks it before the capture service is
+    asked and before the UAC prompt; hold() takes it (an elevated window) for a recording that starts them here. Each
+    says why watch must not go on; that another program holds the lock's name is said once."""
+
+    def __init__(self, say: Callable[[str], None]) -> None:
+        self.say = say
+        self.told = False                             # TAKEN was said
+        self.lock = None                              # the tracelock.TraceLock this window holds
+
+    def _judged(self, state: str) -> bool:
+        from lagdoctor.capture import tracelock
+        if state == tracelock.BUSY:
+            self.say(TRACE_BUSY)
+            return True
+        if state == tracelock.TAKEN and not self.told:
+            self.told = True
+            self.say(TRACE_TAKEN)
+        return False
+
+    def _unknown(self, exc: OSError) -> bool:
+        self.say(f"lag-doctor could not check whether another recording runs on this PC ({exc}), so it did not "
+                 "start one.")
+        return True
+
+    def busy(self) -> bool:
+        """True (said) when watch must not go on: another recording holds the lock, or Windows could not say."""
+        from lagdoctor.capture import tracelock
+        try:
+            return self._judged(tracelock.check())
+        except OSError as exc:
+            return self._unknown(exc)
+
+    def hold(self) -> bool:
+        """Take the lock for this window's recording (release() lets it go); True (said) as busy() is."""
+        from lagdoctor.capture import tracelock
+        lock = _trace_lock()
+        try:
+            state = lock.acquire()
+        except OSError as exc:
+            return self._unknown(exc)
+        if state == tracelock.HELD:
+            self.lock = lock
+        return self._judged(state)
+
+    def here(self) -> bool:
+        """For a recording that starts its trace sessions in this process (watch, and the scripts that record as it
+        does): hold() in an elevated window, else busy(), since a Performance Log Users member may set no owner the lock
+        trusts. True (said) as busy() is."""
+        return self.hold() if _elevated() else self.busy()
+
+    def release(self) -> None:
+        lock, self.lock = self.lock, None
+        if lock is not None:
+            lock.release()
 
 
 class _ConsoleControl:
@@ -766,17 +907,21 @@ def _watching(target: dict[str, Any], observers: Any, say: Callable[[str], None]
 def _elevation(args: argparse.Namespace, target: dict[str, Any] | None, exe: Path, frames_why: str,
                interactive: bool | None, *, say: Callable[[str], None], launcher: Callable[..., Any] | None,
                folders: tuple[str, ...] | None = None, wait_s: float | None = None,
-               ) -> tuple[Any, bool, str, int | None]:
+               trace: _TraceGuard | None = None) -> tuple[Any, bool, str, int | None]:
     """Frame timing's rights, once PresentMon is there: (relay link or None, whether frames are recorded, why not,
     watch's exit code or None to go on). For the running game `target`, or for --wait-folder its folder's `folders`
-    and `wait_s` (target None: the prompt comes before the game exists)."""
+    and `wait_s` (target None: the prompt comes before the game exists). `trace`: the watch's _TraceGuard, which the
+    capture service and the UAC prompt are asked only past (default: one of its own)."""
     from lagdoctor.winapi import elevation
     relay, frames = None, True
+    trace = trace if trace is not None else _TraceGuard(say)
     may_trace = elevation.can_trace()
     # An explicit --elevate also elevates an account that may trace only through Performance Log
     # Users: Windows lets that group start frame timing but not the game-server tracker (E1, 2026-11-06).
     if not may_trace or (args.elevate and not _elevated()):
         if not args.no_elevate:               # the capture service, when installed: the same, with no prompt
+            if trace.busy():                  # it would stop another Windows session's recording, as a relay would
+                return None, frames, frames_why, EXIT_BUSY
             relay, code = _via_service(args, target, say=say, folders=folders, wait_s=wait_s)
             if code is not None:
                 return None, frames, frames_why, code
@@ -784,6 +929,8 @@ def _elevation(args: argparse.Namespace, target: dict[str, Any] | None, exe: Pat
                 return relay, frames, frames_why, None
         choice = elevation_choice(args.elevate, args.no_elevate, _interactive(interactive), _ask, say=say)
         if choice == "elevate":
+            if trace.busy():                  # again: the answer may have taken a while, and no prompt is in vain
+                return None, frames, frames_why, EXIT_BUSY
             relay, code = _start_relay(args, target, exe, may_trace, say=say, launcher=launcher, folders=folders,
                                        wait_s=wait_s)
             if code is not None:
@@ -1089,6 +1236,8 @@ def _relay_failure(exc, play: bool = False) -> tuple[int, str]:
     if exc.code == protocol.EXIT_NOT_READY:
         return EXIT_NOT_READY, ("PresentMon failed its check in the administrator part of the recording, so nothing "
                                 "was recorded. Run `lagdoctor setup` here, then start the recording again.")
+    if exc.code == protocol.EXIT_BUSY:          # the relay found another recording holding the trace lock
+        return EXIT_BUSY, TRACE_BUSY
     if exc.code == protocol.EXIT_TARGET:
         return EXIT_TARGET_CHANGED, ("When the relay checked, the game or this window was no longer running as "
                                      "approved (the game may have exited while the UAC prompt was up), so nothing "

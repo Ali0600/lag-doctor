@@ -58,6 +58,12 @@ SERVICE_ARGUMENTS = "-B -m lagdoctor.service"   # what the MSI runs the install'
 # service, with SERVICE_START (RP) added for interactive users, who may otherwise only query it.
 SERVICE_SDDL = ("D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)(A;;CCLCSWRPLOCRRC;;;IU)"
                 "(A;;CCLCSWLOCRRC;;;SU)")
+# The longest one caller may hold the capture service, from its ask to its recording's end. It bounds a forgotten or
+# hostile hold: the service records for one window at a time, and a recorder that finds it busy records nothing,
+# prompt and all (a relay started then would stop that recording, as their trace sessions share names). Every
+# recording watch and the app make with their default start-by fits inside it, even with the longest window and Play's
+# default wait (a test holds those sums, with the recorder's own margin, client.HOLD_MARGIN_S, under it).
+SERVICE_HOLD_S = 7200.0
 MAX_WAIT_DECIMALS = 3                   # Play's wait_s, as the relay's command line writes it
 _PIPE_NAME = re.compile(re.escape(PIPE_PREFIX) + r"[0-9a-f]{32}")
 MAX_PID = 0xFFFFFFFF
@@ -80,6 +86,9 @@ EXIT_PIPE = 4              # its pipe could not be made: the name was taken, or 
 EXIT_NO_CLIENT = 5         # the recorder did not connect, name the game (Play) or start the recording in time
 EXIT_NOT_READY = 6         # PresentMon is missing or failed its check (watch's own EXIT_NOT_READY is 6 too)
 EXIT_PROTOCOL = 7          # the recorder sent something the protocol does not allow
+EXIT_BUSY = 8              # another lag-doctor recording on this PC, in another Windows session, runs frame timing or
+                           # the network trace (capture/tracelock.py): a relay that started them would stop it
+EXIT_HELD = 9              # the capture service's relay core only: the caller held the service for SERVICE_HOLD_S
 
 # The PresentMon columns the recorder reads (presentmon.frame_row and PresentMonSource._add), with the type each
 # holds after presentmon.convert(): None stands for PresentMon's "NA" in every column but the required ones.
@@ -104,6 +113,13 @@ def pipe_name() -> str:
 
 def is_pipe_name(name: object) -> bool:
     return isinstance(name, str) and _PIPE_NAME.fullmatch(name) is not None
+
+
+def hold_text(seconds: float = SERVICE_HOLD_S) -> str:
+    """The capture service's hold in plain words ('2 hours'): the service's words when it ends a recording at it and
+    the recorder's when it stops one before it name it alike."""
+    hours = seconds / 3600
+    return f"{hours:g} hour{'' if hours == 1 else 's'}"
 
 
 # ------------------------------------------------------------------------------------------- encoding ---

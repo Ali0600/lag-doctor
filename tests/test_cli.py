@@ -30,12 +30,14 @@ import pytest
 from lagdoctor import cli, clock, paths
 from lagdoctor.capture import session as sess
 from lagdoctor.capture import target as tgt
+from lagdoctor.capture import tracelock
 from lagdoctor.capture.base import Collector
 from lagdoctor.fixes import catalog
 from lagdoctor.fixes.base import GONE, Fix
 from lagdoctor.fixes.journal import Journal
 from lagdoctor.model import Capture
 from lagdoctor.winapi import elevation
+from tests.test_relay import StandInTraceLock
 
 ROOT = Path(__file__).resolve().parents[1]
 BASE_PY = getattr(sys, "_base_executable", sys.executable)
@@ -805,6 +807,7 @@ def test_elevate_still_elevates_a_group_member_for_the_game_server_tracker(group
 
 def test_an_administrator_window_is_never_elevated_again(group_member, monkeypatch, tmp_path):
     monkeypatch.setattr(elevation, "is_elevated", lambda: True)
+    _this_tokens_trace_lock(monkeypatch)                # it records here, holding the trace lock as this token may
     assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == 0
     assert group_member["launches"] == []
 
@@ -819,6 +822,170 @@ def test_a_group_member_who_declines_still_records_frames_here(group_member, tmp
     assert f"The UAC prompt was declined, so lag-doctor {said}." in out
     assert "Frame timing is off" not in out and "without frame timing" not in out   # the group still gives it
     assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
+
+
+# The machine-wide trace lock (capture/tracelock.py): another Windows session's lag-doctor recording would lose its
+# trace sessions to this one's. tests/conftest.py gives each test a lock name of its own.
+
+REALLY_ELEVATED = elevation.is_elevated()              # read before any test stands in for it
+
+
+def _this_tokens_trace_lock(monkeypatch) -> set[str] | None:
+    """What an elevated window holds: the real lock, owned by Administrators, where this token is elevated (CI's
+    runner); else one owned by this account, the one owner this token may set. Returns the trusted set that reads it
+    as held (None: the real one)."""
+    if REALLY_ELEVATED:
+        return None
+    mine = {elevation.token_user_sid()}
+    monkeypatch.setattr(cli, "_trace_lock", lambda: tracelock.TraceLock(elevation.token_user_sid(), trusted=mine))
+    return mine
+
+
+def test_an_elevated_window_recording_here_holds_the_trace_lock_until_its_recording_stops(group_member, monkeypatch,
+                                                                                         tmp_path):
+    monkeypatch.setattr(elevation, "is_elevated", lambda: True)
+    trusted = _this_tokens_trace_lock(monkeypatch)
+    seen = []
+    real_run, real_analyze = sess.Session.run, cli._analyze_saved
+
+    def run(self, *a, **k):
+        seen.append(("recording", tracelock.check(trusted=trusted)))
+        return real_run(self, *a, **k)
+
+    def analyze(*a, **k):
+        seen.append(("analysing", tracelock.check(trusted=trusted)))
+        return real_analyze(*a, **k)
+    monkeypatch.setattr(sess.Session, "run", run)
+    monkeypatch.setattr(cli, "_analyze_saved", analyze)
+    assert cli.main([*WATCH, "--out", str(tmp_path / "out")]) == 0
+    assert seen == [("recording", tracelock.BUSY), ("analysing", tracelock.FREE)]   # let go once it stopped
+    assert group_member["launches"] == []
+
+
+def test_an_elevated_window_whose_recording_cannot_begin_lets_the_trace_lock_go(group_member, monkeypatch, tmp_path):
+    monkeypatch.setattr(elevation, "is_elevated", lambda: True)
+    trusted = _this_tokens_trace_lock(monkeypatch)
+
+    def broken(*a, **k):
+        assert tracelock.check(trusted=trusted) == tracelock.BUSY      # held by then
+        raise RuntimeError("a bug")
+    monkeypatch.setattr(sess, "session_dir", broken)
+    with pytest.raises(RuntimeError):
+        cli.main([*WATCH, "--out", str(tmp_path / "out")])
+    assert tracelock.check(trusted=trusted) == tracelock.FREE
+
+
+def test_closing_an_elevated_window_while_it_saves_stops_the_network_trace_only_while_it_holds_the_lock(
+        group_member, monkeypatch, tmp_path):
+    """The console's handler stops the network trace session by name until the save is done; once the lock is let go
+    that name may be another Windows session's recording's, so every such stop must come while the lock is held."""
+    from lagdoctor.capture import netflows
+    from lagdoctor.winapi import etw
+    monkeypatch.setattr(elevation, "is_elevated", lambda: True)
+    trusted = _this_tokens_trace_lock(monkeypatch)
+    stops = []
+    monkeypatch.setattr(etw, "stop_session", lambda name: stops.append((name, tracelock.check(trusted=trusted))) or 0)
+    monkeypatch.setattr(netflows, "expect_external_stop", lambda: None)
+    monkeypatch.setattr(cli, "CLOSE_SAVE_WAIT_S", 0.05)            # the save it would wait for is this test's own
+    consoles = []
+    real_init, real_save = cli._ConsoleControl.__init__, Capture.save
+
+    def init(self, *a, **kw):
+        real_init(self, *a, **kw)
+        consoles.append(self)
+
+    def save(self, path):
+        consoles[-1]._handle(cli.CTRL_CLOSE_EVENT)                  # the window is closed while it saves
+        return real_save(self, path)
+    monkeypatch.setattr(cli._ConsoleControl, "__init__", init)
+    monkeypatch.setattr(Capture, "save", save)
+    with_network = [a for a in WATCH if a != "--no-network"]
+    assert cli.main([*with_network, "--out", str(tmp_path / "out")]) == 0
+    assert stops == [("lag-doctor-net", tracelock.BUSY)]
+    assert tracelock.check(trusted=trusted) == tracelock.FREE      # let go once saved
+    assert len(list((tmp_path / "out").glob(f"*/{cli.CAPTURE_NAME}"))) == 1
+
+
+@pytest.mark.parametrize("pm, extra, may_trace, honoured", [
+    (True, [], True, True),                     # frame timing here: a member of Performance Log Users
+    (True, ["--no-network"], True, True),       # frame timing alone
+    (False, ["--no-elevate"], True, True),      # only the network trace here, which that member may stop by name
+    (False, ["--no-elevate"], False, False),    # an account that may start no trace session stops none either
+    (False, ["--no-elevate", "--no-network"], True, False)])   # nothing traced here at all
+def test_an_unelevated_window_that_traces_itself_honours_another_sessions_recording_and_never_holds_the_lock(
+        fake_world, monkeypatch, tmp_path, capsys, pm, extra, may_trace, honoured):
+    monkeypatch.setattr(elevation, "can_trace", lambda: may_trace)
+    monkeypatch.setattr(cli, "_presentmon_exe", lambda: (tmp_path / "PresentMon-2.6.0-x64.exe" if pm else None,
+                                                         "PresentMon is not installed (test)"))
+    monkeypatch.setattr(cli, "_trace_lock", lambda: pytest.fail("an unelevated window took the trace lock"))
+    asked = []
+    monkeypatch.setattr(tracelock, "check", lambda *a, **k: asked.append("check") or tracelock.BUSY)
+    code = cli.main(["watch", "--pid", "4242", "--duration", "0.2", "--hotkey", "none", "--start-key", "none", *extra,
+                     "--out", str(tmp_path / "out")])
+    out = capsys.readouterr().out
+    if honoured:
+        assert code == cli.EXIT_BUSY and asked == ["check"] and cli.TRACE_BUSY in out
+        assert fake_world["sessions"] == [] and not (tmp_path / "out").exists()
+    else:
+        assert code == 0 and asked == [] and len(fake_world["sessions"]) == 1
+
+
+def test_another_sessions_recording_is_honoured_before_the_service_is_asked_and_before_the_prompt(
+        fake_relay, fake_world, monkeypatch, tmp_path, capsys):
+    asked, answers = [], []
+    monkeypatch.setattr(cli, "_via_service", lambda *a, **k: asked.append("service") or (None, None))
+    monkeypatch.setattr(tracelock, "check", lambda *a, **k: answers.pop(0))
+    answers[:] = [tracelock.BUSY]
+    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == cli.EXIT_BUSY
+    assert asked == [] and fake_relay["launches"] == []
+    answers[:] = [tracelock.FREE, tracelock.BUSY]          # free as the service is asked, busy by the prompt
+    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == cli.EXIT_BUSY
+    assert asked == ["service"] and fake_relay["launches"] == [] and answers == []
+    assert capsys.readouterr().out.count(cli.TRACE_BUSY) == 2 and fake_world["sessions"] == []
+
+
+def test_another_programs_hold_on_the_lock_name_is_said_once_and_the_recording_goes_on(
+        group_member, fake_world, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(cli, "_via_service", lambda *a, **k: (None, None))
+    checks = []
+    monkeypatch.setattr(tracelock, "check", lambda *a, **k: checks.append("check") or tracelock.TAKEN)
+    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == 0       # through the relay
+    out = capsys.readouterr().out
+    assert checks == ["check", "check"] and out.count(cli.TRACE_TAKEN) == 1 and len(group_member["launches"]) == 1
+    monkeypatch.setattr(elevation, "is_elevated", lambda: True)                       # an elevated window, here
+    calls = []
+    monkeypatch.setattr(cli, "_trace_lock", lambda: StandInTraceLock(tracelock.TAKEN, calls))
+    assert cli.main([*WATCH, "--out", str(tmp_path / "out")]) == 0
+    assert capsys.readouterr().out.count(cli.TRACE_TAKEN) == 1 and calls == ["acquire"]
+    assert len(fake_world["sessions"]) == 2
+
+
+def test_a_trace_lock_windows_cannot_answer_about_refuses_to_record(group_member, fake_world, monkeypatch, tmp_path,
+                                                                     capsys):
+    broken = OSError(None, "a device attached to the system is not functioning", None, 31)
+
+    def check(*a, **k):
+        raise broken
+    monkeypatch.setattr(tracelock, "check", check)
+    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == cli.EXIT_BUSY   # before the prompt
+    monkeypatch.setattr(elevation, "is_elevated", lambda: True)
+    monkeypatch.setattr(cli, "_trace_lock", lambda: StandInTraceLock(broken, []))
+    assert cli.main([*WATCH, "--out", str(tmp_path / "out")]) == cli.EXIT_BUSY                # holding it here
+    out = capsys.readouterr().out
+    assert out.count("could not check whether another recording runs on this PC") == 2 and "not functioning" in out
+    assert group_member["launches"] == [] and fake_world["sessions"] == []
+
+
+def test_a_relay_that_found_another_recording_tracing_says_so_and_records_nothing(fake_relay, fake_world, tmp_path,
+                                                                                   capsys):
+    from lagdoctor.relay import client, protocol
+    fake_relay["raise"] = client.RelayFailed("the relay ended before it answered (exit code 8)", protocol.EXIT_BUSY)
+    assert cli.main([*WATCH, "--elevate", "--out", str(tmp_path / "out")]) == cli.EXIT_BUSY
+    assert cli.TRACE_BUSY in capsys.readouterr().out and fake_world["sessions"] == []
+
+
+def test_an_elevated_windows_trace_lock_is_owned_by_administrators():
+    assert cli._trace_lock().owner == tracelock.ADMINISTRATORS
 
 
 def _split_command_line(program: str, params: str) -> list[str]:
@@ -895,7 +1062,8 @@ def test_an_elevated_watch_starts_the_real_relay_through_the_real_launch(fake_wo
 
             def health(self):
                 return {"pump_alive": True}
-        rec = ShellExecuteRelay(server.Parts(verify=lambda exe: None, etw=Etw))
+        rec = ShellExecuteRelay(server.Parts(verify=lambda exe: None, etw=Etw,
+                                             trace_lock=lambda: tracelock.TraceLock(elevation.token_user_sid())))
         monkeypatch.setattr(elevation, "_ShellExecuteExW", rec)
         assert cli.main(["watch", "--pid", str(game.pid), "--elevate", "--duration", "0.2", "--hotkey", "none",
                          "--start-key", "none", "--out", str(tmp_path / "out")]) == 0
@@ -1334,9 +1502,11 @@ def press_soon(event, delay):
 from lagdoctor import cli
 from lagdoctor.capture import session as sess
 from lagdoctor.capture import target as tgt
+from lagdoctor.capture import tracelock
 from lagdoctor.capture.base import Collector
 
 sess.CAPTURE_LOCK_NAME = lock_name
+tracelock.NAME = "Global" + lock_name[len("Local"):]       # this test's own trace lock too, never the PC's
 
 
 class Slow(Collector):

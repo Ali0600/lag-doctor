@@ -9,6 +9,8 @@ only a proxy for that rule, which is why can_trace() does not use it.
 Also here, because both must work across the elevation boundary: the user SID of this token (an
 over-the-shoulder elevation runs as another account), and a named mutex that an unelevated watch and an
 elevated capture child both see (a lock file would not do: the elevated child may have another profile).
+The machine-wide trace lock (capture/tracelock.py) is a mutex too, judged by who owns it and whether a thread holds
+it: create_mutex, open_mutex, take_mutex, release_mutex and mutex_state are thin wrappers for it, with no policy.
 
 Group membership is copied into a token at sign-in, so an account that joins Performance Log Users gets the
 right only from its next sign-in on; trace_rights() tells that state apart by reading the group's members
@@ -54,6 +56,18 @@ WAIT_OBJECT_0, WAIT_TIMEOUT = 0x0, 0x102
 INFINITE_POLL_MS = 250                   # wait in slices so Ctrl+C still reaches Python
 DUPLICATE_SAME_ACCESS = 0x00000002       # winnt.h: the copy has the same rights as the handle it copies
 _CONTROL = re.compile(r"[\x00-\x1f]")   # NUL, tab, newline ...: never in an argument of an elevated launch
+# A mutex's rights (winnt.h; Synchronization Object Security and Access Rights). SYNCHRONIZE is what a wait needs, and
+# a wait is how a thread takes a mutex; MUTANT_QUERY_STATE (Win32 calls the bit MUTEX_MODIFY_STATE, "reserved") lets
+# NtQueryMutant read whether it is held, and nothing more: it cannot take it.
+SYNCHRONIZE = 0x00100000
+READ_CONTROL = 0x00020000
+MUTANT_QUERY_STATE = 0x0001
+CREATE_MUTEX_INITIAL_OWNER = 0x00000001  # synchapi.h: the thread that makes the mutex owns it
+WAIT_ABANDONED = 0x80                    # the wait took a mutex whose owner's thread ended holding it
+ERROR_FILE_NOT_FOUND = 2                 # winerror.h: OpenMutexW, no object of that name
+ERROR_INVALID_HANDLE = 6                 # the name is another kind of object (an event, a semaphore...)
+ERROR_INVALID_OWNER = 1307               # the descriptor names an owner this token may not set
+MUTANT_BASIC_INFORMATION_CLASS = 0       # MutantBasicInformation (phnt's ntexapi.h; tests/test_tracelock.py measures it)
 
 
 class TOKEN_ELEVATION(ctypes.Structure):
@@ -85,17 +99,24 @@ class LOCALGROUP_MEMBERS_INFO_0(ctypes.Structure):
     _fields_ = [("lgrmi0_sid", ctypes.c_void_p)]
 
 
+class MUTANT_BASIC_INFORMATION(ctypes.Structure):
+    # phnt's ntexapi.h: CurrentCount is 1 while no thread holds the mutex and 0 or below while one does.
+    _fields_ = [("CurrentCount", ctypes.c_long), ("OwnedByCaller", ctypes.c_ubyte), ("AbandonedState", ctypes.c_ubyte)]
+
+
 # The research notes give no sizes for these; these are the x64 sizes from the SDK headers above.
 assert ctypes.sizeof(TOKEN_ELEVATION) == 4
 assert ctypes.sizeof(SID_AND_ATTRIBUTES) == 16
 assert ctypes.sizeof(TOKEN_GROUPS) == 24 and TOKEN_GROUPS.Groups.offset == 8     # the array is pointer-aligned
 assert ctypes.sizeof(SHELLEXECUTEINFOW) == 112
 assert ctypes.sizeof(LOCALGROUP_MEMBERS_INFO_0) == 8
+assert ctypes.sizeof(MUTANT_BASIC_INFORMATION) == 8                              # LONG, two BOOLEANs, padded
 
 _advapi32 = ctypes.WinDLL("advapi32", use_last_error=True)
 _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 _shell32 = ctypes.WinDLL("shell32", use_last_error=True)
 _netapi32 = ctypes.WinDLL("netapi32", use_last_error=True)
+_ntdll = ctypes.WinDLL("ntdll")
 
 _advapi32.GetTokenInformation.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
                                           ctypes.POINTER(wintypes.DWORD)]
@@ -136,10 +157,24 @@ _netapi32.NetLocalGroupGetMembers.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR
 _netapi32.NetLocalGroupGetMembers.restype = wintypes.DWORD        # NET_API_STATUS
 _netapi32.NetApiBufferFree.argtypes = [ctypes.c_void_p]
 _netapi32.NetApiBufferFree.restype = wintypes.DWORD
+_kernel32.CreateMutexExW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD]
+_kernel32.CreateMutexExW.restype = wintypes.HANDLE
+_kernel32.OpenMutexW.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.LPCWSTR]
+_kernel32.OpenMutexW.restype = wintypes.HANDLE
+_kernel32.ReleaseMutex.argtypes = [wintypes.HANDLE]
+_kernel32.ReleaseMutex.restype = wintypes.BOOL
+_ntdll.NtQueryMutant.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.ULONG,
+                                 ctypes.POINTER(wintypes.ULONG)]
+_ntdll.NtQueryMutant.restype = ctypes.c_long                     # NTSTATUS
+_ntdll.RtlNtStatusToDosError.argtypes = [ctypes.c_long]
+_ntdll.RtlNtStatusToDosError.restype = wintypes.ULONG
 
 # Indirection so tests can replace the call; nothing in the test suite may raise a real UAC prompt.
 _ShellExecuteExW = _shell32.ShellExecuteExW
 _CreateMutexW = _kernel32.CreateMutexW            # tests replace it to stage error codes
+# The trace lock's calls, below the functions tests/conftest.py guards (a guard's own test stubs these instead).
+_CreateMutexExW = _kernel32.CreateMutexExW
+_OpenMutexW = _kernel32.OpenMutexW
 
 
 def _winerror() -> OSError:
@@ -324,8 +359,7 @@ def hold_named_mutex(name: str) -> int | None:
     The handle is the lock, not the mutex's ownership: the object lives exactly as long as some process
     holds a handle to it, and Windows closes a dead process's handles.
     """
-    if not isinstance(name, str) or not name or "\0" in name or len(name) > 260:
-        raise ValueError(f"bad mutex name: {name!r}")
+    _check_mutex_name(name)
     ctypes.set_last_error(0)
     handle = _CreateMutexW(None, False, name)
     err = ctypes.get_last_error()
@@ -342,6 +376,82 @@ def hold_named_mutex(name: str) -> int | None:
 def release_named_mutex(handle: int | None) -> None:
     if handle:
         _kernel32.CloseHandle(handle)
+
+
+def _check_mutex_name(name: object) -> None:
+    if not isinstance(name, str) or not name or "\0" in name or len(name) > 260:
+        raise ValueError(f"bad mutex name: {name!r}")
+
+
+def create_mutex(name: str, sddl: str, *, own: bool) -> tuple[int, bool]:
+    """CreateMutexExW under the descriptor `sddl` (pipe.security_attributes), not inherited, asking for SYNCHRONIZE and
+    READ_CONTROL only: hold_named_mutex's CreateMutexW asks an existing mutex for MUTEX_ALL_ACCESS, which a DACL that
+    grants less refuses. (handle, True) when this call made the mutex, held by the calling thread when `own`;
+    (handle, False) when one of that name existed and this call opened it instead, held by nobody new (`own` and
+    `sddl` count only for a new one). Close the handle with release_named_mutex. OSError otherwise, with .winerror:
+    ERROR_ACCESS_DENIED when the existing object's DACL refuses those rights, ERROR_INVALID_HANDLE when the name is
+    another kind of object, ERROR_INVALID_OWNER when `sddl` names an owner this token may not set."""
+    from lagdoctor.winapi import pipe
+    _check_mutex_name(name)
+    with pipe.security_attributes(sddl) as sa:
+        ctypes.set_last_error(0)
+        handle = _CreateMutexExW(ctypes.addressof(sa), name, CREATE_MUTEX_INITIAL_OWNER if own else 0,
+                                 SYNCHRONIZE | READ_CONTROL)
+        err = ctypes.get_last_error()
+    if not handle:
+        raise ctypes.WinError(err)
+    return handle, err != ERROR_ALREADY_EXISTS
+
+
+def open_mutex(name: str, access: int) -> int | None:
+    """OpenMutexW with `access`, not inherited: the handle (close it with release_named_mutex), or None when no object
+    has that name. OSError otherwise, with .winerror: ERROR_ACCESS_DENIED when its DACL refuses `access`,
+    ERROR_INVALID_HANDLE when the name is another kind of object."""
+    _check_mutex_name(name)
+    handle = _OpenMutexW(access, False, name)
+    if handle:
+        return handle
+    err = ctypes.get_last_error()
+    if err == ERROR_FILE_NOT_FOUND:
+        return None
+    raise ctypes.WinError(err)
+
+
+def mutex_owner(handle: int) -> str:
+    """The owner of the mutex behind `handle` (opened with READ_CONTROL), as a SID."""
+    from lagdoctor.winapi import pipe
+    return pipe.owner_of(handle)
+
+
+def take_mutex(handle: int) -> bool:
+    """WaitForSingleObject(handle, 0): True when the calling thread now holds the mutex (no thread held it, or its
+    holder's thread ended holding it: abandoned), False while another thread holds it. OSError when the wait failed
+    (ERROR_ACCESS_DENIED: the handle has no SYNCHRONIZE)."""
+    r = _kernel32.WaitForSingleObject(handle, 0)
+    if r in (WAIT_OBJECT_0, WAIT_ABANDONED):
+        return True
+    if r == WAIT_TIMEOUT:
+        return False
+    raise _winerror()
+
+
+def release_mutex(handle: int) -> None:
+    """ReleaseMutex: the calling thread stops holding it. OSError (ERROR_NOT_OWNER) from any other thread."""
+    if not _kernel32.ReleaseMutex(handle):
+        raise _winerror()
+
+
+def mutex_state(handle: int) -> tuple[int, bool, bool]:
+    """(CurrentCount, held by the calling thread, abandoned) of the mutex behind `handle` (NtQueryMutant,
+    MutantBasicInformation): CurrentCount is 1 while no thread holds it and 0 or below while one does; a mutex whose
+    holder's thread ended holding it reads 1 and abandoned until the next wait takes it. The handle needs
+    MUTANT_QUERY_STATE. OSError otherwise."""
+    info = MUTANT_BASIC_INFORMATION()
+    status = _ntdll.NtQueryMutant(handle, MUTANT_BASIC_INFORMATION_CLASS, ctypes.byref(info), ctypes.sizeof(info),
+                                  None)
+    if status < 0:
+        raise ctypes.WinError(_ntdll.RtlNtStatusToDosError(status))
+    return int(info.CurrentCount), bool(info.OwnedByCaller), bool(info.AbandonedState)
 
 
 class ElevatedChild:
