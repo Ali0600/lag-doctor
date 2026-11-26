@@ -70,11 +70,11 @@ Seven screens, all built from data already on the PC. Nothing is downloaded.
    - a table of lag moments (click one to see the CPU, GPU, disk and network around it);
    - checked and fine; not measured.
 
-   Each fix the last recording made offers (of any game: the one `lagdoctor fix` acts on) has **Apply this fix**
-   (M7): the first click shows where and what it would change, and its notes, read from the PC then, as `lagdoctor
-   fix` prints them; a second makes exactly that change, through the same journal and readback, and its Undo puts it
-   back. An older recording's fixes are shown without it: it may describe this PC as it was then. `report.html` stays
-   the shareable page.
+   Each fix a recording offers has **Apply this fix** (M7): the first click shows where and what it would change,
+   and its notes, read from the PC then, as `lagdoctor fix` prints them; a second makes exactly that change, through
+   the same journal and readback, and its Undo puts it back. A fix that names the PC as it was then has it on the
+   last recording made only: a refresh rate an older lag-doctor offered without naming its monitor, and a background
+   program's priority, whose program may be the game by now. `report.html` stays the shareable page.
 5. **Compare**: two recordings of a game side by side, with their conditions next to the numbers: power plan or mode,
    refresh rate, frames source and measured length, and what changed in the game itself (its exe, drop-in files and
    Unreal settings files, read from its folders when the recording started: DECISIONS 2026-11-08).
@@ -774,6 +774,17 @@ above:
   one a newer lag-doctor made left to that version.
 - [x] The owner's own try in the app (2026-11-24, on a demo library whose last recording offered a GPU preference for a
   made-up program): the fix applied and undone; merged as PR #70.
+
+### M7b: Apply from any recording, and Undo all (DECISIONS 2026-11-26)
+
+- [x] A refresh-rate offer names the monitor it was found on (the inventory's displays read it), and the fix follows
+  that monitor to the name Windows gives it now, for the change and its undo; each fix says whether its params still
+  mean what they meant (`Fix.stands_alone`).
+- [x] Results: Apply on any recording's fixes whose params stand alone, and on the last recording's that name the PC
+  as it was then (an older refresh-rate offer, a background program's priority); an older recording says why.
+- [x] Settings: Undo all, for two changes or more, on a second click: the listed changes, newest first, none put back
+  anyway; a change left alone because it was changed since keeps Put it back anyway on its row.
+- [ ] The owner's own try in the app.
 
 ### After that
 

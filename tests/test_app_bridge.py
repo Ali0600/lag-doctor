@@ -87,7 +87,8 @@ def test_each_request_kind_parses_with_exactly_its_fields():
              "delete_recordings": {"game": "g-0123456789abcdef", "sessions": [sid, "20261101-201500-demoracer"]},
              "stop_recording": {}, "cancel_recording": {}, "recording": {},
              "plan_fix": {"session": sid, "finding": 0, "fix": 1}, "apply_fix": {"plan": "p-0123456789abcdef"},
-             "changes": {}, "undo_change": {"entry": "0123456789ab", "force": False}}
+             "changes": {}, "undo_change": {"entry": "0123456789ab", "force": False},
+             "undo_all": {"entries": ["0123456789ab", "ba9876543210"]}}
     assert set(cases) == set(bridge.REQUESTS)
     for kind, args in cases.items():
         req = bridge.parse(msg(type="request", id=3, kind=kind, **args))
@@ -151,6 +152,13 @@ def test_each_request_kind_parses_with_exactly_its_fields():
     msg(type="request", id=1, kind="undo_change", entry="0123456789a", force=False),
     msg(type="request", id=1, kind="undo_change", entry="power_plan", force=False),   # a fix's id, not a change's
     msg(type="request", id=1, kind="undo_change", entry=["0123456789ab"], force=False),
+    msg(type="request", id=1, kind="undo_all"),
+    msg(type="request", id=1, kind="undo_all", entries=[]),                      # one change at least
+    msg(type="request", id=1, kind="undo_all", entries="0123456789ab"),          # a list of them, never one
+    msg(type="request", id=1, kind="undo_all", entries=["0123456789ab", "0123456789ab"]),    # none twice
+    msg(type="request", id=1, kind="undo_all", entries=["0123456789ab", "power_plan"]),
+    msg(type="request", id=1, kind="undo_all", entries=["0123456789ab"], force=True),         # never put back anyway
+    msg(type="request", id=1, kind="undo_all", entries=[f"{i:012x}" for i in range(bridge.MAX_UNDO_ALL + 1)]),
     msg(type="frames_done"),                                               # a notice without its token
     msg(type="frames_done", token=1, extra=2),
     msg(type="ready", x=1),

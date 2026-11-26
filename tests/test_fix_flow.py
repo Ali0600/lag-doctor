@@ -38,11 +38,39 @@ def test_a_fix_is_applied_from_a_report_only_when_this_lag_doctor_knows_it_and_i
     assert ids == frozenset(catalog.ids()) - {"game_setting"} and "power_plan" in ids and "game_setting" not in ids
     assert flow.offerable("power_plan", {"scheme": "x"}, ids)
     assert not flow.offerable("game_setting", {}, ids | {"game_setting"})        # never the sweep's own
+    assert not flow.applies("game_setting", {}, ids | {"game_setting"}, is_last=True)     # not even the last's
     assert not flow.offerable("from_a_newer_lag_doctor", {}, ids)
     assert not flow.offerable("power_plan", ["scheme"], ids)
     assert not flow.offerable("power_plan", None, ids)
     assert not flow.offerable(None, {}, ids)
     assert not flow.offerable(["power_plan"], {}, ids)
+    assert not flow.offerable("from_a_newer_lag_doctor", {}, ids | {"from_a_newer_lag_doctor"})   # not in the catalogue
+    assert not flow.offerable("power_plan", {}, frozenset())              # a window that applies none
+
+
+def test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_they_meant():
+    ids = flow.known()
+    screen = {"device": "\\\\.\\DISPLAY1", "hz": 144}
+    monitor = "\\\\?\\DISPLAY#ABC1234#5&1a2b3c4d&0&UID4352#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}"
+    assert flow.why_not_offered("refresh_rate", dict(screen, monitor=monitor), ids) is None
+    assert flow.applies("refresh_rate", dict(screen, monitor=monitor), ids, is_last=False)
+    # An older report's display name belongs to whichever monitor Windows lists first, which may be another by now,
+    # and a program that was running may be the game: from the last recording made only.
+    background = {"pid": 4242, "create_time": 1, "class": "below_normal", "exclude": [7], "name": "Chat.exe"}
+    for fid, odd in [("refresh_rate", screen), ("refresh_rate", dict(screen, monitor="")),
+                     ("refresh_rate", dict(screen, monitor=5)), ("refresh_rate", dict(screen, monitor="x" * 200)),
+                     ("background_priority", background)]:
+        assert flow.why_not_offered(fid, odd, ids) == "dated", odd
+        assert not flow.offerable(fid, odd, ids) and not flow.applies(fid, odd, ids, is_last=False)
+        assert flow.applies(fid, odd, ids, is_last=True)
+    assert flow.why_not_offered("refresh_rate", ["device"], ids) == "params"
+    assert not flow.applies("refresh_rate", ["device"], ids, is_last=True)
+    assert flow.why_not_offered("from_a_newer_lag_doctor", {}, ids) == "unknown"
+    assert not flow.applies("from_a_newer_lag_doctor", {}, ids, is_last=True)
+    assert flow.why_not_offered("game_setting", {}, ids | {"game_setting"}) == "unknown"
+    assert all(catalog.find(i).stands_alone({}) for i in ids - {"refresh_rate", "background_priority"})   # they last
+    from lagdoctor.fixes.base import Fix
+    assert Fix.stands_alone({}) is False                  # a fix that does not say: from the last recording only
 
 
 # ---------------------------------------------------------------- apply ---

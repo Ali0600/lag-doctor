@@ -54,10 +54,32 @@ def known() -> frozenset[str]:
     return frozenset(catalog.ids()) - NEVER_OFFERED
 
 
+def why_not_offered(fix_id: Any, params: Any, ids: frozenset[str]) -> str | None:
+    """Why lag-doctor's window does not apply an offer, or None when it does, from whichever recording made it.
+    "unknown": no id among `ids` (known(): a report a newer lag-doctor wrote may name a fix this one does not know), or
+    the sweep's own; "params": params that are not an object; "dated": params that name something as the PC was when
+    the report was written (Fix.stands_alone: a display name may belong to another monitor by now, a background program
+    may be the game), which the window applies from the last recording made only (applies)."""
+    if not isinstance(fix_id, str) or fix_id not in ids or fix_id in NEVER_OFFERED:
+        return "unknown"
+    if not isinstance(params, dict):
+        return "params"
+    cls = catalog.find(fix_id)
+    if cls is None:
+        return "unknown"
+    return None if cls.stands_alone(params) else "dated"
+
+
 def offerable(fix_id: Any, params: Any, ids: frozenset[str]) -> bool:
-    """Whether an offer is one to apply: an id among `ids` (known(): a report a newer lag-doctor wrote may name a fix
-    this one does not know), never the sweep's own, with params that are an object."""
-    return isinstance(fix_id, str) and fix_id in ids and fix_id not in NEVER_OFFERED and isinstance(params, dict)
+    """Whether lag-doctor's window applies an offer from any recording (why_not_offered says no reason not to)."""
+    return why_not_offered(fix_id, params, ids) is None
+
+
+def applies(fix_id: Any, params: Any, ids: frozenset[str], is_last: bool) -> bool:
+    """Whether lag-doctor's window applies an offer from the recording that made it: any recording's that stands
+    alone, and the last recording's (`is_last`, the one `lagdoctor fix` acts on) that is "dated", as M7 applied them."""
+    why = why_not_offered(fix_id, params, ids)
+    return why is None or (why == "dated" and is_last)
 
 
 def apply(fix: Fix, plan: FixPlan, journal: Journal) -> FixResult:

@@ -14,7 +14,12 @@ and if that fails the entry stays applied, so undo can still take it back.
 
 The GDI name (\\\\.\\DISPLAY1) belongs to whichever monitor Windows lists first, so a plan also stores the
 monitor's own identity (its monitorDevicePath, WT 6.2) as params "monitor". read() and write() refuse a name
-that now shows another monitor: to them it is a display that is not connected.
+that now shows another monitor, unless Windows lists that monitor under another name now (a dock or another screen
+moves the names): then they follow it there (_where), so an undo after a dock still reaches it. A report's offer
+names the monitor too (the inventory's displays read it, DESIGN.md), and the plan follows that monitor the same way:
+such an offer says what it changes on its own, so lag-doctor's window applies it from any recording (stands_alone).
+An offer without one (a report from before monitors were named) is planned for whichever monitor its name shows now,
+as `lagdoctor fix` always did, and the window applies it from the last recording only.
 """
 from __future__ import annotations
 
@@ -73,12 +78,22 @@ class RefreshRateFix(Fix):
         self.display = display
 
     def target(self, params: dict[str, Any]) -> str:
-        return (f"the refresh rate of display {check_device(params.get('device'))} "
-                f"(Settings > System > Display > Advanced display)")
+        # Journaled as it reads now: after a dock that name may show another monitor, so it says when it was given.
+        return (f"the refresh rate of display {check_device(params.get('device'))}, as Windows named the screen when "
+                f"lag-doctor read it (Settings > System > Display > Advanced display)")
+
+    @classmethod
+    def stands_alone(cls, params: dict[str, Any]) -> bool:
+        """Only with the monitor's own identity: a display name alone may belong to another monitor by now."""
+        try:
+            return _monitor(params) is not None
+        except ValueError:
+            return False
 
     def plan(self, params: dict[str, Any]) -> FixPlan:
-        """The report suggests {device, hz}; the plan adds which monitor that name shows now, so a later read,
-        write or undo can tell when Windows has given the name to another monitor."""
+        """The report suggests {device, hz, monitor}. With the monitor, the plan is for that monitor under the name
+        it has now; without it (an older report), the plan adds which monitor that name shows now. Either way a later
+        read, write or undo can tell when Windows has given the name to another monitor."""
         device = check_device(params.get("device"))
         if _monitor(params) is None:
             monitor = self.display.monitor_path(device)
@@ -86,13 +101,29 @@ class RefreshRateFix(Fix):
                 raise LookupError(f"display {device} is not connected (or Windows did not say which monitor it "
                                   f"is), so lag-doctor could not be sure a later undo reaches the same screen")
             params = {**params, "monitor": monitor}
+        else:
+            where = self._where(params)
+            if where is None:
+                raise LookupError(f"the monitor this fix is for (it was {device}) is not connected now")
+            params = {**params, "device": where}
         return super().plan(params)
 
-    def read(self, params: dict[str, Any]) -> Any:
+    def _where(self, params: dict[str, Any]) -> str | None:
+        """The display name that shows the params' monitor now: their own while it still shows that monitor, else the
+        one Windows lists the monitor under now (it hands names out in the order it lists monitors, so a dock or another
+        screen moves them); None when that monitor is not connected. Params from before monitors were stored name a
+        display only, so that name."""
         device = check_device(params.get("device"))
         monitor = _monitor(params)
-        if monitor is not None and self.display.monitor_path(device) != monitor:
-            return dict(GONE)                 # unplugged, or the name now belongs to another monitor
+        if monitor is None or self.display.monitor_path(device) == monitor:
+            return device
+        moved = next((d.get("device") for d in self.display.list_displays() if d.get("monitor") == monitor), None)
+        return None if moved is None else check_device(moved)
+
+    def read(self, params: dict[str, Any]) -> Any:
+        device = self._where(params)
+        if device is None:
+            return dict(GONE)                 # unplugged, or switched off: its monitor is under no name now
         try:
             mode = self.display.current_mode(device)
         except OSError:
@@ -126,12 +157,11 @@ class RefreshRateFix(Fix):
         return {"width": current["width"], "height": current["height"], "hz": hz}
 
     def write(self, params: dict[str, Any], value: Any) -> None:
-        device = check_device(params.get("device"))
         hz = check_hz(value["hz"])
-        monitor = _monitor(params)
-        if monitor is not None and self.display.monitor_path(device) != monitor:
-            raise RuntimeError(f"{device} no longer shows the monitor lag-doctor read (it was unplugged, or Windows "
-                               f"gave the name to another monitor); nothing was changed")
+        device = self._where(params)
+        if device is None:
+            raise RuntimeError(f"{check_device(params.get('device'))} no longer shows the monitor lag-doctor read, and "
+                               f"no other name does (it was unplugged); nothing was changed")
         live = self.display.current_mode(device)
         if (live["width"], live["height"]) != (value["width"], value["height"]):
             raise RuntimeError(f"{device} is now at {live['width']}x{live['height']}, not "
@@ -151,7 +181,8 @@ class RefreshRateFix(Fix):
         mode = self.read(params)
         if is_gone(mode):
             return mode
-        info = self._info(check_device(params.get("device")))
+        where = self._where(params)
+        info = self._info(where) if where is not None else None
         exact = info.get("hz") if info else None
         if mode["hz"] is None or exact is None or abs(exact - mode["hz"]) >= QDC_TOLERANCE_HZ:
             return {**mode, "display_config_hz": exact}     # the two readouts disagree: not confirmed

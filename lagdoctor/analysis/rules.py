@@ -151,8 +151,14 @@ SOLID_STATE = "SSD"
 DEVICE_RE = re.compile(r"\\\\\.\\DISPLAY\d{1,3}")                  # DESIGN refresh_rate: "\\.\DISPLAY1"
 GUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 EXE_MAX_CHARS = 1024         # [inferred] longer than any real install path, short enough to bound
+MONITOR_MAX_CHARS = 127      # DESIGN refresh_rate: a monitorDevicePath is WCHAR[128]; fixes/refresh_rate checks the same
 
 _num = fa._num
+
+
+def _monitor_path(value: Any) -> bool:
+    """Whether a display's "monitor" has the shape the refresh-rate fix takes (fixes/refresh_rate._monitor)."""
+    return isinstance(value, str) and 0 < len(value) <= MONITOR_MAX_CHARS and value.isprintable()
 
 
 # ------------------------------------------------------------------------------- results ---
@@ -1926,8 +1932,11 @@ def _refresh_rate(cap: Capture, ctx: dict) -> Any:
     device = d.get("device") if isinstance(d.get("device"), str) and DEVICE_RE.fullmatch(d["device"]) else None
     battery = e.power.get("on_battery") is True
     note = " A lower rate saves battery, so keep it if that is on purpose." if battery else ""
+    params: dict[str, Any] = {"device": device, "hz": int(round(top))}
+    if _monitor_path(d.get("monitor")):       # which monitor the name showed: the fix follows it to the name it has now
+        params["monitor"] = d["monitor"]
     fixes = ([FixSuggestion(title=f"Set {screen} to {top:.0f} Hz", detail="Windows tests the mode first." + note, fix_id="refresh_rate",
-                            params={"device": device, "hz": int(round(top))})]
+                            params=params)]
              if device else
              [_advice(f"Set {screen} to {top:.0f} Hz", "Settings > System > Display > Advanced display." + note)])
     return c.conclude(f"The screen runs at {hz:.0f} Hz, below its {top:.0f} Hz maximum",

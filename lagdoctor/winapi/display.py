@@ -308,6 +308,7 @@ def list_displays() -> list[dict]:
         out.append({
             "device": device,
             "name": path.get("friendly") or _monitor_name(device),
+            "monitor": path.get("device_path") or None,       # which monitor this name shows now (monitor_path)
             "adapter_luid": path.get("adapter_luid"),
             "internal": path.get("internal"),
             "primary": bool(dd.StateFlags & DISPLAY_DEVICE_PRIMARY_DEVICE),

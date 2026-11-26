@@ -460,7 +460,8 @@ def displays():
 
 
 def test_live_displays_agree_with_enum_display_settings(displays, adapters):
-    keys = {"device", "name", "adapter_luid", "internal", "primary", "width", "height", "hz", "max_hz", "modes_hz"}
+    keys = {"device", "name", "monitor", "adapter_luid", "internal", "primary", "width", "height", "hz", "max_hz",
+            "modes_hz"}
     assert sum(d["primary"] for d in displays) == 1
     for d in displays:
         assert set(d) == keys
@@ -469,6 +470,7 @@ def test_live_displays_agree_with_enum_display_settings(displays, adapters):
         assert abs(d["hz"] - mode["hz"]) < 1.5, (d["hz"], mode["hz"])
         assert mode["hz"] in d["modes_hz"] and d["max_hz"] == max(d["modes_hz"])
         assert d["adapter_luid"] in {a["luid"] for a in adapters}
+        assert d["monitor"] == display.monitor_path(d["device"]) and d["monitor"]     # the monitor this name shows
 
 
 def test_live_internal_panels_agree_with_wmi(displays):

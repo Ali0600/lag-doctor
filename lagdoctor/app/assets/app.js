@@ -518,6 +518,7 @@ const SCREENS = {
     const sound = el('button', {class: 'btn', type: 'button', on: {click: () => ask('test_sound')}}, 'Play a test sound');
     const changes = el('div', {id: 'changes'}, el('p', {class: 'muted loading'}, 'Loading'));
     const said = saidNote(args);
+    const forced = Array.isArray(args.force) ? args.force : [];     // left alone by Undo all: changed since
     show(el('h1', null, 'Settings'),
       el('h2', null, 'Ready to record'),
       el('div', {class: 'strip' + (r.ok ? '' : ' no')}, ...prose(r.text)),
@@ -539,7 +540,7 @@ const SCREENS = {
       el('h2', null, 'About'),
       el('table', null, el('tbody', null, ...s.about.map(([k, v]) => el('tr', null, el('td', null, k), el('td', null, v))))));
     // The list of changes comes in its own answer: a journal another window holds keeps the rest of Settings drawn.
-    ask('changes').then((c) => { if (live()) fillChanges(changes, c, live); }).catch((err) => {
+    ask('changes').then((c) => { if (live()) fillChanges(changes, c, live, forced); }).catch((err) => {
       if (live()) fill(changes, el('p', {class: 'error'}, String(err && err.message || err)));
     });
   },
@@ -725,7 +726,7 @@ function deleteButton(game, chosen) {
   return b;
 }
 
-// Apply, for a fix the last recording offers: the first click shows what would change (the app's plan, read now, as
+// Apply, for a fix a recording offers: the first click shows what would change (the app's plan, read now, as
 // `lagdoctor fix` prints it), the second makes exactly that change, and its Undo puts it back. The page names the fix
 // only by its place on this page; the app reads the fix and its settings from the recording itself. The app keeps one
 // plan at a time, so a box showing one goes back to its button when another box shows its own.
@@ -759,7 +760,7 @@ function applyBox(session, finding, fix) {
           const done = (u) => fill(box, el('p', {class: 'note', id: 'undone'}, u.text),
             u.force ? undoButton(r.entry, done, true) : (u.done ? null : undoButton(r.entry, done)));
           fill(box, said, undoButton(r.entry, done, r.force));
-        }).catch((err) => {           // that plan is gone (another box's replaced it, a newer recording): plan again
+        }).catch((err) => {           // refused, or that plan is gone (another box's replaced it): plan again
           again();
           recError(err);
         });
@@ -799,8 +800,9 @@ function undoButton(entry, done, force = false) {
 // Settings' list of the changes lag-doctor made that are still in place, newest first: each with its Undo (Put it back
 // anyway for one that is neither how it was nor lag-doctor's), or a note saying why it has none. An undo draws the
 // list again with what was said, unless the change was left alone because it was changed since: then that change's
-// row offers to put it back anyway.
-function fillChanges(box, c, live) {
+// row offers to put it back anyway, as do the rows of the changes Undo all left alone so (`forced`, their ids). Undo
+// all, for two changes or more, takes a second click, and the app puts back exactly the ones it listed (c.all).
+function fillChanges(box, c, live, forced = []) {
   if (!c.rows.length) { fill(box, el('p', {class: c.paused ? 'error' : 'muted', id: 'changes-none'}, ...prose(c.text))); return; }
   const rows = c.rows.map((r) => {
     const note = el('p', {class: 'muted'}, ...prose(r.note));
@@ -810,20 +812,48 @@ function fillChanges(box, c, live) {
       fill(note, u.text);
       fill(buttons, undoButton(r.id, done, true));
     };
-    const buttons = el('div', {class: 'row'}, r.undo ? undoButton(r.id, done) : null,
-      r.force ? undoButton(r.id, done, true) : null);
+    const left = forced.includes(r.id);
+    const buttons = el('div', {class: 'row'}, r.undo && !left ? undoButton(r.id, done) : null,
+      r.force || left ? undoButton(r.id, done, true) : null);
     return el('div', {class: 'card change', 'data-entry': r.id},
       el('strong', null, r.title), r.change ? el('p', null, r.change) : null,
       el('p', {class: 'muted'}, r.where), el('p', {class: 'muted'}, `Made ${r.when}`), note, buttons);
   });
+  // Undo all for what it may put back: not the changes it just left alone because they were changed since.
+  const every = c.all.filter((id) => !forced.includes(id));
+  const all = every.length > 1 ? undoAllButton(every, (u) => {
+    if (live()) go('settings', {said: u.lines, force: u.force}, false);
+  }) : null;
   fill(box, el('p', {class: 'muted'}, 'Newest first. Undo puts back how each setting was before lag-doctor changed it.'),
-    rows);
+    all ? el('div', {class: 'row'}, all) : null, rows);
+}
+
+// Undo all: the first click asks for a second, which puts back every change the list named (`entries`, newest first).
+// done(answer) shows what the app said of each.
+function undoAllButton(entries, done) {
+  const b = el('button', {class: 'btn', type: 'button', id: 'undo-all'}, 'Undo all');
+  b.addEventListener('click', () => {
+    if (b.dataset.armed !== '1') {
+      b.dataset.armed = '1';
+      b.textContent = `Click again to undo all ${entries.length} changes`;
+      return;
+    }
+    b.disabled = true;
+    ask('undo_all', {entries}).then((u) => done(u)).catch((err) => {
+      b.disabled = false;
+      recError(err);
+    });
+  });
+  return b;
 }
 
 // What a deletion said, shown once on the screen it led to (args.said): not again when Back returns to that screen.
 function saidNote(args) {
   const text = args.said;
   delete args.said;
+  if (Array.isArray(text)) {          // a line for each change Undo all tried
+    return text.length ? el('div', {class: 'note', id: 'said'}, ...text.map((line) => el('p', null, line))) : null;
+  }
   return text ? el('p', {class: 'note', id: 'said'}, text) : null;
 }
 
