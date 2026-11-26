@@ -38,7 +38,10 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   runner (PR #73: a standard account started it and recorded a stand-in game through it, research note section 13);
   the recorder and the app trying the service first (PR #74: `watch` asks it before the prompt, the app through its
   recorder); and the owner's own install and recording, frame timing's first check under the service.
-- [ ] Stage 5: unsigned preview release, SignPath, winget.
+- [ ] Stage 5: unsigned preview release, SignPath, winget. Its first step's workflow is built (2026-11-26,
+  `.github/workflows/release.yml`, PR #77): main's tested MSI on a draft release, which the owner publishes.
+  The first draft, v0.1.0, was made on 2026-11-26 from main's CI run of the merge (d867ee1) and read back with no
+  tag yet; publishing it is the owner's.
 
 ## E2: the group fallback
 
@@ -198,7 +201,12 @@ but a GitHub-hosted runner. Measured (research note section 8):
 ## Stage 5: release
 
 1. An unsigned preview release of the MSI, service included, on GitHub Releases (SignPath signs only a project
-   "already released in the form that should be signed").
+   "already released in the form that should be signed"). Built 2026-11-26: `.github/workflows/release.yml`, started
+   by hand on main, promotes the `lag-doctor-msi` artifact of main's newest CI run (a push that passed, with only
+   ignored paths changed since) to a draft pre-release at that run's commit, with its SHA-256 and notes on what an
+   unsigned installer meets (`scripts/release.py`, DECISIONS 2026-11-26). The draft is seen only by those who may
+   push, and GitHub makes its tag when it is published, which is the owner's step. Left open: whether Smart App
+   Control blocks the MSI (E6), and Windows 10 (E7).
 2. Apply to SignPath Foundation. Its approval is manual and may be declined for reputation; then releases stay
    unsigned, and the README says what SmartScreen and Smart App Control will show.
 3. With SignPath: signing in the release workflow, each request approved by the owner.

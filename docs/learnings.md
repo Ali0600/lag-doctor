@@ -1518,6 +1518,21 @@ S-1-5-21-...-500 the test expected. `tests/test_tracelock.py` now turns every AC
 **Takeaway**: compare SIDs read from SDDL in their S-1- form, never as text, and expect the alias set to depend on the
 account the test runs as.
 
+### Release the bytes the checks ran on, and let a draft hold the tag until a person publishes
+A release built again is a file no test ever installed, and builds differ: two MSIs CI built a few commits apart,
+with `lagdoctor/` unchanged between them, were both 12,378,112 bytes and had different SHA-256s. Promote the artifact
+the checks ran on instead, and judge it against the repository's files at that artifact's own commit, not the
+checkout. On GitHub a draft release is seen only by those who may push, and it gets its tag only
+when it is published: the draft's page is `releases/tag/untagged-<hash>` until then. No current GitHub page states
+that, so the readback checked it live.
+**Why it came up**: Stage 5's preview (PR #77). `release.yml` takes the `lag-doctor-msi` artifact of main's newest CI
+run, which built, installed and uninstalled it, and makes a draft at that run's commit; on 2026-11-26 the first one,
+v0.1.0, read back with no `v0.1.0` tag. `gh release create --draft` does not delete its draft when an upload fails
+(cli/cli's create.go cleans up only the draft it makes for a non-draft release), so the script does: only while the
+release is still the tag's one draft at that commit, and never a tag, since its owner may have published it meanwhile.
+**Takeaway**: ship the artifact your checks ran on, made private until a person publishes it; clean up a half-made
+one only after reading again that it is still yours.
+
 ### A name the system hands out by position is no identity to keep
 Windows names displays `\\.\DISPLAY1`, `DISPLAY2` and on in the order it lists them, so a dock, another screen or a
 driver update gives a name to another monitor; the monitor's device interface path (`monitorDevicePath`) stays with
