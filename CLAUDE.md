@@ -115,9 +115,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   picking: a pick by `git diff --name-only origin/main HEAD` cannot see an uncommitted edit (PR #53's first pick left
   out `frames.py`'s 112). Merge `origin/main` into the branch first, too: worktrees share their refs, so another
   session's fetch moves `origin/main` under yours, and the two-dot diff then counts main's new files as the branch's
-  (PR #66's first pick took 1,644 mutations, 511 once main was merged). A picked set runs about 3.7 s a mutation here (PR #53's 1,098 took 67 minutes), and one heavy in the window's own
+  (PR #66's first pick took 1,644 mutations, 511 once main was merged). When main moves again while the gate runs,
+  merge it, pick again on the merged tree and run only what the new pick holds that the running one does not (PR #70's
+  second pick, after #69 landed, was the same 686). A picked set runs about 3.7 s a mutation here (PR #53's 1,098 took 67 minutes), and one heavy in the window's own
   tests about 8 s (each run of `tests/test_app_page.py` opens the real window: PR #62's 308 took about 40 minutes,
-  PR #64's 466, 71 of them on the window, about 68, and PR #66's 511, 83 on the window, 69). Every mutation on
+  PR #64's 466, 71 of them on the window, about 68, PR #66's 511, 83 on the window, 69, and PR #70's 686, 87 on the window, about 100). Every mutation on
   `lagdoctor/analysis/rules.py` (456 after PR #52) takes up to an hour here (PR #50's 494 picked mutations took about
   70 minutes, PR #51's 744 about 36 and PR #52's 643 about 38 on a quiet PC): start it in the background as soon as the code is settled, and
   review meanwhile with agents that run no tests (no second pytest meanwhile, so write the next change's tests without
@@ -353,7 +355,12 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   the App a stand-in recorder first. A program icon is read for any game with a program and no cover (an Epic launcher's, a recording's
   `summary.json` `exe`): a test that needs an icon makes its program under its own `tmp_path` (`tests/pe_build.py`).
   `tests/app_demo.py`'s recordings name made-up programs under `C:\Games`, which an App with no covers then looks for
-  there, read-only (`stores.open_file`'s stat first); keep them names no real game has.
+  there, read-only (`stores.open_file`'s stat first); keep them names no real game has. When the owner's own library
+  cannot show what an app change does (PR #70: their last recording offered no fix to apply), give their try a library
+  of its own: `tests.app_demo.build` into a new folder under `%TEMP%`, with the one thing to try pointed at made-up data
+  (the demo's markup program name is refused by the real `gpu_preference` plan, so PR #70's try offered it for a
+  made-up `C:\Games\Ember Quest\EmberQuest.exe`), opened with `$env:LAGDOCTOR_HOME` set for that one command and
+  removed after it; read its journal or files afterwards to see what the try did.
 - **The overhead benchmark** (`scripts/overhead/bench.py`, `docs/research/overhead.md`) opens a LagLab window for
   about 6.5 minutes a suite and holds lag-doctor's capture lock for the whole run, so the owner's own `watch` refuses
   meanwhile (exit 4), and the benchmark refuses to start while a recording runs: run it when the owner is not
