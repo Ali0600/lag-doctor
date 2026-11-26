@@ -619,4 +619,7 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   runs watched every 20 ms, all 70 of its UDP sockets were a utility process's, on 0.0.0.0, on a port Windows chose).
   Since PR #22 the check counts that one shape as WebView2's client and fails on every other (`server_reason` in the
   spike; `docs/research/desktop-app.md` section 11). If it fails again, read the failing reading's `servers` in
-  results.json (each names its reason and process kind) before rerunning.
+  results.json (each names its reason and process kind) before rerunning. Its start-up check ("first page up within 10 s")
+  failed twice in a row on PR #75 (page ready 20.5 s and 21.3 s after the process started, against 5.8 s to 7.2 s in
+  other runs, on the same runner image and WebView2 runtime, the spike's own imports costing the same), then passed
+  on the next push: Python's start and the first page were slow on those runners. Rerun it before blaming a change.
