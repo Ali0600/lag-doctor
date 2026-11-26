@@ -340,6 +340,6 @@ class Host:
         cfg = server.Config(pipe=self.pipe_name, recorder=(pid, rec.create_time), sid=who.sid, game=ask["game"],
                             frames=ask["frames"], network=ask["network"], presentmon_exe=exe,
                             folders=folders, wait_s=ask["wait_s"])
-        pass
+        self._hold_the_trace()                         # last: no check after it may refuse the caller
         return server.Relay(cfg, srv, who.session, self.parts, since=since, me=(me.pid, me.create_time), tree=tree,
                             until=until)
