@@ -45,8 +45,11 @@ ones.*
 
 A per-machine installer, `lag-doctor-0.1.0-x64.msi`, is built and tested by CI on every change and kept as the
 `lag-doctor-msi` artifact of each [CI run](https://github.com/Ali0600/lag-doctor/actions/workflows/ci.yml) (GitHub
-asks you to sign in to download one). There is no release yet and the MSI is not signed (`docs/INSTALLER-PLAN.md`,
-Stage 5), so SmartScreen may warn before it runs, and a PC with Smart App Control on is expected to refuse it.
+asks you to sign in to download one). Previews go on [Releases](https://github.com/Ali0600/lag-doctor/releases) once
+the maintainer publishes one, each the very MSI one of main's CI runs built and checked, with its SHA-256 and how to
+check your download against it. The MSI is not signed
+yet (`docs/INSTALLER-PLAN.md`, Stage 5), so SmartScreen may warn before it runs, and a PC with Smart App Control on is
+expected to refuse it.
 
 ```powershell
 msiexec /i lag-doctor-0.1.0-x64.msi          # or double-click it: one UAC prompt, no questions
@@ -300,6 +303,13 @@ uv run python scripts/overhead/bench.py cycles --suite intel-cpu --out <dir>   #
   GitHub-hosted runner). Three MSIs broken on purpose each failed it where they should: one missing a module, one
   whose uninstall left its PATH entry, and one without its bytecode, where an administrator's run wrote into
   Program Files and the uninstall left that behind.
+- **The release**: `.github/workflows/release.yml`, started by hand on `main`, builds nothing. It takes the MSI of
+  main's newest CI run (a push that passed, with only those ignored paths changed on `main` since), checks it against
+  its `payload.json` and main's own files at that commit, and puts it with its SHA-256 on a draft pre-release at that
+  commit, then downloads it again to compare (`scripts/release.py`); a draft left by a failure is deleted while it is
+  still a draft. The maintainer publishes it, and GitHub makes the tag then. Its token may write in that one job only,
+  which runs no third-party action; a pull request that changes the release runs the rest with a read-only token, on
+  main's real newest run.
 - **Only what the shipped runtime imports**: python.org's embeddable runtime leaves tkinter, IDLE, turtle, venv and
   ensurepip out of the standard library, so `tests/test_stdlib_only.py` lets `lagdoctor/` import only the modules
   that runtime says it can (`scripts/runtime_modules.json`, which `scripts/runtime_modules.py` asks of the pinned
@@ -312,7 +322,7 @@ uv run python scripts/overhead/bench.py cycles --suite intel-cpu --out <dir>   #
 
 ## Code signing policy
 
-Nothing is signed yet. Once a first unsigned preview is released, lag-doctor applies to SignPath Foundation for free
+Nothing is signed yet. Once a first unsigned preview is published, lag-doctor applies to SignPath Foundation for free
 code signing (`docs/INSTALLER-PLAN.md`, Stage 5), and from then on: Free code signing provided by
 [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
 
@@ -380,14 +390,14 @@ connection to Microsoft, as the runtime does on its own.
   says how far off the next limit is (the CPU, the GPU or the screen, and how
   many times faster the limiting part must get), from thread CPU time rather than PresentMon's CPU Busy, which
   read 16.55 ms of a 16.9 ms GPU-bound frame.
-- **Testing that proves itself**: 5,845 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
+- **Testing that proves itself**: 5,933 tests, run in CI on GitHub's Windows runners on the exact Python the MSI
   ships, with SHA-pinned actions, skipping pushes that change only docs (20 of the first 42 to main) under a test
   that scans every job's inputs, beside jobs that run the built wheel in a fresh venv and the MSI on a throwaway
   runner; the
   hardware a runner lacks is declared, so those tests skip there by name and still fail on the laptop if a bug hides
   the hardware, and the 45 tests on the real PresentMon get its release and gold captures fetched, pinned and cached
-  there, failing rather than skipping if they go missing; plus a mutation harness of 4,629 deliberate
-  sabotages in 75 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
+  there, failing rather than skipping if they go missing; plus a mutation harness of 4,702 deliberate
+  sabotages in 76 specs that must each turn a test red, run on a throwaway copy of the tree with hash checks.
 - **Safe automation of system changes**: 7 opt-in fixes, applied from the terminal or the app's window through one
   shared flow (the change shown first, then exactly that change, never while any recording runs), and a settings
   sweep that edits a game's settings file between runs and puts it back byte for byte, all behind a write-ahead
@@ -398,7 +408,8 @@ connection to Microsoft, as the runtime does on its own.
 - **Supply chain and least privilege**: a per-machine WiX MSI of 249 files built in CI from pinned inputs (Python
   runtime and PresentMon by SHA-256, WiX by SHA-512), installed, run from a fresh shell and uninstalled on a throwaway
   runner with nothing left behind, its Start-menu shortcut and app ID read back from the installed link, its check
-  proven by 4 sabotaged builds; PresentMon checked through a deny-write handle and launched by that handle's resolved
+  proven by 4 sabotaged builds, and promoted as those very bytes (no rebuild) to a draft release whose write token
+  lives in 1 of the release workflow's 2 jobs, which runs no third-party action; PresentMon checked through a deny-write handle and launched by that handle's resolved
   path; only PresentMon and the ETW trace run elevated, in a windowless relay behind 1 UAC prompt that passes back
   only the game's data and the player's own programs' byte totals; a capture service to replace that prompt, measured
   on GitHub's runners before it was built (a 1-privilege LocalService service enabling all 13 ETW providers), that

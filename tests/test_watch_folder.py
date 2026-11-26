@@ -640,7 +640,7 @@ def test_through_the_service_a_program_from_the_folder_older_than_the_ask_is_alr
         self.since, self.service = RELAY_CT + 10 * SECOND, True
 
     monkeypatch.setattr(PlayLink, "__init__", service_link)
-    started = {"pid": 4301, "create_time": RELAY_CT + 1, "name": "lantern.exe", "exe": GAME_DIR + "\lantern.exe"}
+    started = {"pid": 4301, "create_time": RELAY_CT + 1, "name": "lantern.exe", "exe": GAME_DIR + "\\lantern.exe"}
     play["running"] = [[], [started]]
     play["windows"] = [_window_of(4301)]                 # after the service's start, before the ask: never the wait's
     assert _watch(play, tmp_path, "--elevate") == cli.EXIT_BAD_ARGS and play["waits"] == []

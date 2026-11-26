@@ -20,4 +20,5 @@ you approve `--elevate`, `scripts/e2e.py` or `scripts/etw_access.py` (README, Li
 
 ## Supported versions
 
-Only the latest commit on `main`; there are no releases yet.
+The latest commit on `main`, and the newest preview MSI on GitHub Releases once one is published. Older previews are
+not supported.

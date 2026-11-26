@@ -1,6 +1,7 @@
 """The side workflows run on every pull request that changes code they run (docs/DECISIONS.md, 2026-11-08).
 
-experiments.yml and webview-spike.yml start on a pull request only when it changes a path their `paths:` filter names.
+experiments.yml, webview-spike.yml and release.yml start on a pull request only when it changes a path their `paths:`
+filter names.
 Their scripts import lagdoctor modules and sibling scripts, so a filter that names only the scripts lets a pull request
 change what they run without running them: PR #6 changed four modules the experiments run as a service and started
 none. These tests start from each workflow's entry scripts (the ones its steps run, and every file a wildcard entry
@@ -17,7 +18,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
-SIDE = ("experiments.yml", "webview-spike.yml")
+SIDE = ("experiments.yml", "webview-spike.yml", "release.yml")
 # Where an absolute import is found: the repo's root (lagdoctor) and scripts/, which every script puts on sys.path.
 SEARCH = ("", "scripts")
 # One file per route an import can take to it, so a reader that loses a route fails here, not silently.
@@ -34,6 +35,10 @@ REACHED = {
         "scripts/stage2/guard.py": "`from stage2 import guard`, a package under scripts/",
         "lagdoctor/paths.py": "only through another module: lagdoctor/setup.py imports it",
     },
+    "release.yml": {
+        "scripts/stage2/__init__.py": "the package on the way to guard.py, from release.py",
+        "scripts/stage2/guard.py": "`from stage2 import guard` in release.py",
+    },
 }
 
 
@@ -47,7 +52,7 @@ def filter_paths(text: str) -> list[str]:
 def run_scripts(text: str) -> list[str]:
     """The repo scripts a workflow's steps run with python, comments left out."""
     code = "\n".join(line.split(" #")[0] for line in text.splitlines() if not line.lstrip().startswith("#"))
-    return sorted(set(re.findall(r"\bpython (scripts/[\w./-]+\.py)\b", code)))
+    return sorted(set(re.findall(r"\bpython3?(?: -I)? (scripts/[\w./-]+\.py)\b", code)))
 
 
 def glob_re(pattern: str) -> re.Pattern:
@@ -151,6 +156,12 @@ def test_a_side_workflow_names_no_file_its_code_does_not_import(workflow):
     assert f".github/workflows/{workflow}" in patterns, f"{workflow} does not run when it changes itself"
 
 
+def test_every_workflow_whose_pull_requests_are_filtered_by_path_is_checked_here():
+    filtered = sorted(wf.name for wf in WORKFLOWS.glob("*.yml")
+                      if re.search(r"^  pull_request:\n    paths:\n", wf.read_text(encoding="utf-8"), re.M))
+    assert filtered == sorted(SIDE), f"a workflow with a pull_request paths filter is not in SIDE: {filtered}"
+
+
 @pytest.mark.parametrize("workflow", SIDE)
 def test_the_imports_are_followed_by_every_route(workflow):
     text = (WORKFLOWS / workflow).read_text(encoding="utf-8")
@@ -186,6 +197,7 @@ def test_filter_patterns_match_as_github_reads_them():
 def test_the_workflow_readers_take_the_paths_and_the_scripts():
     text = ('on:\n  pull_request:\n    paths:\n      - "a.yml"\n      # why\n      - "s/**"\n\njobs:\n'
             '      - run: uv run --no-sync python scripts/x.py --ci\n      # run: python scripts/no.py\n'
-            '      - run: uv run python scripts/y/z.py  # python scripts/not.py\n')
+            '      - run: uv run python scripts/y/z.py  # python scripts/not.py\n'
+            '        run: python3 -I scripts/w.py gather "$X"\n')
     assert filter_paths(text) == ["a.yml", "s/**"]
-    assert run_scripts(text) == ["scripts/x.py", "scripts/y/z.py"]
+    assert run_scripts(text) == ["scripts/w.py", "scripts/x.py", "scripts/y/z.py"]
