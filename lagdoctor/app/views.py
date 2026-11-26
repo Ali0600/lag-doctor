@@ -39,8 +39,9 @@ MOMENT_MAX_S = 120.0                  # longest span a moment shows
 TOP_PROGRAMS = 5
 RECENT = 6
 
-UNNAMED_FIX = ("A fix here has no Apply because an older lag-doctor found it without noting exactly what it would "
-               "change (for a refresh rate, which monitor). Record again to apply it from the new recording.")
+LAST_ONLY_FIX = ("A fix here without Apply is applied from your last recording only: it names something as this PC was "
+                 "then (a program that was running, or a screen by the name Windows gave it), which may be another one "
+                 "by now.")
 
 # Charts on Results besides frame times: (id, title, unit, [columns], source the columns come from).
 CHARTS = (
@@ -406,6 +407,8 @@ def deleted_view(done: int, failed: list[tuple[Entry, str]], listed: bool) -> di
 
 # ------------------------------------------------------------------------------------- Apply and Undo (fixes) --
 
+NOT_LAST = ("A newer recording was made since this one, and this fix is applied from the last recording only: what it "
+            "names may be another one by now. Open that recording to apply its fixes.")
 SWEEP_CHANGE = ("A settings sweep's change, in a game's own settings file: in a terminal, `lagdoctor sweep --resume` "
                 "puts it back (and goes on with the sweep), and so does `lagdoctor undo game_setting`.")
 NEWER_CHANGE = "A newer lag-doctor made this change: undo it with that version."
@@ -429,6 +432,10 @@ APPLIED = {
     "unsure": ("lag-doctor could not finish writing this change down. If it was made, Settings lists it under the "
                "changes lag-doctor made, where Undo puts it back. " + FIX_LOG),
 }
+UNDO_ALL_STOPPED = ("Undo all stopped here: lag-doctor could no longer read its fix journal, so the change it was "
+                    "putting back may be back without being written down, and fixes and undo are paused until the "
+                    "journal can be read again. " + FIX_LOG)
+UNDO_ALL_UNSURE = "Undo all stopped there, and left the changes after it as they are."
 UNCONFIRMED = ("The change is in place, but lag-doctor could not confirm it took. Settings lists it under the changes "
                "lag-doctor made, where Undo puts it back. " + FIX_LOG)
 # What Undo says for each case fixes/base.undo met (FixResult.why) but a change put back.
@@ -553,7 +560,7 @@ def changes_view(entries: list, about: Callable[[Any], tuple[str | None, str]] |
                      "undo": undo and named, "force": force and named})
     text = paused or ("" if rows else "lag-doctor has no changes of yours in place: none were made, or each was undone.")
     # Undo all: every change with an Undo, newest first, when there is more than one to put back (App.do_undo_all).
-    every = [r["id"] for r in rows if r["undo"]][:bridge.MAX_UNDO_ALL]
+    every = list(dict.fromkeys(r["id"] for r in rows if r["undo"]))[:bridge.MAX_UNDO_ALL]     # an id once
     return {"rows": rows, "text": text, "paused": bool(paused), "all": every if len(every) > 1 else []}
 
 
@@ -609,24 +616,27 @@ def frame_bytes(main: dict[str, list]) -> tuple[bytes, int]:
     return data.tobytes(), len(ts)
 
 
-def _fixes(f, apply_ids: frozenset[str]) -> list[dict[str, Any]]:
-    """A finding's fixes as Results lists them: `apply` when the window can apply it (an offer whose fix is among
-    `apply_ids` and whose params say on their own what it changes, fixes/flow.offerable), `unnamed` when only the
-    params keep it from that (an older report's), `can_apply` when it is an automatic fix at all."""
+def _fixes(f, apply_ids: frozenset[str], is_last: bool) -> list[dict[str, Any]]:
+    """A finding's fixes as Results lists them: `apply` when the window can apply it from this recording (an offer
+    whose fix is among `apply_ids`, from any recording when its params stand alone and from the last one made when
+    they name the PC as it was then, fixes/flow.applies), `last_only` when only not being the last keeps it from that,
+    `can_apply` when it is an automatic fix at all."""
     out = []
     for fx in f.fixes:
         restart = {"game": "Restart the game afterwards.", "reboot": "Restart the PC afterwards."}.get(
             fx.needs_restart or "", "")
-        why = flow.why_not_offered(fx.fix_id, fx.params, apply_ids)
+        dated = flow.why_not_offered(fx.fix_id, fx.params, apply_ids) == "dated"
         out.append({"title": fx.title, "detail": fx.detail or "", "restart": restart, "admin": bool(fx.needs_admin),
-                    "apply": why is None, "unnamed": why == "unnamed", "can_apply": bool(fx.fix_id)})
+                    "apply": flow.applies(fx.fix_id, fx.params, apply_ids, is_last),
+                    "last_only": dated and not is_last, "can_apply": bool(fx.fix_id)})
     return out
 
 
 def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list], has_report: bool,
-                 apply_ids: frozenset[str] = frozenset()) -> dict[str, Any]:
+                 apply_ids: frozenset[str] = frozenset(), is_last: bool = False) -> dict[str, Any]:
     """Screen 4, without the frame times themselves (frame_bytes hands those over in a shared buffer). `apply_ids`: the
-    fixes the window applies (App.fixes' known(); none where it applies none), offered on any recording."""
+    fixes the window applies (App.fixes' known(); none where it applies none); `is_last`: whether this is the last
+    recording made, the only one whose offers that name the PC as it was then have Apply."""
     stats = _dict(d.stats)
     target = _dict(cap.target)
     started = None
@@ -656,8 +666,8 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
     findings = [{"title": f.title, "confidence": f.confidence,
                  "confidence_text": labels.CONFIDENCE.get(f.confidence, str(f.confidence)),
                  "summary": f.summary, "evidence": [x.text for x in f.evidence if isinstance(x.text, str)],
-                 "fixes": _fixes(f, apply_ids)} for f in d.findings]
-    unnamed = any(fx["unnamed"] for f in findings for fx in f["fixes"])
+                 "fixes": _fixes(f, apply_ids, is_last)} for f in d.findings]
+    last_only = any(fx["last_only"] for f in findings for fx in f["fixes"])
     charts = [_chart(cap, spec) for spec in CHARTS]
     # The charts' right edge: the recording's length, or the last sample when that is later (report/html._x1).
     end = max([v for v in (number(cap.duration_s), *(number(x) for x in _list(main.get("t"))[-1:]),
@@ -694,7 +704,7 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
                   ["Jitter", fmt(stats.get("jitter_ms"), "{:.1f}", " ms")],
                   ["Packet loss", fmt(stats.get("loss_pct"), "{:.1f}", "%")]],
         "findings": findings,
-        "fix_note": UNNAMED_FIX if unnamed else "",
+        "fix_note": LAST_ONLY_FIX if last_only else "",
         "frames": {"duration": number(cap.duration_s), "refresh_ms": 1000.0 / refresh if refresh else None,
                    "drops": [[number(ev.t_start), number(ev.t_end)] for ev in d.events if ev.kind == "fps_drop"],
                    "stutters": [s for s in stutters if s[0] is not None and s[1] is not None],

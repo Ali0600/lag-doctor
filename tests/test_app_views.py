@@ -461,28 +461,29 @@ def _load(entry):
     return cap, Diagnosis.from_json(library.read_diagnosis(entry)), main_chain(cap)
 
 
-def test_results_offer_apply_on_any_recording_for_fixes_the_window_applies_that_name_what_they_change(demo):
+def test_results_offer_apply_for_the_fixes_the_window_applies_and_dated_ones_on_the_last_recording_only(demo):
     from lagdoctor.fixes import flow
     from lagdoctor.model import FixSuggestion
     home, _ = demo
     entry = next(e for e in entries_of(home) if e.game == app_demo.MARKUP_TITLE)
-    assert entry.id != max(e.id for e in entries_of(home))              # not the last recording: Apply all the same
     cap, d, main = _load(entry)
-    last = views.results_view(entry, d, cap, main, has_report=True, apply_ids=flow.known())
-    applied = [fx["title"] for f in last["findings"] for fx in f["fixes"] if fx["apply"]]
-    assert applied and last["fix_note"] == ""
-    assert all(fx["can_apply"] for f in last["findings"] for fx in f["fixes"] if fx["apply"])
-    # A refresh rate an older lag-doctor offered names its screen only by the name Windows gave it then: no Apply,
-    # and Results says why. With its monitor noted, it has one.
+    for is_last in (True, False):                             # a GPU preference names its program: from any recording
+        v = views.results_view(entry, d, cap, main, has_report=True, apply_ids=flow.known(), is_last=is_last)
+        assert [fx["title"] for f in v["findings"] for fx in f["fixes"] if fx["apply"]] and v["fix_note"] == ""
+        assert all(fx["can_apply"] for f in v["findings"] for fx in f["fixes"] if fx["apply"])
+    # A refresh rate an older lag-doctor offered names its screen only by the name Windows gave it then: Apply on the
+    # last recording only, and an older one's Results says why. With its monitor noted, Apply on any.
     screen = {"device": "\\\\.\\DISPLAY1", "hz": 144}
     d.findings[0].fixes[:] = [FixSuggestion("Set it to 144 Hz", fix_id="refresh_rate", params=dict(screen)),
                               FixSuggestion("Set it to 144 Hz", fix_id="refresh_rate",
                                             params=dict(screen, monitor="\\\\?\\DISPLAY#ABC1234#5&1&0&UID1#{x}"))]
+    last = views.results_view(entry, d, cap, main, has_report=True, apply_ids=flow.known(), is_last=True)
+    assert [fx["apply"] for fx in last["findings"][0]["fixes"]] == [True, True] and last["fix_note"] == ""
     older = views.results_view(entry, d, cap, main, has_report=True, apply_ids=flow.known())
     assert [fx["apply"] for fx in older["findings"][0]["fixes"]] == [False, True]
-    assert older["fix_note"] == views.UNNAMED_FIX
-    assert views.results_view(entry, d, cap, main, has_report=True)["fix_note"] == ""     # a window that applies none
+    assert older["fix_note"] == views.LAST_ONLY_FIX
     none = views.results_view(entry, d, cap, main, has_report=True)      # a window that applies none
+    assert none["fix_note"] == ""
     assert not [fx for f in none["findings"] for fx in f["fixes"] if fx["apply"]]
     assert not [fx for f in last["findings"] for fx in f["fixes"] if "command" in fx]      # no terminal command now
     assert last["game"] == app_demo.MARKUP_TITLE                # text, as it came: the page shows it as text

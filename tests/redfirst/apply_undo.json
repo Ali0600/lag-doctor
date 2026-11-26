@@ -242,8 +242,8 @@
  {
   "name": "plan: advice planned as a fix",
   "file": "lagdoctor/app/main.py",
-  "old": "        if found is None or not flow.offerable(found.fix_id, found.params, fixes.known()):",
-  "new": "        if found is None:",
+  "old": "        if offered not in (None, \"dated\"):\n            raise Gone(\"That is not a fix lag-doctor can apply from this recording: open its results again.\")\n",
+  "new": "        if found is None:\n            raise Gone(\"That is not a fix lag-doctor can apply from this recording: open its results again.\")\n",
   "tests": [
    "tests/test_app_fixes.py::test_the_page_names_a_fix_only_by_its_place_on_a_recordings_results"
   ]
@@ -456,8 +456,8 @@
  {
   "name": "plan: made during another change",
   "file": "lagdoctor/app/main.py",
-  "old": "            raise Gone(\"That is not a fix lag-doctor can apply from this recording: open its results again.\")\n        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n",
-  "new": "            raise Gone(\"That is not a fix lag-doctor can apply from this recording: open its results again.\")\n        if not self.fix_lock.acquire(blocking=False) and False:\n            raise Gone(BUSY)\n        try:\n",
+  "old": "            raise Gone(views.NOT_LAST)\n        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n",
+  "new": "            raise Gone(views.NOT_LAST)\n        if not self.fix_lock.acquire(blocking=False) and False:\n            raise Gone(BUSY)\n        try:\n",
   "tests": [
    "tests/test_app_fixes.py::test_one_change_at_a_time"
   ]
@@ -465,8 +465,8 @@
  {
   "name": "apply: made during another change",
   "file": "lagdoctor/app/main.py",
-  "old": "            raise Gone(NO_LONGER_PLANNED)\n        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n",
-  "new": "            raise Gone(NO_LONGER_PLANNED)\n        if not self.fix_lock.acquire(blocking=False) and False:\n            raise Gone(BUSY)\n        try:\n",
+  "old": "            raise Gone(views.NOT_LAST)              # what it names may be another one since that newer recording\n        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n",
+  "new": "            raise Gone(views.NOT_LAST)              # what it names may be another one since that newer recording\n        if not self.fix_lock.acquire(blocking=False) and False:\n            raise Gone(BUSY)\n        try:\n",
   "tests": [
    "tests/test_app_fixes.py::test_one_change_at_a_time"
   ]

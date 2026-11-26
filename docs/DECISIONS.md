@@ -245,27 +245,33 @@ The owner chose these two Backlog items of M7 as the next piece ("do C", one of 
 were settled while building, as M7's were; the owner's own try in the app before the merge is their check.
 
 - **Which recordings' fixes the window applies**
-  - **Any recording's, when the offer's params say on their own what the fix changes (chosen)**: each fix answers
-    (`Fix.stands_alone`), and the window applies an offer only then (`flow.why_not_offered`). Every fix's params name
-    a lasting thing (a power plan's GUID, a program's path, a process by its id and start time, or none at all) but a
-    refresh rate's, whose display name Windows hands to whichever monitor it lists first. So a report now names the
-    monitor too, by the path `monitor_path` reads (the inventory's displays keep it), and an older report's refresh
-    rate shows without Apply, Results saying why. A process an older recording named has usually exited, and its plan
-    says so with nothing to change.
-  - **Keep the last recording's exemption for an offer that does not stand alone**: rejected. The last recording can
-    be weeks old, and the window would then have two rules for one question; recording again gives an offer that
-    stands alone.
+  - **Any recording's when the fix's params still mean what they meant, the last recording's otherwise (chosen)**:
+    each fix answers (`Fix.stands_alone`, read by `flow.applies`). A power plan's GUID, a program's path and the
+    settings with no params last. Two kinds name the PC as it was then. One is a refresh rate's display name, which
+    Windows hands to whichever monitor it lists first, so a report now names the monitor too, by the path
+    `monitor_path` reads (the inventory's displays keep it). The other is a background program's priority: that
+    program may be the game by now (one started before the recording and played since), which the offer's own
+    exclusions, the recording's game, would not see. Those two keep M7's rule, the last recording only, and an older
+    recording's Results says why.
+  - **Every offer from any recording once the refresh rate names its monitor**: rejected after review. The first
+    version did this, and an independent review found that an older recording's background priority could then open,
+    and lower, a process that had become the game since, which the project's first rule forbids.
   - **Any recording's offers as they are**: rejected. An old refresh rate could land on another monitor.
 - **Where the refresh rate's monitor is now**
-  - **The plan follows the monitor to the name it has now (chosen)**: docking or another screen moves the names, and
-    the fix still finds the monitor the recording saw; it refuses when that monitor is not connected.
-  - **Refuse when the name moved**: rejected. A valid fix would be refused after every dock.
+  - **The fix follows the monitor to the name it has now, in its plan, its reads and its writes (chosen)**: docking or
+    another screen moves the names, and the fix still finds the monitor the recording saw, for the change and for its
+    undo; it refuses when that monitor is not connected.
+  - **Refuse when the name moved**: rejected. A valid fix would be refused after every dock, and a change made before
+    a dock could be undone only after undocking.
 - **What Undo all puts back**
   - **The changes the list showed with an Undo, by their ids, newest first, never put back anyway (chosen)**: what the
     player saw is what changes, as with Apply's plan; newest first as `lagdoctor undo --all` goes, so that two changes
     of one setting come back in turn; one changed since is left alone, and its row then offers Put it back anyway,
     which stays the single change's second click.
   - **Whatever the journal lists when the click lands**: rejected. Another window's newer change would be undone unseen.
+  - **Where it stops**: at a journal that turns unreadable, and at an undo the journal could not write down (`unsure`),
+    since every later one would go unwritten too; a change that is neither value (a conflict) is passed over, as the
+    list gives it no Undo.
   - **With Put it back anyway**: rejected. It would overwrite a change the player made by hand, unasked.
 - **Undo all's confirm**: a second click on the same button (chosen), as Put it back anyway asks; one click
   (rejected) puts back several settings at once, the cost of a slip.

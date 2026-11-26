@@ -2,11 +2,21 @@
  {
   "name": "stands_alone: what a fix's params name lasts, by default",
   "file": "lagdoctor/fixes/base.py",
-  "old": "lists first) says no unless they also name it by an identity that lasts.\"\"\"\n        return True",
-  "new": "lists first) says no unless they also name it by an identity that lasts.\"\"\"\n        return False",
+  "old": "lists first), or a program that was running (which may be the game by\n        now).\"\"\"\n        return True",
+  "new": "lists first), or a program that was running (which may be the game by\n        now).\"\"\"\n        return False",
   "tests": [
-   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_say_what_it_changes_on_their_own",
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_they_meant",
    "tests/test_app_fixes.py::test_results_offer_apply_on_every_recording_for_the_fixes_the_window_applies"
+  ]
+ },
+ {
+  "name": "stands_alone: a background program, which may be the game by now",
+  "file": "lagdoctor/fixes/priority.py",
+  "old": "applies it from the last recording made only.\"\"\"\n        return False",
+  "new": "applies it from the last recording made only.\"\"\"\n        return True",
+  "tests": [
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_they_meant",
+   "tests/test_app_fixes.py::test_an_offer_that_names_the_pc_as_it_was_then_is_applied_from_the_last_recording_only"
   ]
  },
  {
@@ -15,9 +25,9 @@
   "old": "            return _monitor(params) is not None\n        except ValueError:",
   "new": "            return True\n        except ValueError:",
   "tests": [
-   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_say_what_it_changes_on_their_own",
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_they_meant",
    "tests/test_machine_fixes.py::test_refresh_rate_stands_alone_only_with_the_monitor_it_was_found_on",
-   "tests/test_app_fixes.py::test_an_older_reports_refresh_rate_names_no_monitor_so_it_has_no_apply"
+   "tests/test_app_fixes.py::test_an_offer_that_names_the_pc_as_it_was_then_is_applied_from_the_last_recording_only"
   ]
  },
  {
@@ -26,7 +36,7 @@
   "old": "        except ValueError:\n            return False\n\n    def plan(",
   "new": "        except ValueError:\n            return True\n\n    def plan(",
   "tests": [
-   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_say_what_it_changes_on_their_own",
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_they_meant",
    "tests/test_machine_fixes.py::test_refresh_rate_stands_alone_only_with_the_monitor_it_was_found_on"
   ]
  },
@@ -40,62 +50,161 @@
   ]
  },
  {
-  "name": "why_not_offered: params that do not stand alone",
+  "name": "why_not_offered: params that name the PC as it was then",
   "file": "lagdoctor/fixes/flow.py",
-  "old": "    return None if cls.stands_alone(params) else \"unnamed\"",
+  "old": "    return None if cls.stands_alone(params) else \"dated\"",
   "new": "    return None",
   "tests": [
-   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_say_what_it_changes_on_their_own",
-   "tests/test_app_fixes.py::test_an_older_reports_refresh_rate_names_no_monitor_so_it_has_no_apply",
-   "tests/test_app_views.py::test_results_offer_apply_on_any_recording_for_fixes_the_window_applies_that_name_what_they_change"
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_they_meant",
+   "tests/test_app_fixes.py::test_an_offer_that_names_the_pc_as_it_was_then_is_applied_from_the_last_recording_only",
+   "tests/test_app_views.py::test_results_offer_apply_for_the_fixes_the_window_applies_and_dated_ones_on_the_last_recording_only"
   ]
  },
  {
-  "name": "Results: an offer kept from Apply only by its params is not said",
-  "file": "lagdoctor/app/views.py",
-  "old": "\"unnamed\": why == \"unnamed\",",
-  "new": "\"unnamed\": False,",
+  "name": "applies: a dated offer from any recording",
+  "file": "lagdoctor/fixes/flow.py",
+  "old": "    return why is None or (why == \"dated\" and is_last)",
+  "new": "    return why is None or why == \"dated\"",
   "tests": [
-   "tests/test_app_fixes.py::test_an_older_reports_refresh_rate_names_no_monitor_so_it_has_no_apply",
-   "tests/test_app_views.py::test_results_offer_apply_on_any_recording_for_fixes_the_window_applies_that_name_what_they_change"
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_they_meant",
+   "tests/test_app_fixes.py::test_an_offer_that_names_the_pc_as_it_was_then_is_applied_from_the_last_recording_only",
+   "tests/test_app_views.py::test_results_offer_apply_for_the_fixes_the_window_applies_and_dated_ones_on_the_last_recording_only"
   ]
  },
  {
-  "name": "Results: why such an offer has no Apply",
+  "name": "applies: a dated offer from no recording",
+  "file": "lagdoctor/fixes/flow.py",
+  "old": "    return why is None or (why == \"dated\" and is_last)",
+  "new": "    return why is None",
+  "tests": [
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_they_meant",
+   "tests/test_app_fixes.py::test_an_offer_that_names_the_pc_as_it_was_then_is_applied_from_the_last_recording_only",
+   "tests/test_app_views.py::test_results_offer_apply_for_the_fixes_the_window_applies_and_dated_ones_on_the_last_recording_only"
+  ]
+ },
+ {
+  "name": "Results: whether the recording is the last one, never asked",
+  "file": "lagdoctor/app/main.py",
+  "old": "                                  is_last=library.last_session(self.home, self.sessions) == session)",
+  "new": "                                  is_last=False)",
+  "tests": [
+   "tests/test_app_fixes.py::test_an_offer_that_names_the_pc_as_it_was_then_is_applied_from_the_last_recording_only"
+  ]
+ },
+ {
+  "name": "Results: a fix kept from Apply by not being the last is not said",
   "file": "lagdoctor/app/views.py",
-  "old": "        \"fix_note\": UNNAMED_FIX if unnamed else \"\",",
+  "old": "\"last_only\": dated and not is_last,",
+  "new": "\"last_only\": False,",
+  "tests": [
+   "tests/test_app_fixes.py::test_an_offer_that_names_the_pc_as_it_was_then_is_applied_from_the_last_recording_only",
+   "tests/test_app_views.py::test_results_offer_apply_for_the_fixes_the_window_applies_and_dated_ones_on_the_last_recording_only"
+  ]
+ },
+ {
+  "name": "Results: why such a fix has no Apply",
+  "file": "lagdoctor/app/views.py",
+  "old": "        \"fix_note\": LAST_ONLY_FIX if last_only else \"\",",
   "new": "        \"fix_note\": \"\",",
   "tests": [
-   "tests/test_app_fixes.py::test_an_older_reports_refresh_rate_names_no_monitor_so_it_has_no_apply",
-   "tests/test_app_views.py::test_results_offer_apply_on_any_recording_for_fixes_the_window_applies_that_name_what_they_change"
+   "tests/test_app_fixes.py::test_an_offer_that_names_the_pc_as_it_was_then_is_applied_from_the_last_recording_only",
+   "tests/test_app_views.py::test_results_offer_apply_for_the_fixes_the_window_applies_and_dated_ones_on_the_last_recording_only"
   ]
  },
  {
-  "name": "refresh rate: a plan never follows the monitor a report named",
+  "name": "plan: a dated offer from an older recording",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if offered == \"dated\" and library.last_session(self.home, self.sessions) != session:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_fixes.py::test_an_offer_that_names_the_pc_as_it_was_then_is_applied_from_the_last_recording_only"
+  ]
+ },
+ {
+  "name": "plan: a dated plan not marked so",
+  "file": "lagdoctor/app/main.py",
+  "old": "dated=offered == \"dated\")",
+  "new": "dated=False)",
+  "tests": [
+   "tests/test_app_fixes.py::test_an_offer_that_names_the_pc_as_it_was_then_is_applied_from_the_last_recording_only"
+  ]
+ },
+ {
+  "name": "apply: a dated plan applied after a newer recording",
+  "file": "lagdoctor/app/main.py",
+  "old": "        if planned.dated and library.last_session(self.home, self.sessions) != planned.session:",
+  "new": "        if False:",
+  "tests": [
+   "tests/test_app_fixes.py::test_an_offer_that_names_the_pc_as_it_was_then_is_applied_from_the_last_recording_only"
+  ]
+ },
+ {
+  "name": "refresh rate: never follows the monitor to another name",
   "file": "lagdoctor/fixes/refresh_rate.py",
-  "old": "        elif self.display.monitor_path(device) != monitor:",
-  "new": "        elif False:",
+  "old": "        if monitor is None or self.display.monitor_path(device) == monitor:\n            return device",
+  "new": "        if True:\n            return device",
   "tests": [
    "tests/test_machine_fixes.py::test_refresh_rate_plan_follows_the_monitor_a_report_named_to_the_name_it_has_now",
+   "tests/test_machine_fixes.py::test_refresh_rate_plan_refuses_when_the_monitor_a_report_named_is_not_connected",
+   "tests/test_machine_fixes.py::test_refresh_rate_undo_follows_its_monitor_to_the_name_a_dock_gave_it",
+   "tests/test_machine_fixes.py::test_refresh_rate_a_name_that_now_shows_another_monitor_is_not_read_or_written"
+  ]
+ },
+ {
+  "name": "refresh rate: follows the monitor but keeps the old name",
+  "file": "lagdoctor/fixes/refresh_rate.py",
+  "old": "        return None if moved is None else check_device(moved)",
+  "new": "        return None if moved is None else device",
+  "tests": [
+   "tests/test_machine_fixes.py::test_refresh_rate_plan_follows_the_monitor_a_report_named_to_the_name_it_has_now",
+   "tests/test_machine_fixes.py::test_refresh_rate_undo_follows_its_monitor_to_the_name_a_dock_gave_it"
+  ]
+ },
+ {
+  "name": "refresh rate: a plan for a monitor that is not connected",
+  "file": "lagdoctor/fixes/refresh_rate.py",
+  "old": "            if where is None:\n                raise LookupError(",
+  "new": "            if False:\n                raise LookupError(",
+  "tests": [
    "tests/test_machine_fixes.py::test_refresh_rate_plan_refuses_when_the_monitor_a_report_named_is_not_connected"
   ]
  },
  {
-  "name": "refresh rate: a plan follows the monitor but keeps the old name",
+  "name": "refresh rate: a plan follows the monitor but keeps the report's name",
   "file": "lagdoctor/fixes/refresh_rate.py",
-  "old": "            params = {**params, \"device\": check_device(moved)}",
+  "old": "            params = {**params, \"device\": where}",
   "new": "            params = dict(params)",
   "tests": [
    "tests/test_machine_fixes.py::test_refresh_rate_plan_follows_the_monitor_a_report_named_to_the_name_it_has_now"
   ]
  },
  {
-  "name": "refresh rate: a monitor that is not connected is said so",
+  "name": "refresh rate: a read under the name the change was made on",
   "file": "lagdoctor/fixes/refresh_rate.py",
-  "old": "            if moved is None:\n                raise LookupError(",
-  "new": "            if False:\n                raise LookupError(",
+  "old": "        device = self._where(params)\n        if device is None:\n            return dict(GONE)",
+  "new": "        device = check_device(params.get(\"device\"))\n        if device is None:\n            return dict(GONE)",
   "tests": [
-   "tests/test_machine_fixes.py::test_refresh_rate_plan_refuses_when_the_monitor_a_report_named_is_not_connected"
+   "tests/test_machine_fixes.py::test_refresh_rate_undo_follows_its_monitor_to_the_name_a_dock_gave_it",
+   "tests/test_machine_fixes.py::test_refresh_rate_a_name_that_now_shows_another_monitor_is_not_read_or_written"
+  ]
+ },
+ {
+  "name": "refresh rate: a write under the name the change was made on",
+  "file": "lagdoctor/fixes/refresh_rate.py",
+  "old": "        device = self._where(params)\n        if device is None:\n            raise RuntimeError(",
+  "new": "        device = check_device(params.get(\"device\"))\n        if device is None:\n            raise RuntimeError(",
+  "tests": [
+   "tests/test_machine_fixes.py::test_refresh_rate_undo_follows_its_monitor_to_the_name_a_dock_gave_it",
+   "tests/test_machine_fixes.py::test_refresh_rate_a_name_that_now_shows_another_monitor_is_not_read_or_written"
+  ]
+ },
+ {
+  "name": "refresh rate: a readback asks the old name",
+  "file": "lagdoctor/fixes/refresh_rate.py",
+  "old": "        info = self._info(where) if where is not None else None",
+  "new": "        info = self._info(check_device(params.get(\"device\")))",
+  "tests": [
+   "tests/test_machine_fixes.py::test_refresh_rate_undo_follows_its_monitor_to_the_name_a_dock_gave_it"
   ]
  },
  {
@@ -147,10 +256,19 @@
   ]
  },
  {
+  "name": "changes: Undo all names a change twice",
+  "file": "lagdoctor/app/views.py",
+  "old": "    every = list(dict.fromkeys(r[\"id\"] for r in rows if r[\"undo\"]))[:bridge.MAX_UNDO_ALL]",
+  "new": "    every = [r[\"id\"] for r in rows if r[\"undo\"]][:bridge.MAX_UNDO_ALL]",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_copes_with_a_journal_whose_ids_are_odd"
+  ]
+ },
+ {
   "name": "changes: Undo all for changes without an Undo",
   "file": "lagdoctor/app/views.py",
-  "old": "    every = [r[\"id\"] for r in rows if r[\"undo\"]][:bridge.MAX_UNDO_ALL]",
-  "new": "    every = [r[\"id\"] for r in rows][:bridge.MAX_UNDO_ALL]",
+  "old": "    every = list(dict.fromkeys(r[\"id\"] for r in rows if r[\"undo\"]))[:bridge.MAX_UNDO_ALL]",
+  "new": "    every = list(dict.fromkeys(r[\"id\"] for r in rows))[:bridge.MAX_UNDO_ALL]",
   "tests": [
    "tests/test_app_views.py::test_undo_all_names_each_change_with_an_undo_newest_first_up_to_its_cap",
    "tests/test_app_fixes.py::test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name"
@@ -159,8 +277,8 @@
  {
   "name": "changes: Undo all past its cap",
   "file": "lagdoctor/app/views.py",
-  "old": "    every = [r[\"id\"] for r in rows if r[\"undo\"]][:bridge.MAX_UNDO_ALL]",
-  "new": "    every = [r[\"id\"] for r in rows if r[\"undo\"]]",
+  "old": "    every = list(dict.fromkeys(r[\"id\"] for r in rows if r[\"undo\"]))[:bridge.MAX_UNDO_ALL]",
+  "new": "    every = list(dict.fromkeys(r[\"id\"] for r in rows if r[\"undo\"]))",
   "tests": [
    "tests/test_app_views.py::test_undo_all_names_each_change_with_an_undo_newest_first_up_to_its_cap"
   ]
@@ -213,8 +331,8 @@
  {
   "name": "Undo all: while a recording runs or as administrator",
   "file": "lagdoctor/app/main.py",
-  "old": "            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen",
-  "new": "            why = None\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen",
+  "old": "            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen = [e for e in journal.outstanding() if isinstance(e.id, str) and e.id in wanted]",
+  "new": "            why = None\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen = [e for e in journal.outstanding() if isinstance(e.id, str) and e.id in wanted]",
   "tests": [
    "tests/test_app_fixes.py::test_nothing_is_changed_while_this_windows_recording_runs",
    "tests/test_app_fixes.py::test_nothing_is_changed_while_another_process_records",
@@ -224,8 +342,8 @@
  {
   "name": "Undo all: during another change",
   "file": "lagdoctor/app/main.py",
-  "old": "        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen",
-  "new": "        if not self.fix_lock.acquire(blocking=False) and False:\n            raise Gone(BUSY)\n        try:\n            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen",
+  "old": "        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen = [e for e in journal.outstanding() if isinstance(e.id, str) and e.id in wanted]",
+  "new": "        if not self.fix_lock.acquire(blocking=False) and False:\n            raise Gone(BUSY)\n        try:\n            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen = [e for e in journal.outstanding() if isinstance(e.id, str) and e.id in wanted]",
   "tests": [
    "tests/test_app_fixes.py::test_one_change_at_a_time"
   ]
@@ -233,17 +351,35 @@
  {
   "name": "Undo all: a recording looked for before the change lock is taken",
   "file": "lagdoctor/app/main.py",
-  "old": "        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen",
-  "new": "        why = self.change_refusal(fixes)\n        if why is not None:\n            raise Gone(why)\n        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            journal = fixes.journal()\n            try:\n                chosen",
+  "old": "        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            why = self.change_refusal(fixes)        # with the change lock held: a recording that starts meanwhile waits the change out (_start)\n            if why is not None:\n                raise Gone(why)\n            journal = fixes.journal()\n            try:\n                chosen = [e for e in journal.outstanding() if isinstance(e.id, str) and e.id in wanted]",
+  "new": "        why = self.change_refusal(fixes)\n        if why is not None:\n            raise Gone(why)\n        if not self.fix_lock.acquire(blocking=False):\n            raise Gone(BUSY)\n        try:\n            journal = fixes.journal()\n            try:\n                chosen = [e for e in journal.outstanding() if isinstance(e.id, str) and e.id in wanted]",
   "tests": [
    "tests/test_app_fixes.py::test_a_recording_is_looked_for_with_the_change_lock_held"
   ]
  },
  {
+  "name": "Undo all: changes the list did not name",
+  "file": "lagdoctor/app/main.py",
+  "old": "                chosen = [e for e in journal.outstanding() if isinstance(e.id, str) and e.id in wanted]",
+  "new": "                chosen = [e for e in journal.outstanding() if isinstance(e.id, str)]",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name"
+  ]
+ },
+ {
+  "name": "Undo all: an id that is no text",
+  "file": "lagdoctor/app/main.py",
+  "old": "                chosen = [e for e in journal.outstanding() if isinstance(e.id, str) and e.id in wanted]",
+  "new": "                chosen = [e for e in journal.outstanding() if e.id in wanted]",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_copes_with_a_journal_whose_ids_are_odd"
+  ]
+ },
+ {
   "name": "Undo all: oldest first",
   "file": "lagdoctor/app/main.py",
-  "old": "                chosen = [e for e in journal.outstanding() if e.id in wanted]",
-  "new": "                chosen = [e for e in reversed(journal.outstanding()) if e.id in wanted]",
+  "old": "                chosen = [e for e in journal.outstanding() if isinstance(e.id, str) and e.id in wanted]",
+  "new": "                chosen = [e for e in reversed(journal.outstanding()) if isinstance(e.id, str) and e.id in wanted]",
   "tests": [
    "tests/test_app_fixes.py::test_undo_all_puts_back_two_changes_of_one_setting_in_turn",
    "tests/test_app_fixes.py::test_undo_all_puts_back_each_change_the_list_named_newest_first"
@@ -252,8 +388,17 @@
  {
   "name": "Undo all: a settings sweep's change too",
   "file": "lagdoctor/app/main.py",
-  "old": "                if e.fix_id in flow.NEVER_OFFERED:\n                    continue\n                title, change",
-  "new": "                if False:\n                    continue\n                title, change",
+  "old": "                if e.fix_id in flow.NEVER_OFFERED or e.state == \"conflict\":",
+  "new": "                if e.state == \"conflict\":",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name"
+  ]
+ },
+ {
+  "name": "Undo all: a change left neither value too",
+  "file": "lagdoctor/app/main.py",
+  "old": "                if e.fix_id in flow.NEVER_OFFERED or e.state == \"conflict\":",
+  "new": "                if e.fix_id in flow.NEVER_OFFERED:",
   "tests": [
    "tests/test_app_fixes.py::test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name"
   ]
@@ -279,8 +424,8 @@
  {
   "name": "Undo all: goes on past an unreadable journal",
   "file": "lagdoctor/app/main.py",
-  "old": "                    stopped = exc.plain()\n                    break",
-  "new": "                    stopped = exc.plain()\n                    continue",
+  "old": "                    stopped = views.UNDO_ALL_STOPPED\n                    break",
+  "new": "                    stopped = views.UNDO_ALL_STOPPED\n                    continue",
   "tests": [
    "tests/test_app_fixes.py::test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did"
   ]
@@ -288,10 +433,28 @@
  {
   "name": "Undo all: says nothing of an unreadable journal",
   "file": "lagdoctor/app/main.py",
-  "old": "                    stopped = exc.plain()\n                    break",
+  "old": "                    stopped = views.UNDO_ALL_STOPPED\n                    break",
   "new": "                    stopped = \"\"\n                    break",
   "tests": [
    "tests/test_app_fixes.py::test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did"
+  ]
+ },
+ {
+  "name": "Undo all: goes on past an undo it could not write down",
+  "file": "lagdoctor/app/main.py",
+  "old": "                if res.why == \"unsure\":",
+  "new": "                if False:",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_stops_at_an_undo_it_could_not_write_down"
+  ]
+ },
+ {
+  "name": "Undo all: says nothing of where it stopped",
+  "file": "lagdoctor/app/main.py",
+  "old": "                    stopped = views.UNDO_ALL_UNSURE\n                    break",
+  "new": "                    stopped = \"\"\n                    break",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_stops_at_an_undo_it_could_not_write_down"
   ]
  },
  {
@@ -320,7 +483,8 @@
   "old": "    if stopped:\n        lines.append(stopped)",
   "new": "    if False:\n        lines.append(stopped)",
   "tests": [
-   "tests/test_app_fixes.py::test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did"
+   "tests/test_app_fixes.py::test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did",
+   "tests/test_app_fixes.py::test_undo_all_stops_at_an_undo_it_could_not_write_down"
   ]
  },
  {

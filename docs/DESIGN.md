@@ -1797,17 +1797,18 @@ report makes (`offers`: never `game_setting`, never one whose id is not text or 
 any program of the player's can write a report), the errors a plan raises for a refusal (`PLAN_ERRORS`), an apply
 or an undo whose journal another lag-doctor holds, or a disk refuses, said as an outcome rather than raised
 (`apply`'s `busy` and `unsure`, `undo`'s `unsure`, and `unknown` for a fix a newer lag-doctor journaled), and
-`settle`, the journal's settling at a start. It also holds which offers the window applies from any recording
-(`offerable`, `why_not_offered`): a fix's `stands_alone(params)` says whether its params name what it changes on their
-own, however long ago a report wrote them, and only a refresh rate's without its monitor do not, since a display name
-belongs to whichever monitor Windows lists first. `FixResult.why` names the case each undo met (`restored`, `already`,
+`settle`, the journal's settling at a start. It also holds which offers the window applies from which recording
+(`applies`, `offerable`, `why_not_offered`): a fix's `stands_alone(params)` says whether its params still mean what
+they meant however long ago a report wrote them. Two kinds do not, and are "dated": a refresh rate's without its
+monitor, since a display name belongs to whichever monitor Windows lists first, and a background program's priority,
+since that program may be the game by now; the window applies those from the last recording made only. `FixResult.why` names the case each undo met (`restored`, `already`,
 `ended`, `not_connected`, `changed`, `unreadable`, `write_failed`, `no_readback`), so that each front end words it
 itself: the fixes' own messages name internal values, which the terminal prints and the window keeps to its log.
 
 | fix id | params | what it changes | readback | needs restart |
 |---|---|---|---|---|
 | `power_plan` | `{"scheme": guid}` | active power scheme (`PowerSetActiveScheme`, allowed for standard users, WT 7.5) | `active_scheme()` | no |
-| `refresh_rate` | `{"device": "\\.\DISPLAY1", "hz": int, "monitor": path}` (`monitor`, the monitor's stable path, from the inventory's display; plan() follows it to the name Windows gives that monitor now, and adds the one the name shows now to a report from before monitors were named) | display refresh at the current resolution: `CDS_TEST` first, then `CDS_UPDATEREGISTRY`; journals `{width, height, hz}` | `current_mode()`, `list_displays()` hz, and the stored mode equal to the screen | no |
+| `refresh_rate` | `{"device": "\\.\DISPLAY1", "hz": int, "monitor": path}` (`monitor`, the monitor's stable path, from the inventory's display; plan(), read() and write() follow it to the name Windows gives that monitor now, so an undo after a dock still reaches it, and plan() adds the one the name shows now to a report from before monitors were named) | display refresh at the current resolution: `CDS_TEST` first, then `CDS_UPDATEREGISTRY`; journals `{width, height, hz}` | `current_mode()`, `list_displays()` hz, and the stored mode equal to the screen | no |
 | `gpu_preference` | `{"exe": path, "preference": 2}` | `HKCU\Software\Microsoft\DirectX\UserGpuPreferences\<exe>` field `GpuPreference=N;`, other fields kept | registry, then the game's LUID next run | game |
 | `game_dvr_off` | `{}` | `HKCU\System\GameConfigStore\GameDVR_Enabled` = 0 and `HKCU\…\GameDVR\HistoricalCaptureEnabled` = 0 | registry | game |
 | `game_mode_on` | `{}` | `HKCU\Software\Microsoft\GameBar\AutoGameModeEnabled` = 1 | registry; `effective_mode()` = game_mode while playing | no |
@@ -2314,11 +2315,14 @@ spike, which passed the owner's run.
   the recording it acts on is gone (`cli.remembered_report`), and the fix journal is kept apart (`fix-journal.json`).
 - **Apply and Undo** (M7: `plan_fix`, `apply_fix`, `changes`, `undo_change`, `undo_all`; `App.do_plan_fix` and the
   rest, through `fixes/flow.py`, and `views.plan_view`, `applied_view`, `undone_view`, `undone_all_view` and
-  `changes_view`): each fix Results lists, on any recording, has **Apply this fix** when the window applies it
-  (`flow.offerable` over `App(fixes=)`'s `known()`: never `game_setting`, never a fix this lag-doctor does not know,
-  never params of another shape, and only params that say on their own what the fix changes, `Fix.stands_alone`). A
-  refresh rate a report made before monitors were named (2026-11-26) names its screen only by the name Windows gave it
-  then, which may belong to another monitor now: it shows without Apply, and Results says why (`views.UNNAMED_FIX`).
+  `changes_view`): each fix Results lists has **Apply this fix** when the window applies it from that recording
+  (`flow.applies` over `App(fixes=)`'s `known()`: never `game_setting`, never a fix this lag-doctor does not know,
+  never params of another shape). That is any recording when the fix's params still mean what they meant
+  (`Fix.stands_alone`), and only the last recording made (`last-session.txt`, the one `lagdoctor fix` acts on) when they
+  name the PC as it was then: a refresh rate a report made before monitors were named (2026-11-26), whose display name
+  may belong to another monitor now, and a background program's priority, whose program may be the game by now. An
+  older recording's such fixes show without Apply, and Results says why (`views.LAST_ONLY_FIX`); a newer recording
+  made between such a plan and its second click stops the change (`views.NOT_LAST`).
   The page names the fix only by its place on that page, and the app reads the fix and its params from the
   recording's own diagnosis. The first click plans it, reading the PC then, and shows where, the change, its
   notes and when it takes effect, as `lagdoctor fix` prints them; the app keeps that plan under a one-shot token
@@ -2331,7 +2335,8 @@ spike, which passed the owner's run.
   back each change the list gave an Undo, by the ids the list named (`changes_view`'s `all`, at most
   `bridge.MAX_UNDO_ALL`), newest first as `lagdoctor undo --all` goes, so that two changes of one setting come back in
   turn; it never puts back anyway: one changed since is left alone, and its row then offers Put it back anyway. A
-  journal that turns unreadable stops it there, with what it did said. Nothing changes while a recording runs (this window's, or any other that
+  journal that turns unreadable, or one that could not write an undo down (`unsure`), stops it there, with what it did
+  said. Nothing changes while a recording runs (this window's, or any other that
   holds the capture lock, as for Delete), as administrator or when that cannot be told (`Fixes.elevated()` None), or
   during another change (`App.fix_lock`, which a recording's start waits out too); an unreadable journal pauses all of
   it (`JournalCorrupt.plain()`), and one another lag-doctor holds changes nothing. Every outcome is said in the
@@ -2343,7 +2348,7 @@ spike, which passed the owner's run.
   capture; check-ups and `analyze` folders are left out. A game's key is `paths.folder_stem` of its exe name, case
   folded; the page knows it only as `g-` and 16 hex digits of its SHA-256. A session id resolves only against the
   listing. `last-session.txt` marks the recording `lagdoctor fix` acts on, tagged on its game's page; the window
-  applies any recording's fixes (Apply and Undo).
+  applies a fix that names the PC as it was then from that one only (Apply and Undo).
 - **summary.json** (`report/summary.py`, schema `lagdoctor.summary/1`, at most 64 KB), written by
   `cli.analyze_and_report`: `kind` (`watch` or `analyze`), `tool_version`, `capture_tool_version`, `game`, `exe`,
   `exe_name`, `started_at`, `duration_s`, `lag_type`, `headline`, `frames`, `avg_fps`, `low1_fps`, `stutters_per_min`,

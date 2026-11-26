@@ -1524,6 +1524,7 @@ driver update gives a name to another monitor; the monitor's device interface pa
 one monitor on one port. Data kept for later must hold the lasting identity and look up the current name when it acts.
 **Why it came up**: applying a fix from an older recording in lag-doctor's window (M7b). Its refresh-rate offer named
 the screen only by its display name, which may belong to another monitor by then. Reports now name the monitor by
-its path, the fix's plan follows that monitor to the name it has now, and an older offer without one gets no Apply.
+its path, the fix follows that monitor to the name it has now (for the change and its undo), and an older offer
+without one is applied from the last recording only.
 **Takeaway**: store what a thing is (a stable id), not where the system put it (a slot, an index), and resolve the
 slot when you act.

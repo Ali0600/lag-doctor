@@ -109,10 +109,11 @@ class Fix(ABC):
 
     @classmethod
     def stands_alone(cls, params: dict[str, Any]) -> bool:
-        """Whether `params` say on their own what this fix changes, however long ago a report wrote them: lag-doctor's
-        window applies an offer from any recording only then (fixes/flow.offerable). A fix whose params may name their
-        subject only by where Windows put it at the time (a display name, which belongs to whichever monitor Windows
-        lists first) says no unless they also name it by an identity that lasts."""
+        """Whether `params` still mean what they meant however long ago a report wrote them: lag-doctor's window
+        applies an offer from any recording only then, and from the last recording made otherwise (fixes/flow.applies).
+        A fix whose params name something as the PC was then says no: a display by the name Windows gave it (which
+        belongs to whichever monitor Windows lists first), or a program that was running (which may be the game by
+        now)."""
         return True
 
     def ended(self, params: dict[str, Any]) -> bool:
