@@ -32,6 +32,11 @@ class PowerPlanFix(Fix):
             power = power_api
         self.power = power
 
+    @classmethod
+    def stands_alone(cls, params: dict[str, Any]) -> bool:
+        """Yes: a plan's GUID names the same plan whenever it is read."""
+        return True
+
     def target(self, params: dict[str, Any]) -> str:
         return "the active power plan (Control Panel > Hardware and Sound > Power Options)"
 

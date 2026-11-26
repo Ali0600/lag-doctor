@@ -68,6 +68,8 @@ def test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_t
     assert not flow.applies("from_a_newer_lag_doctor", {}, ids, is_last=True)
     assert flow.why_not_offered("game_setting", {}, ids | {"game_setting"}) == "unknown"
     assert all(catalog.find(i).stands_alone({}) for i in ids - {"refresh_rate", "background_priority"})   # they last
+    from lagdoctor.fixes.base import Fix
+    assert Fix.stands_alone({}) is False                  # a fix that does not say: from the last recording only
 
 
 # ---------------------------------------------------------------- apply ---

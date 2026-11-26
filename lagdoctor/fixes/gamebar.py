@@ -31,6 +31,11 @@ class DwordValuesFix(Fix):
     def __init__(self, reg: RegistryBackend | None = None) -> None:
         self.reg = reg if reg is not None else RegistryBackend()
 
+    @classmethod
+    def stands_alone(cls, params: dict[str, Any]) -> bool:
+        """Yes: fixed values, with no params at all."""
+        return True
+
     def target(self, params: dict[str, Any]) -> str:
         no_params(params)
         return "; ".join(f"{HIVE}\\{path}\\{name}" for path, name, _ in self.values)

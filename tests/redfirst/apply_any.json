@@ -1,12 +1,41 @@
 [
  {
-  "name": "stands_alone: what a fix's params name lasts, by default",
+  "name": "stands_alone: a fix that does not say stands alone",
   "file": "lagdoctor/fixes/base.py",
-  "old": "lists first), or a program that was running (which may be the game by\n        now).\"\"\"\n        return True",
-  "new": "lists first), or a program that was running (which may be the game by\n        now).\"\"\"\n        return False",
+  "old": "applied from the last recording only until it does.\"\"\"\n        return False",
+  "new": "applied from the last recording only until it does.\"\"\"\n        return True",
+  "tests": [
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_they_meant"
+  ]
+ },
+ {
+  "name": "stands_alone: a power plan's does not",
+  "file": "lagdoctor/fixes/power.py",
+  "old": "names the same plan whenever it is read.\"\"\"\n        return True",
+  "new": "names the same plan whenever it is read.\"\"\"\n        return False",
   "tests": [
    "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_they_meant",
    "tests/test_app_fixes.py::test_results_offer_apply_on_every_recording_for_the_fixes_the_window_applies"
+  ]
+ },
+ {
+  "name": "stands_alone: a program's GPU preference does not",
+  "file": "lagdoctor/fixes/gpu_preference.py",
+  "old": "or in one global value.\"\"\"\n        return True",
+  "new": "or in one global value.\"\"\"\n        return False",
+  "tests": [
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_they_meant",
+   "tests/test_app_views.py::test_results_offer_apply_for_the_fixes_the_window_applies_and_dated_ones_on_the_last_recording_only",
+   "tests/test_app_page.py::test_apply_works_from_a_recording_that_is_not_the_last_and_undo_all_puts_back_every_change"
+  ]
+ },
+ {
+  "name": "stands_alone: Game Bar's values do not",
+  "file": "lagdoctor/fixes/gamebar.py",
+  "old": "with no params at all.\"\"\"\n        return True",
+  "new": "with no params at all.\"\"\"\n        return False",
+  "tests": [
+   "tests/test_fix_flow.py::test_a_fix_is_applied_from_any_report_only_when_its_params_still_mean_what_they_meant"
   ]
  },
  {
@@ -388,8 +417,8 @@
  {
   "name": "Undo all: a settings sweep's change too",
   "file": "lagdoctor/app/main.py",
-  "old": "                if e.fix_id in flow.NEVER_OFFERED or e.state == \"conflict\":",
-  "new": "                if e.state == \"conflict\":",
+  "old": "                if title is None or e.fix_id in flow.NEVER_OFFERED or e.state == \"conflict\":",
+  "new": "                if title is None or e.state == \"conflict\":",
   "tests": [
    "tests/test_app_fixes.py::test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name"
   ]
@@ -397,19 +426,20 @@
  {
   "name": "Undo all: a change left neither value too",
   "file": "lagdoctor/app/main.py",
-  "old": "                if e.fix_id in flow.NEVER_OFFERED or e.state == \"conflict\":",
-  "new": "                if e.fix_id in flow.NEVER_OFFERED:",
+  "old": "                if title is None or e.fix_id in flow.NEVER_OFFERED or e.state == \"conflict\":",
+  "new": "                if title is None or e.fix_id in flow.NEVER_OFFERED:",
   "tests": [
    "tests/test_app_fixes.py::test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name"
   ]
  },
  {
-  "name": "Undo all: a change a newer lag-doctor made too",
+  "name": "Undo all: a change a newer lag-doctor made, or one with no fix id, too",
   "file": "lagdoctor/app/main.py",
-  "old": "                if title is None:                   # a fix this lag-doctor does not know",
-  "new": "                if False:                   # a fix this lag-doctor does not know",
+  "old": "                if title is None or e.fix_id in flow.NEVER_OFFERED or e.state == \"conflict\":",
+  "new": "                if e.fix_id in flow.NEVER_OFFERED or e.state == \"conflict\":",
   "tests": [
-   "tests/test_app_fixes.py::test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name"
+   "tests/test_app_fixes.py::test_undo_all_leaves_what_the_list_gave_no_undo_and_what_it_did_not_name",
+   "tests/test_app_fixes.py::test_undo_all_copes_with_a_journal_whose_ids_are_odd"
   ]
  },
  {
@@ -424,8 +454,8 @@
  {
   "name": "Undo all: goes on past an unreadable journal",
   "file": "lagdoctor/app/main.py",
-  "old": "                    stopped = views.UNDO_ALL_STOPPED\n                    break",
-  "new": "                    stopped = views.UNDO_ALL_STOPPED\n                    continue",
+  "old": "                    stopped = views.UNDO_ALL_STOPPED.format(title=title)\n                    break",
+  "new": "                    stopped = views.UNDO_ALL_STOPPED.format(title=title)\n                    continue",
   "tests": [
    "tests/test_app_fixes.py::test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did"
   ]
@@ -433,8 +463,17 @@
  {
   "name": "Undo all: says nothing of an unreadable journal",
   "file": "lagdoctor/app/main.py",
-  "old": "                    stopped = views.UNDO_ALL_STOPPED\n                    break",
+  "old": "                    stopped = views.UNDO_ALL_STOPPED.format(title=title)\n                    break",
   "new": "                    stopped = \"\"\n                    break",
+  "tests": [
+   "tests/test_app_fixes.py::test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did"
+  ]
+ },
+ {
+  "name": "Undo all: says it stopped, but not at which change",
+  "file": "lagdoctor/app/main.py",
+  "old": "                    stopped = views.UNDO_ALL_STOPPED.format(title=title)\n                    break",
+  "new": "                    stopped = views.UNDO_ALL_STOPPED\n                    break",
   "tests": [
    "tests/test_app_fixes.py::test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did"
   ]
@@ -518,8 +557,17 @@
  {
   "name": "page: no Undo all",
   "file": "lagdoctor/app/assets/app.js",
-  "old": "  const all = c.all.length ? undoAllButton(",
-  "new": "  const all = false ? undoAllButton(",
+  "old": "  const all = every.length > 1 ? undoAllButton(every,",
+  "new": "  const all = false ? undoAllButton(every,",
+  "tests": [
+   "tests/test_app_page.py::test_apply_works_from_a_recording_that_is_not_the_last_and_undo_all_puts_back_every_change"
+  ]
+ },
+ {
+  "name": "page: Undo all again for what it just left alone",
+  "file": "lagdoctor/app/assets/app.js",
+  "old": "  const every = c.all.filter((id) => !forced.includes(id));",
+  "new": "  const every = c.all;",
   "tests": [
    "tests/test_app_page.py::test_apply_works_from_a_recording_that_is_not_the_last_and_undo_all_puts_back_every_change"
   ]

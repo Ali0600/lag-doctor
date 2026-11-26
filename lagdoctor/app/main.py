@@ -831,16 +831,17 @@ class App:
                 self.log(f"reading the fix journal: {exc}")
                 raise Gone(NO_JOURNAL) from None
             for e in chosen:
-                if e.fix_id in flow.NEVER_OFFERED or e.state == "conflict":
-                    continue
                 title, change = self.about_change(fixes, e)
-                if title is None:                   # a fix this lag-doctor does not know: the list gave it no Undo
+                # A fix this lag-doctor does not know (or an id that is no text), a settings sweep's change, and one
+                # left neither value: the list gave each no Undo.
+                if title is None or e.fix_id in flow.NEVER_OFFERED or e.state == "conflict":
                     continue
                 try:
                     res = flow.undo(e, fixes.fix, journal, force=False)
                 except JournalCorrupt as exc:
-                    self.log(f"undo all: {exc.plain()}")
-                    stopped = views.UNDO_ALL_STOPPED
+                    self.log(f"undo all stopped at {e.fix_id} ({e.id}), which may be back without being written "
+                             f"down: {exc.plain()}")
+                    stopped = views.UNDO_ALL_STOPPED.format(title=title)
                     break
                 self.log(f"undo {e.fix_id} ({e.id}): {res.why or res.state}: {res.message}")
                 done.append((title, res, change))

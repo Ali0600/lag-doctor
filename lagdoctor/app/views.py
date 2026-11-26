@@ -432,9 +432,9 @@ APPLIED = {
     "unsure": ("lag-doctor could not finish writing this change down. If it was made, Settings lists it under the "
                "changes lag-doctor made, where Undo puts it back. " + FIX_LOG),
 }
-UNDO_ALL_STOPPED = ("Undo all stopped here: lag-doctor could no longer read its fix journal, so the change it was "
-                    "putting back may be back without being written down, and fixes and undo are paused until the "
-                    "journal can be read again. " + FIX_LOG)
+UNDO_ALL_STOPPED = ("Undo all stopped at {title}: lag-doctor could no longer read its fix journal, so that change "
+                    "may be back without being written down, and fixes and undo are paused until the journal can be "
+                    "read again. " + FIX_LOG)
 UNDO_ALL_UNSURE = "Undo all stopped there, and left the changes after it as they are."
 UNCONFIRMED = ("The change is in place, but lag-doctor could not confirm it took. Settings lists it under the changes "
                "lag-doctor made, where Undo puts it back. " + FIX_LOG)

@@ -819,7 +819,9 @@ function fillChanges(box, c, live, forced = []) {
       el('strong', null, r.title), r.change ? el('p', null, r.change) : null,
       el('p', {class: 'muted'}, r.where), el('p', {class: 'muted'}, `Made ${r.when}`), note, buttons);
   });
-  const all = c.all.length ? undoAllButton(c.all, (u) => {
+  // Undo all for what it may put back: not the changes it just left alone because they were changed since.
+  const every = c.all.filter((id) => !forced.includes(id));
+  const all = every.length > 1 ? undoAllButton(every, (u) => {
     if (live()) go('settings', {said: u.lines, force: u.force}, false);
   }) : null;
   fill(box, el('p', {class: 'muted'}, 'Newest first. Undo puts back how each setting was before lag-doctor changed it.'),

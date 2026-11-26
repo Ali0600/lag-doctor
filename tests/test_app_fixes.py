@@ -579,7 +579,7 @@ def test_undo_all_stops_where_the_journal_turns_unreadable_and_says_what_it_did(
     u = ask(app, "undo_all", entries=ids)
     assert calls == ids[:2] and u["done"] == 1                # the second undo could not write itself down
     assert plain(u["lines"][0]) == "Undone: The stand-in for game_dvr_off: off -> on. It is back to how it was."
-    assert u["lines"][1:] == [views.UNDO_ALL_STOPPED]
+    assert u["lines"][1:] == [views.UNDO_ALL_STOPPED.format(title="The stand-in for game_mode_on")]
 
 
 def test_undo_all_stops_at_an_undo_it_could_not_write_down(tmp_path, monkeypatch):
@@ -608,6 +608,7 @@ def test_undo_all_copes_with_a_journal_whose_ids_are_odd(tmp_path):
     raw = json.loads(j.path.read_text(encoding="utf-8"))
     raw["entries"].append(dict(raw["entries"][0], id=["not", "text"], target="no text"))
     raw["entries"].append(dict(raw["entries"][1], target="written twice"))       # the newest change's id again
+    raw["entries"].append(dict(raw["entries"][1], fix_id=["no", "text"], target="no fix id"))       # and once more
     j.path.write_text(json.dumps(raw), encoding="utf-8")
     c = ask(app, "changes")
     assert c["all"] == ids                                    # each id once, and never the one that is no text
@@ -648,7 +649,8 @@ def test_every_answer_to_an_apply_or_an_undo_is_in_plain_words():
                                   "Power plan: Silent -> Balanced")
             plain(v["text"])
             assert v["force"] == (why == "changed")
-    for text in (views.LAST_ONLY_FIX, views.NOT_LAST, views.UNDO_ALL_STOPPED, views.UNDO_ALL_UNSURE, views.NEWER_CHANGE, views.CONFLICT_NOTE, app_main.BUSY,
+    for text in (views.LAST_ONLY_FIX, views.NOT_LAST, views.UNDO_ALL_STOPPED.format(title="Power plan"),
+                 views.UNDO_ALL_UNSURE, views.NEWER_CHANGE, views.CONFLICT_NOTE, app_main.BUSY,
                  app_main.NO_JOURNAL, app_main.NO_LONGER_PLANNED):
         plain(text)
     assert views.refused_text(ValueError("")) == "lag-doctor will not make this change."

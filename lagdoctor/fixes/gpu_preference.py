@@ -121,6 +121,11 @@ class StringFieldFix(Fix):
     def __init__(self, reg: RegistryBackend | None = None) -> None:
         self.reg = reg if reg is not None else RegistryBackend()
 
+    @classmethod
+    def stands_alone(cls, params: dict[str, Any]) -> bool:
+        """Yes: a field in a value named by a program's path, or in one global value."""
+        return True
+
     def value_name(self, params: dict[str, Any]) -> str:
         raise NotImplementedError
 

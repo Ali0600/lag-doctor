@@ -275,9 +275,9 @@ def script(facts: dict, app: App):
         note: document.getElementById('note') ? document.getElementById('note').textContent : null,
         made: {MADE}, pwned: window.__pwned === 1}}))()""")
     # Apply from a recording that is not the last one made: its own offer (a GPU preference for Demo Racer's program),
-    # made as the last one's is. With two more changes in place, one of them changed by hand since, Settings' Undo all
-    # takes a second click and puts back the two it may, newest first; the third's row then offers to put it back
-    # anyway, which takes a second click too.
+    # made as the last one's is. With three more changes in place, two of them changed by hand since, Settings' Undo
+    # all takes a second click and puts back the two it may, newest first; the others' rows then offer only to put
+    # each back anyway, which takes a second click too, and Undo all is not offered for them again.
     facts["racer_applies"] = yield js("document.querySelectorAll('.apply button').length")
     yield js("document.querySelector('.apply button').click(); true")
     yield until("!!document.getElementById('apply-confirm')")
@@ -285,7 +285,8 @@ def script(facts: dict, app: App):
     yield until("!!document.getElementById('applied')")
     facts["racer_applied"] = yield js("document.getElementById('applied').textContent")
     journal = app.fixes.journal()
-    for fix_id, now in (("power_plan", fake_fixes.AFTER), ("game_mode_on", "set by hand since")):
+    for fix_id, now in (("power_plan", fake_fixes.AFTER), ("game_mode_on", "set by hand since"),
+                        ("game_dvr_off", "set by hand since")):
         made = journal.begin(fix_id, f"the stand-in setting of {fix_id}", {}, fake_fixes.BEFORE, fake_fixes.AFTER)
         journal.set_state(made.id, "applied")
         app.harness.fix_store[fix_id] = now                        # as Apply leaves it, or as the player changed it
@@ -300,20 +301,22 @@ def script(facts: dict, app: App):
     facts["undo_all_rows"] = yield js("document.querySelectorAll('#changes .change').length")
     yield js("document.getElementById('undo-all').click(); true")
     facts["undo_all_armed"] = yield js("document.getElementById('undo-all').textContent")
+    yield sleep(500)                                               # a request the click sent would have landed
     facts["undo_all_first_click"] = list(app.harness.fix_store.get("writes", []))
     yield js("document.getElementById('undo-all').click(); true")
-    yield until("!!document.getElementById('said') && document.querySelectorAll('#changes .change').length === 1")
+    yield until("!!document.getElementById('said') && document.querySelectorAll('#changes .change').length === 2")
     facts["undo_all_said"] = yield js("[...document.querySelectorAll('#said p')].map((p) => p.textContent)")
     facts["undo_all_writes"] = list(app.harness.fix_store.get("writes", []))
-    facts["undo_all_left"] = yield js("""(() => {
-        const row = document.querySelector('#changes .change');
-        return {title: row.querySelector('strong').textContent,
-                undo: !!row.querySelector('button[data-entry]:not([data-force])'),
-                anyway: !!row.querySelector('button[data-force]'), again: !!document.getElementById('undo-all')};
-    })()""")
+    facts["undo_all_left"] = yield js("""(() => ({
+        rows: [...document.querySelectorAll('#changes .change')].map((row) => ({
+            title: row.querySelector('strong').textContent,
+            undo: !!row.querySelector('button[data-entry]:not([data-force])'),
+            anyway: !!row.querySelector('button[data-force]')})),
+        again: !!document.getElementById('undo-all')}))()""")
     yield js("document.querySelector('#changes .change button[data-force]').click(); true")
     yield js("document.querySelector('#changes .change button[data-force]').click(); true")
-    yield until("!!document.getElementById('changes-none')")
+    yield until("!!document.getElementById('said') && document.querySelectorAll('#changes .change').length === 1 && "
+                "document.getElementById('said').textContent.startsWith('Undone')")
     facts["undo_all_anyway"] = yield js("document.getElementById('said').textContent")
     facts["undo_all_anyway_writes"] = list(app.harness.fix_store.get("writes", []))
 

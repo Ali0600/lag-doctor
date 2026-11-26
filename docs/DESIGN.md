@@ -1799,7 +1799,8 @@ or an undo whose journal another lag-doctor holds, or a disk refuses, said as an
 (`apply`'s `busy` and `unsure`, `undo`'s `unsure`, and `unknown` for a fix a newer lag-doctor journaled), and
 `settle`, the journal's settling at a start. It also holds which offers the window applies from which recording
 (`applies`, `offerable`, `why_not_offered`): a fix's `stands_alone(params)` says whether its params still mean what
-they meant however long ago a report wrote them. Two kinds do not, and are "dated": a refresh rate's without its
+they meant however long ago a report wrote them (no unless the fix says so: power plans, the registry fixes and a
+refresh rate with its monitor do). Two kinds do not, and are "dated": a refresh rate's without its
 monitor, since a display name belongs to whichever monitor Windows lists first, and a background program's priority,
 since that program may be the game by now; the window applies those from the last recording made only. `FixResult.why` names the case each undo met (`restored`, `already`,
 `ended`, `not_connected`, `changed`, `unreadable`, `write_failed`, `no_readback`), so that each front end words it

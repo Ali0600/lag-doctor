@@ -92,11 +92,13 @@ class FakeDisplay:
         self.stores_on = {0, 1}                # result codes after which the new rate is in the profile
 
     def current_mode(self, device):
-        if not self.connected:
+        if not self.connected or device.upper() != self.at.upper():       # a name that shows no monitor now
             raise OSError(1167, "The device is not connected")
         return dict(self.mode)
 
     def stored_mode(self, device):
+        if device.upper() != self.at.upper():
+            raise OSError(1167, "The device is not connected")
         return dict(self.mode) if self.stored is _FOLLOW else (dict(self.stored) if self.stored else None)
 
     def monitor_path(self, device):

@@ -78,8 +78,9 @@ class RefreshRateFix(Fix):
         self.display = display
 
     def target(self, params: dict[str, Any]) -> str:
-        return (f"the refresh rate of display {check_device(params.get('device'))} "
-                f"(Settings > System > Display > Advanced display)")
+        # Journaled as it reads now: after a dock that name may show another monitor, so it says when it was given.
+        return (f"the refresh rate of display {check_device(params.get('device'))}, as Windows named the screen when "
+                f"lag-doctor read it (Settings > System > Display > Advanced display)")
 
     @classmethod
     def stands_alone(cls, params: dict[str, Any]) -> bool:
