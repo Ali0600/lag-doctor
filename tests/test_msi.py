@@ -465,10 +465,11 @@ def test_the_check_installs_nothing_off_a_github_hosted_runner(monkeypatch, tmp_
 
 def test_every_check_between_install_and_uninstall_runs_in_the_order_reported():
     """MIDDLE names the checks reported as not run when the install fails; run_checks must run exactly those."""
-    ran = re.findall(r'guarded\("([a-z ]+)"', inspect.getsource(mc.run_checks))
+    ran = re.findall(r'guarded\("([a-z -]+)"', inspect.getsource(mc.run_checks))
     assert ran == [*mc.MIDDLE, "gone"]
-    assert mc.MIDDLE == ("files", "registered", "path", "registry", "shortcut", "service", "recording", "token",
-                         "command", "imports", "untouched")
+    # trace-lock reads what the recording's client left, and the token check the service's token it read
+    assert mc.MIDDLE == ("files", "registered", "path", "registry", "shortcut", "service", "recording", "trace-lock",
+                         "token", "command", "imports", "untouched")
 
 
 # ----------------------------------------------------------- the Start-menu shortcut and its registry value ---
@@ -1048,6 +1049,40 @@ def test_the_recording_check_needs_the_real_service_to_record_the_stand_in_for_a
     assert {k: mc.judge_recording(_client(**v), 77, INSTALL).ok for k, v in bad.items()} == dict.fromkeys(bad, False)
     assert not mc.judge_recording(None, 77, INSTALL).ok
     assert not mc.judge_recording({"crashed": "Traceback"}, 77, INSTALL).ok
+
+
+def _locked(**over) -> dict:
+    """A client that read the trace lock as it must be: busy and the service's while it recorded, refused to take
+    (access denied), free after."""
+    from lagdoctor.relay import protocol
+    from lagdoctor.winapi import service as svc
+    during = {"state": "busy", "owner": svc.service_sid(protocol.SERVICE_NAME), "take": 5}
+    after = over.pop("lock_after", "free")
+    return _client(lock_during={**during, **over}, lock_after=after)
+
+
+def test_the_trace_lock_check_needs_the_service_to_hold_it_alone_while_it_records_and_let_it_go():
+    good = mc.judge_trace_lock(_locked())
+    assert good.ok and good.name == "trace-lock", good
+    bad = {"free while recording": ({"state": "free"}, "not busy"),
+           "taken by another program": ({"state": "taken"}, "not busy"),
+           "unreadable": ({"state": "OSError: [WinError 5] Access is denied"}, "not busy"),
+           "owned by Administrators": ({"owner": "S-1-5-32-544"}, "not the service's own SID"),
+           "no owner": ({"owner": None}, "not the service's own SID"),
+           "the account could take it": ({"take": None}, "could open the lock to take it"),
+           "another refusal": ({"take": 6}, "not access denied"),
+           "no lock to take": ({"take": "no lock"}, "not access denied"),
+           "busy after": ({"lock_after": "busy"}, "once the recording ended"),
+           "never read after": ({"lock_after": None}, "once the recording ended")}
+    got = {k: mc.judge_trace_lock(_locked(**v)) for k, (v, _) in bad.items()}
+    assert {k: c.ok for k, c in got.items()} == dict.fromkeys(bad, False)
+    named = {k: bad[k][1] in c.detail and ";" not in c.detail for k, c in got.items()}    # it, and it alone
+    assert named == dict.fromkeys(bad, True), {k: c.detail for k, c in got.items()}
+    assert "\n" not in mc.judge_trace_lock(_locked(state="free", take=None, lock_after="busy")).detail
+    for client, why in ((None, "left no result"), ({"crashed": "Traceback"}, "crashed"),
+                        (_client(), "no recording ran")):
+        check = mc.judge_trace_lock(client)
+        assert not check.ok and why in check.detail, check.detail
 
 
 def test_the_token_check_needs_localservice_with_one_privilege_and_its_own_unrestricted_sid():

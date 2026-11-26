@@ -1,0 +1,102 @@
+[
+ {
+  "name": "a test marked for the real lock keeps it off the runner too",
+  "file": "tests/conftest.py",
+  "old": "    return node.get_closest_marker(\"real_trace_lock\") is not None and stage2_guard().on_throwaway_runner()",
+  "new": "    return node.get_closest_marker(\"real_trace_lock\") is not None",
+  "tests": [
+   "tests/test_tracelock.py::test_the_guard_leaves_the_real_lock_to_no_test_but_one_marked_for_it_on_the_runner",
+   "tests/test_tracelock.py::test_the_real_fixture_reads_the_mark_and_the_runner_alike"
+  ]
+ },
+ {
+  "name": "every test on the runner keeps the real lock, marked or not",
+  "file": "tests/conftest.py",
+  "old": "    return node.get_closest_marker(\"real_trace_lock\") is not None and stage2_guard().on_throwaway_runner()",
+  "new": "    return stage2_guard().on_throwaway_runner()",
+  "tests": [
+   "tests/test_tracelock.py::test_the_guard_leaves_the_real_lock_to_no_test_but_one_marked_for_it_on_the_runner"
+  ]
+ },
+ {
+  "name": "a test marked for the real lock on the runner gets a moved name and the guard anyway",
+  "file": "tests/conftest.py",
+  "old": "    if real_trace_lock_left(node):\n        yield None\n        return",
+  "new": "    if False:\n        yield None\n        return",
+  "tests": [
+   "tests/test_tracelock.py::test_a_test_marked_for_the_real_lock_on_the_runner_keeps_its_name_and_no_guard"
+  ]
+ },
+ {
+  "name": "the trace-lock check passes a lock that was not busy while the service recorded",
+  "file": "scripts/msi_check.py",
+  "old": "    if during.get(\"state\") != tracelock.BUSY:",
+  "new": "    if during.get(\"state\") not in (tracelock.BUSY, tracelock.FREE):",
+  "tests": [
+   "tests/test_msi.py::test_the_trace_lock_check_needs_the_service_to_hold_it_alone_while_it_records_and_let_it_go"
+  ]
+ },
+ {
+  "name": "the trace-lock check passes a lock of any owner",
+  "file": "scripts/msi_check.py",
+  "old": "    if during.get(\"owner\") != svc.service_sid(protocol.SERVICE_NAME):",
+  "new": "    if not during.get(\"owner\"):",
+  "tests": [
+   "tests/test_msi.py::test_the_trace_lock_check_needs_the_service_to_hold_it_alone_while_it_records_and_let_it_go"
+  ]
+ },
+ {
+  "name": "the trace-lock check passes a lock the standard account could open to take",
+  "file": "scripts/msi_check.py",
+  "old": "    if took != ERROR_ACCESS_DENIED:",
+  "new": "    if took not in (ERROR_ACCESS_DENIED, None):",
+  "tests": [
+   "tests/test_msi.py::test_the_trace_lock_check_needs_the_service_to_hold_it_alone_while_it_records_and_let_it_go"
+  ]
+ },
+ {
+  "name": "the trace-lock check passes a lock still held after the recording",
+  "file": "scripts/msi_check.py",
+  "old": "    if client.get(\"lock_after\") != tracelock.FREE:",
+  "new": "    if client.get(\"lock_after\") is None:",
+  "tests": [
+   "tests/test_msi.py::test_the_trace_lock_check_needs_the_service_to_hold_it_alone_while_it_records_and_let_it_go"
+  ]
+ },
+ {
+  "name": "the trace-lock check passes a client that read no lock",
+  "file": "scripts/msi_check.py",
+  "old": "    if not isinstance(during, dict):",
+  "new": "    if not client:\n        why = 'it left no result'\n        return Check(\"trace-lock\", False, why)\n    if not isinstance(during, dict):\n        during = {\"state\": \"busy\", \"take\": 5, \"owner\": svc.service_sid(protocol.SERVICE_NAME)}\n    if False:",
+  "tests": [
+   "tests/test_msi.py::test_the_trace_lock_check_needs_the_service_to_hold_it_alone_while_it_records_and_let_it_go"
+  ]
+ },
+ {
+  "name": "the trace-lock check is reported after the token check",
+  "file": "scripts/msi_check.py",
+  "old": "MIDDLE = (\"files\", \"registered\", \"path\", \"registry\", \"shortcut\", \"service\", \"recording\", \"trace-lock\", \"token\",\n          \"command\", \"imports\", \"untouched\")",
+  "new": "MIDDLE = (\"files\", \"registered\", \"path\", \"registry\", \"shortcut\", \"service\", \"recording\", \"token\",\n          \"trace-lock\",\n          \"command\", \"imports\", \"untouched\")",
+  "tests": [
+   "tests/test_msi.py::test_every_check_between_install_and_uninstall_runs_in_the_order_reported"
+  ]
+ },
+ {
+  "name": "a failed install does not report the trace-lock check",
+  "file": "scripts/msi_check.py",
+  "old": "MIDDLE = (\"files\", \"registered\", \"path\", \"registry\", \"shortcut\", \"service\", \"recording\", \"trace-lock\", \"token\",\n          \"command\", \"imports\", \"untouched\")",
+  "new": "MIDDLE = (\"files\", \"registered\", \"path\", \"registry\", \"shortcut\", \"service\", \"recording\", \"token\",\n          \"command\", \"imports\", \"untouched\")",
+  "tests": [
+   "tests/test_msi.py::test_every_check_between_install_and_uninstall_runs_in_the_order_reported"
+  ]
+ },
+ {
+  "name": "the trace-lock check never runs",
+  "file": "scripts/msi_check.py",
+  "old": "        checks += guarded(\"trace-lock\", lambda: judge_trace_lock(recording_seen.get(\"client\")))\n",
+  "new": "",
+  "tests": [
+   "tests/test_msi.py::test_every_check_between_install_and_uninstall_runs_in_the_order_reported"
+  ]
+ }
+]

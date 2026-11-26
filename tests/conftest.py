@@ -5,6 +5,7 @@ Builders: put fixtures only your own tests use in your own test module, not here
 from __future__ import annotations
 
 import os
+import sys
 import uuid
 import winreg
 from pathlib import Path
@@ -231,13 +232,40 @@ REAL_TRACE_LOCK = "Global\\lag-doctor-trace"
 
 
 @pytest.fixture(autouse=True)
-def _no_real_trace_lock(monkeypatch):
+def _no_real_trace_lock(request, monkeypatch):
     """No test makes, opens or waits on this PC's machine-wide trace lock (capture/tracelock.py, in Windows' Global\\
     namespace): the owner's own recording in any Windows session, or the capture service, may hold it, so a test that
     met it would read busy, and one that held it would keep a real recording from starting. Every test gets a name of
     its own (tracelock.NAME, Global\\lagdoctor-test-<uuid>); one that reaches the real name anyway reads it as no lock
     there, and fails at its end. A test that starts watch in a child process moves the name there too, as it does the
-    capture lock's."""
+    capture lock's. The one exception is real_trace_lock_left's: on GitHub's throwaway runner only, a test marked
+    real_trace_lock keeps the real name and no guard, to read the lock the real relay takes under it."""
+    yield from trace_lock_fixture(request.node, monkeypatch)
+
+
+def stage2_guard():
+    """scripts/stage2/guard.py, imported as the tests that need the runner import it (`from stage2 import guard`, with
+    scripts/ on sys.path), so it is the one module object a test stubs."""
+    scripts = str(Path(__file__).resolve().parents[1] / "scripts")
+    if scripts not in sys.path:
+        sys.path.append(scripts)                    # last: it shadows nothing the tests import from elsewhere
+    from stage2 import guard
+    return guard
+
+
+def real_trace_lock_left(node) -> bool:
+    """Whether the test `node` keeps this PC's real trace lock name, unguarded: only a test marked real_trace_lock, and
+    only on GitHub's throwaway runner (stage2/guard.on_throwaway_runner), where no owner's recording can meet it."""
+    return node.get_closest_marker("real_trace_lock") is not None and stage2_guard().on_throwaway_runner()
+
+
+def trace_lock_fixture(node, monkeypatch):
+    """_no_real_trace_lock's body for the test `node`: moves tracelock.NAME to a name of the test's own and guards the
+    real one (trace_lock_guard), yielding the guard's list of reaches; for a test real_trace_lock_left leaves the real
+    name, changes nothing and yields None (tests/test_tracelock.py drives both)."""
+    if real_trace_lock_left(node):
+        yield None
+        return
     from lagdoctor.capture import tracelock
     monkeypatch.setattr(tracelock, "NAME", f"Global\\lagdoctor-test-{uuid.uuid4().hex}")
     yield from trace_lock_guard(monkeypatch)
@@ -298,6 +326,8 @@ def fixes_guard(monkeypatch):
 def pytest_configure(config):
     config.addinivalue_line("markers", "needs(*names): what the test needs from the machine; it skips when "
                             f"{capabilities.ABSENT_ENV} lists one of them (tests/capabilities.py)")
+    config.addinivalue_line("markers", "real_trace_lock: on GitHub's throwaway runner only, the test keeps this PC's "
+                            "real trace lock name, unguarded (tests/conftest.py, real_trace_lock_left)")
     downloads.required(os.environ)                  # a misspelt LAGDOCTOR_REQUIRE stops the run before it starts
     for line in downloads.TALLIES:                  # a line each in the summary (downloads.TALLIES)
         config.pluginmanager.register(downloads.Tally(os.environ, line), f"lagdoctor-download-tally-{line}")

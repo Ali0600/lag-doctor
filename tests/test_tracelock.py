@@ -282,3 +282,57 @@ def test_the_guard_keeps_tests_from_this_pcs_trace_lock(monkeypatch):
     assert reached == [other]
     with pytest.raises(AssertionError):
         next(guard)
+
+
+TEST_NAME = r"Global\\lagdoctor-test-[0-9a-f]{32}"
+
+
+@pytest.mark.parametrize("marked, runner", [(True, False), (False, True), (False, False)],
+                         ids=["marked off the runner", "unmarked on the runner", "unmarked off the runner"])
+def test_the_guard_leaves_the_real_lock_to_no_test_but_one_marked_for_it_on_the_runner(marked, runner, request,
+                                                                                       monkeypatch):
+    """conftest's fixture body (trace_lock_fixture), driven for this test's own item with the runner stubbed: the name
+    is moved and the real one refused unless both hold. The mutex calls are stand-ins one layer below the guard, so a
+    sabotaged guard reaches them, never Windows."""
+    reached: list[str] = []
+    monkeypatch.setattr(elevation, "create_mutex", lambda name, sddl, *, own: reached.append(name) or (None, False))
+    monkeypatch.setattr(elevation, "open_mutex", lambda name, access: reached.append(name))
+    monkeypatch.setattr(conftest.stage2_guard(), "on_throwaway_runner", lambda environ=None: runner)
+    monkeypatch.setattr(tracelock, "NAME", "Global\\lagdoctor-test-before")
+    if marked:
+        request.node.add_marker("real_trace_lock")
+    body = conftest.trace_lock_fixture(request.node, monkeypatch)
+    caught = next(body)
+    assert caught == [] and re.fullmatch(TEST_NAME, tracelock.NAME), (caught, tracelock.NAME)
+    with pytest.raises(OSError):
+        elevation.create_mutex(conftest.REAL_TRACE_LOCK, tracelock.descriptor(ME), own=True)
+    assert elevation.open_mutex(conftest.REAL_TRACE_LOCK, QUERY) is None
+    assert len(caught) == 2 and reached == []
+    with pytest.raises(AssertionError):
+        next(body)
+
+
+def test_a_test_marked_for_the_real_lock_on_the_runner_keeps_its_name_and_no_guard(request, monkeypatch):
+    reached: list[str] = []
+    monkeypatch.setattr(elevation, "create_mutex", lambda name, sddl, *, own: reached.append(name) or (None, False))
+    monkeypatch.setattr(elevation, "open_mutex", lambda name, access: reached.append(name))
+    monkeypatch.setattr(conftest.stage2_guard(), "on_throwaway_runner", lambda environ=None: True)
+    monkeypatch.setattr(tracelock, "NAME", "Global\\lagdoctor-test-before")     # stands in for the shipped name
+    request.node.add_marker("real_trace_lock")
+    body = conftest.trace_lock_fixture(request.node, monkeypatch)
+    assert next(body) is None and tracelock.NAME == "Global\\lagdoctor-test-before"
+    elevation.create_mutex(conftest.REAL_TRACE_LOCK, tracelock.descriptor(ME), own=True)
+    elevation.open_mutex(conftest.REAL_TRACE_LOCK, QUERY)
+    assert reached == [conftest.REAL_TRACE_LOCK] * 2          # both went on, past no guard of the fixture's
+    with pytest.raises(StopIteration):
+        next(body)
+
+
+@pytest.mark.real_trace_lock
+def test_the_real_fixture_reads_the_mark_and_the_runner_alike():
+    """The autouse fixture itself, for a test marked real_trace_lock: a name of the test's own off the runner, the
+    shipped one on it. Either way this test only reads the name."""
+    if conftest.stage2_guard().on_throwaway_runner():
+        assert tracelock.NAME == conftest.REAL_TRACE_LOCK
+    else:
+        assert re.fullmatch(TEST_NAME, tracelock.NAME), tracelock.NAME

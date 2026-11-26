@@ -41,6 +41,9 @@ failed, 2 if they could not start (not a runner, an input missing, the product o
   it; the pipe's server is the process the SCM names and its owner the service's own SID; asked for a stand-in game
   (stage2/standin.py, run by this job in the same session) it greets with that game, starts the network trace,
   passes on that game's events, runs PresentMon (which writes no row on a runner with no GPU), and ends when told.
+- trace-lock: what that client read of the machine-wide trace lock under its real name (lagdoctor/capture/tracelock.py):
+  while the service recorded, busy, owned by the service's own SID, and refused to the standard account to take
+  (access denied); once the recording had ended, free.
 - token: the running service's own token (read by this job, an administrator): LocalService, SeChangeNotifyPrivilege
   alone, not restricted, its service SID among its groups. Windows Installer's page for MsiServiceConfig says its
   settings take effect "the next time the system is started"; this is what the first start after the install got.
@@ -102,8 +105,8 @@ COMMAND_TIMEOUT_S = 120      # one command; the eight between the install and th
 # every verdict before the job's cap stops the step (tests/test_ci_budgets.py holds it under ci.yml's timeout-minutes).
 BUDGET_S = 720
 _deadline: float | None = None
-MIDDLE = ("files", "registered", "path", "registry", "shortcut", "service", "recording", "token", "command", "imports",
-          "untouched")
+MIDDLE = ("files", "registered", "path", "registry", "shortcut", "service", "recording", "trace-lock", "token",
+          "command", "imports", "untouched")
 CLIENT = ROOT / "scripts" / "msi_service_client.py"        # run by the throwaway account with the installed runtime
 STANDIN = ROOT / "scripts" / "stage2" / "standin.py"       # the game the recording check records
 ACCOUNT = "lagdoctor-msi-check"                            # the throwaway standard account (at most 20 characters)
@@ -920,6 +923,35 @@ def judge_recording(client: dict | None, game_pid: int | None, install: Path) ->
                                     f"{frames.get('state')} ({frames.get('detail', '')[:120]})")
 
 
+def judge_trace_lock(client: dict | None) -> Check:
+    """The machine-wide trace lock under its real name as the throwaway account read it (msi_service_client.py): held
+    by the service while it recorded, owned by the service's own SID, refused to this account to take, and free once
+    the recording ended (see the module's docstring)."""
+    from lagdoctor.capture import tracelock
+    from lagdoctor.relay import protocol
+    from lagdoctor.winapi import service as svc
+    during = (client or {}).get("lock_during")
+    if not isinstance(during, dict):
+        why = ("it left no result" if not client else "it crashed" if "crashed" in client else
+               "no recording ran through the service")
+        return Check("trace-lock", False, f"the client did not read the trace lock while the service recorded ({why})")
+    problems = []
+    if during.get("state") != tracelock.BUSY:
+        problems.append(f"while the service recorded, the lock read {during.get('state')!r}, not busy")
+    if during.get("owner") != svc.service_sid(protocol.SERVICE_NAME):
+        problems.append(f"the lock is owned by {during.get('owner')!r}, not the service's own SID")
+    took = during.get("take", "not read")
+    if took != ERROR_ACCESS_DENIED:
+        problems.append("the standard account could open the lock to take it" if took is None else
+                        f"opening the lock to take it met {took!r}, not access denied")
+    if client.get("lock_after") != tracelock.FREE:
+        problems.append(f"once the recording ended, the lock read {client.get('lock_after')!r}, not free")
+    if problems:
+        return Check("trace-lock", False, "; ".join(problems))
+    return Check("trace-lock", True, "the service held the trace lock while it recorded, owned by its own SID, a "
+                                     "standard account could not take it, and it was free once the recording ended")
+
+
 def read_process_token(pid: int) -> dict:
     """Another process's token, read as this administrator: its own service process, never a game."""
     from stage2 import tokeninfo
@@ -1303,6 +1335,7 @@ def run_checks(msi: Path, runtime_zip: Path, presentmon: Path, logs: Path) -> li
         checks += guarded("shortcut", check_shortcut, install, shortcut_seen)
         checks += guarded("service", check_service, install)
         checks += guarded("recording", check_recording, install, work, recording_seen)
+        checks += guarded("trace-lock", lambda: judge_trace_lock(recording_seen.get("client")))
         checks += guarded("token", lambda: judge_token(recording_seen.get("token")))
         checks += guarded("command", lambda: check_command(fresh_environment(), install, work, home,
                                                            info["version"], presentmon))
