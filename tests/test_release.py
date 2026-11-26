@@ -53,6 +53,10 @@ class World:
         self.calls: list[list[str]] = []
         self.run = {"databaseId": 7, "headSha": RUN_SHA, "status": "completed", "conclusion": "success",
                     "event": "push", "headBranch": "main", "url": RUN_URL}
+        self.passed_run = dict(self.run)          # what `--status success` lists
+        self.files: dict[str, bytes] = {}         # the repository's files at the run's commit, else this tree's
+        self.reads: list[tuple[str, str]] = []
+        self.may_push = True                      # whether the token sees drafts (the draft job's) or not (check's)
         self.main = RUN_SHA
         self.compare = {"status": "ahead", "behind_by": 0, "total_commits": 1, "files": [{"filename": DOCS_FILE}]}
         self.releases: list[dict] = []
@@ -62,11 +66,18 @@ class World:
         self.made: dict | None = None
         self.tamper: dict = {}                    # what the made release reads back as instead
         self.tag_on_create = False                # GitHub making the tag with the draft
+        self.upload_fails = False                 # gh makes the draft, then an asset's upload fails
+        self.fail_asset_download = False
+        self.published_meanwhile = False          # the owner publishes the draft while it is read back
+        self.twin_on_create = False               # a second release with the tag appears with the draft
         self.deleted: list[int] = []
 
     def __call__(self, args: list[str]) -> bytes:
         self.calls.append(list(args))
         if args[:2] == ["run", "list"]:
+            if "--status" in args:
+                assert args[args.index("--status") + 1] == "success"
+                return json.dumps([self.passed_run]).encode()
             return json.dumps([self.run] if self.run else []).encode()
         if args[:2] == ["run", "download"]:
             folder = Path(args[args.index("--dir") + 1])
@@ -83,6 +94,11 @@ class World:
             self.releases.append(self.made)
             if self.tag_on_create:
                 self.tags.append(args[2])
+            if self.twin_on_create:
+                self.releases.append({**self.made, "id": 42})
+            if self.upload_fails:
+                self.made["assets"] = self.made["assets"][:1]
+                raise rel.Refused("`gh release create v0.1.0 ...` failed with exit code 1: upload failed")
             return b""
         if args[0] == "api":
             return self.api(args[1:])
@@ -96,13 +112,22 @@ class World:
             self.deleted.append(int(args[2].rsplit("/", 1)[1]))
             return b""
         if args[:2] == ["-H", "Accept: application/octet-stream"]:
+            if self.fail_asset_download:
+                raise rel.Refused("`gh api -H Accept: application/octet-stream ...` took over 600 s and was stopped")
+            if self.published_meanwhile and self.made["draft"]:
+                self.made["draft"] = False
+                self.tags.append(self.made["tag_name"])
             asset = int(args[2].rsplit("/", 1)[1])
             return next(a["data"] for r in self.releases for a in r["assets"] if a["id"] == asset)
+        if args[:2] == ["-H", rel.RAW]:
+            path, ref = re.fullmatch(rf"repos/{re.escape(REPO)}/contents/(.+)\?ref=([0-9a-f]{{40}})", args[2]).groups()
+            self.reads.append((path, ref))
+            return self.files[path] if path in self.files else (ROOT / path).read_bytes()
         if args[0] == "--paginate" and args[1].startswith(f"repos/{REPO}/releases"):
             tag = re.search(r'select\(\.tag_name == "([^"]+)"\)', args[3]).group(1)
             return b"".join(json.dumps({**r, "assets": [{k: v for k, v in a.items() if k != "data"}
                                                         for a in r["assets"]]}).encode() + b"\n"
-                            for r in self.releases if r["tag_name"] == tag)
+                            for r in self.releases if r["tag_name"] == tag and (self.may_push or not r["draft"]))
         if args[0] == f"repos/{REPO}/git/ref/heads/main":
             return json.dumps({"object": {"sha": self.main}}).encode()
         if args[0] == f"repos/{REPO}/compare/{RUN_SHA}...{MAIN_SHA}":
@@ -121,9 +146,12 @@ def world(tmp_path):
     return World(tmp_path)
 
 
-def staged(world: World, tmp_path: Path) -> Path:
+def staged(world: World, tmp_path: Path, strict: bool = True) -> Path:
+    """gather as the check job runs it (a token that sees no draft); the draft job's token, which does, after."""
     out = tmp_path / "release"
-    rel.gather(out, REPO, gh=world)
+    world.may_push = False
+    _, world.noted = rel.gather(out, REPO, gh=world, strict=strict)
+    world.may_push = True
     return out
 
 
@@ -266,15 +294,97 @@ def test_gather_refuses_when_main_changed_code_after_the_run(world, tmp_path):
     assert not any(c[:2] == ["run", "download"] for c in world.calls)
 
 
-@pytest.mark.parametrize("what", ["release", "draft", "tag"])
+@pytest.mark.parametrize("what", ["release", "tag"])
 def test_gather_refuses_a_version_whose_release_or_tag_exists(world, tmp_path, what):
     if what == "tag":
         world.tags.append(TAG)
     else:
-        world.releases.append({"id": 3, "tag_name": TAG, "draft": what == "draft", "assets": []})
+        world.releases.append({"id": 3, "tag_name": TAG, "draft": False, "assets": []})
     with pytest.raises(rel.Refused, match="raise the version"):
         staged(world, tmp_path)
     assert not any(c[:2] == ["run", "download"] for c in world.calls)
+
+
+def test_a_draft_holding_the_tag_passes_the_check_job_and_the_draft_job_refuses_it(world, tmp_path):
+    world.releases.append({"id": 3, "tag_name": TAG, "draft": True, "assets": []})
+    out = staged(world, tmp_path)                 # the check job's token sees no draft
+    with pytest.raises(rel.Refused, match="a draft release already has the tag"):
+        rel.create(out, REPO, gh=world)
+    assert world.writes() == []
+
+
+def test_gather_judges_the_artifact_by_main_s_files_at_the_run_s_commit_not_the_checkout(world, tmp_path):
+    world.files["pyproject.toml"] = b'[project]\nname = "lag-doctor"\nversion = "9.9.9"\n'
+    with pytest.raises(rel.Refused, match="not just lag-doctor-9.9.9-x64.msi"):
+        staged(world, tmp_path)
+    assert {p for p, _ in world.reads} == {".github/workflows/ci.yml", "pyproject.toml", "installer/lag-doctor.wxs"}
+    assert {ref for _, ref in world.reads} == {RUN_SHA}
+
+
+def test_gather_refuses_a_compare_that_lists_no_files(world, tmp_path):
+    world.main = MAIN_SHA
+    del world.compare["files"]
+    with pytest.raises(rel.Refused, match="lists no files"):
+        staged(world, tmp_path)
+
+
+@pytest.mark.parametrize("setup, why", [
+    (lambda w: w.run.update(status="in_progress", conclusion=None), "has not finished"),
+    (lambda w: w.run.update(conclusion="failure"), "not success"),
+    (lambda w: (setattr(w, "main", MAIN_SHA), w.compare["files"].append({"filename": "lagdoctor/cli.py"})),
+     "main changed"),
+    (lambda w: w.tags.append(TAG), "the tag v"),
+])
+def test_a_pull_request_s_check_notes_what_only_main_s_state_decides(world, tmp_path, setup, why):
+    setup(world)
+    with pytest.raises(rel.Refused, match=why):
+        staged(world, tmp_path)
+    world.calls.clear()
+    out = staged(world, tmp_path / "pr", strict=False)
+    assert (out / MSI).is_file() and len(world.noted) == 1 and why in world.noted[0]
+    assert world.writes() == []
+
+
+def test_a_pull_request_s_check_still_refuses_an_artifact_that_is_not_the_msi(world, tmp_path):
+    world.artifact[MSI] = b"PK" + msi_bytes()[2:]
+    with pytest.raises(rel.Refused, match="does not start"):
+        staged(world, tmp_path, strict=False)
+
+
+STAGED = {"tag": TAG, "msi": MSI, "size": 1, "sha256": "0" * 64, "target": RUN_SHA, "run_url": RUN_URL,
+          "html_url": "https://example.test/r"}
+
+
+@pytest.fixture
+def main_env(monkeypatch):
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPO)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    for name, value in DISPATCH.items():
+        monkeypatch.setenv(name, value)
+    return monkeypatch
+
+
+def test_main_s_gather_is_lenient_only_for_a_pull_request(main_env, tmp_path):
+    seen = []
+
+    def fake_gather(out, repo, strict):
+        seen.append(strict)
+        return STAGED, []
+    main_env.setattr(rel, "gather", fake_gather)
+    for event in ("pull_request", "workflow_dispatch", "push", ""):
+        main_env.setenv("GITHUB_EVENT_NAME", event)
+        assert rel.main(["gather", str(tmp_path / "release")]) == 0
+    assert seen == [False, True, True, True]
+
+
+@pytest.mark.parametrize("step", ["gather", "create"])
+def test_main_exits_1_on_a_refusal_and_0_once_done(main_env, tmp_path, step):
+    def refused(*args, **kwargs):
+        raise rel.Refused("the artifact is not the MSI to release")
+    main_env.setattr(rel, step, refused)
+    assert rel.main([step, str(tmp_path / "a")]) == 1
+    main_env.setattr(rel, step, lambda *a, **k: (STAGED, []) if step == "gather" else STAGED)
+    assert rel.main([step, str(tmp_path / "b")]) == 0
 
 
 def test_a_tag_that_only_starts_like_the_version_is_not_taken(world, tmp_path):
@@ -318,17 +428,74 @@ def test_create_makes_a_draft_pre_release_at_the_run_s_commit_and_reads_it_back(
 
 
 @pytest.mark.parametrize("tamper, why", [
-    ({"draft": False}, "draft"),
     ({"prerelease": False}, "prerelease"),
-    ({"target_commitish": "main"}, "target_commitish"),
     ({"name": "other"}, "its name"),
 ])
 def test_a_draft_that_reads_back_wrong_is_deleted(world, tmp_path, tamper, why):
     out = staged(world, tmp_path)
     world.tamper = tamper
-    with pytest.raises(rel.Refused, match=f"deleted.*{why}"):
+    with pytest.raises(rel.Refused, match=f"{why}.*the draft was deleted"):
         rel.create(out, REPO, gh=world)
     assert world.deleted == [41]
+
+
+@pytest.mark.parametrize("tamper, why", [
+    ({"draft": False}, "its draft is False"),
+    ({"target_commitish": "main"}, "its target_commitish is 'main'"),
+])
+def test_a_release_that_is_not_a_draft_at_the_run_s_commit_is_named_and_never_deleted(world, tmp_path, tamper, why):
+    out = staged(world, tmp_path)
+    world.tamper = tamper
+    with pytest.raises(rel.Refused, match=f"{why}.*left as they are"):
+        rel.create(out, REPO, gh=world)
+    assert world.deleted == []
+
+
+def test_a_draft_the_owner_publishes_during_the_readback_is_never_deleted(world, tmp_path):
+    out = staged(world, tmp_path)
+    world.published_meanwhile = True
+    with pytest.raises(rel.Refused, match="not private.*left as they are.*tag .* exists and was left"):
+        rel.create(out, REPO, gh=world)
+    assert world.deleted == [] and world.tags == [TAG] and world.writes()[-1][:2] == ["release", "create"]
+
+
+def test_two_releases_with_the_tag_after_the_create_are_both_left(world, tmp_path):
+    out = staged(world, tmp_path)
+    world.twin_on_create = True
+    with pytest.raises(rel.Refused, match="2 releases have the tag.*2 releases with the tag .* left as they are"):
+        rel.create(out, REPO, gh=world)
+    assert world.deleted == []
+
+
+def test_a_draft_whose_upload_failed_is_deleted(world, tmp_path):
+    out = staged(world, tmp_path)
+    world.upload_fails = True
+    with pytest.raises(rel.Refused, match="upload failed; the draft was deleted"):
+        rel.create(out, REPO, gh=world)
+    assert world.deleted == [41]
+
+
+def test_a_draft_whose_readback_download_failed_is_deleted(world, tmp_path):
+    out = staged(world, tmp_path)
+    world.fail_asset_download = True
+    with pytest.raises(rel.Refused, match="was stopped; the draft was deleted"):
+        rel.create(out, REPO, gh=world)
+    assert world.deleted == [41]
+
+
+def test_a_failed_cleanup_says_where_to_look(world, tmp_path):
+    out = staged(world, tmp_path)
+    world.upload_fails = True
+    real = world.api
+
+    def no_list(args):
+        if args[0] == "--paginate" and world.made is not None:
+            raise rel.Refused("`gh api --paginate ...` failed with exit code 1: HTTP 502")
+        return real(args)
+    world.api = no_list
+    with pytest.raises(rel.Refused, match="upload failed; looking for what it left failed too.*releases page"):
+        rel.create(out, REPO, gh=world)
+    assert world.deleted == []
 
 
 def test_a_draft_whose_msi_downloads_different_is_deleted(world, tmp_path):
@@ -336,6 +503,15 @@ def test_a_draft_whose_msi_downloads_different_is_deleted(world, tmp_path):
     world.tamper = {"assets": [{"id": 50, "name": MSI, "data": msi_bytes() + b"x"},
                                {"id": 51, "name": rel.SUMS, "data": (out / rel.SUMS).read_bytes()}]}
     with pytest.raises(rel.Refused, match=f"the {MSI} downloaded from it"):
+        rel.create(out, REPO, gh=world)
+    assert world.deleted == [41]
+
+
+def test_a_draft_whose_sums_download_different_is_deleted(world, tmp_path):
+    out = staged(world, tmp_path)
+    world.tamper = {"assets": [{"id": 50, "name": MSI, "data": (out / MSI).read_bytes()},
+                               {"id": 51, "name": rel.SUMS, "data": b"0" * 64 + f"  {MSI}\n".encode()}]}
+    with pytest.raises(rel.Refused, match=f"the {rel.SUMS} downloaded from it.*the draft was deleted"):
         rel.create(out, REPO, gh=world)
     assert world.deleted == [41]
 
@@ -350,21 +526,12 @@ def test_a_draft_with_another_asset_is_deleted(world, tmp_path):
     assert world.deleted == [41]
 
 
-def test_a_draft_that_made_its_tag_is_deleted_with_the_tag(world, tmp_path):
+def test_a_draft_that_made_its_tag_is_deleted_and_the_tag_named_but_kept(world, tmp_path):
     out = staged(world, tmp_path)
     world.tag_on_create = True
-    with pytest.raises(rel.Refused, match="not private"):
+    with pytest.raises(rel.Refused, match="not private.*the draft was deleted; the tag .* exists and was left"):
         rel.create(out, REPO, gh=world)
-    assert world.deleted == [41] and world.tags == []
-
-
-def test_a_draft_deleted_for_another_reason_leaves_the_tags_alone(world, tmp_path):
-    out = staged(world, tmp_path)
-    world.tags.append(f"{TAG}-other")
-    world.tamper = {"draft": False}
-    with pytest.raises(rel.Refused, match="deleted"):
-        rel.create(out, REPO, gh=world)
-    assert world.deleted == [41] and world.tags == [f"{TAG}-other"]
+    assert world.deleted == [41] and world.tags == [TAG]
     assert not any("git/refs" in " ".join(c) for c in world.writes())
 
 
@@ -456,6 +623,29 @@ def test_only_the_draft_job_may_write_and_only_in_a_dispatch_of_main():
     assert ("    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'\n") in draft
     assert "release.py create" not in check and "release.py gather" not in draft
     assert len(re.findall(r"release\.py create", text)) == 1 and len(re.findall(r"release\.py gather", text)) == 1
+
+
+def test_the_jobs_run_the_runner_s_own_python_and_only_github_s_own_actions():
+    text = code(workflow())
+    for name in ("check", "draft"):
+        owners = re.findall(r"uses: ([\w.-]+)/", job(text, name))
+        assert owners and set(owners) == {"actions"}, f"the {name} job runs an action not GitHub's own: {owners}"
+    runs = re.findall(r'^        run: python3 -I scripts/release\.py (\w+) "\$RUNNER_TEMP/release"$', text, re.M)
+    assert runs == ["gather", "create"]
+
+
+def test_run_gh_gives_the_msi_s_moves_the_long_timeout_and_turns_a_timeout_into_a_refusal(monkeypatch):
+    seen = []
+
+    def fake_run(argv, capture_output, timeout):
+        seen.append((argv[1:3], timeout))
+        raise rel.subprocess.TimeoutExpired(argv, timeout)
+    monkeypatch.setattr(rel, "_run", fake_run)
+    for args in (["run", "download", "7"], ["release", "create", TAG],
+                 ["api", "-H", "Accept: application/octet-stream", "repos/x/y/releases/assets/1"], ["run", "list"]):
+        with pytest.raises(rel.Refused, match="was stopped"):
+            rel.run_gh(args)
+    assert [t for _, t in seen] == [rel.DOWNLOAD_TIMEOUT_S] * 3 + [rel.GH_TIMEOUT_S]
 
 
 def test_every_action_is_pinned_and_no_event_text_reaches_a_shell():

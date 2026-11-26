@@ -52,7 +52,7 @@ def filter_paths(text: str) -> list[str]:
 def run_scripts(text: str) -> list[str]:
     """The repo scripts a workflow's steps run with python, comments left out."""
     code = "\n".join(line.split(" #")[0] for line in text.splitlines() if not line.lstrip().startswith("#"))
-    return sorted(set(re.findall(r"\bpython (scripts/[\w./-]+\.py)\b", code)))
+    return sorted(set(re.findall(r"\bpython3?(?: -I)? (scripts/[\w./-]+\.py)\b", code)))
 
 
 def glob_re(pattern: str) -> re.Pattern:
@@ -197,6 +197,7 @@ def test_filter_patterns_match_as_github_reads_them():
 def test_the_workflow_readers_take_the_paths_and_the_scripts():
     text = ('on:\n  pull_request:\n    paths:\n      - "a.yml"\n      # why\n      - "s/**"\n\njobs:\n'
             '      - run: uv run --no-sync python scripts/x.py --ci\n      # run: python scripts/no.py\n'
-            '      - run: uv run python scripts/y/z.py  # python scripts/not.py\n')
+            '      - run: uv run python scripts/y/z.py  # python scripts/not.py\n'
+            '        run: python3 -I scripts/w.py gather "$X"\n')
     assert filter_paths(text) == ["a.yml", "s/**"]
-    assert run_scripts(text) == ["scripts/x.py", "scripts/y/z.py"]
+    assert run_scripts(text) == ["scripts/w.py", "scripts/x.py", "scripts/y/z.py"]

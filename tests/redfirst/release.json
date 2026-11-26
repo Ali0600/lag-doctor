@@ -54,9 +54,18 @@
   ]
  },
  {
+  "name": "a compare without its file list passes",
+  "file": "scripts/release.py",
+  "old": "    if not isinstance(files, list) or not isinstance(commits, int):\n",
+  "new": "    if False:\n",
+  "tests": [
+   "tests/test_release.py::test_gather_refuses_a_compare_that_lists_no_files"
+  ]
+ },
+ {
   "name": "a cut-short compare passes",
   "file": "scripts/release.py",
-  "old": "    if len(files) >= COMPARE_MAX_FILES or int(compare.get(\"total_commits\", 0)) >= COMPARE_MAX_COMMITS:\n",
+  "old": "    if len(files) >= COMPARE_MAX_FILES or commits >= COMPARE_MAX_COMMITS:\n",
   "new": "    if False:\n",
   "tests": [
    "tests/test_release.py::test_a_compare_that_cannot_show_main_s_changes_refuses"
@@ -110,17 +119,72 @@
  {
   "name": "main's later code changes pass",
   "file": "scripts/release.py",
-  "old": "        if code:\n            raise Refused(f\"main changed",
-  "new": "        if False:\n            raise Refused(f\"main changed",
+  "old": "        if code:\n            refuse(f\"main changed",
+  "new": "        if False:\n            refuse(f\"main changed",
   "tests": [
    "tests/test_release.py::test_gather_refuses_when_main_changed_code_after_the_run"
   ]
  },
  {
+  "name": "the version is read from the checkout",
+  "file": "scripts/release.py",
+  "old": "    version = project_version(file_at(gh, repo, \"pyproject.toml\", sha))\n",
+  "new": "    version = project_version((ROOT / \"pyproject.toml\").read_text(encoding=\"utf-8\"))\n",
+  "tests": [
+   "tests/test_release.py::test_gather_judges_the_artifact_by_main_s_files_at_the_run_s_commit_not_the_checkout"
+  ]
+ },
+ {
+  "name": "the installer is read at another commit",
+  "file": "scripts/release.py",
+  "old": "    code = upgrade_code(file_at(gh, repo, \"installer/lag-doctor.wxs\", sha))\n",
+  "new": "    code = upgrade_code(file_at(gh, repo, \"installer/lag-doctor.wxs\", \"f\" * 40))\n",
+  "tests": [
+   "tests/test_release.py::test_gather_judges_the_artifact_by_main_s_files_at_the_run_s_commit_not_the_checkout"
+  ]
+ },
+ {
+  "name": "a strict gather notes instead of refusing",
+  "file": "scripts/release.py",
+  "old": "        if strict:\n            raise Refused(why)\n",
+  "new": "        if False:\n            raise Refused(why)\n",
+  "tests": [
+   "tests/test_release.py::test_a_pull_request_s_check_notes_what_only_main_s_state_decides",
+   "tests/test_release.py::test_gather_refuses_when_main_changed_code_after_the_run"
+  ]
+ },
+ {
+  "name": "a lenient gather keeps main's unfinished run",
+  "file": "scripts/release.py",
+  "old": "        run = newest_run(gh_json(gh, runs + [\"--status\", \"success\"]))\n",
+  "new": "        run = newest_run(gh_json(gh, runs))\n",
+  "tests": [
+   "tests/test_release.py::test_a_pull_request_s_check_notes_what_only_main_s_state_decides"
+  ]
+ },
+ {
+  "name": "a push's gather is lenient",
+  "file": "scripts/release.py",
+  "old": "            f, noted = gather(Path(args.out), repo, strict=os.environ.get(\"GITHUB_EVENT_NAME\") != \"pull_request\")\n",
+  "new": "            f, noted = gather(Path(args.out), repo, strict=os.environ.get(\"GITHUB_EVENT_NAME\") not in (\"pull_request\", \"push\"))\n",
+  "tests": [
+   "tests/test_release.py::test_main_s_gather_is_lenient_only_for_a_pull_request"
+  ]
+ },
+ {
+  "name": "a pull request's gather is strict",
+  "file": "scripts/release.py",
+  "old": "            f, noted = gather(Path(args.out), repo, strict=os.environ.get(\"GITHUB_EVENT_NAME\") != \"pull_request\")\n",
+  "new": "            f, noted = gather(Path(args.out), repo, strict=True)\n",
+  "tests": [
+   "tests/test_release.py::test_main_s_gather_is_lenient_only_for_a_pull_request"
+  ]
+ },
+ {
   "name": "a version whose release or tag exists is gathered",
   "file": "scripts/release.py",
-  "old": "    problems = taken(gh, repo, tag)\n    if problems:\n        raise Refused(\"; \".join(problems) + f\": raise",
-  "new": "    problems = taken(gh, repo, tag)\n    if False:\n        raise Refused(\"; \".join(problems) + f\": raise",
+  "old": "    problems = taken(gh, repo, tag)\n    if problems:\n        refuse(",
+  "new": "    problems = taken(gh, repo, tag)\n    if False:\n        refuse(",
   "tests": [
    "tests/test_release.py::test_gather_refuses_a_version_whose_release_or_tag_exists"
   ]
@@ -194,7 +258,8 @@
   "old": "    if head != OLE_MAGIC:\n",
   "new": "    if False:\n",
   "tests": [
-   "tests/test_release.py::test_an_artifact_that_is_not_the_msi_to_release_refuses"
+   "tests/test_release.py::test_an_artifact_that_is_not_the_msi_to_release_refuses",
+   "tests/test_release.py::test_a_pull_request_s_check_still_refuses_an_artifact_that_is_not_the_msi"
   ]
  },
  {
@@ -213,6 +278,24 @@
   "new": "    return f\"{digest} {name}\\n\"\n",
   "tests": [
    "tests/test_release.py::test_gather_stages_the_tested_msi_with_its_hash_and_notes_and_writes_nothing_on_github"
+  ]
+ },
+ {
+  "name": "the asset's download gets the short timeout",
+  "file": "scripts/release.py",
+  "old": "    return args[:2] in ([\"run\", \"download\"], [\"release\", \"create\"]) or \"Accept: application/octet-stream\" in args\n",
+  "new": "    return args[:2] in ([\"run\", \"download\"], [\"release\", \"create\"])\n",
+  "tests": [
+   "tests/test_release.py::test_run_gh_gives_the_msi_s_moves_the_long_timeout_and_turns_a_timeout_into_a_refusal"
+  ]
+ },
+ {
+  "name": "a timeout escapes as a crash",
+  "file": "scripts/release.py",
+  "old": "    except subprocess.TimeoutExpired:\n        raise Refused(",
+  "new": "    except ZeroDivisionError:\n        raise Refused(",
+  "tests": [
+   "tests/test_release.py::test_run_gh_gives_the_msi_s_moves_the_long_timeout_and_turns_a_timeout_into_a_refusal"
   ]
  },
  {
@@ -261,6 +344,15 @@
   ]
  },
  {
+  "name": "a refusal exits 0",
+  "file": "scripts/release.py",
+  "old": "        print(f\"The release was refused: {exc}\", file=sys.stderr)\n        return 1\n",
+  "new": "        print(f\"The release was refused: {exc}\", file=sys.stderr)\n        return 0\n",
+  "tests": [
+   "tests/test_release.py::test_main_exits_1_on_a_refusal_and_0_once_done"
+  ]
+ },
+ {
   "name": "a staged MSI that changed is released",
   "file": "scripts/release.py",
   "old": "    if not msi.is_file() or sha256_file(msi) != facts.get(\"sha256\"):\n",
@@ -302,7 +394,8 @@
   "old": "    problems = taken(gh, repo, tag)\n    if problems:\n        raise Refused(\"; \".join(problems))\n",
   "new": "    problems = taken(gh, repo, tag)\n    if False:\n        raise Refused(\"; \".join(problems))\n",
   "tests": [
-   "tests/test_release.py::test_create_refuses_a_tag_a_draft_took_since_the_gather"
+   "tests/test_release.py::test_create_refuses_a_tag_a_draft_took_since_the_gather",
+   "tests/test_release.py::test_a_draft_holding_the_tag_passes_the_check_job_and_the_draft_job_refuses_it"
   ]
  },
  {
@@ -317,8 +410,8 @@
  {
   "name": "the release is no pre-release",
   "file": "scripts/release.py",
-  "old": "        \"--prerelease\", \"--latest=false\", \"--target\",",
-  "new": "        \"--latest=false\", \"--target\",",
+  "old": "            \"--prerelease\", \"--latest=false\", \"--target\",",
+  "new": "            \"--latest=false\", \"--target\",",
   "tests": [
    "tests/test_release.py::test_create_makes_a_draft_pre_release_at_the_run_s_commit_and_reads_it_back"
   ]
@@ -326,8 +419,8 @@
  {
   "name": "the release may become Latest",
   "file": "scripts/release.py",
-  "old": "        \"--prerelease\", \"--latest=false\", \"--target\",",
-  "new": "        \"--prerelease\", \"--target\",",
+  "old": "            \"--prerelease\", \"--latest=false\", \"--target\",",
+  "new": "            \"--prerelease\", \"--target\",",
   "tests": [
    "tests/test_release.py::test_create_makes_a_draft_pre_release_at_the_run_s_commit_and_reads_it_back"
   ]
@@ -338,7 +431,7 @@
   "old": "                for k, v in ((\"tag_name\", facts[\"tag\"]), (\"name\", facts[\"title\"]), (\"draft\", True),\n",
   "new": "                for k, v in ((\"tag_name\", facts[\"tag\"]), (\"name\", facts[\"title\"]),\n",
   "tests": [
-   "tests/test_release.py::test_a_draft_that_reads_back_wrong_is_deleted"
+   "tests/test_release.py::test_a_release_that_is_not_a_draft_at_the_run_s_commit_is_named_and_never_deleted"
   ]
  },
  {
@@ -347,7 +440,16 @@
   "old": "                             (\"prerelease\", True), (\"target_commitish\", facts[\"target\"]))\n",
   "new": "                             (\"prerelease\", True))\n",
   "tests": [
-   "tests/test_release.py::test_a_draft_that_reads_back_wrong_is_deleted"
+   "tests/test_release.py::test_a_release_that_is_not_a_draft_at_the_run_s_commit_is_named_and_never_deleted"
+  ]
+ },
+ {
+  "name": "the readback takes two releases with the tag",
+  "file": "scripts/release.py",
+  "old": "        if len(found) != 1:\n            raise Refused(f\"{len(found)} releases have the tag",
+  "new": "        if not found:\n            raise Refused(f\"{len(found)} releases have the tag",
+  "tests": [
+   "tests/test_release.py::test_two_releases_with_the_tag_after_the_create_are_both_left"
   ]
  },
  {
@@ -369,40 +471,88 @@
   ]
  },
  {
+  "name": "the readback never compares the SHA256SUMS it downloads",
+  "file": "scripts/release.py",
+  "old": "    if assets.get(SUMS) != sums_text(facts[\"sha256\"], facts[\"msi\"]).encode(\"ascii\"):\n",
+  "new": "    if False:\n",
+  "tests": [
+   "tests/test_release.py::test_a_draft_whose_sums_download_different_is_deleted"
+  ]
+ },
+ {
   "name": "the readback never looks for the tag",
   "file": "scripts/release.py",
-  "old": "    if made_tag:\n        problems.append",
-  "new": "    if False:\n        problems.append",
+  "old": "        if tag_exists(gh, repo, tag):           # absent just before the create\n",
+  "new": "        if False:\n",
   "tests": [
-   "tests/test_release.py::test_a_draft_that_made_its_tag_is_deleted_with_the_tag"
+   "tests/test_release.py::test_a_draft_that_made_its_tag_is_deleted_and_the_tag_named_but_kept",
+   "tests/test_release.py::test_a_draft_the_owner_publishes_during_the_readback_is_never_deleted"
+  ]
+ },
+ {
+  "name": "a failure after the create leaves its draft",
+  "file": "scripts/release.py",
+  "old": "    except Refused as exc:\n        raise Refused(f\"{exc}; {remove_draft(gh, repo, tag, facts['target'])}\") from None\n",
+  "new": "    except ZeroDivisionError:\n        raise\n",
+  "tests": [
+   "tests/test_release.py::test_a_draft_whose_upload_failed_is_deleted",
+   "tests/test_release.py::test_a_draft_whose_readback_download_failed_is_deleted"
   ]
  },
  {
   "name": "a draft that reads back wrong is kept",
   "file": "scripts/release.py",
-  "old": "        gh([\"api\", \"-X\", \"DELETE\", f\"repos/{repo}/releases/{int(release['id'])}\"])\n",
-  "new": "        pass\n",
+  "old": "            gh([\"api\", \"-X\", \"DELETE\", f\"repos/{repo}/releases/{int(found[0]['id'])}\"])\n",
+  "new": "            pass\n",
   "tests": [
    "tests/test_release.py::test_a_draft_that_reads_back_wrong_is_deleted",
-   "tests/test_release.py::test_a_draft_that_made_its_tag_is_deleted_with_the_tag"
+   "tests/test_release.py::test_a_draft_whose_upload_failed_is_deleted"
   ]
  },
  {
-  "name": "a tag the draft made is left behind",
+  "name": "a published release is deleted",
   "file": "scripts/release.py",
-  "old": "        if made_tag:\n            gh([\"api\", \"-X\", \"DELETE\", f\"repos/{repo}/git/refs/tags/{tag}\"])\n",
-  "new": "        if False:\n            gh([\"api\", \"-X\", \"DELETE\", f\"repos/{repo}/git/refs/tags/{tag}\"])\n",
+  "old": "        if len(found) == 1 and found[0].get(\"draft\") is True and found[0].get(\"target_commitish\") == target:\n",
+  "new": "        if len(found) == 1 and found[0].get(\"target_commitish\") == target:\n",
   "tests": [
-   "tests/test_release.py::test_a_draft_that_made_its_tag_is_deleted_with_the_tag"
+   "tests/test_release.py::test_a_draft_the_owner_publishes_during_the_readback_is_never_deleted",
+   "tests/test_release.py::test_a_release_that_is_not_a_draft_at_the_run_s_commit_is_named_and_never_deleted"
   ]
  },
  {
-  "name": "every deleted draft takes its tag",
+  "name": "a draft at another commit is deleted",
   "file": "scripts/release.py",
-  "old": "        if made_tag:\n            gh([\"api\", \"-X\", \"DELETE\", f\"repos/{repo}/git/refs/tags/{tag}\"])\n",
-  "new": "        if True:\n            gh([\"api\", \"-X\", \"DELETE\", f\"repos/{repo}/git/refs/tags/{tag}\"])\n",
+  "old": "        if len(found) == 1 and found[0].get(\"draft\") is True and found[0].get(\"target_commitish\") == target:\n",
+  "new": "        if len(found) == 1 and found[0].get(\"draft\") is True:\n",
   "tests": [
-   "tests/test_release.py::test_a_draft_deleted_for_another_reason_leaves_the_tags_alone"
+   "tests/test_release.py::test_a_release_that_is_not_a_draft_at_the_run_s_commit_is_named_and_never_deleted"
+  ]
+ },
+ {
+  "name": "one of two releases with the tag is deleted",
+  "file": "scripts/release.py",
+  "old": "        if len(found) == 1 and found[0].get(\"draft\") is True and found[0].get(\"target_commitish\") == target:\n",
+  "new": "        if found and found[0].get(\"draft\") is True and found[0].get(\"target_commitish\") == target:\n",
+  "tests": [
+   "tests/test_release.py::test_two_releases_with_the_tag_after_the_create_are_both_left"
+  ]
+ },
+ {
+  "name": "a tag left behind is not named",
+  "file": "scripts/release.py",
+  "old": "        if tag_exists(gh, repo, tag):\n            said +=",
+  "new": "        if False:\n            said +=",
+  "tests": [
+   "tests/test_release.py::test_a_draft_that_made_its_tag_is_deleted_and_the_tag_named_but_kept"
+  ]
+ },
+ {
+  "name": "a failed cleanup crashes the job",
+  "file": "scripts/release.py",
+  "old": "    except Refused as exc:\n        return f\"looking for",
+  "new": "    except ZeroDivisionError as exc:\n        return f\"looking for",
+  "tests": [
+   "tests/test_release.py::test_a_failed_cleanup_says_where_to_look"
   ]
  },
  {
@@ -444,8 +594,8 @@
  {
   "name": "the check job also creates",
   "file": ".github/workflows/release.yml",
-  "old": "        run: uv run --no-project python scripts/release.py gather \"$RUNNER_TEMP/release\"\n",
-  "new": "        run: uv run --no-project python scripts/release.py gather \"$RUNNER_TEMP/release\" && uv run --no-project python scripts/release.py create \"$RUNNER_TEMP/release\"\n",
+  "old": "        run: python3 -I scripts/release.py gather \"$RUNNER_TEMP/release\"\n",
+  "new": "        run: python3 -I scripts/release.py gather \"$RUNNER_TEMP/release\" && python3 -I scripts/release.py create \"$RUNNER_TEMP/release\"\n",
   "tests": [
    "tests/test_release.py::test_only_the_draft_job_may_write_and_only_in_a_dispatch_of_main"
   ]
@@ -469,10 +619,19 @@
   ]
  },
  {
+  "name": "the draft job sets up uv beside its write token",
+  "file": ".github/workflows/release.yml",
+  "old": "      - name: The staged release\n",
+  "new": "      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3\n      - name: The staged release\n",
+  "tests": [
+   "tests/test_release.py::test_the_jobs_run_the_runner_s_own_python_and_only_github_s_own_actions"
+  ]
+ },
+ {
   "name": "a checkout keeps its credentials",
   "file": ".github/workflows/release.yml",
-  "old": "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3\n        with:\n          version: \"0.10.4\"\n          python-version: \"3.13\"\n      - name: The staged release\n",
-  "new": "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3\n        with:\n          version: \"0.10.4\"\n          python-version: \"3.13\"\n      - name: The staged release\n",
+  "old": "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - name: The staged release\n",
+  "new": "      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n      - name: The staged release\n",
   "tests": [
    "tests/test_release.py::test_every_action_is_pinned_and_no_event_text_reaches_a_shell"
   ]
@@ -493,6 +652,15 @@
   "new": "SIDE = (\"experiments.yml\", \"webview-spike.yml\")\n",
   "tests": [
    "tests/test_side_workflows.py::test_every_workflow_whose_pull_requests_are_filtered_by_path_is_checked_here"
+  ]
+ },
+ {
+  "name": "a python3 -I step is not read as one",
+  "file": "tests/test_side_workflows.py",
+  "old": "    return sorted(set(re.findall(r\"\\bpython3?(?: -I)? (scripts/[\\w./-]+\\.py)\\b\", code)))\n",
+  "new": "    return sorted(set(re.findall(r\"\\bpython (scripts/[\\w./-]+\\.py)\\b\", code)))\n",
+  "tests": [
+   "tests/test_side_workflows.py::test_the_workflow_readers_take_the_paths_and_the_scripts"
   ]
  }
 ]

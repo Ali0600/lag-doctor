@@ -320,16 +320,22 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
 - **A release is a draft that the owner publishes** (`.github/workflows/release.yml`, `scripts/release.py`,
   `docs/INSTALLER-PLAN.md` Stage 5). Nothing is built there: the MSI is the `lag-doctor-msi` artifact of main's newest
   ci.yml push run, which must have passed with only paths-ignore paths changed on `main` since, so WiX's EULA stays
-  accepted in ci.yml alone. `release.py create` runs only in a workflow_dispatch run of `main` on GitHub's runner (exit
-  2 anywhere else), in the one job whose token may write (`tests/test_release.py` holds the triggers and each job's
-  rights). It makes a draft pre-release at the run's commit, reads it back by downloading the MSI again, checks that
-  the tag does not exist yet (GitHub makes it when the draft is published), and deletes a draft that reads back
-  wrong. An agent starts the workflow only when the owner asks for a draft, and never publishes or edits a release,
-  pushes a `v*` tag or changes the repository's release settings (release immutability among them): a published
-  release and its tag are public. A new release needs `pyproject.toml`'s version raised, since a version whose tag or
-  release exists is refused. A pull request that changes the release, or what `release.py` imports, runs its check
-  job only (its `paths:`, which `tests/test_side_workflows.py` keeps whole), with a read-only token, on main's real
-  newest run. The tests drive a made-up GitHub behind `release.py`'s `gh` seam and never call the real `gh`.
+  accepted in ci.yml alone; it is judged against main's own files at that run's commit, read through the API, never
+  the checkout's. `release.py create` runs only in a workflow_dispatch run of `main` on GitHub's runner (exit 2
+  anywhere else), in the one job whose token may write, which runs the runner's own `python3` and no action but
+  GitHub's (`tests/test_release.py` holds the triggers, each job's rights and its actions). It makes a draft
+  pre-release at the run's commit, reads it back by downloading the MSI again, and checks that the tag does not exist
+  yet (GitHub makes it when the draft is published). Whatever fails once the create has started, it deletes the
+  release only while it is the tag's one release and still a draft at that commit, and never deletes a tag; a draft
+  it could not delete is named in the job's error, for the owner to delete, not worked around by raising the version.
+  An agent starts the workflow only when the owner asks for a draft, and never publishes or edits a release, pushes a
+  `v*` tag or changes the repository's release settings (release immutability among them): a published release and
+  its tag are public. A new release needs `pyproject.toml`'s version raised, since a version whose tag or release
+  exists is refused. A pull request that changes the release, or what `release.py` imports, runs its check job only
+  (its `paths:`, which `tests/test_side_workflows.py` keeps whole), with a read-only token that sees no draft, on
+  main's real newest run that passed: what only main's state decides (its newest run unfinished, code on main since,
+  the tag taken) is a note in the job's summary there, not a failure. The tests drive a made-up GitHub behind
+  `release.py`'s `gh` seam and never call the real `gh`.
 - **`watch --control stdio` is lag-doctor's window's** (`lagdoctor/control.py`, DESIGN.md "The control channel"). Its
   stdout is the channel, so nothing but `Channel` may write there: `serve` points stdout at stderr before anything
   else runs, and a new message or field goes through `control.from_app` or `from_recorder` with its checks. An agent

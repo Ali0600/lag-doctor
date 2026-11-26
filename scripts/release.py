@@ -1,20 +1,22 @@
 """Stage 5's preview release (docs/INSTALLER-PLAN.md): the MSI main's CI checked, on a DRAFT GitHub Release.
 
-Usage:  uv run --no-project python scripts/release.py gather OUT_DIR
-        uv run --no-project python scripts/release.py create OUT_DIR
+Usage:  python3 -I scripts/release.py gather OUT_DIR       (on GitHub's runner, with its own Python: stdlib only)
+        python3 -I scripts/release.py create OUT_DIR
 
 Nothing is built here. `gather` takes main's newest CI run (.github/workflows/ci.yml): it must be a push run that
 concluded success, and every commit on main after it may change only what ci.yml's push trigger ignores, so the MSI
 it built, installed, ran and uninstalled (the msi job) is main's code. It downloads that run's `lag-doctor-msi`
-artifact, checks it (one MSI, named and versioned as its payload.json and pyproject.toml say, lag-doctor's upgrade
-code), refuses a version whose tag or release exists, hashes the MSI and writes OUT_DIR: the MSI, SHA256SUMS,
-notes.md and release.json. A pull request that changes the release runs it with a read-only token.
+artifact, checks it against main's own files at the run's commit (one MSI, named and versioned as its payload.json
+and pyproject.toml say, lag-doctor's upgrade code), refuses a version whose tag or release exists, hashes the MSI and
+writes OUT_DIR: the MSI, SHA256SUMS, notes.md and release.json. A pull request that changes the release runs it with
+a read-only token, which sees no draft, and with what only main's state decides noted rather than refused.
 
 `create` makes the draft from OUT_DIR, and only on GitHub's runner in a run dispatched on main
 (.github/workflows/release.yml's draft job, the one with a token that may write): the tag v<version> at that commit,
 marked a pre-release, the MSI and SHA256SUMS as its assets. It reads the draft back, downloads the MSI from it and
 compares the hash, and checks the tag does not exist yet: a draft is seen only by those who may push, and GitHub
-creates its tag when someone publishes it. Publishing is the owner's. A draft that reads back wrong is deleted.
+creates its tag when someone publishes it. Publishing is the owner's. If anything fails once the create has started,
+the draft is deleted while it is still a draft; a tag is never deleted.
 
 Exit codes: 0 done; 1 a check refused the release; 2 refused to start (not on GitHub's runner, not a dispatch of main).
 """
@@ -58,19 +60,31 @@ DOWNLOAD_TIMEOUT_S = 600
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 REPO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/(?!\.\.?$)[A-Za-z0-9_.-]+")   # an owner, then a name (not . or ..)
 VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+RAW = "Accept: application/vnd.github.raw+json"          # the contents API's media type for a file's own bytes
 
 Gh = Callable[[list[str]], bytes]
+_run = subprocess.run                                    # run_gh's own seam, so a test never patches subprocess itself
 
 
 class Refused(Exception):
-    """A check refused the release; nothing was made."""
+    """A check refused the release, or a gh call failed; the message says what, if anything, was left."""
 
 
 # ------------------------------------------------------------------------------------------------- gh ---
 
-def run_gh(args: list[str], timeout_s: float = GH_TIMEOUT_S) -> bytes:
-    """`gh` with these arguments (no shell); its stdout, or Refused naming the command and its stderr."""
-    p = subprocess.run(["gh", *args], capture_output=True, timeout=timeout_s)
+def slow(args: list[str]) -> bool:
+    """The gh calls that move the MSI: the artifact's download, the draft's upload, and the asset's download."""
+    return args[:2] in (["run", "download"], ["release", "create"]) or "Accept: application/octet-stream" in args
+
+
+def run_gh(args: list[str]) -> bytes:
+    """`gh` with these arguments (no shell); its stdout, or Refused naming the command and its stderr (or its
+    timeout, past which it is killed)."""
+    timeout_s = DOWNLOAD_TIMEOUT_S if slow(args) else GH_TIMEOUT_S
+    try:
+        p = _run(["gh", *args], capture_output=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        raise Refused(f"`gh {' '.join(args[:3])} ...` took over {timeout_s} s and was stopped") from None
     if p.returncode != 0:
         err = p.stderr.decode("utf-8", "replace").strip()[-400:]
         raise Refused(f"`gh {' '.join(args[:3])} ...` failed with exit code {p.returncode}: {err}")
@@ -121,8 +135,10 @@ def later_code(compare: dict, patterns: list[str]) -> list[str]:
     """The files main changed after the run's commit that ci.yml's push trigger does not ignore (none may be)."""
     if compare.get("status") not in ("ahead", "identical") or compare.get("behind_by"):
         raise Refused(f"main is not ahead of the run's commit (GitHub says {compare.get('status')!r})")
-    files = compare.get("files") or []
-    if len(files) >= COMPARE_MAX_FILES or int(compare.get("total_commits", 0)) >= COMPARE_MAX_COMMITS:
+    files, commits = compare.get("files"), compare.get("total_commits")
+    if not isinstance(files, list) or not isinstance(commits, int):
+        raise Refused("GitHub's compare of the run's commit and main lists no files or no commit count")
+    if len(files) >= COMPARE_MAX_FILES or commits >= COMPARE_MAX_COMMITS:
         raise Refused("main changed too much after the run's commit for GitHub to list it all: let CI run on main")
     out = []
     for f in files:
@@ -218,7 +234,7 @@ def notes(version: str, msi: str, digest: str, sha: str, run_url: str, repo: str
     readme = f"https://github.com/{repo}/blob/{sha}/README.md"
     return f"""**A preview, and not signed yet.** lag-doctor {version} for 64-bit Windows 11 (Windows 10 is not tried \
 yet): the MSI that CI built from commit `{sha[:12]}` and then installed, ran and uninstalled on GitHub's runner \
-([that run]({run_url})).
+([that run]({run_url}), kept for 90 days).
 
 ## Install
 
@@ -240,15 +256,17 @@ so Windows treats it as an app from an unknown publisher:
 
 - **SmartScreen** may say "Windows protected your PC" when you open the download. Choose **More info**, then **Run \
 anyway**. Its trust in an unsigned file is per file, so each new release starts again.
-- **The UAC prompt** is yellow and gives the publisher as **Unknown**. The hash in step 2, not the prompt, is what \
-says this is the file CI checked.
+- **The UAC prompt** is yellow and gives the publisher as **Unknown**. Neither says where the file came from: step \
+2's hash says only that your download is the file on this page.
 - **Smart App Control** (Windows 11), when it is on, blocks unsigned code and has no way past that for one app, only \
 turning it off. Whether it blocks this MSI has not been tried yet. If it does, leave it on: this preview is not for \
 that PC.
 
 ## Remove it
 
-Settings > Apps > Installed apps, or `msiexec /x {msi}`. CI checks that the uninstall leaves nothing behind.
+Settings > Apps > Installed apps, or `msiexec /x {msi}`. CI checks that no file, PATH entry, Start-menu shortcut or \
+Windows Installer key is left. Your recordings and the app's own folders stay in `%LOCALAPPDATA%\\lag-doctor`: delete \
+that folder to remove them too.
 """
 
 
@@ -258,28 +276,49 @@ def title(version: str) -> str:
 
 # ---------------------------------------------------------------------------------------------- gather ---
 
-def gather(out: Path, repo: str, gh: Gh = run_gh, root: Path = ROOT) -> dict:
-    """Pick main's tested MSI and stage the release in `out` (an empty or new folder). Changes nothing on GitHub."""
+def file_at(gh: Gh, repo: str, path: str, sha: str) -> str:
+    """A file of the repository as it is at commit `sha`, read through GitHub's API (its raw media type)."""
+    return gh(["api", "-H", RAW, f"repos/{repo}/contents/{path}?ref={sha}"]).decode("utf-8")
+
+
+def gather(out: Path, repo: str, gh: Gh = run_gh, strict: bool = True) -> tuple[dict, list[str]]:
+    """Pick main's tested MSI and stage the release in `out` (an empty or new folder); changes nothing on GitHub.
+    The artifact is judged against main's own files at the run's commit, never a checkout's, so a pull request that
+    changes the version or the installer does not judge main's MSI by them. With strict=False (a pull request's
+    check), what only main's state decides (its newest run not passed yet, code changed on main since, the version's
+    tag taken) is noted instead of refused, from main's newest run that passed; every other check is as strict.
+    Returns the staged facts and those notes."""
     if out.exists() and any(out.iterdir()):
         raise Refused(f"{out} is not empty")
-    patterns = push_ignored((root / ".github" / "workflows" / CI_WORKFLOW).read_text(encoding="utf-8"))
-    run = newest_run(gh_json(gh, ["run", "list", "--repo", repo, "--workflow", CI_WORKFLOW, "--branch", "main",
-                                  "--event", "push", "--limit", "1", "--json",
-                                  "databaseId,headSha,status,conclusion,event,headBranch,url"]))
+    noted: list[str] = []
+
+    def refuse(why: str) -> None:
+        if strict:
+            raise Refused(why)
+        noted.append(why)
+
+    runs = ["run", "list", "--repo", repo, "--workflow", CI_WORKFLOW, "--branch", "main", "--event", "push",
+            "--limit", "1", "--json", "databaseId,headSha,status,conclusion,event,headBranch,url"]
+    try:
+        run = newest_run(gh_json(gh, runs))
+    except Refused as exc:
+        refuse(str(exc))
+        run = newest_run(gh_json(gh, runs + ["--status", "success"]))
     sha = run["headSha"]
+    patterns = push_ignored(file_at(gh, repo, f".github/workflows/{CI_WORKFLOW}", sha))
     main_sha = gh_json(gh, ["api", f"repos/{repo}/git/ref/heads/main"]).get("object", {}).get("sha")
     if not SHA_RE.fullmatch(str(main_sha)):
         raise Refused(f"main's commit reads wrong: {main_sha!r}")
     if main_sha != sha:
         code = later_code(gh_json(gh, ["api", f"repos/{repo}/compare/{sha}...{main_sha}"]), patterns)
         if code:
-            raise Refused(f"main changed {code[:8]} after CI's run of {sha[:12]}: wait for CI to run on main")
-    version = project_version((root / "pyproject.toml").read_text(encoding="utf-8"))
-    code = upgrade_code((root / "installer" / "lag-doctor.wxs").read_text(encoding="utf-8"))
+            refuse(f"main changed {code[:8]} after CI's run of {sha[:12]}: wait for CI to run on main")
+    version = project_version(file_at(gh, repo, "pyproject.toml", sha))
+    code = upgrade_code(file_at(gh, repo, "installer/lag-doctor.wxs", sha))
     tag = f"v{version}"
     problems = taken(gh, repo, tag)
     if problems:
-        raise Refused("; ".join(problems) + f": raise the version in pyproject.toml for a new release")
+        refuse("; ".join(problems) + ": raise the version in pyproject.toml for a new release")
     work = out / "artifact"
     work.mkdir(parents=True)
     gh(["run", "download", str(run["databaseId"]), "--repo", repo, "--name", ARTIFACT, "--dir", str(work)])
@@ -293,7 +332,7 @@ def gather(out: Path, repo: str, gh: Gh = run_gh, root: Path = ROOT) -> dict:
     (out / SUMS).write_bytes(sums_text(digest, msi.name).encode("ascii"))
     (out / NOTES).write_bytes(notes(version, msi.name, digest, sha, run["url"], repo).encode("utf-8"))
     (out / FACTS).write_bytes((json.dumps(facts, indent=1) + "\n").encode("utf-8"))
-    return facts
+    return facts, noted
 
 
 # ---------------------------------------------------------------------------------------------- create ---
@@ -348,32 +387,52 @@ def readback_problems(release: dict, facts: dict, assets: Mapping[str, bytes]) -
     return problems
 
 
+def remove_draft(gh: Gh, repo: str, tag: str, target: str) -> str:
+    """After a create that failed or read back wrong: delete the release with the tag only while it is the one
+    release with it and still a draft at the target, read again just before. A published release and any tag stay:
+    the owner may have published the draft or pushed the tag meanwhile. Says what was done or left."""
+    try:
+        found = releases_with(gh, repo, tag)
+        if len(found) == 1 and found[0].get("draft") is True and found[0].get("target_commitish") == target:
+            gh(["api", "-X", "DELETE", f"repos/{repo}/releases/{int(found[0]['id'])}"])
+            said = "the draft was deleted"
+        elif not found:
+            said = "no release was left"
+        else:
+            said = f"{len(found)} releases with the tag {tag} were left as they are: look at the releases page"
+        if tag_exists(gh, repo, tag):
+            said += f"; the tag {tag} exists and was left: delete it on the tags page if no release should have it"
+        return said
+    except Refused as exc:
+        return f"looking for what it left failed too ({exc}): look at the releases page for a draft {tag}"
+
+
 def create(folder: Path, repo: str, gh: Gh = run_gh) -> dict:
-    """Make the draft from the staged folder, read it back, and delete it again if it reads wrong."""
+    """Make the draft from the staged folder and read it back; whatever fails after the create starts, a draft it
+    left is deleted (`remove_draft`)."""
     facts = load_staged(folder, repo)
     tag = facts["tag"]
     problems = taken(gh, repo, tag)
     if problems:
         raise Refused("; ".join(problems))
-    gh(["release", "create", tag, str(folder / facts["msi"]), str(folder / SUMS), "--repo", repo, "--draft",
-        "--prerelease", "--latest=false", "--target", facts["target"], "--title", facts["title"],
-        "--notes-file", str(folder / NOTES)])
-    found = releases_with(gh, repo, tag)
-    if len(found) != 1:
-        raise Refused(f"{len(found)} releases have the tag {tag} after the create, not 1: look at the releases page")
-    release = found[0]
-    assets = {a.get("name"): gh(["api", "-H", "Accept: application/octet-stream",
-                                 f"repos/{repo}/releases/assets/{int(a['id'])}"])
-              for a in release.get("assets", []) if a.get("name") in (facts["msi"], SUMS)}
-    problems = readback_problems(release, facts, assets)
-    made_tag = tag_exists(gh, repo, tag)            # absent just before the create: GitHub made it with the draft
-    if made_tag:
-        problems.append(f"the tag {tag} exists already, so the draft is not private")
-    if problems:
-        gh(["api", "-X", "DELETE", f"repos/{repo}/releases/{int(release['id'])}"])
-        if made_tag:
-            gh(["api", "-X", "DELETE", f"repos/{repo}/git/refs/tags/{tag}"])
-        raise Refused("the draft read back wrong and was deleted: " + "; ".join(problems))
+    try:
+        gh(["release", "create", tag, str(folder / facts["msi"]), str(folder / SUMS), "--repo", repo, "--draft",
+            "--prerelease", "--latest=false", "--target", facts["target"], "--title", facts["title"],
+            "--notes-file", str(folder / NOTES)])
+        found = releases_with(gh, repo, tag)
+        if len(found) != 1:
+            raise Refused(f"{len(found)} releases have the tag {tag} after the create, not 1")
+        release = found[0]
+        assets = {a.get("name"): gh(["api", "-H", "Accept: application/octet-stream",
+                                     f"repos/{repo}/releases/assets/{int(a['id'])}"])
+                  for a in release.get("assets", []) if a.get("name") in (facts["msi"], SUMS)}
+        problems = readback_problems(release, facts, assets)
+        if tag_exists(gh, repo, tag):           # absent just before the create
+            problems.append(f"the tag {tag} exists already, so the draft is not private")
+        if problems:
+            raise Refused("the draft read back wrong: " + "; ".join(problems))
+    except Refused as exc:
+        raise Refused(f"{exc}; {remove_draft(gh, repo, tag, facts['target'])}") from None
     return {**facts, "release_id": release["id"], "html_url": release.get("html_url")}
 
 
@@ -404,9 +463,11 @@ def main(argv: list[str] | None = None) -> int:
             return guard.REFUSED_EXIT
     try:
         if args.step == "gather":
-            f = gather(Path(args.out), repo)
+            # A pull request's check judges its code on main's state, which it cannot change: anything else is strict.
+            f, noted = gather(Path(args.out), repo, strict=os.environ.get("GITHUB_EVENT_NAME") != "pull_request")
             summary([f"Staged {f['tag']}: {f['msi']} ({f['size']:,} bytes), SHA-256 {f['sha256']}",
-                     f"from commit {f['target']}, built and checked by {f['run_url']}"])
+                     f"from commit {f['target']}, built and checked by {f['run_url']}"]
+                    + [f"A dispatch would refuse this now: {why}" for why in noted])
         else:
             f = create(Path(args.out), repo)
             summary([f"Draft release {f['tag']} made and read back: {f['html_url']}",
