@@ -39,7 +39,9 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   the recorder and the app trying the service first (PR #74: `watch` asks it before the prompt, the app through its
   recorder); and the owner's own install and recording, frame timing's first check under the service.
 - [ ] Stage 5: unsigned preview release, SignPath, winget. Its first step's workflow is built (2026-11-26,
-  `.github/workflows/release.yml`): main's tested MSI on a draft release, which the owner publishes.
+  `.github/workflows/release.yml`, PR #77): main's tested MSI on a draft release, which the owner publishes.
+  The first draft, v0.1.0, was made on 2026-11-26 from main's CI run of the merge (d867ee1) and read back with no
+  tag yet; publishing it is the owner's.
 
 ## E2: the group fallback
 
