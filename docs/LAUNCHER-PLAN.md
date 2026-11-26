@@ -784,7 +784,8 @@ above:
   as it was then (an older refresh-rate offer, a background program's priority); an older recording says why.
 - [x] Settings: Undo all, for two changes or more, on a second click: the listed changes, newest first, none put back
   anyway; a change left alone because it was changed since keeps Put it back anyway on its row.
-- [ ] The owner's own try in the app.
+- [x] The owner's own try in the app (2026-11-26, on a demo library: GPU preferences for two made-up programs applied
+  from recordings that were not the last one made, and both put back by Undo all); merged as PR #78.
 
 ### After that
 
