@@ -301,7 +301,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   WIX1149 through by its id (`-sw1149`, DECISIONS 2026-11-25) and no other warning. The check's `recording` verdict
   makes a throwaway standard account (`stage2/logon.py`), runs `scripts/msi_service_client.py` as it with the
   installed runtime against a stand-in game (`stage2/standin.py`), and deletes the account after the uninstall: like
-  the install itself, only on the runner. The
+  the install itself, only on the runner. Its `trace-lock` verdict reads what that account's client saw of the
+  machine-wide trace lock: held while the service recorded, owned by the service's SID, refused to the account to
+  take, and free once the recording ended. The
   install's `PresentMon\` folder is where `setup.BUNDLED` looks (a test pins the two together), and `bin\` holds only
   `lagdoctor.cmd`, since the folder on PATH must not offer the runtime's `python.exe`. Python must never write into
   the install: the build ships unchecked-hash `.pyc` files the shipped runtime compiles, and the check's `untouched`
@@ -410,7 +412,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   here: `tests/conftest.py`'s `_no_real_trace_lock` moves `tracelock.NAME` to a name of the test's own and fails a test
   that reaches the real one, and a test that starts `watch` in a child sets `tracelock.NAME` there too, as it sets
   `session.CAPTURE_LOCK_NAME`. The real relay and service on GitHub's runner take the real name, which that guard
-  cannot reach. The owner installed the
+  cannot reach. A test marked `real_trace_lock` keeps the real name, and only on GitHub's runner
+  (`scripts/stage2/guard.py`; anywhere else the mark changes nothing): `tests/test_relay_live.py`'s second-relay
+  test, which needs a second real relay to exit 8 while the first records. The owner installed the
   MSI on this PC on 2026-11-25, so its capture service is real here: an agent may read it (`sc.exe query`, `qc`, `qprivs`,
   `qsidtype`, `sdshow`) and the recordings it made, and never starts, stops or reconfigures it.
 - **The relay and the capture service talk only through `lagdoctor/winapi/pipe.py`.** Name a pipe through
@@ -443,8 +447,9 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
   for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
   to land recounts on main: a total its PR did not touch goes stale without a merge conflict (after #4 and #5, and
-  again after #7). The PresentMon figure (44 since M6d's live relay test for a folder) is the tests that run on CI with a
-  download, not CI's "tests that use a download" count (45, one of which skips there): read a counter at the commit
+  again after #7). The PresentMon figure (45 since the trace lock's live relay test, 2026-11-26) is the tests that
+  run on CI with a download, not CI's "tests that use a download" count (46, one of which skips there): read a
+  counter at the commit
   that set a figure before
   correcting the figure against it.
 - **CI's runner lacks some of this laptop**: no GPU, NVIDIA driver, thermal sensors, ping replies or ASUS fan device
