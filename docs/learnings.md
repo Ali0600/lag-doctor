@@ -1507,3 +1507,14 @@ mutex on a thread of its own, lets other accounts read its owner and state but n
 when its owner is one a standard account cannot set.
 **Takeaway**: when a lock's name moves to a namespace others share, lock by ownership, deny everyone else the right
 to take it, and trust it by an owner they cannot set.
+
+### A security descriptor read back as SDDL names well-known accounts by alias
+Windows writes a descriptor back in SDDL with two-letter aliases for well-known SIDs wherever it has one: SY, BA, WD,
+and also an account's own SID when that account is the machine's built-in Administrator (LA). Code that builds an
+expected descriptor from raw S-1- strings and compares text then fails only on the machines where an alias applies.
+**Why it came up**: the trace lock's DACL test passed on the laptop and failed on GitHub's runner (PR #75): the
+runner's tests run as the local Administrator, so the ACE for the test's own account came back as LA, not as the
+S-1-5-21-...-500 the test expected. `tests/test_tracelock.py` now turns every ACE's SID into its S-1- form
+(ConvertStringSidToSid, then ConvertSidToStringSid) before comparing.
+**Takeaway**: compare SIDs read from SDDL in their S-1- form, never as text, and expect the alias set to depend on the
+account the test runs as.
