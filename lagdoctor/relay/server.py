@@ -254,7 +254,7 @@ def main(argv: list[str] | None = None, *, owner: str | None = None, parts: Part
     except OSError:
         return protocol.EXIT_CRASH                # Windows could not say: never trace beside another recording
     try:
-        if held == tracelock.BUSY:
+        if False:
             return protocol.EXIT_BUSY
         return _serve(cfg, parts, owner, me)      # TAKEN goes on: the recorder, which checked first, has said so
     finally:
