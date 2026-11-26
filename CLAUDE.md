@@ -328,9 +328,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   yet (GitHub makes it when the draft is published). Whatever fails once the create has started, it deletes the
   release only while it is the tag's one release and still a draft at that commit, and never deletes a tag; a draft
   it could not delete is named in the job's error, for the owner to delete, not worked around by raising the version.
-  An agent starts the workflow only when the owner asks for a draft, and never publishes or edits a release, pushes a
-  `v*` tag or changes the repository's release settings (release immutability among them): a published release and
-  its tag are public. A new release needs `pyproject.toml`'s version raised, since a version whose tag or release
+  An agent starts the workflow only when the owner asks for a draft, and publishes one only when the owner says so
+  in chat (`gh release edit v<version> --draft=false`, as v0.1.0 was on 2026-11-26), after reading that it is still
+  the unchanged draft; it never edits a published release, pushes a `v*` tag or changes the repository's release
+  settings (release immutability among them): a published release and its tag are public. A new release needs `pyproject.toml`'s version raised, since a version whose tag or release
   exists is refused. A pull request that changes the release, or what `release.py` imports, runs its check job only
   (its `paths:`, which `tests/test_side_workflows.py` keeps whole), with a read-only token that sees no draft, on
   main's real newest run that passed: what only main's state decides (its newest run unfinished, code on main since,

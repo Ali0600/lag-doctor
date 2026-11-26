@@ -40,8 +40,9 @@ SignPath Foundation; the licence is MIT. Facts, sources and the experiments' det
   recorder); and the owner's own install and recording, frame timing's first check under the service.
 - [ ] Stage 5: unsigned preview release, SignPath, winget. Its first step's workflow is built (2026-11-26,
   `.github/workflows/release.yml`, PR #77): main's tested MSI on a draft release, which the owner publishes.
-  The first draft, v0.1.0, was made on 2026-11-26 from main's CI run of the merge (d867ee1) and read back with no
-  tag yet; publishing it is the owner's.
+  The first, v0.1.0, was drafted on 2026-11-26 from main's CI run of the merge (d867ee1), read back with no tag
+  yet, and published the same day on the owner's word ("Publish"): a pre-release whose tag GitHub made at
+  d867ee1, and whose MSI, downloaded without signing in, matched its SHA256SUMS. Next: SignPath (step 2).
 
 ## E2: the group fallback
 
@@ -205,8 +206,9 @@ but a GitHub-hosted runner. Measured (research note section 8):
    by hand on main, promotes the `lag-doctor-msi` artifact of main's newest CI run (a push that passed, with only
    ignored paths changed since) to a draft pre-release at that run's commit, with its SHA-256 and notes on what an
    unsigned installer meets (`scripts/release.py`, DECISIONS 2026-11-26). The draft is seen only by those who may
-   push, and GitHub makes its tag when it is published, which is the owner's step. Left open: whether Smart App
-   Control blocks the MSI (E6), and Windows 10 (E7).
+   push, and GitHub makes its tag when it is published, which is the owner's step. Done 2026-11-26: v0.1.0 is
+   published (https://github.com/Ali0600/lag-doctor/releases/tag/v0.1.0). Left open: whether Smart App Control
+   blocks the MSI (E6), and Windows 10 (E7).
 2. Apply to SignPath Foundation. Its approval is manual and may be declined for reputation; then releases stay
    unsigned, and the README says what SmartScreen and Smart App Control will show.
 3. With SignPath: signing in the release workflow, each request approved by the owner.
