@@ -49,7 +49,7 @@ A per-machine installer, `lag-doctor-0.1.0-x64.msi`, is built and tested by CI o
 asks you to sign in to download one). Previews go on [Releases](https://github.com/Ali0600/lag-doctor/releases) once
 the maintainer publishes one, each the very MSI one of main's CI runs built and checked, with its SHA-256 and how to
 check your download against it. The MSI is not signed
-yet (`docs/INSTALLER-PLAN.md`, Stage 5), so SmartScreen may warn before it runs, and a PC with Smart App Control on is
+(signing is deferred: `docs/DECISIONS.md`, 2026-11-26), so SmartScreen may warn before it runs, and a PC with Smart App Control on is
 expected to refuse it.
 
 ```powershell
@@ -323,9 +323,11 @@ uv run python scripts/overhead/bench.py cycles --suite intel-cpu --out <dir>   #
 
 ## Code signing policy
 
-Nothing is signed yet. Once a first unsigned preview is published, lag-doctor applies to SignPath Foundation for free
-code signing (`docs/INSTALLER-PLAN.md`, Stage 5), and from then on: Free code signing provided by
-[SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+Nothing is signed: signing is deferred (`docs/DECISIONS.md`, 2026-11-26), so releases are unsigned, and Install
+says what Windows shows for them. If lag-doctor takes signing up, it applies to SignPath Foundation for free code
+signing (`docs/INSTALLER-PLAN.md`, Stage 5), and from then on: Free code signing provided by
+[SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org). The policy
+it would follow:
 
 - **What is signed**: the MSI, built by this repository's CI from its own source (the msi job in
   `.github/workflows/ci.yml`). The upstream files inside it are signed by their makers and verified, not re-signed:

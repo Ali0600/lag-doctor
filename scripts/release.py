@@ -232,7 +232,7 @@ def taken(gh: Gh, repo: str, tag: str) -> list[str]:
 def notes(version: str, msi: str, digest: str, sha: str, run_url: str, repo: str) -> str:
     """The release's text: what it is, how to check it, what Windows shows for an unsigned MSI, and how to remove it."""
     readme = f"https://github.com/{repo}/blob/{sha}/README.md"
-    return f"""**A preview, and not signed yet.** lag-doctor {version} for 64-bit Windows 11 (Windows 10 is not tried \
+    return f"""**A preview, and not signed.** lag-doctor {version} for 64-bit Windows 11 (Windows 10 is not tried \
 yet): the MSI that CI built from commit `{sha[:12]}` and then installed, ran and uninstalled on GitHub's runner \
 ([that run]({run_url}), kept for 90 days).
 
@@ -251,8 +251,7 @@ the system PATH, a Start-menu shortcut and the capture service, which records fr
 
 ## What Windows shows for an unsigned installer
 
-It is not signed yet (an application for SignPath Foundation's free signing of open-source projects comes next), \
-so Windows treats it as an app from an unknown publisher:
+It is not signed, so Windows treats it as an app from an unknown publisher:
 
 - **SmartScreen** may say "Windows protected your PC" when you open the download. Choose **More info**, then **Run \
 anyway**. Its trust in an unsigned file is per file, so each new release starts again.

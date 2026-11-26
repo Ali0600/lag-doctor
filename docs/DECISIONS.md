@@ -2,6 +2,10 @@
 
 ## Backlog: alternatives worth trying later
 
+- **Sign the MSI through SignPath Foundation**, free for open-source projects, so the UAC prompt names a
+  publisher, SmartScreen's trust carries across releases and Smart App Control lets it install: worth it once
+  strangers are meant to install lag-doctor (deferred by the owner, 2026-11-26). Revisit hook: INSTALLER-PLAN
+  Stage 5, steps 2 and 3.
 - **A budget of hold time per account for the capture service**, so an account that asks again the moment its 2-hour
   hold ends cannot keep the service, and the trace lock, from everyone else; it must outlive the service's idle stop,
   which writes no file today (2026-11-25, Stage 4). Revisit hook: `service.Host._one`, keyed by the caller's SID.
@@ -240,6 +244,27 @@
   after "Keep the MSI", with `id-token` and `attestations` rights), so anyone can check which workflow and commit built
   the file; worth trying with signing. Release immutability, a repository setting that is the owner's, would attest
   each published release on its own (2026-11-26, Stage 5). Revisit hook: ci.yml's msi job.
+
+---
+
+## 2026-11-26: Signing deferred: releases stay unsigned
+
+v0.1.0 went out unsigned (the next entry). Asked whether SignPath was needed or people could just download and use
+the release, the owner chose to defer it ("Yeah, let's defer this").
+- **Defer signing (chosen by the owner)**: lag-doctor is for the owner's own games first, and the owner's PC has run
+  unsigned builds since Stage 4. It saves an application SignPath may decline for a new project's reputation, the
+  privacy statement it requires (LAUNCHER-PLAN's open question on WebView2's diagnostic data), and approving every
+  signed release by hand.
+- **Apply to SignPath Foundation now (deferred, worth trying)**: free; the UAC prompt would name a publisher,
+  SmartScreen's trust would carry from one release to the next, and Smart App Control would let the MSI install.
+  Worth it once strangers are meant to install lag-doctor.
+- **A paid certificate (rejected)**: it costs money every year (DECISIONS 2026-11-06).
+
+Accepted: SmartScreen may warn on every release, the UAC prompt gives the publisher as Unknown, and a PC with Smart
+App Control on may refuse the MSI (not tried yet, E6).
+
+Revisit hook: INSTALLER-PLAN Stage 5, steps 2 and 3. The signing step goes between `release.gather` and
+`release.create`, and the README's Code signing policy section is already written for SignPath.
 
 ---
 

@@ -816,7 +816,7 @@ above:
 - **A fork the planning session settled** (DECISIONS 2026-11-08), open to the owner: measuring from a start key,
   rather than the whole recording or a fixed startup skipped per game.
 - **The privacy statement.** It gains a sentence about WebView2's diagnostic data, and SignPath requires the
-  statement. Its terms add that software which "collects user data and transfers it to systems not specified by the
+  statement (its part waits while signing is deferred, DECISIONS 2026-11-26). Its terms add that software which "collects user data and transfers it to systems not specified by the
   user" must show that policy during installation, with an option there to turn it off. The MSI has no dialogs, and
   WebView2's required diagnostic data cannot be turned off, so ask SignPath whether the clause covers the runtime's own
   data. M0 adds a measurement: the page itself cannot reach the network, but in one run of five a WebView2 process
