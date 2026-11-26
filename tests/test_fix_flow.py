@@ -38,6 +38,7 @@ def test_a_fix_is_applied_from_a_report_only_when_this_lag_doctor_knows_it_and_i
     assert ids == frozenset(catalog.ids()) - {"game_setting"} and "power_plan" in ids and "game_setting" not in ids
     assert flow.offerable("power_plan", {"scheme": "x"}, ids)
     assert not flow.offerable("game_setting", {}, ids | {"game_setting"})        # never the sweep's own
+    assert not flow.applies("game_setting", {}, ids | {"game_setting"}, is_last=True)     # not even the last's
     assert not flow.offerable("from_a_newer_lag_doctor", {}, ids)
     assert not flow.offerable("power_plan", ["scheme"], ids)
     assert not flow.offerable("power_plan", None, ids)
