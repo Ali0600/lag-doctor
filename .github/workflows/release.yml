@@ -1,0 +1,82 @@
+# Stage 5's preview release (docs/INSTALLER-PLAN.md): main's tested MSI on a DRAFT GitHub Release, for the owner to
+# read and publish. Nothing is built or signed here. The MSI is the `lag-doctor-msi` artifact of main's newest CI run,
+# whose msi job built it and then installed, ran and uninstalled it, so the bytes released are the bytes checked, and
+# WiX's EULA stays accepted in ci.yml alone (docs/DECISIONS.md, 2026-11-08).
+# Started by hand on main (gh workflow run release.yml, or the Actions tab). A pull request that changes the release
+# runs only its check job, with a token that cannot write, so every check runs on real data before a draft can be made.
+name: Release (draft)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "scripts/release.py"
+      - "scripts/stage2/__init__.py"
+      - "scripts/stage2/guard.py"
+
+permissions: {}
+
+# One release at a time: a second dispatch waits, then finds the first one's draft and refuses its tag. A pull
+# request's check has a group of its own, so it never queues behind, or displaces, a dispatch.
+concurrency:
+  group: release-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    # Picks main's newest CI run (a push that passed, with only ignored paths changed on main since), downloads its MSI,
+    # checks it and stages the release: the MSI, SHA256SUMS, the notes and release.json.
+    name: The MSI main's CI checked, staged for a release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.10.4"
+          python-version: "3.13"
+      - name: Stage the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uv run --no-project python scripts/release.py gather "$RUNNER_TEMP/release"
+      - name: Keep it for the draft job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-staged
+          path: ${{ runner.temp }}/release
+          if-no-files-found: error
+          retention-days: 7
+
+  draft:
+    # The only job whose token may write, and only in a run dispatched on main; it reads nothing but what the check
+    # job staged in this run.
+    name: Draft release
+    needs: check
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.10.4"
+          python-version: "3.13"
+      - name: The staged release
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-staged
+          path: ${{ runner.temp }}/release
+      - name: Make the draft, and read it back
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: uv run --no-project python scripts/release.py create "$RUNNER_TEMP/release"

@@ -242,8 +242,39 @@
   game's tree), for a launcher the re-arm's hold missed: worth trying if Play recordings show the hold delaying too
   much of a game's start. Revisit hook: `Relay._out_of_turn` ("a game after the start") and `_start_sources` in
   relay/server.py (DECISIONS 2026-11-17, M6d).
+- **Build provenance for the released MSI**, an attestation signed in ci.yml's msi job (`actions/attest-build-provenance`
+  after "Keep the MSI", with `id-token` and `attestations` rights), so anyone can check which workflow and commit built
+  the file; worth trying with signing. Release immutability, a repository setting that is the owner's, would attest
+  each published release on its own (2026-11-26, Stage 5). Revisit hook: ci.yml's msi job.
 
 ---
+
+## 2026-11-26: The preview release: the MSI CI checked, promoted to a draft
+
+Stage 5's first step (`docs/INSTALLER-PLAN.md`): an unsigned MSI on GitHub Releases. Settled by this session; the owner
+asked for the draft ("Do A", after a shortlist that described it as a draft whose publishing stays theirs).
+
+- **Promote the `lag-doctor-msi` artifact of main's newest CI run (chosen)**: the bytes released are the ones the msi
+  job installed, ran and uninstalled, and WiX's EULA stays accepted in ci.yml alone (DECISIONS 2026-11-08). The run
+  must be a push that passed, and main may have changed only what ci.yml's push trigger ignores since, so the MSI is
+  main's code. Artifacts and runs last 90 days on a public repo, so a release long after main's last code change
+  needs one more push of code first.
+- **Build the MSI again in the release workflow (rejected)**: a second place that accepts WiX's EULA, which is the
+  owner's to give, and bytes no check installed.
+- **Call ci.yml's msi job from the release workflow (`workflow_call`) (rejected for now)**: tested bytes again, but a
+  second full build and install for every release and a ci.yml split in two, for nothing promotion lacks while main's
+  runs last.
+- **A draft from a dispatch of main (chosen)**: nothing public until the owner publishes it; a draft is seen only by
+  those who may push, and GitHub makes its tag at the draft's commit when it is published. The draft's readback checks
+  the tag is still absent, since no current GitHub page says so, and deletes the draft (and a tag it made) otherwise.
+- **A workflow started by pushing a `v*` tag (rejected)**: the tag is public before any check has run, and the
+  agent that pushed it would have published.
+- **Two jobs, the write token in the second only (chosen)**: the job that picks the run and reads the downloaded
+  artifact holds a token that cannot write, and a pull request that changes the release runs it on main's real newest
+  run. **One job with `contents: write` (rejected)**: the token that can make releases would read the artifact.
+
+Revisit hook: `release.gather` (which run, which artifact) and `release.create` (the draft and its readback); Stage 5's
+signing step goes between them.
 
 ## 2026-11-25: How long one caller may hold the capture service
 

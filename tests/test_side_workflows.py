@@ -1,6 +1,7 @@
 """The side workflows run on every pull request that changes code they run (docs/DECISIONS.md, 2026-11-08).
 
-experiments.yml and webview-spike.yml start on a pull request only when it changes a path their `paths:` filter names.
+experiments.yml, webview-spike.yml and release.yml start on a pull request only when it changes a path their `paths:`
+filter names.
 Their scripts import lagdoctor modules and sibling scripts, so a filter that names only the scripts lets a pull request
 change what they run without running them: PR #6 changed four modules the experiments run as a service and started
 none. These tests start from each workflow's entry scripts (the ones its steps run, and every file a wildcard entry
@@ -17,7 +18,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
-SIDE = ("experiments.yml", "webview-spike.yml")
+SIDE = ("experiments.yml", "webview-spike.yml", "release.yml")
 # Where an absolute import is found: the repo's root (lagdoctor) and scripts/, which every script puts on sys.path.
 SEARCH = ("", "scripts")
 # One file per route an import can take to it, so a reader that loses a route fails here, not silently.
@@ -33,6 +34,10 @@ REACHED = {
     "webview-spike.yml": {
         "scripts/stage2/guard.py": "`from stage2 import guard`, a package under scripts/",
         "lagdoctor/paths.py": "only through another module: lagdoctor/setup.py imports it",
+    },
+    "release.yml": {
+        "scripts/stage2/__init__.py": "the package on the way to guard.py, from release.py",
+        "scripts/stage2/guard.py": "`from stage2 import guard` in release.py",
     },
 }
 
@@ -149,6 +154,12 @@ def test_a_side_workflow_names_no_file_its_code_does_not_import(workflow):
     stale = sorted(p for p in plain if p not in reached)
     assert not stale, f"{workflow}'s paths name files its code no longer imports: drop {stale}"
     assert f".github/workflows/{workflow}" in patterns, f"{workflow} does not run when it changes itself"
+
+
+def test_every_workflow_whose_pull_requests_are_filtered_by_path_is_checked_here():
+    filtered = sorted(wf.name for wf in WORKFLOWS.glob("*.yml")
+                      if re.search(r"^  pull_request:\n    paths:\n", wf.read_text(encoding="utf-8"), re.M))
+    assert filtered == sorted(SIDE), f"a workflow with a pull_request paths filter is not in SIDE: {filtered}"
 
 
 @pytest.mark.parametrize("workflow", SIDE)
