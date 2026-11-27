@@ -125,7 +125,7 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   merge it, pick again on the merged tree and run only what the new pick holds that the running one does not (PR #70's
   second pick, after #69 landed, was the same 686). A picked set runs about 3.7 s a mutation here (PR #53's 1,098 took 67 minutes), and one heavy in the window's own
   tests about 8 s (each run of `tests/test_app_page.py` opens the real window: PR #62's 308 took about 40 minutes,
-  PR #64's 466, 71 of them on the window, about 68, PR #66's 511, 83 on the window, 69, and PR #70's 686, 87 on the window, about 100). Every mutation on
+  PR #64's 466, 71 of them on the window, about 68, PR #66's 511, 83 on the window, 69, PR #70's 686, 87 on the window, about 100, and PR #78's 1,109, 95 on the window and 396 on `rules.py`, about 120). Every mutation on
   `lagdoctor/analysis/rules.py` (456 after PR #52) takes up to an hour here (PR #50's 494 picked mutations took about
   70 minutes, PR #51's 744 about 36 and PR #52's 643 about 38 on a quiet PC): start it in the background as soon as the code is settled, and
   review meanwhile with agents that run no tests (no second pytest meanwhile, so write the next change's tests without
@@ -241,7 +241,11 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `_no_real_asus_device` fails a test that reaches the real device, except those marked `needs("asus_acpi")`
   (`tests/test_fans_live.py`, which reads this laptop's fans). An agent may run those: they only read.
 - **Fixes go through `lagdoctor/fixes/base.py`** (journal first, readback, undo). Never offered: disabling
-  security features, killing or suspending processes, HKLM or policy tweaks, anything on the game process.
+  security features, killing or suspending processes, HKLM or policy tweaks, anything on the game process. A new fix
+  says whether its params still mean what they meant however long ago a report wrote them (`Fix.stands_alone`, no by
+  default): only then does lag-doctor's window apply it from any recording, else from the last one only
+  (`flow.applies`). Keep it no for params that name a running process (it may be the game by now: PR #78's review
+  caught exactly that) or a display by its `\\.\DISPLAYn` name.
 - **ETW needs rights.** PresentMon (session `lagdoctor`) and the network tracker (session `lag-doctor-net`)
   need ETW rights: PresentMon an elevated token or Performance Log Users, the tracker an elevated token only
   (measured, E1 in `docs/research/install-and-rights.md`: Kernel-Network's own descriptor lets only SYSTEM,
@@ -475,7 +479,10 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   error (exit 2), and PR #34's body went out unscanned that way when a backslash the Bash tool halved left `\2` in the
   pattern (2026-11-09; a rescan found it clean). Take `.git/hooks/pre-push`'s own `pattern=` line in a script written
   with the Write tool, add `Users[/\]` for folder paths (Git Bash's `grep -F` aborted on a backslash), and prove it on a
-  planted positive first.
+  planted positive first. In a worktree `.git` is a file: the hook is `$(git rev-parse --git-common-dir)/hooks/pre-push`.
+  A Python scan that crashes exits 1 as a match does, so the planted run proves the scan only when its output shows the
+  match (PR #78's first chain passed its planted check on a FileNotFoundError, and stopped only because the real scan
+  crashed too).
 - **The README's Experience Gained carries totals** (tests, red-first sabotages and their specs, the tests on the real
   PresentMon). Count them from the source, never the old figure plus your delta: `uv run pytest --collect-only -q`
   for tests, the mutations in `tests/redfirst/*.json` for sabotages and specs. When PRs merge in parallel, the last
