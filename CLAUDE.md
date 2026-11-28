@@ -103,7 +103,7 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   `scripts/redfirst.py` must report every mutation `CAUGHT`. Never weaken a test to make it pass. A pytest run that
   outlives `TIMEOUT_S` (10 minutes; `REDFIRST_TIMEOUT_S` sets it in seconds) is ended with every process under it (a
   job object) and reads TIMEOUT, which is not caught: a hang names no failing test, so give the test's wait a bound
-  past which it fails. A baseline that times out is BAD-BASE. The runner
+  past which it fails. A baseline that times out is BAD-BASE. Stopping a run yourself: ending the shell that started `redfirst.py` (TaskStop) left the runner's launcher, its interpreter and the pytest it was running alive (2026-11-28), so `taskkill /T /F` the launcher, then each `python.exe` whose command line holds `redfirst.py` or `_redfirst_probe`, until a listing shows none. The runner
   mutates a temp copy of the tree, never the working tree; so tests must not read the real repo by an
   absolute path (reported UNISOLATED) or write into their own tree (stops the run). It copies the tree when each run
   starts, so keep the checkout still until a queued run has begun. Editing a line that an existing mutation's `old`
@@ -125,7 +125,7 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   merge it, pick again on the merged tree and run only what the new pick holds that the running one does not (PR #70's
   second pick, after #69 landed, was the same 686). A picked set runs about 3.7 s a mutation here (PR #53's 1,098 took 67 minutes), and one heavy in the window's own
   tests about 8 s (each run of `tests/test_app_page.py` opens the real window: PR #62's 308 took about 40 minutes,
-  PR #64's 466, 71 of them on the window, about 68, PR #66's 511, 83 on the window, 69, PR #70's 686, 87 on the window, about 100, and PR #78's 1,109, 95 on the window and 396 on `rules.py`, about 120). Every mutation on
+  PR #64's 466, 71 of them on the window, about 68, PR #66's 511, 83 on the window, 69, PR #70's 686, 87 on the window, about 100, PR #78's 1,109, 95 on the window and 396 on `rules.py`, about 120, and PR #80's 1,179, 4 on the window and 502 on `rules.py`, 58). Every mutation on
   `lagdoctor/analysis/rules.py` (456 after PR #52) takes up to an hour here (PR #50's 494 picked mutations took about
   70 minutes, PR #51's 744 about 36 and PR #52's 643 about 38 on a quiet PC): start it in the background as soon as the code is settled, and
   review meanwhile with agents that run no tests (no second pytest meanwhile, so write the next change's tests without
@@ -154,7 +154,7 @@ host answered 504 to whole jobs' tries on 2026-11-08: rerun the failed job befor
   are off on this laptop, and past 259 characters Python's own `write_bytes` raises FileNotFoundError before any
   sabotage, so red-first reported three mutations BAD-BASE (2026-11-09).
 - **Not measured is not fine.** A collector that cannot run reports `unavailable`/`failed` with the reason;
-  a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked.
+  a failed sample is `None`, never `0`; rules that need a missing source are listed as unchecked. The one exception runs the other way: `events.game_offline` (DESIGN.md, "A game that played offline") clears every network rule and drops the network's lag events when the game's bytes received over the network are exactly 0, so that 0 must be proof. A new way for the tracker or the relay to pass over a game packet (a protocol, a filter, a process boundary, a cap) gets a health counter that `game_offline` requires present and 0, or it fails closed (PR #80: TCP's unplaced packets, the capture service's folder filter, orphaned children, the relay's 64-program cap).
 - **The game folder check reads folders, never the game** (`capture/gamefiles.py`, what Compare's drop-in and Unreal
   rows show). Find the user's own folders through `winapi/folders.py`: OneDrive can hold Documents, so
   `%USERPROFILE%\Documents` may be the wrong place. Never open a file whose listing marks it online only (reading it

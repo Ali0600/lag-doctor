@@ -255,7 +255,7 @@
 
 The owner asked for a way to ignore networking for games known to play offline, a click or a checkbox, and
 whether it would save performance. It saves next to nothing (docs/research/overhead.md: the pings about 0.15 % of
-one CPU thread, the game-server tracker 1-2 %), but the owner's recordings show the noise: 12 of 14 had a game that
+one CPU thread, the game-server tracker 1-2 %), but the owner's recordings show the noise: 11 of 14 had a game that
 received nothing over the network, and three of them listed 5 network findings and 31 ping or loss moments between
 them. Asked to choose, the owner said "do A".
 - **A: tell it from the game's own traffic (chosen by the owner)**: the tracker already counts what the game
