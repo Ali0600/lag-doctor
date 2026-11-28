@@ -622,8 +622,8 @@ def _pc(cap: Capture) -> str:
 def _cleared(d: Diagnosis) -> str:
     if not d.cleared:
         return ""
-    items = "".join(f"<li><strong>{e(labels.topic_text(c))}</strong>: {prose(why)}</li>"
-                    for c, why in sorted(d.cleared.items(), key=lambda kv: labels.topic_text(kv[0]).casefold()))
+    items = "".join(f"<li><strong>{e(topics)}</strong>: {prose(why)}</li>"
+                    for topics, why in labels.group_cleared(d.cleared))
     return ("<h2>Checked and fine</h2><p class=\"muted\">These were measured and ruled out:</p>"
             f"<ul>{items}</ul>")
 

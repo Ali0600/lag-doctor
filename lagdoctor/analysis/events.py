@@ -82,14 +82,49 @@ def find_events(cap: Capture, fr: dict[str, list], stats: dict[str, Any] | None)
     # slows itself down there would set a target of its background rate (bound() does the same)
     pace = fa._classify(cap, fr, fa._steady_rows(fr, fa.not_steady_spans(stutters, fr)),
                         fa.not_steady_spans(stutters, fr, pad=fa.TICK_PAD_S))
-    evs = (stutters + _fps_drops(fr, pace) + _pacing(cap, fr, spans) + _net_spikes(cap) + _net_losses(cap)
-           + _net_gaps(cap) + _marks(cap))
+    evs = stutters + _fps_drops(fr, pace) + _pacing(cap, fr, spans) + _marks(cap)
+    if not game_offline(cap):          # a game that received nothing met no network lag: its pings are not its play
+        evs += _net_spikes(cap) + _net_losses(cap) + _net_gaps(cap)
     evs = _finite(evs)
     evs.sort(key=lambda e: (e.t_start, KIND_ORDER[e.kind], e.t_end))
     for i, e in enumerate(evs, 1):
         e.id = i
     _link_marks(evs, bool(fr.get(F.T)))
     return evs
+
+
+def game_offline(cap: Capture) -> bool:
+    """Whether the game received nothing over the network, by a trace that saw all of its traffic (DESIGN.md, "A
+    game that played offline"). Then no ping spike, lost probe or Wi-Fi problem reached its play: the network's lag
+    events are left out and the network rules are cleared (rules.run_rule). One predicate for both.
+
+    It holds only when the Kernel-Network trace (`net_flows`) read "ok", which a lost or undecoded event, a late
+    packet or a consumer that stopped by itself makes "partial"; its address layout was proven by the self-test; the
+    tracker knew the game's process; ETW and the relay dropped no event; no packet of the game's had ends that could
+    not be told apart; and the game's bytes received over the network (`game_wire_bytes`, [received, sent], over the
+    whole recording, which a measured part keeps only where a count is 0) are exactly 0. Bytes sent do not count: a
+    game that only sends plays nothing a server sends back. Anything else, older captures with no such count among
+    them, is not offline. A game whose traffic goes through another program it did not start reads as offline too."""
+    nf = cap.net_flows if isinstance(cap.net_flows, dict) else {}
+    src = cap.sources.get("net_flows") if isinstance(cap.sources, dict) else None
+    if getattr(src, "state", None) != "ok" or nf.get("layout") != "verified":
+        return False
+    pid = cap.target.get("pid") if isinstance(cap.target, dict) else None
+    if type(pid) is not int or pid <= 0:                # the tracker counts the game's packets by its process
+        return False
+    h = nf.get("health") if isinstance(nf.get("health"), dict) else {}
+    relay = h.get("relay", {})
+    if not (_zero(h.get("lost")) and _zero(h.get("buffers_lost")) and h.get("consumer_stopped_t") is None
+            and _zero(h.get("early_dropped", 0)) and _zero(h.get("unknown_endpoints"))
+            and isinstance(relay, dict) and _zero(relay.get("events_lost", 0))):
+        return False
+    wire = nf.get("game_wire_bytes")
+    return isinstance(wire, list) and len(wire) == 2 and _zero(wire[0])
+
+
+def _zero(v: Any) -> bool:
+    """Exactly the count 0: never None, a float or a bool (False == 0 in Python)."""
+    return type(v) is int and v == 0
 
 
 def _finite(evs: list[LagEvent]) -> list[LagEvent]:

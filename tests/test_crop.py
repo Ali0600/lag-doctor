@@ -281,9 +281,9 @@ def test_a_source_keeps_its_own_reason_when_it_failed_and_its_state_when_it_neve
 
 def test_every_net_flows_key_the_collectors_write_has_a_decision():
     """A key a collector adds goes red here until crop says what a part does with it (cut, clip, count again,
-    drop or keep)."""
+    drop, keep, or keep only its counts of 0)."""
     assert set(NET_FLOWS) == set(sess.NETWORK_FLOW_KEYS) | set(sess.FLOW_KEYS)
-    assert set(NET_FLOWS.values()) == {"kept", "cut", "clipped", "counted again", "dropped"}
+    assert set(NET_FLOWS.values()) == {"kept", "cut", "clipped", "counted again", "dropped", "zeros kept"}
 
 
 def test_net_flows_lists_of_times_are_cut_and_totals_dropped():
