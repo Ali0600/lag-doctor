@@ -1760,7 +1760,8 @@ nor any protocol (`wire_unplaced`, which `FlowTable.count_wire` counts, and whic
 forward as `unknown_endpoints` does: an address set that is stale or could not be read leaves a TCP game's packets
 uncounted, never an online game reading as offline); the relay passed on whole every program of the game's that
 received anything (`game_unrelayed_rx`, the relay's own totals of the programs the recorder knew as the game's:
-the capture service passes on whole only those in the game's folder); and the game's bytes received over the
+the capture service passes on whole only those in the game's folder; None, which fails, when the relay's list
+reached its 64 programs and may have left one out); and the game's bytes received over the
 network (`game_wire_bytes[0]`, whole recording) are exactly the integer 0. Bytes it sent do not count: in one of
 the owner's recordings the game sent 6,500 bytes and received none. Anything else is not offline, a capture made
 before `wire_unplaced` was counted among them, whatever its other counts say. Then:
@@ -1771,7 +1772,12 @@ before `wire_unplaced` was counted among them, whatever its other counts say. Th
 - the HTML report and the app list causes cleared for the very same reason on one line (`labels.group_cleared`),
   so the nine say it once. The console names only the topics.
 The ping table and the stats read from it (`ping_*_ms`, `jitter_ms`, `loss_pct`) stay: they measure the PC.
-Known limit: a game whose network traffic goes through another program it did not start reads as offline.
+`game_wire_bytes` counts every program that was ever the game's (`FlowTable.was_game`: a child whose parent exited
+leaves the game's tree, not its bytes) and, through the relay, every whole event that is not the recorder's own,
+since the relay passes on whole only the game's and the recorder's: a game process the recorder has not listed yet
+is still the game's. Known limits: a game whose network traffic goes through another program it did not start
+reads as offline, and so would one whose only received bytes reached a child outside the game's folder in its
+last second, which the relay counts as `unattributed_bytes` once the child has gone.
 
 ### Scoring (LC 5)
 - Evidence families: frame timing, GPU telemetry, GPU engine/memory, CPU threads, CPU frequency/limits,

@@ -78,6 +78,7 @@ def test_a_game_that_received_nothing_meets_no_network_lag_and_every_network_rul
     ("a capture from before those were counted", lambda c: c.net_flows["health"].pop("wire_unplaced")),
     ("a child the relay did not pass on received bytes", lambda c: c.net_flows["health"].update(game_unrelayed_rx=700)),
     ("the relay's totals for the game not given", lambda c: c.net_flows["health"].pop("game_unrelayed_rx")),
+    ("the relay's totals may have been cut", lambda c: c.net_flows["health"].update(game_unrelayed_rx=None)),
     ("the game's process tree could not be read", lambda c: c.net_flows["health"].update(pid_errors=1)),
     ("the relay lost events", lambda c: c.net_flows["health"]["relay"].update(events_lost=1)),
     ("a relay record that is none", lambda c: c.net_flows["health"].update(relay=None)),

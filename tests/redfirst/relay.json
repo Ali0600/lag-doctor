@@ -922,7 +922,7 @@
  {
   "name": "the game's traffic never counts toward its wire bytes",
   "file": "lagdoctor/capture/netflows.py",
-  "old": "            if game and spec[1] in (\"send\", \"recv\"):",
+  "old": "            if spec[1] in (\"send\", \"recv\") and (theirs or table.was_game(pid)):",
   "new": "            if False:",
   "tests": [
    "tests/test_relay.py::test_only_the_games_and_the_recorders_events_leave_the_relay_and_totals_only_for_this_session"

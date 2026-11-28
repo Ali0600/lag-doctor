@@ -648,6 +648,26 @@ def test_the_relays_totals_of_the_games_own_programs_are_its_unrelayed_bytes_onc
     assert FlowTable({GAME}, LOCALS).unrelayed_game_rx() == 0          # no relay
 
 
+def test_the_games_wire_bytes_count_a_child_that_left_its_tree_and_what_the_relay_judged_the_games():
+    table = FlowTable({GAME}, LOCALS)
+    table.set_game_pids({GAME, 81})
+    table.set_game_pids({GAME})                  # 81's parent exited: it left the game's tree, not its bytes
+    table.count_wire(Packet(11, "tcp", "recv", 81, 1000, LOCAL, "203.0.113.9", 50000, 443))
+    table.count_wire(Packet(11, "tcp", "recv", 82, 70, LOCAL, "203.0.113.9", 50001, 443), theirs=True)   # the relay's
+    table.count_wire(Packet(11, "tcp", "recv", OTHER, 5000, LOCAL, "203.0.113.9", 50002, 443))          # not the game
+    assert table.game_wire == [1070, 0]
+
+
+def test_relayed_totals_at_the_relays_cap_may_have_been_cut_so_they_tell_nothing():
+    from lagdoctor.relay import protocol
+    assert nf.MAX_RELAYED_TOTALS == protocol.MAX_TOTALS
+    table = FlowTable({GAME}, LOCALS)
+    table.set_relayed([(1000 + i, 1, 0) for i in range(nf.MAX_RELAYED_TOTALS - 1)])
+    assert table.unrelayed_game_rx() == 0
+    table.set_relayed([(1000 + i, 1, 0) for i in range(nf.MAX_RELAYED_TOTALS)])
+    assert table.unrelayed_game_rx() is None
+
+
 def test_the_games_wire_bytes_count_only_its_traffic_that_crossed_the_network():
     table = FlowTable({GAME}, LOCALS)
     table.count_wire(Packet(11, "tcp", "recv", GAME, 1000, LOCAL, "203.0.113.9", 50000, 443))   # from the internet

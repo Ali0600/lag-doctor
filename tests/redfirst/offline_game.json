@@ -374,5 +374,70 @@
   "tests": [
    "tests/test_etw_tracker.py::test_a_stale_local_address_set_is_reread_early_for_a_tcp_game_too"
   ]
+ },
+ {
+  "name": "a child that left the game's tree is not counted",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if pkt.kind not in (\"send\", \"recv\") or not (theirs or pkt.pid in self._game_ever):\n",
+  "new": "        if pkt.kind not in (\"send\", \"recv\") or not (theirs or pkt.pid in self._game):\n",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_games_wire_bytes_count_a_child_that_left_its_tree_and_what_the_relay_judged_the_games"
+  ]
+ },
+ {
+  "name": "the relay's judgement of the game's packets is not taken",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if pkt.kind not in (\"send\", \"recv\") or not (theirs or pkt.pid in self._game_ever):\n",
+  "new": "        if pkt.kind not in (\"send\", \"recv\") or pkt.pid not in self._game_ever:\n",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_games_wire_bytes_count_a_child_that_left_its_tree_and_what_the_relay_judged_the_games",
+   "tests/test_relay.py::test_the_games_whole_events_count_as_its_traffic_before_the_recorder_knows_its_process"
+  ]
+ },
+ {
+  "name": "through the relay only the processes the recorder lists count",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            theirs = self._relay is not None and pid != self._own_pid\n",
+  "new": "            theirs = False\n",
+  "tests": [
+   "tests/test_relay.py::test_the_games_whole_events_count_as_its_traffic_before_the_recorder_knows_its_process"
+  ]
+ },
+ {
+  "name": "the recorder's own packets count as the game's",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            theirs = self._relay is not None and pid != self._own_pid\n",
+  "new": "            theirs = self._relay is not None\n",
+  "tests": [
+   "tests/test_relay.py::test_the_games_whole_events_count_as_its_traffic_before_the_recorder_knows_its_process",
+   "tests/test_relay.py::test_only_the_games_and_the_recorders_events_leave_the_relay_and_totals_only_for_this_session"
+  ]
+ },
+ {
+  "name": "the tracker counts only the game's current tree",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            if spec[1] in (\"send\", \"recv\") and (theirs or table.was_game(pid)):\n",
+  "new": "            if spec[1] in (\"send\", \"recv\") and (theirs or game):\n",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_child_that_left_the_games_tree_still_counts_toward_what_the_game_received"
+  ]
+ },
+ {
+  "name": "a relayed list at the cap still tells",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        if len(self._relayed) >= MAX_RELAYED_TOTALS:\n",
+  "new": "        if len(self._relayed) > MAX_RELAYED_TOTALS:\n",
+  "tests": [
+   "tests/test_etw_flows.py::test_relayed_totals_at_the_relays_cap_may_have_been_cut_so_they_tell_nothing"
+  ]
+ },
+ {
+  "name": "the cap drifts from the relay's",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "MAX_RELAYED_TOTALS = 64\n",
+  "new": "MAX_RELAYED_TOTALS = 65\n",
+  "tests": [
+   "tests/test_etw_flows.py::test_relayed_totals_at_the_relays_cap_may_have_been_cut_so_they_tell_nothing"
+  ]
  }
 ]

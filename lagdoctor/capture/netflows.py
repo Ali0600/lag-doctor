@@ -62,6 +62,9 @@ def _refused_why() -> str:
         member = False
     return GROUP_REFUSED if member else NEEDS_RIGHTS
 
+# The relay sends at most this many per-program totals, the largest first (relay/protocol.MAX_TOTALS, which a test
+# holds equal): a list this long may have been cut, so what it leaves out is not known.
+MAX_RELAYED_TOTALS = 64
 # NE 4.2: the events decoded here -> (protocol, kind, address family). All are version 0.
 EVENTS: dict[int, tuple[str, str, int]] = {
     10: ("tcp", "send", 4), 26: ("tcp", "send", 6),
@@ -400,12 +403,18 @@ class FlowTable:
     def is_game(self, pid: int) -> bool:
         return pid in self._game
 
-    def count_wire(self, pkt: Packet) -> None:
+    def was_game(self, pid: int) -> bool:
+        """Whether the pid was ever the game's: a child whose parent has exited leaves the game's tree, not its bytes."""
+        return pid in self._game_ever
+
+    def count_wire(self, pkt: Packet, theirs: bool = False) -> None:
         """One of the game's packets toward game_wire, if it crossed the network. One whose ends cannot be told
         apart (neither is this PC's: an address set that is stale or could not be read) is counted in
         `wire_unplaced`, whatever its protocol, so that a game whose packets went uncounted never reads as having
-        received nothing (analysis/events.game_offline); add() counts only UDP in `unknown_endpoints`."""
-        if pkt.kind not in ("send", "recv") or pkt.pid not in self._game:
+        received nothing (analysis/events.game_offline); add() counts only UDP in `unknown_endpoints`. It counts every
+        program that was ever the game's, and with `theirs` one the relay judged the game's (it passes on whole only
+        the game's events and the recorder's own), whether or not this table knows it yet."""
+        if pkt.kind not in ("send", "recv") or not (theirs or pkt.pid in self._game_ever):
             return
         if endpoints(pkt, self._local) is not None:
             self.game_wire[0 if pkt.kind == "recv" else 1] += pkt.size
@@ -416,10 +425,13 @@ class FlowTable:
         """The relay's per-program totals, (pid, bytes received, bytes sent) each, as it last sent them."""
         self._relayed = {pid: (rx, tx) for pid, rx, tx in totals}
 
-    def unrelayed_game_rx(self) -> int:
+    def unrelayed_game_rx(self) -> int | None:
         """Bytes the relay counted as received by a program this table knew as the game's, whose events it did not
         pass on whole (the capture service passes only the game's folder's): never in game_wire, so a game whose
-        traffic runs in such a child is not one that received nothing (events.game_offline)."""
+        traffic runs in such a child is not one that received nothing (events.game_offline). None when the relay's
+        list may have been cut at its cap, which could leave such a child out."""
+        if len(self._relayed) >= MAX_RELAYED_TOTALS:
+            return None
         return sum(rx for pid, (rx, _) in self._relayed.items() if pid in self._game_ever)
 
     def _all_talkers(self) -> dict[int, list[int]]:
@@ -1002,8 +1014,10 @@ class FlowTracker(Collector):
                 self._lag_hist[min(LAG_BUCKETS, max(0, int(lag / LAG_BUCKET_S)))] += 1
             else:
                 table.count(pid, spec[1], size)
-            if game and spec[1] in ("send", "recv"):
-                table.count_wire(pkt if pkt is not None else decode(ev.id, ev.version, data))
+            # Through the relay, an event that is not this process's own is the game's by the relay's judgement
+            theirs = self._relay is not None and pid != self._own_pid
+            if spec[1] in ("send", "recv") and (theirs or table.was_game(pid)):
+                table.count_wire(pkt if pkt is not None else decode(ev.id, ev.version, data), theirs)
 
     # ---- helpers --------------------------------------------------------
     def _refresh_inputs(self, local: bool) -> None:
