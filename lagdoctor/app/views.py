@@ -717,8 +717,7 @@ def results_view(entry: Entry, d: Diagnosis, cap: Capture, main: dict[str, list]
         "events_note": "" if timed else ("No lag events were found." if frames_ok else
                                          "Frame timing was not measured, so stutters could not be looked for."),
         "marks_summary": labels.marks_summary(marks, frames_ok) if marks else "",
-        "cleared": [[labels.topic_text(c), why] for c, why in
-                    sorted(_dict(d.cleared).items(), key=lambda kv: labels.topic_text(kv[0]).casefold())],
+        "cleared": [[topics, why] for topics, why in labels.group_cleared(_dict(d.cleared))],
         "not_measured": [list(x) for x in labels.not_measured(cap.sources, d.measured)],
         "unchecked": [[why, topics] for why, topics in labels.group_unchecked(_dict(d.unchecked))],
         "has_report": has_report,

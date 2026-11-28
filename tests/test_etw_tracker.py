@@ -359,6 +359,61 @@ def test_a_stale_local_address_set_is_reread_early():
     assert r["server"] is not None and r["server"]["rx_packets"] > 64
 
 
+def test_a_stale_local_address_set_is_reread_early_for_a_tcp_game_too():
+    # add() counts only UDP in unknown_endpoints: a TCP game's packets with neither end local are counted
+    # unplaced, and bring the re-read forward too, or its received bytes would wait for the 10 s refresh.
+    made = []
+    current = {"127.0.0.1"}
+    tr = _tracker(made, local_addrs=lambda: set(current))
+    tr.start(clock.now())
+    try:
+        assert _wait(lambda: made and made[0].started)
+        current.add(LOCAL)
+        start, k = tr.now(), 0
+        while k / 64 < 3.0:
+            t = start + k / 64
+            if t > tr.now() + 0.1:
+                time.sleep(0.02)
+                continue
+            made[0].feed([_event(tr.origin, t, 11, _v4(GAME, 1200, LOCAL, SERVER, 50000, 443))])
+            k += 1
+    finally:
+        tr.stop()
+    r = tr.result()
+    assert r["health"]["wire_unplaced"] > 0 and r["health"]["unknown_endpoints"] == 0
+    assert r["game_wire_bytes"][0] > 0
+
+
+def test_a_child_that_left_the_games_tree_still_counts_toward_what_the_game_received():
+    made = []
+    tr = _tracker(made)
+    tr.start(clock.now())
+    try:
+        assert _wait(lambda: made and made[0].started)
+        with tr._lock:
+            tr._table.set_game_pids({GAME, 81})
+            tr._table.set_game_pids({GAME})          # its parent exited: the next pid refresh would say so too
+        start, k = tr.now(), 0
+        while k / 64 < 1.0:
+            t = start + k / 64
+            if t > tr.now() + 0.1:
+                time.sleep(0.02)
+                continue
+            made[0].feed([_event(tr.origin, t, 11, _v4(81, 1200, LOCAL, SERVER, 50000, 443))])
+            k += 1
+    finally:
+        tr.stop()
+    assert tr.result()["game_wire_bytes"][0] == 64 * 1200
+
+
+def test_health_gives_the_relays_totals_of_the_games_programs_it_did_not_pass_on_whole():
+    tr = FlowTracker({GAME}, selftest=False)
+    assert tr.health()["game_unrelayed_rx"] == 0 and tr.health()["wire_unplaced"] == 0
+    tr._table.set_game_pids({GAME, 81})
+    tr._table.set_relayed([(81, 700, 5), (90, 2000, 0)])
+    assert tr.health()["game_unrelayed_rx"] == 700
+
+
 def test_a_consumer_that_dies_or_drops_events_is_reported(monkeypatch):
     monkeypatch.setattr(nf, "HEALTH_EVERY_S", 0.1)
     made = []

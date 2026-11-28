@@ -262,6 +262,24 @@ def _net_script(game_pid: int, recorder: int) -> list[tuple[int, int, bytes]]:
     return out
 
 
+def test_the_games_whole_events_count_as_its_traffic_before_the_recorder_knows_its_process(game, spy_writes):
+    # The relay passes on whole only the game's events and the recorder's own: a game process the recorder has not
+    # listed yet (its next refresh, or a child whose parent exited) is still the game's, so what it received counts.
+    me = _me()
+    relay = InProcessRelay(parts(
+        snapshot=snapshot_with(_fake_proc(IN_SESSION, me.session_id), _fake_proc(OTHER_SESSION, me.session_id + 99)),
+        etw=lambda on_event: FakeEtw(on_event, _net_script(game["pid"], me.pid), [])))
+    link = launch(game, relay, network=True)
+    tracker = nf.FlowTracker({game["pid"] + 7}, selftest=False, local_addrs=lambda: {LOCAL_IP}, relay=link)
+    try:
+        tracker.start(clock.now())
+        _until(lambda: any(m["t"] == "net" and m["totals"] for m in spy_writes), 10, "the first totals")
+        tracker.stop()
+    finally:
+        link.close(wait_s=5)
+    assert tracker.result()["game_wire_bytes"] == [30 * 200 + 500, 30 * 100]    # never the recorder's own 40
+
+
 def test_only_the_games_and_the_recorders_events_leave_the_relay_and_totals_only_for_this_session(game, spy_writes):
     me = _me()
     stops: list[str] = []

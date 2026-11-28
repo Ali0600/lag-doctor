@@ -520,6 +520,18 @@ def group_unchecked(unchecked: dict[str, str]) -> list[tuple[str, list[str]]]:
     return sorted(out, key=lambda g: (-len(g[1]), g[0]))
 
 
+def group_cleared(cleared: dict[str, Any]) -> list[tuple[str, Any]]:
+    """(topics, reason) for a Checked and fine list: causes ruled out for the very same reason share one line, their
+    topics in alphabetical order (every network rule of a game that received nothing over the network gives one,
+    rules.offline_text), and the lines go in the alphabetical order of their topics. A reason that is not text (a
+    damaged diagnosis file) keeps a line of its own."""
+    groups: dict[Any, tuple[Any, list[str]]] = {}
+    for i, (cause, why) in enumerate(cleared.items()):
+        groups.setdefault(why if isinstance(why, str) else i, (why, []))[1].append(topic_text(cause))
+    out = [(", ".join(sorted(topics, key=str.casefold)), why) for why, topics in groups.values()]
+    return sorted(out, key=lambda g: g[0].casefold())
+
+
 def sorted_topics(causes: Any) -> list[str]:
     """The topics of these causes in alphabetical order, whatever their case ("CPU heat" with "copies", not before)."""
     return sorted((topic_text(c) for c in causes), key=str.casefold)

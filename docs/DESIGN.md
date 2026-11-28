@@ -1235,8 +1235,10 @@ runs on it (`docs/LAUNCHER-PLAN.md`, "Measuring the right part"; DECISIONS 2026-
   again (lost, the lost-probe times in the span; sent, those
   plus the span's rows that hold that target's round trip: exact, since the network collector counts a probe as sent
   only when it was answered or lost), None for a capture without the lost-probe times; the per-program and
-  whole-recording byte totals (`talkers`, `game_wire_bytes`) become None, since they cannot be split by time, and
-  `bandwidth_hog` then says so (or that counting stopped with the ETW consumer); a key this version does not know
+  per-program byte totals (`talkers`) become None, since they cannot be split by time, and `bandwidth_hog` then says
+  so (or that counting stopped with the ETW consumer); of the game's own whole-recording counts (`game_wire_bytes`)
+  only those of exactly 0 stay, as 0, since a count of 0 is 0 in any part, and the others become None (all None:
+  the key is None), which is what tells an offline game in a part (below); a key this version does not know
   becomes None. None stays None (not recorded) and a
   list whose cut is empty stays a list (recorded, nothing in the span).
 - **Refused** (`check_span`; `analyze --from/--to` checks through it, as the app's trim handles would have, had
@@ -1744,6 +1746,38 @@ The 36 rules: `wrong_gpu`, `hybrid_copy`, `gpu_limit`, `cpu_limit`, `gpu_content
   NIC counters); talkers that cover only the player's Windows session (`talkers_scope` "session", through the
   relay) can name a program but rule out only together with the NIC counters, since services run outside it: what
   the adapter moved less the game's own bytes over the network (`game_wire_bytes`) must stay under 1 MB/s.
+
+### A game that played offline (analysis/events.py)
+A game that received nothing over the network meets no network lag: a ping spike, a lost probe or a weak Wi-Fi
+signal while it ran is the PC's, not the game's (the owner's offline games, DECISIONS 2026-11-28).
+`events.game_offline(cap)` is the one predicate: the Kernel-Network trace (`net_flows`) read "ok", which a lost or
+undecoded event, a late packet or a consumer that stopped by itself makes "partial"; its address layout was
+proven by the self-test (`layout` "verified"); the target names the game's process, whose tree the tracker read
+every time (`pid_errors` 0); ETW lost no event or buffer (`health` `lost`, `buffers_lost`, `consumer_stopped_t`),
+nor did the recorder before the trace began or the relay (`early_dropped`, `relay.events_lost`, each absent where
+there is no relay); no packet of the game's had ends that could not be told apart, neither UDP (`unknown_endpoints`)
+nor any protocol (`wire_unplaced`, which `FlowTable.count_wire` counts, and which brings the address re-read
+forward as `unknown_endpoints` does: an address set that is stale or could not be read leaves a TCP game's packets
+uncounted, never an online game reading as offline); the relay passed on whole every program of the game's that
+received anything (`game_unrelayed_rx`, the relay's own totals of the programs the recorder knew as the game's:
+the capture service passes on whole only those in the game's folder; None, which fails, when the relay's list
+reached its 64 programs and may have left one out); and the game's bytes received over the
+network (`game_wire_bytes[0]`, whole recording) are exactly the integer 0. Bytes it sent do not count: in one of
+the owner's recordings the game sent 6,500 bytes and received none. Anything else is not offline, a capture made
+before `wire_unplaced` was counted among them, whatever its other counts say. Then:
+- `find_events` leaves out the network's lag events (`net_spike`, `net_loss`, `net_gap`), so they are neither lag
+  moments, nor in a mark's events, nor network lag in the lag type or the headline;
+- `run_rule` clears every rule of category "network" (the nine network rules) before its sources are asked for,
+  with one reason, `rules.offline_text`, which names `_Env.part`;
+- the HTML report and the app list causes cleared for the very same reason on one line (`labels.group_cleared`),
+  so the nine say it once. The console names only the topics.
+The ping table and the stats read from it (`ping_*_ms`, `jitter_ms`, `loss_pct`) stay: they measure the PC.
+`game_wire_bytes` counts every program that was ever the game's (`FlowTable.was_game`: a child whose parent exited
+leaves the game's tree, not its bytes) and, through the relay, every whole event that is not the recorder's own,
+since the relay passes on whole only the game's and the recorder's: a game process the recorder has not listed yet
+is still the game's. Known limits: a game whose network traffic goes through another program it did not start
+reads as offline, and so would one whose only received bytes reached a child outside the game's folder in its
+last second, which the relay counts as `unattributed_bytes` once the child has gone.
 
 ### Scoring (LC 5)
 - Evidence families: frame timing, GPU telemetry, GPU engine/memory, CPU threads, CPU frequency/limits,

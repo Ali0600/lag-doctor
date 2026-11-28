@@ -2,6 +2,10 @@
 
 ## Backlog: alternatives worth trying later
 
+- **A per-game "plays offline" switch in the app**, which records without the network side for that game: worth
+  it if a game whose traffic goes through another program it did not start reads as offline, so its network
+  problems are hidden (2026-11-28). Revisit hook: the app's recorder arguments (`--no-network`, which a terminal
+  `watch` already takes) and `events.game_offline`.
 - **Sign the MSI through SignPath Foundation**, free for open-source projects, so the UAC prompt names a
   publisher, SmartScreen's trust carries across releases and Smart App Control lets it install: worth it once
   strangers are meant to install lag-doctor (deferred by the owner, 2026-11-26). Revisit hook: INSTALLER-PLAN
@@ -244,6 +248,30 @@
   after "Keep the MSI", with `id-token` and `attestations` rights), so anyone can check which workflow and commit built
   the file; worth trying with signing. Release immutability, a repository setting that is the owner's, would attest
   each published release on its own (2026-11-26, Stage 5). Revisit hook: ci.yml's msi job.
+
+---
+
+## 2026-11-28: An offline game's network checks: told from its own traffic, no switch
+
+The owner asked for a way to ignore networking for games known to play offline, a click or a checkbox, and
+whether it would save performance. It saves next to nothing (docs/research/overhead.md: the pings about 0.15 % of
+one CPU thread, the game-server tracker 1-2 %), but the owner's recordings show the noise: 12 of 14 had a game that
+received nothing over the network, and three of them listed 5 network findings and 31 ping or loss moments between
+them. Asked to choose, the owner said "do A".
+- **A: tell it from the game's own traffic (chosen by the owner)**: the tracker already counts what the game
+  received over the network; at exactly 0, by a trace that lost nothing, its network events go and the network
+  rules are cleared for that one reason, listed once. Nothing to remember per game, and the PC's pings are still
+  recorded.
+- **B: a per-game "plays offline" checkbox in the app (deferred, worth trying)**: it would record without the
+  network side. Worth it if a game whose traffic goes through another program it did not start reads as offline
+  under A, which then hides its network problems.
+- **C: leave it (rejected)**: an offline game's report keeps naming ping problems that cannot touch it.
+
+A game counts as offline on what it received, never on what it sent: one recording's game sent 6,500 bytes and
+received none. Recordings made before the tracker counted a game's packets of every protocol it could not place
+keep their network checks: a TCP game's packets could go uncounted then, with nothing to say so.
+
+Revisit hook: `events.game_offline` for the predicate; for B, the app's recorder arguments (`--no-network`).
 
 ---
 

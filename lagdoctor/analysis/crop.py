@@ -59,7 +59,8 @@ NET_FLOWS = {
     "lost": "cut", "wifi_scans": "cut", "downloads": "cut", "server_rx": "cut",
     "gaps": "clipped", "server": "clipped",
     "probes": "counted again",
-    "talkers": "dropped", "game_wire_bytes": "dropped",
+    "talkers": "dropped",
+    "game_wire_bytes": "zeros kept",     # a count of 0 over the whole recording is 0 in any part of it
 }
 
 
@@ -278,9 +279,19 @@ def _net_flows(nf: Any, lo: float, hi: float, network: dict[str, list]) -> dict[
             out[key] = _server(value, lo, hi, bins, gaps)
         elif key == "probes":
             out[key] = _probes(value, nf.get("lost"), nf.get("targets"), lo, hi, network)
+        elif what == "zeros kept":
+            out[key] = _zeros(value)
         else:                            # "dropped", and any key this version does not know
             out[key] = None
     return out
+
+
+def _zeros(v: Any) -> list | None:
+    """A whole recording's counts (game_wire_bytes, [received, sent]) for a part: each count of exactly 0 stays 0,
+    any other is None, since it cannot be split by time; None when no count is 0, as when nothing was counted."""
+    if not isinstance(v, list) or not any(type(x) is int and x == 0 for x in v):
+        return None
+    return [0 if type(x) is int and x == 0 else None for x in v]
 
 
 def _times(v: Any, lo: float, hi: float) -> list | None:

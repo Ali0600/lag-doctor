@@ -461,6 +461,16 @@ def _load(entry):
     return cap, Diagnosis.from_json(library.read_diagnosis(entry)), main_chain(cap)
 
 
+def test_results_list_the_causes_ruled_out_for_one_reason_on_one_line(demo):
+    home, _ = demo
+    entry = next(e for e in entries_of(home) if e.game == app_demo.MARKUP_TITLE)
+    cap, d, main = _load(entry)
+    d.cleared = {"power_plan": "its own reason", "packet_loss": "one reason", "bufferbloat": "one reason"}
+    v = views.results_view(entry, d, cap, main, has_report=True)
+    assert v["cleared"] == [[t, why] for t, why in labels.group_cleared(d.cleared)]
+    assert [why for _, why in v["cleared"]].count("one reason") == 1 and len(v["cleared"]) == 2
+
+
 def test_results_offer_apply_for_the_fixes_the_window_applies_and_dated_ones_on_the_last_recording_only(demo):
     from lagdoctor.fixes import flow
     from lagdoctor.model import FixSuggestion

@@ -278,6 +278,7 @@ class _Env:
         self.power = _dict(self.inv.get("power"))
         self.settings = _dict(self.inv.get("settings"))
         self.game = _dict(self.inv.get("game"))
+        self.offline = ev_mod.game_offline(cap)       # the game received nothing over the network (events.py)
 
     # sources ------------------------------------------------------------------------------
     def _rows(self, name: str) -> int:
@@ -556,6 +557,8 @@ def run_rule(rule: Rule, cap: Capture, ctx: dict, env: _Env | None = None) -> An
     """One rule: its sources first (not measured -> Unchecked), then the rule, then its gate; a cause the
     capture holds open is never checked and fine (_holds_open)."""
     env = env or _env(cap, ctx)
+    if rule.category == "network" and env.offline:       # before its sources: no ping of its own is needed either
+        return Cleared(rule.cause, offline_text(env))
     for need in rule.needs:
         names = need.split("|")
         if not any(env.measured(n) for n in names):
@@ -570,6 +573,14 @@ def run_rule(rule: Rule, cap: Capture, ctx: dict, env: _Env | None = None) -> An
     except Exception as exc:  # noqa: BLE001 - one broken rule must not hide the rest; it says it failed
         return Unchecked(rule.cause, f"the check failed ({type(exc).__name__}: {exc})")
     return Unchecked(rule.cause, held) if held else res
+
+
+def offline_text(e: _Env) -> str:
+    """What a network rule says when the game received nothing over the network (events.game_offline): one reason
+    for every one of them, which the reports list once (labels.group_cleared). A count over the whole recording
+    that is 0 is 0 in a measured part too, so it names the part."""
+    return (f"the game received nothing over the network during {e.part}, so it was not playing online and the "
+            "network could not slow it down")
 
 
 def _holds_open(cause: str, e: _Env) -> str | None:
