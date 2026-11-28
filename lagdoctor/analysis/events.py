@@ -100,11 +100,14 @@ def game_offline(cap: Capture) -> bool:
 
     It holds only when the Kernel-Network trace (`net_flows`) read "ok", which a lost or undecoded event, a late
     packet or a consumer that stopped by itself makes "partial"; its address layout was proven by the self-test; the
-    tracker knew the game's process; ETW and the relay dropped no event; no packet of the game's had ends that could
-    not be told apart; and the game's bytes received over the network (`game_wire_bytes`, [received, sent], over the
-    whole recording, which a measured part keeps only where a count is 0) are exactly 0. Bytes sent do not count: a
-    game that only sends plays nothing a server sends back. Anything else, older captures with no such count among
-    them, is not offline. A game whose traffic goes through another program it did not start reads as offline too."""
+    tracker knew the game's process and read its process tree every time; ETW and the relay dropped no event; no
+    packet of the game's had ends that could not be told apart (`wire_unplaced`, any protocol: captures from before
+    it was counted are never offline); the relay passed on whole every program of the game's that received anything
+    (`game_unrelayed_rx`: the capture service passes only the game's folder's); and the game's bytes received over
+    the network (`game_wire_bytes`, [received, sent], over the whole recording, which a measured part keeps only
+    where a count is 0) are exactly 0. Bytes sent do not count: a game that only sends plays nothing a server sends
+    back. Anything else is not offline. A game whose traffic goes through another program it did not start reads as
+    offline too."""
     nf = cap.net_flows if isinstance(cap.net_flows, dict) else {}
     src = cap.sources.get("net_flows") if isinstance(cap.sources, dict) else None
     if getattr(src, "state", None) != "ok" or nf.get("layout") != "verified":
@@ -116,6 +119,7 @@ def game_offline(cap: Capture) -> bool:
     relay = h.get("relay", {})
     if not (_zero(h.get("lost")) and _zero(h.get("buffers_lost")) and h.get("consumer_stopped_t") is None
             and _zero(h.get("early_dropped", 0)) and _zero(h.get("unknown_endpoints"))
+            and _zero(h.get("wire_unplaced")) and _zero(h.get("game_unrelayed_rx")) and _zero(h.get("pid_errors", 0))
             and isinstance(relay, dict) and _zero(relay.get("events_lost", 0))):
         return False
     wire = nf.get("game_wire_bytes")

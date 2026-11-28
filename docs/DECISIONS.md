@@ -268,7 +268,8 @@ them. Asked to choose, the owner said "do A".
 - **C: leave it (rejected)**: an offline game's report keeps naming ping problems that cannot touch it.
 
 A game counts as offline on what it received, never on what it sent: one recording's game sent 6,500 bytes and
-received none.
+received none. Recordings made before the tracker counted a game's packets of every protocol it could not place
+keep their network checks: a TCP game's packets could go uncounted then, with nothing to say so.
 
 Revisit hook: `events.game_offline` for the predicate; for B, the app's recorder arguments (`--no-network`).
 

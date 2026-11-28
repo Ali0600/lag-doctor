@@ -623,6 +623,31 @@ def test_relayed_totals_join_the_bytes_counted_here_per_program_and_the_latest_r
     assert {t["pid"] for t in table.result()["talkers"]} == {80, 77}
 
 
+def test_a_game_packet_whose_ends_cannot_be_told_apart_is_counted_unplaced_whatever_its_protocol():
+    table = FlowTable({GAME}, LOCALS)
+    table.count_wire(Packet(11, "tcp", "recv", GAME, 1000, "10.9.9.9", "203.0.113.9", 50000, 443))   # neither ours
+    table.count_wire(Packet(43, "udp", "recv", GAME, 64, "10.9.9.9", "203.0.113.9", 5000, 5001))
+    table.count_wire(Packet(43, "udp", "recv", GAME, 64, "127.0.0.1", "127.0.0.1", 5000, 5001))     # loopback
+    table.count_wire(Packet(11, "tcp", "recv", OTHER, 500, "10.9.9.9", "203.0.113.9", 50001, 443))   # not the game
+    table.count_wire(Packet(12, "tcp", "connect", GAME, 0, "10.9.9.9", "203.0.113.9", 443, 50000))  # no bytes
+    assert table.counts["wire_unplaced"] == 2 and table.game_wire == [0, 0]
+    unread = FlowTable({GAME}, ())               # an address set that could not be read: nothing is this PC's
+    unread.count_wire(Packet(11, "tcp", "recv", GAME, 1000, LOCAL, "203.0.113.9", 50000, 443))
+    assert unread.counts["wire_unplaced"] == 1 and unread.game_wire == [0, 0]
+    assert unread.result()["game_wire_bytes"] == [0, 0]       # what the offline check must not take alone
+
+
+def test_the_relays_totals_of_the_games_own_programs_are_its_unrelayed_bytes_once_a_child_has_exited_too():
+    table = FlowTable({GAME}, LOCALS)
+    table.set_game_pids({GAME, 81})                  # a child of the game's starts ...
+    table.set_game_pids({GAME})                      # ... and exits: its bytes were the game's all the same
+    table.set_relayed([(81, 700, 5), (90, 2000, 0)])  # 90 is another program
+    assert table.unrelayed_game_rx() == 700
+    table.set_relayed([(81, 0, 5), (90, 2000, 0)])    # it only sent
+    assert table.unrelayed_game_rx() == 0
+    assert FlowTable({GAME}, LOCALS).unrelayed_game_rx() == 0          # no relay
+
+
 def test_the_games_wire_bytes_count_only_its_traffic_that_crossed_the_network():
     table = FlowTable({GAME}, LOCALS)
     table.count_wire(Packet(11, "tcp", "recv", GAME, 1000, LOCAL, "203.0.113.9", 50000, 443))   # from the internet

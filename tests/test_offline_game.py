@@ -19,7 +19,7 @@ from tests.test_analysis_rules import run
 NETWORK_CAUSES = {"wifi_weak", "wifi_roaming", "wifi_scan_spikes", "bufferbloat", "isp_latency", "server_lag",
                   "packet_loss", "vpn_route", "bandwidth_hog"}
 HEALTH = {"lost": 0, "buffers_lost": 0, "consumer_stopped_t": None, "early_dropped": 0, "unknown_endpoints": 0,
-          "relay": {"events_lost": 0, "rows_lost": 0}}
+          "wire_unplaced": 0, "game_unrelayed_rx": 0, "pid_errors": 0, "relay": {"events_lost": 0, "rows_lost": 0}}
 NOTHING = "received nothing over the network"
 
 
@@ -67,11 +67,18 @@ def test_a_game_that_received_nothing_meets_no_network_lag_and_every_network_rul
     ("three counts", lambda c: c.net_flows["game_wire_bytes"].append(0)),
     ("ETW lost events", lambda c: c.net_flows["health"].update(lost=2)),
     ("ETW's losses not read", lambda c: c.net_flows["health"].update(lost=None)),
+    ("ETW's lost events not reported", lambda c: c.net_flows["health"].pop("lost")),
+    ("ETW's lost buffers not reported", lambda c: c.net_flows["health"].pop("buffers_lost")),
     ("ETW lost buffers", lambda c: c.net_flows["health"].update(buffers_lost=1)),
     ("the consumer stopped by itself", lambda c: c.net_flows["health"].update(consumer_stopped_t=40.0)),
     ("events from before the trace were dropped", lambda c: c.net_flows["health"].update(early_dropped=5)),
     ("a game packet whose ends could not be told", lambda c: c.net_flows["health"].update(unknown_endpoints=1)),
     ("such packets not counted", lambda c: c.net_flows["health"].pop("unknown_endpoints")),
+    ("a TCP packet of the game's that could not be placed", lambda c: c.net_flows["health"].update(wire_unplaced=1)),
+    ("a capture from before those were counted", lambda c: c.net_flows["health"].pop("wire_unplaced")),
+    ("a child the relay did not pass on received bytes", lambda c: c.net_flows["health"].update(game_unrelayed_rx=700)),
+    ("the relay's totals for the game not given", lambda c: c.net_flows["health"].pop("game_unrelayed_rx")),
+    ("the game's process tree could not be read", lambda c: c.net_flows["health"].update(pid_errors=1)),
     ("the relay lost events", lambda c: c.net_flows["health"]["relay"].update(events_lost=1)),
     ("a relay record that is none", lambda c: c.net_flows["health"].update(relay=None)),
 ])
@@ -126,14 +133,14 @@ def test_an_offline_recording_cut_to_a_part_stays_offline_and_says_the_part():
 
 def test_causes_ruled_out_for_one_reason_share_a_line_and_the_lines_go_in_order():
     cleared = {"power_plan": "a plan of its own", "bufferbloat": "one reason", "packet_loss": "one reason",
-               "game_dvr": ["not text"]}
+               "game_dvr": ["not text"], "refresh_rate": 5}       # two reasons that are not text: a line each
     t = labels.topic_text
     # The preconditions that make order a test: the shared pair and the lines are not already given in order
     assert [t("bufferbloat"), t("packet_loss")] != sorted([t("bufferbloat"), t("packet_loss")], key=str.casefold)
     pair = ", ".join(sorted([t("bufferbloat"), t("packet_loss")], key=str.casefold))
-    want = sorted([(t("power_plan"), "a plan of its own"), (pair, "one reason"), (t("game_dvr"), ["not text"])],
-                  key=lambda g: g[0].casefold())
-    assert [g[0] for g in want] != [t("power_plan"), pair, t("game_dvr")]
+    want = sorted([(t("power_plan"), "a plan of its own"), (pair, "one reason"), (t("game_dvr"), ["not text"]),
+                   (t("refresh_rate"), 5)], key=lambda g: g[0].casefold())
+    assert [g[0] for g in want] != [t("power_plan"), pair, t("game_dvr"), t("refresh_rate")]
     assert labels.group_cleared(cleared) == want
 
 

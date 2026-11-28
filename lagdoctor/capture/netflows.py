@@ -364,6 +364,7 @@ class FlowTable:
                  reorder_s: float = REORDER_S) -> None:
         self.reorder_s = reorder_s
         self._game = frozenset(game_pids)
+        self._game_ever: set[int] = set(self._game)     # every pid that was the game's: the relay's totals of them
         self._local = frozenset(local)
         self._flows: OrderedDict[tuple, _Flow] = OrderedDict()
         self._heap: list[tuple[float, int, _Flow, bool, int]] = []
@@ -384,13 +385,14 @@ class FlowTable:
         self.game_wire = [0, 0]
         self.gaps: list[list] = []
         self.server_rx: list[list] = []
-        self.counts = {"game_events": 0, "local_endpoints": 0, "unknown_endpoints": 0, "late": 0,
+        self.counts = {"game_events": 0, "local_endpoints": 0, "unknown_endpoints": 0, "wire_unplaced": 0, "late": 0,
                        "flows_evicted": 0, "pending_overflow": 0, "gaps_dropped": 0, "gaps_late": 0,
                        "talkers_dropped": 0, "server_changes": 0, "retransmits": 0}
 
     # ---- inputs ---------------------------------------------------------
     def set_game_pids(self, pids: Iterable[int]) -> None:
         self._game = frozenset(pids)
+        self._game_ever.update(self._game)
 
     def set_local(self, local: Iterable[str]) -> None:
         self._local = frozenset(local)
@@ -399,13 +401,26 @@ class FlowTable:
         return pid in self._game
 
     def count_wire(self, pkt: Packet) -> None:
-        """One of the game's packets toward game_wire, if it crossed the network."""
-        if pkt.kind in ("send", "recv") and pkt.pid in self._game and endpoints(pkt, self._local) is not None:
+        """One of the game's packets toward game_wire, if it crossed the network. One whose ends cannot be told
+        apart (neither is this PC's: an address set that is stale or could not be read) is counted in
+        `wire_unplaced`, whatever its protocol, so that a game whose packets went uncounted never reads as having
+        received nothing (analysis/events.game_offline); add() counts only UDP in `unknown_endpoints`."""
+        if pkt.kind not in ("send", "recv") or pkt.pid not in self._game:
+            return
+        if endpoints(pkt, self._local) is not None:
             self.game_wire[0 if pkt.kind == "recv" else 1] += pkt.size
+        elif not (pkt.daddr in self._local and pkt.saddr in self._local):      # loopback is no network
+            self.counts["wire_unplaced"] += 1
 
     def set_relayed(self, totals: Iterable[tuple[int, int, int]]) -> None:
         """The relay's per-program totals, (pid, bytes received, bytes sent) each, as it last sent them."""
         self._relayed = {pid: (rx, tx) for pid, rx, tx in totals}
+
+    def unrelayed_game_rx(self) -> int:
+        """Bytes the relay counted as received by a program this table knew as the game's, whose events it did not
+        pass on whole (the capture service passes only the game's folder's): never in game_wire, so a game whose
+        traffic runs in such a child is not one that received nothing (events.game_offline)."""
+        return sum(rx for pid, (rx, _) in self._relayed.items() if pid in self._game_ever)
 
     def _all_talkers(self) -> dict[int, list[int]]:
         if not self._relayed:
@@ -864,7 +879,7 @@ class FlowTracker(Collector):
             for t in self.ticks(TICK_S):
                 with self._lock:
                     self._table.advance(t)
-                    unknown = self._table.counts["unknown_endpoints"]
+                    unknown = self._table.counts["unknown_endpoints"] + self._table.counts["wire_unplaced"]
                 if t >= due["pump"]:
                     due["pump"] = t + PUMP_EVERY_S
                     self._check_pump(session, t)
@@ -931,9 +946,11 @@ class FlowTracker(Collector):
                 counts = dict(self._table.counts)
             bad = self._bad_layouts()
             lag_max, lag_p99 = self._lag_max, self._lag_p99()
+            unrelayed = self._table.unrelayed_game_rx()
         h.update(counts)
         h.update({"ignored": self._ignored, "layout_mismatch": bad, "bad_time": self._bad_time,
                   "selftest": dict(self._selftest), "names": self._names_note, "pid_errors": self._pid_errors,
+                  "game_unrelayed_rx": unrelayed,
                   "consumer_stopped_t": None if self._pump_dead is None else round(self._pump_dead[0], 3),
                   "delivery_lag_max_s": None if lag_max is None else round(lag_max, 3),
                   "delivery_lag_p99_s": lag_p99})

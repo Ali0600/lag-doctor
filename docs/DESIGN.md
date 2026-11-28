@@ -1752,13 +1752,18 @@ A game that received nothing over the network meets no network lag: a ping spike
 signal while it ran is the PC's, not the game's (the owner's offline games, DECISIONS 2026-11-28).
 `events.game_offline(cap)` is the one predicate: the Kernel-Network trace (`net_flows`) read "ok", which a lost or
 undecoded event, a late packet or a consumer that stopped by itself makes "partial"; its address layout was
-proven by the self-test (`layout` "verified"); the target names the game's process; ETW lost no event or buffer
-(`health` `lost`, `buffers_lost`, `consumer_stopped_t`), nor did the recorder before the trace began or the relay
-(`early_dropped`, `relay.events_lost`, each absent where there is no relay); no packet of the game's had ends that
-could not be told apart (`unknown_endpoints`, which must be there); and the game's bytes received over the network
-(`game_wire_bytes[0]`, whole recording) are exactly the integer 0. Bytes it sent do not count: in one of the
-owner's recordings the game sent 6,500 bytes and received none. Anything else, an older capture without those
-counts among them, is not offline. Then:
+proven by the self-test (`layout` "verified"); the target names the game's process, whose tree the tracker read
+every time (`pid_errors` 0); ETW lost no event or buffer (`health` `lost`, `buffers_lost`, `consumer_stopped_t`),
+nor did the recorder before the trace began or the relay (`early_dropped`, `relay.events_lost`, each absent where
+there is no relay); no packet of the game's had ends that could not be told apart, neither UDP (`unknown_endpoints`)
+nor any protocol (`wire_unplaced`, which `FlowTable.count_wire` counts, and which brings the address re-read
+forward as `unknown_endpoints` does: an address set that is stale or could not be read leaves a TCP game's packets
+uncounted, never an online game reading as offline); the relay passed on whole every program of the game's that
+received anything (`game_unrelayed_rx`, the relay's own totals of the programs the recorder knew as the game's:
+the capture service passes on whole only those in the game's folder); and the game's bytes received over the
+network (`game_wire_bytes[0]`, whole recording) are exactly the integer 0. Bytes it sent do not count: in one of
+the owner's recordings the game sent 6,500 bytes and received none. Anything else is not offline, a capture made
+before `wire_unplaced` was counted among them, whatever its other counts say. Then:
 - `find_events` leaves out the network's lag events (`net_spike`, `net_loss`, `net_gap`), so they are neither lag
   moments, nor in a mark's events, nor network lag in the lag type or the headline;
 - `run_rule` clears every rule of category "network" (the nine network rules) before its sources are asked for,

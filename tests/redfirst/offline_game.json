@@ -256,5 +256,123 @@
   "tests": [
    "tests/test_app_views.py::test_results_list_the_causes_ruled_out_for_one_reason_on_one_line"
   ]
+ },
+ {
+  "name": "health without ETW's loss counts passes",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if not (_zero(h.get(\"lost\")) and _zero(h.get(\"buffers_lost\")) and h.get(\"consumer_stopped_t\") is None\n",
+  "new": "    if not (_zero(h.get(\"lost\", 0)) and _zero(h.get(\"buffers_lost\", 0)) and h.get(\"consumer_stopped_t\") is None\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "unplaced game packets are not looked at",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "            and _zero(h.get(\"wire_unplaced\")) and _zero(h.get(\"game_unrelayed_rx\")) and _zero(h.get(\"pid_errors\", 0))\n",
+  "new": "            and _zero(h.get(\"game_unrelayed_rx\")) and _zero(h.get(\"pid_errors\", 0))\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "a capture from before unplaced packets were counted passes",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "            and _zero(h.get(\"wire_unplaced\")) and _zero(h.get(\"game_unrelayed_rx\")) and _zero(h.get(\"pid_errors\", 0))\n",
+  "new": "            and _zero(h.get(\"wire_unplaced\", 0)) and _zero(h.get(\"game_unrelayed_rx\")) and _zero(h.get(\"pid_errors\", 0))\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "the relay's totals of the game's programs are not looked at",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "            and _zero(h.get(\"wire_unplaced\")) and _zero(h.get(\"game_unrelayed_rx\")) and _zero(h.get(\"pid_errors\", 0))\n",
+  "new": "            and _zero(h.get(\"wire_unplaced\")) and _zero(h.get(\"pid_errors\", 0))\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "a process tree that could not be read passes",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "            and _zero(h.get(\"wire_unplaced\")) and _zero(h.get(\"game_unrelayed_rx\")) and _zero(h.get(\"pid_errors\", 0))\n",
+  "new": "            and _zero(h.get(\"wire_unplaced\")) and _zero(h.get(\"game_unrelayed_rx\"))\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "reasons that are not text share a line",
+  "file": "lagdoctor/report/labels.py",
+  "old": "        groups.setdefault(why if isinstance(why, str) else i, (why, []))[1].append(topic_text(cause))\n",
+  "new": "        groups.setdefault(why if isinstance(why, str) else None, (why, []))[1].append(topic_text(cause))\n",
+  "tests": [
+   "tests/test_offline_game.py::test_causes_ruled_out_for_one_reason_share_a_line_and_the_lines_go_in_order"
+  ]
+ },
+ {
+  "name": "a TCP packet of the game's that cannot be placed is not counted",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        elif not (pkt.daddr in self._local and pkt.saddr in self._local):      # loopback is no network\n            self.counts[\"wire_unplaced\"] += 1\n",
+  "new": "        elif pkt.proto == \"udp\" and not (pkt.daddr in self._local and pkt.saddr in self._local):\n            self.counts[\"wire_unplaced\"] += 1\n",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_game_packet_whose_ends_cannot_be_told_apart_is_counted_unplaced_whatever_its_protocol"
+  ]
+ },
+ {
+  "name": "loopback counts as an unplaced packet",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        elif not (pkt.daddr in self._local and pkt.saddr in self._local):      # loopback is no network\n            self.counts[\"wire_unplaced\"] += 1\n",
+  "new": "        else:\n            self.counts[\"wire_unplaced\"] += 1\n",
+  "tests": [
+   "tests/test_etw_flows.py::test_a_game_packet_whose_ends_cannot_be_told_apart_is_counted_unplaced_whatever_its_protocol"
+  ]
+ },
+ {
+  "name": "an exited child's relayed totals are forgotten",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        self._game_ever.update(self._game)\n",
+  "new": "        self._game_ever = set(self._game)\n",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_relays_totals_of_the_games_own_programs_are_its_unrelayed_bytes_once_a_child_has_exited_too"
+  ]
+ },
+ {
+  "name": "the relay's totals of the game's programs are never counted",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        return sum(rx for pid, (rx, _) in self._relayed.items() if pid in self._game_ever)\n",
+  "new": "        return 0\n",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_relays_totals_of_the_games_own_programs_are_its_unrelayed_bytes_once_a_child_has_exited_too",
+   "tests/test_etw_tracker.py::test_health_gives_the_relays_totals_of_the_games_programs_it_did_not_pass_on_whole"
+  ]
+ },
+ {
+  "name": "the relay's totals of the game's programs count what they sent",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "        return sum(rx for pid, (rx, _) in self._relayed.items() if pid in self._game_ever)\n",
+  "new": "        return sum(tx for pid, (_, tx) in self._relayed.items() if pid in self._game_ever)\n",
+  "tests": [
+   "tests/test_etw_flows.py::test_the_relays_totals_of_the_games_own_programs_are_its_unrelayed_bytes_once_a_child_has_exited_too"
+  ]
+ },
+ {
+  "name": "health leaves the relay's totals of the game out",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "            unrelayed = self._table.unrelayed_game_rx()\n",
+  "new": "            unrelayed = 0\n",
+  "tests": [
+   "tests/test_etw_tracker.py::test_health_gives_the_relays_totals_of_the_games_programs_it_did_not_pass_on_whole"
+  ]
+ },
+ {
+  "name": "unplaced TCP packets do not bring the address re-read forward",
+  "file": "lagdoctor/capture/netflows.py",
+  "old": "                    unknown = self._table.counts[\"unknown_endpoints\"] + self._table.counts[\"wire_unplaced\"]\n",
+  "new": "                    unknown = self._table.counts[\"unknown_endpoints\"]\n",
+  "tests": [
+   "tests/test_etw_tracker.py::test_a_stale_local_address_set_is_reread_early_for_a_tcp_game_too"
+  ]
  }
 ]

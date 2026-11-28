@@ -931,8 +931,8 @@
  {
   "name": "the game's loopback traffic counts as crossing the network",
   "file": "lagdoctor/capture/netflows.py",
-  "old": " and endpoints(pkt, self._local) is not None:",
-  "new": ":",
+  "old": "        if endpoints(pkt, self._local) is not None:\n            self.game_wire[",
+  "new": "        if True:\n            self.game_wire[",
   "tests": [
    "tests/test_etw_flows.py::test_the_games_wire_bytes_count_only_its_traffic_that_crossed_the_network"
   ]

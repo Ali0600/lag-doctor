@@ -538,9 +538,9 @@
  },
  {
   "name": "Checked and fine sorts upper case first (HTML)",
-  "file": "lagdoctor/report/html.py",
-  "old": "key=lambda kv: labels.topic_text(kv[0]).casefold()))",
-  "new": "key=lambda kv: labels.topic_text(kv[0])))",
+  "file": "lagdoctor/report/labels.py",
+  "old": "    return sorted(out, key=lambda g: g[0].casefold())",
+  "new": "    return sorted(out, key=lambda g: g[0])",
   "tests": [
    "tests/test_report.py::test_lists_sort_whatever_the_case_and_name_what_was_not_measured"
   ]
