@@ -1,0 +1,260 @@
+[
+ {
+  "name": "an offline game's network events are kept",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if not game_offline(cap):          # a game that received nothing met no network lag: its pings are not its play\n",
+  "new": "    if True:\n",
+  "tests": [
+   "tests/test_offline_game.py::test_a_game_that_received_nothing_meets_no_network_lag_and_every_network_rule_is_cleared_for_that",
+   "tests/test_offline_game.py::test_an_offline_recording_cut_to_a_part_stays_offline_and_says_the_part"
+  ]
+ },
+ {
+  "name": "bytes received are not looked at",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    return isinstance(wire, list) and len(wire) == 2 and _zero(wire[0])\n",
+  "new": "    return isinstance(wire, list) and len(wire) == 2\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "a partial trace is trusted",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if getattr(src, \"state\", None) != \"ok\" or nf.get(\"layout\") != \"verified\":\n",
+  "new": "    if getattr(src, \"state\", None) not in (\"ok\", \"partial\") or nf.get(\"layout\") != \"verified\":\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "an unproven address layout is trusted",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if getattr(src, \"state\", None) != \"ok\" or nf.get(\"layout\") != \"verified\":\n",
+  "new": "    if getattr(src, \"state\", None) != \"ok\":\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "a game process of any kind is trusted",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if type(pid) is not int or pid <= 0:",
+  "new": "    if pid is None:",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "a game process of 0 is trusted",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if type(pid) is not int or pid <= 0:",
+  "new": "    if type(pid) is not int:",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "lost events are not looked at",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if not (_zero(h.get(\"lost\")) and _zero(h.get(\"buffers_lost\")) and h.get(\"consumer_stopped_t\") is None\n",
+  "new": "    if not (_zero(h.get(\"buffers_lost\")) and h.get(\"consumer_stopped_t\") is None\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "lost buffers are not looked at",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if not (_zero(h.get(\"lost\")) and _zero(h.get(\"buffers_lost\")) and h.get(\"consumer_stopped_t\") is None\n",
+  "new": "    if not (_zero(h.get(\"lost\")) and h.get(\"consumer_stopped_t\") is None\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "a consumer that stopped is not looked at",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    if not (_zero(h.get(\"lost\")) and _zero(h.get(\"buffers_lost\")) and h.get(\"consumer_stopped_t\") is None\n",
+  "new": "    if not (_zero(h.get(\"lost\")) and _zero(h.get(\"buffers_lost\"))\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "events dropped before the trace are not looked at",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "            and _zero(h.get(\"early_dropped\", 0)) and _zero(h.get(\"unknown_endpoints\"))\n",
+  "new": "            and _zero(h.get(\"unknown_endpoints\"))\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "packets whose ends were not counted pass",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "            and _zero(h.get(\"early_dropped\", 0)) and _zero(h.get(\"unknown_endpoints\"))\n",
+  "new": "            and _zero(h.get(\"early_dropped\", 0)) and _zero(h.get(\"unknown_endpoints\", 0))\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "the relay's lost events are not looked at",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "            and isinstance(relay, dict) and _zero(relay.get(\"events_lost\", 0))):\n",
+  "new": "            and isinstance(relay, dict)):\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "a relay record that is none passes",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    relay = h.get(\"relay\", {})\n",
+  "new": "    relay = h.get(\"relay\") or {}\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "a zero is any value equal to 0",
+  "file": "lagdoctor/analysis/events.py",
+  "old": "    return type(v) is int and v == 0\n",
+  "new": "    return v == 0\n",
+  "tests": [
+   "tests/test_offline_game.py::test_offline_takes_a_whole_trace_that_saw_the_game_receive_nothing"
+  ]
+ },
+ {
+  "name": "no network rule is cleared for an offline game",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if rule.category == \"network\" and env.offline:       # before its sources: no ping of its own is needed either\n        return Cleared(rule.cause, offline_text(env))\n",
+  "new": "",
+  "tests": [
+   "tests/test_offline_game.py::test_each_network_rule_is_cleared_before_its_sources_are_asked_for_and_no_other_rule_is",
+   "tests/test_offline_game.py::test_a_game_that_received_nothing_meets_no_network_lag_and_every_network_rule_is_cleared_for_that"
+  ]
+ },
+ {
+  "name": "every rule is cleared for an offline game",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if rule.category == \"network\" and env.offline:       # before its sources: no ping of its own is needed either\n",
+  "new": "    if env.offline:\n",
+  "tests": [
+   "tests/test_offline_game.py::test_each_network_rule_is_cleared_before_its_sources_are_asked_for_and_no_other_rule_is"
+  ]
+ },
+ {
+  "name": "a network rule asks for its sources first",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    if rule.category == \"network\" and env.offline:       # before its sources: no ping of its own is needed either\n        return Cleared(rule.cause, offline_text(env))\n    for need in rule.needs:\n        names = need.split(\"|\")\n        if not any(env.measured(n) for n in names):\n            return Unchecked(rule.cause, env.need(names[0]))\n",
+  "new": "    for need in rule.needs:\n        names = need.split(\"|\")\n        if not any(env.measured(n) for n in names):\n            return Unchecked(rule.cause, env.need(names[0]))\n    if rule.category == \"network\" and env.offline:       # before its sources: no ping of its own is needed either\n        return Cleared(rule.cause, offline_text(env))\n",
+  "tests": [
+   "tests/test_offline_game.py::test_each_network_rule_is_cleared_before_its_sources_are_asked_for_and_no_other_rule_is"
+  ]
+ },
+ {
+  "name": "the reason always names the whole capture",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    return (f\"the game received nothing over the network during {e.part}, so it was not playing online and the \"\n",
+  "new": "    return (f\"the game received nothing over the network during the capture, so it was not playing online and the \"\n",
+  "tests": [
+   "tests/test_offline_game.py::test_an_offline_recording_cut_to_a_part_stays_offline_and_says_the_part"
+  ]
+ },
+ {
+  "name": "a network rule loses its category",
+  "file": "lagdoctor/analysis/rules.py",
+  "old": "    Rule(\"vpn_route\", \"static\", (\"network\",), None, _vpn_route, \"network\", alt=(\"network_path\",)),\n",
+  "new": "    Rule(\"vpn_route\", \"static\", (\"network\",), None, _vpn_route, \"setup\", alt=(\"network_path\",)),\n",
+  "tests": [
+   "tests/test_offline_game.py::test_the_network_rules_are_the_ones_an_offline_game_clears",
+   "tests/test_offline_game.py::test_each_network_rule_is_cleared_before_its_sources_are_asked_for_and_no_other_rule_is"
+  ]
+ },
+ {
+  "name": "a part drops the game's counts of 0",
+  "file": "lagdoctor/analysis/crop.py",
+  "old": "            out[key] = _zeros(value)\n",
+  "new": "            out[key] = None\n",
+  "tests": [
+   "tests/test_offline_game.py::test_an_offline_recording_cut_to_a_part_stays_offline_and_says_the_part"
+  ]
+ },
+ {
+  "name": "a part keeps every count",
+  "file": "lagdoctor/analysis/crop.py",
+  "old": "    return [0 if type(x) is int and x == 0 else None for x in v]\n",
+  "new": "    return list(v)\n",
+  "tests": [
+   "tests/test_offline_game.py::test_a_measured_part_keeps_only_the_whole_recordings_counts_of_zero",
+   "tests/test_offline_game.py::test_an_offline_recording_cut_to_a_part_stays_offline_and_says_the_part"
+  ]
+ },
+ {
+  "name": "a part keeps counts where none is 0",
+  "file": "lagdoctor/analysis/crop.py",
+  "old": "    if not isinstance(v, list) or not any(type(x) is int and x == 0 for x in v):\n",
+  "new": "    if not isinstance(v, list):\n",
+  "tests": [
+   "tests/test_offline_game.py::test_a_measured_part_keeps_only_the_whole_recordings_counts_of_zero"
+  ]
+ },
+ {
+  "name": "a part keeps a False as 0",
+  "file": "lagdoctor/analysis/crop.py",
+  "old": "    return [0 if type(x) is int and x == 0 else None for x in v]\n",
+  "new": "    return [0 if x == 0 else None for x in v]\n",
+  "tests": [
+   "tests/test_offline_game.py::test_a_measured_part_keeps_only_the_whole_recordings_counts_of_zero"
+  ]
+ },
+ {
+  "name": "causes sharing a reason keep a line each",
+  "file": "lagdoctor/report/labels.py",
+  "old": "        groups.setdefault(why if isinstance(why, str) else i, (why, []))[1].append(topic_text(cause))\n",
+  "new": "        groups.setdefault(i, (why, []))[1].append(topic_text(cause))\n",
+  "tests": [
+   "tests/test_offline_game.py::test_causes_ruled_out_for_one_reason_share_a_line_and_the_lines_go_in_order",
+   "tests/test_offline_game.py::test_the_report_says_an_offline_games_reason_once_for_all_its_network_rules",
+   "tests/test_app_views.py::test_results_list_the_causes_ruled_out_for_one_reason_on_one_line"
+  ]
+ },
+ {
+  "name": "a shared line's topics are not put in order",
+  "file": "lagdoctor/report/labels.py",
+  "old": "    out = [(\", \".join(sorted(topics, key=str.casefold)), why) for why, topics in groups.values()]\n",
+  "new": "    out = [(\", \".join(topics), why) for why, topics in groups.values()]\n",
+  "tests": [
+   "tests/test_offline_game.py::test_causes_ruled_out_for_one_reason_share_a_line_and_the_lines_go_in_order"
+  ]
+ },
+ {
+  "name": "the lines are not put in order",
+  "file": "lagdoctor/report/labels.py",
+  "old": "    return sorted(out, key=lambda g: g[0].casefold())\n",
+  "new": "    return out\n",
+  "tests": [
+   "tests/test_offline_game.py::test_causes_ruled_out_for_one_reason_share_a_line_and_the_lines_go_in_order"
+  ]
+ },
+ {
+  "name": "the report lists each cleared cause on its own line",
+  "file": "lagdoctor/report/html.py",
+  "old": "    items = \"\".join(f\"<li><strong>{e(topics)}</strong>: {prose(why)}</li>\"\n                    for topics, why in labels.group_cleared(d.cleared))\n",
+  "new": "    items = \"\".join(f\"<li><strong>{e(labels.topic_text(c))}</strong>: {prose(why)}</li>\"\n                    for c, why in sorted(d.cleared.items(), key=lambda kv: labels.topic_text(kv[0]).casefold()))\n",
+  "tests": [
+   "tests/test_offline_game.py::test_the_report_says_an_offline_games_reason_once_for_all_its_network_rules"
+  ]
+ },
+ {
+  "name": "the app lists each cleared cause on its own line",
+  "file": "lagdoctor/app/views.py",
+  "old": "        \"cleared\": [[topics, why] for topics, why in labels.group_cleared(_dict(d.cleared))],\n",
+  "new": "        \"cleared\": [[labels.topic_text(c), why] for c, why in\n                    sorted(_dict(d.cleared).items(), key=lambda kv: labels.topic_text(kv[0]).casefold())],\n",
+  "tests": [
+   "tests/test_app_views.py::test_results_list_the_causes_ruled_out_for_one_reason_on_one_line"
+  ]
+ }
+]

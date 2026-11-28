@@ -58,6 +58,7 @@ def test_a_game_that_received_nothing_meets_no_network_lag_and_every_network_rul
     ("its address layout was not proven", lambda c: c.net_flows.update(layout="unverified")),
     ("the game's process was not known", lambda c: c.target.update(pid=None)),
     ("a process number that is True", lambda c: c.target.update(pid=True)),
+    ("a process number of 0", lambda c: c.target.update(pid=0)),
     ("one byte received", lambda c: c.net_flows["game_wire_bytes"].__setitem__(0, 1)),
     ("a received count of 0.0", lambda c: c.net_flows["game_wire_bytes"].__setitem__(0, 0.0)),
     ("a received count of False", lambda c: c.net_flows["game_wire_bytes"].__setitem__(0, False)),
